@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
-import { BookOpenText, BrainCircuit, FileText, Moon, Settings, Sparkles, Sun, Target, XCircle } from 'lucide-react';
+import { BookOpenText, BrainCircuit, FileText, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore } from './stores/uiStore';
 import { BankPage } from './pages/BankPage';
 import { QuizPage } from './pages/QuizPage';
 import { WrongPage } from './pages/WrongPage';
 import { NotebookPage } from './pages/NotebookPage';
-import { AiPage } from './pages/AiPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AiAssistant } from './components/AiAssistant';
 
 const { Sider, Header, Content } = Layout;
 
@@ -17,17 +17,20 @@ const navItems = [
   { key: '/quiz', label: '刷题', icon: <Target size={17} /> },
   { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
   { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
-  { key: '/ai', label: 'AI', icon: <Sparkles size={17} /> },
   { key: '/settings', label: '设置', icon: <Settings size={17} /> }
 ];
 
 function Shell(): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useUiStore();
+  const theme = useUiStore((state) => state.theme);
+  const toggleTheme = useUiStore((state) => state.toggleTheme);
   const setTheme = useUiStore((state) => state.setTheme);
+  const clearPageContext = useUiStore((state) => state.clearPageContext);
   const [configLoaded, setConfigLoaded] = useState(false);
-  const activeKey = navItems.some((item) => location.pathname.startsWith(item.key)) ? navItems.find((item) => location.pathname.startsWith(item.key))!.key : '/banks';
+  const activeKey = navItems.some((item) => location.pathname.startsWith(item.key))
+    ? navItems.find((item) => location.pathname.startsWith(item.key))!.key
+    : '/banks';
   const title = navItems.find((item) => item.key === activeKey)?.label ?? 'Drill Notebook';
 
   useEffect(() => {
@@ -42,6 +45,12 @@ function Shell(): JSX.Element {
   useEffect(() => {
     if (configLoaded) void window.api?.config.set({ theme });
   }, [configLoaded, theme]);
+  useEffect(() => {
+    // Leaving a domain page clears stale context unless the page re-registers.
+    if (!['/quiz', '/wrong', '/notebooks', '/banks'].some((prefix) => location.pathname.startsWith(prefix))) {
+      clearPageContext();
+    }
+  }, [clearPageContext, location.pathname]);
 
   return (
     <Layout className="app-shell">
@@ -51,22 +60,30 @@ function Shell(): JSX.Element {
           <span className="brand-name">Drill Notebook</span>
         </div>
         <Menu selectedKeys={[activeKey]} onClickMenuItem={(key) => navigate(key)} style={{ border: 0, padding: '12px 10px' }}>
-          {navItems.map((item) => <Menu.Item key={item.key}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span></Menu.Item>)}
+          {navItems.map((item) => (
+            <Menu.Item key={item.key}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span>
+            </Menu.Item>
+          ))}
         </Menu>
       </Sider>
       <Layout>
         <Header className="topbar">
           <Typography.Title heading={5} className="topbar-title">{title}</Typography.Title>
-          <Switch
-            checked={theme === 'dark'}
-            onChange={toggleTheme}
-            checkedText={<Moon size={14} />}
-            uncheckedText={<Sun size={14} />}
-            aria-label="切换主题"
-          />
+          <div className="topbar-actions">
+            <Typography.Text type="secondary" className="topbar-hint">AI · Ctrl+J</Typography.Text>
+            <Switch
+              checked={theme === 'dark'}
+              onChange={toggleTheme}
+              checkedText={<Moon size={14} />}
+              uncheckedText={<Sun size={14} />}
+              aria-label="切换主题"
+            />
+          </div>
         </Header>
         <Content><AppRoutes /></Content>
       </Layout>
+      <AiAssistant />
     </Layout>
   );
 }
@@ -87,7 +104,7 @@ export function AppRoutes(): JSX.Element {
       <Route path="/quiz" element={<QuizPage />} />
       <Route path="/wrong" element={<WrongPage />} />
       <Route path="/notebooks" element={<NotebookPage />} />
-      <Route path="/ai" element={<AiPage />} />
+      <Route path="/ai" element={<Navigate to="/settings" replace />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/banks" replace />} />
     </Routes>

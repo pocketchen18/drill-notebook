@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
-import { FilePlus2, FolderPlus, Save } from 'lucide-react';
+import { FilePlus2, FolderPlus, Save, Sparkles } from 'lucide-react';
 import { get, post, put } from '../lib/api';
 import type { NotePage, Notebook } from '../lib/types';
 import { NotebookEditor } from '../components/editor/NotebookEditor';
+import { useUiStore } from '../stores/uiStore';
+import { notePageToMarkdown } from '../lib/aiContext';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 
 export function NotebookPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const setAiOpen = useUiStore((state) => state.setAiOpen);
   const [notebookId, setNotebookId] = useState<number>();
   const [pageId, setPageId] = useState<number>();
   const [newPageVisible, setNewPageVisible] = useState(false);
@@ -67,10 +71,29 @@ export function NotebookPage(): JSX.Element {
   }, [pageId, pendingContent, pageQuery.data?.content]);
 
   const currentPage = pageQuery.data;
+
+  const pageContext = useMemo(() => {
+    if (!currentPage) {
+      return { kind: 'note' as const, title: '笔记本', markdown: '', route: '/notebooks', notebookId, notePageId: pageId };
+    }
+    const content = pendingContent ?? currentPage.content;
+    return {
+      kind: 'note' as const,
+      title: `笔记 · ${currentPage.title}`,
+      markdown: notePageToMarkdown({ ...currentPage, content }),
+      route: '/notebooks',
+      notebookId: currentPage.notebookId,
+      notePageId: currentPage.id
+    };
+  }, [currentPage, notebookId, pageId, pendingContent]);
+
+  useRegisterPageContext(pageContext);
+
   return <main className="page">
     <div className="page-heading">
-      <div><h1>笔记本</h1><p>整理刷题过程，公式、图表和题目快照会保存在页面内容中。</p></div>
+      <div><h1>笔记本</h1><p>所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p></div>
       <Space>
+        <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 助手</Button>
         <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
           {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
         </Select>

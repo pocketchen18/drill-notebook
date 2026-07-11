@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Empty, Message, Modal, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react';
-import { Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import type { Bank, NotePage, Notebook, Question, QuizSession, SubmitResult } from '../lib/types';
 import { useSessionStore } from '../stores/sessionStore';
+import { useUiStore } from '../stores/uiStore';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
+import { questionsToMarkdown } from '../lib/aiContext';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 
 const { Text } = Typography;
 
@@ -48,9 +51,9 @@ function AddToNoteModal({ question, visible, onClose }: { question?: Question; v
 }
 
 export function QuizPage(): JSX.Element {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { setSessionId } = useSessionStore();
+  const setAiOpen = useUiStore((state) => state.setAiOpen);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const initialBank = Number(searchParams.get('bankId')) || undefined;
   const questionIds = useMemo(() => searchParams.get('questionIds')?.split(',').map(Number).filter(Boolean), [searchParams]);
@@ -66,6 +69,29 @@ export function QuizPage(): JSX.Element {
   useEffect(() => {
     if (!bankId && banksQuery.data?.length) setBankId(banksQuery.data[0].id);
   }, [bankId, banksQuery.data]);
+
+  const question = session?.questions[index];
+
+  const pageContext = useMemo(() => {
+    if (!question) {
+      return { kind: 'quiz' as const, title: '刷题（未开始）', markdown: '', route: '/quiz' };
+    }
+    const body = questionsToMarkdown([{
+      ...question,
+      answer: result?.correctAnswer ?? question.answer,
+      analysis: result?.analysis ?? question.analysis
+    }]);
+    return {
+      kind: 'quiz' as const,
+      title: `刷题 · 第 ${index + 1} 题`,
+      markdown: body,
+      route: '/quiz',
+      questionId: question.id
+    };
+  }, [index, question, result]);
+
+  useRegisterPageContext(pageContext);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (!session || (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(event.target.tagName))) return;
@@ -112,7 +138,6 @@ export function QuizPage(): JSX.Element {
     }
   };
 
-  const question = session?.questions[index];
   const choose = (key: string): void => {
     if (!question || result) return;
     setSelected((current) => question.type === 'multiple' ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key].sort() : [key]);
@@ -151,8 +176,9 @@ export function QuizPage(): JSX.Element {
 
   return <main className="page">
     <div className="page-heading">
-      <div><h1>刷题</h1><p>按题库随机抽题，提交后查看答案和解析。</p></div>
+      <div><h1>刷题</h1><p>按题库随机抽题，提交后查看答案和解析。可用右下角 AI 助手讲解当前题。</p></div>
       <Space>
+        <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>问 AI</Button>
         <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); }}>重新选择</Button>
         <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
       </Space>
@@ -187,10 +213,11 @@ export function QuizPage(): JSX.Element {
         {result && <div className="feedback"><strong>{result.isCorrect ? '回答正确' : `回答错误，正确答案：${result.correctAnswer}`}</strong><MarkdownContent value={result.analysis || '这道题暂无解析。'} /></div>}
         <div className="quiz-actions">
           <Button icon={<FilePlus2 size={16} />} onClick={() => { setNoteQuestion(question); setNoteVisible(true); }}>添加到笔记</Button>
+          <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 讲解</Button>
           {!result ? <Button type="primary" onClick={() => void submit()}>提交答案</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === session.questions.length - 1 ? '完成' : '下一题'}</Button>}
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">数字 1-4 选择，Enter 提交，←/→ 或 P/N 切题</Text></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">数字 1-4 选择，Enter 提交，←/→ 或 P/N 切题 · Ctrl+J AI</Text></div>
     </div> : <Empty description="题库中没有可练习的题目" />}
     <AddToNoteModal question={noteQuestion} visible={noteVisible} onClose={() => setNoteVisible(false)} />
   </main>;

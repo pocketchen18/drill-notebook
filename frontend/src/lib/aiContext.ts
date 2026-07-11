@@ -11,16 +11,20 @@ function inlineText(node: Record<string, unknown>): string {
 }
 
 function questionMarkdown(question: Question): string {
-  const options = (question.options ?? []).map((option) => `${option.key}. ${option.text}`).join('\n');
+  const options = (Array.isArray(question.options) ? question.options : [])
+    .map((option) => `${option?.key ?? ''}. ${option?.text ?? ''}`)
+    .join('\n');
+  const stem = question.stem ?? '';
   const answer = question.answer ? `\n\n**答案：** ${question.answer}` : '';
   const analysis = question.analysis ? `\n\n**解析：**\n\n${question.analysis}` : '';
-  return `### ${question.stem}\n\n${options}${answer}${analysis}`;
+  return `### ${stem}\n\n${options}${answer}${analysis}`;
 }
 
-export function questionsToMarkdown(questions: Question[]): string {
-  if (!questions.length) return '';
+export function questionsToMarkdown(questions: Question[] | null | undefined): string {
+  if (!questions?.length) return '';
   return questions.map(questionMarkdown).join('\n\n---\n\n');
 }
+
 
 function nodeMarkdown(node: Record<string, unknown>): string {
   const type = String(node.type ?? '');
