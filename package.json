@@ -1,0 +1,64 @@
+{
+  "name": "drill-notebook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable desktop learning notebook with quizzes, notes, and an AI proxy.",
+  "main": "electron-dist/main.js",
+  "workspaces": ["frontend"],
+  "scripts": {
+    "dev:frontend": "npm --workspace frontend run dev",
+    "dev:electron": "npm run build:electron && electron .",
+    "dev:backend": "mvnw.cmd -f backend/pom.xml spring-boot:run",
+    "dev": "concurrently -k \"npm:dev:frontend\" \"npm:dev:electron\"",
+    "start": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/start-mvp.ps1",
+    "start:check": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/start-mvp.ps1 -CheckOnly",
+    "build:frontend": "npm --workspace frontend run build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "build:backend": "mvnw.cmd -f backend/pom.xml -DskipTests package",
+    "build": "npm run build:frontend && npm run build:electron",
+    "test:frontend": "npm --workspace frontend run test",
+    "test:backend": "mvnw.cmd -f backend/pom.xml test",
+    "test": "npm run test:frontend && npm run test:backend",
+    "package:portable": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^35.1.5",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.7.3"
+  },
+  "build": {
+    "appId": "com.drillnotebook.app",
+    "productName": "Drill Notebook",
+    "asar": true,
+    "files": [
+      "electron-dist/**/*",
+      "frontend/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/config-templates",
+        "to": "config-templates",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "backend/target/drill-notebook-backend-0.1.0.jar",
+        "to": "backend/app.jar"
+      },
+      {
+        "from": "jre",
+        "to": "jre",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    }
+  }
+}

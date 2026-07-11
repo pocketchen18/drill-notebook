@@ -1,0 +1,6 @@
+{
+  "provider": "custom",
+  "endpoint": "mock://local",
+  "model": "local-demo",
+  "apiKey": ""
+}
