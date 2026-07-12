@@ -36,13 +36,14 @@ credentials/
 *.credentials
 
 # Application data, user profiles and portable runtime state
-data/
-cache/
-logs/
-runtime/
+# Anchor to repo root so source packages like backend/.../config are not ignored.
+/data/
+/cache/
+/logs/
+/runtime/
+/config/
 runtime-portable/
 runtime-portable*/
-config/
 user-data/
 userData/
 electron-userdata/
