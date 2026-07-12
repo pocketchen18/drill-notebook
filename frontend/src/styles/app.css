@@ -41,6 +41,11 @@ button, input, textarea { font: inherit; }
 .bank-item-meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .question-list { display: grid; gap: 12px; }
 .question-row { padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
+.question-row.is-export-selected, .note-page-item.is-export-selected { border-color: #8bb8ff; background: #f4f8ff; }
+.selection-toolbar { display: flex; align-items: center; min-height: 32px; padding: 6px 10px; border-radius: 6px; background: var(--subtle-bg); }
+.selection-line { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.export-actions { flex-wrap: nowrap; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--subtle-bg); }
+.export-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .question-row-top { display: flex; justify-content: space-between; gap: 12px; }
 .question-stem { margin: 0; line-height: 1.65; white-space: pre-wrap; }
 .question-options { display: grid; gap: 7px; margin: 12px 0 0; color: var(--muted); font-size: 14px; }
@@ -180,6 +185,7 @@ button, input, textarea { font: inherit; }
 [data-theme='light'] .app-shell { --page-bg: #f5f7fa; --panel-bg: #fff; --line: #e5e6eb; --muted: #86909c; --hover-bg: #f2f3f5; --subtle-bg: #f7f8fa; }
 [data-theme='dark'] .arco-menu-light, [data-theme='dark'] .arco-layout-sider-children { background: #232527; }
 [data-theme='dark'] .bank-item.selected, [data-theme='dark'] .quiz-option.selected { background: #182c4b; border-color: #4078d8; }
+[data-theme='dark'] .question-row.is-export-selected, [data-theme='dark'] .note-page-item.is-export-selected { background: #182c4b; border-color: #4078d8; }
 [data-theme='dark'] .math-block, [data-theme='dark'] .mermaid-block, [data-theme='dark'] .markdown-block { background: #1c2b40; border-color: #3e638f; }
 [data-theme='dark'] .math-block.is-editing, [data-theme='dark'] .mermaid-block.is-editing, [data-theme='dark'] .markdown-block.is-editing { background: #182c4b; }
 [data-theme='dark'] .ai-context-card.has-context, [data-theme='dark'] .ai-insert-bar { background: #182c4b; border-color: #4078d8; }
@@ -190,4 +196,3 @@ button, input, textarea { font: inherit; }
   .content-grid, .settings-grid { grid-template-columns: 1fr; }
   .note-layout { grid-template-columns: 210px minmax(0, 1fr); }
 }
-

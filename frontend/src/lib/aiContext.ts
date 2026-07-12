@@ -17,7 +17,12 @@ function questionMarkdown(question: Question): string {
   const stem = question.stem ?? '';
   const answer = question.answer ? `\n\n**答案：** ${question.answer}` : '';
   const analysis = question.analysis ? `\n\n**解析：**\n\n${question.analysis}` : '';
-  return `### ${stem}\n\n${options}${answer}${analysis}`;
+  const metadata = [
+    question.chapter ? `章节：${question.chapter}` : '',
+    question.tags?.length ? `标签：${question.tags.join('、')}` : '',
+    question.difficulty !== undefined ? `难度：${question.difficulty}` : ''
+  ].filter(Boolean).join('；');
+  return `### ${stem}${metadata ? `\n\n> ${metadata}` : ''}\n\n${options}${answer}${analysis}`;
 }
 
 export function questionsToMarkdown(questions: Question[] | null | undefined): string {
