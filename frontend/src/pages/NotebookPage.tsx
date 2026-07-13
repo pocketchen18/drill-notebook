@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
+import { Button, Checkbox, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
 import { FilePlus2, FolderPlus, Save, Sparkles } from 'lucide-react';
 import { get, post, put } from '../lib/api';
 import type { NotePage, Notebook } from '../lib/types';
@@ -8,6 +8,8 @@ import { NotebookEditor } from '../components/editor/NotebookEditor';
 import { useUiStore } from '../stores/uiStore';
 import { notePageToMarkdown } from '../lib/aiContext';
 import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
+import { ExportActions } from '../components/ExportActions';
+import { noteExportDocument } from '../lib/export';
 
 export function NotebookPage(): JSX.Element {
   const queryClient = useQueryClient();
@@ -18,6 +20,7 @@ export function NotebookPage(): JSX.Element {
   const [newPageTitle, setNewPageTitle] = useState('');
   const [pendingContent, setPendingContent] = useState<Record<string, unknown>>();
   const [saveState, setSaveState] = useState<'saved' | 'pending' | 'saving'>('saved');
+  const [selectedPageIds, setSelectedPageIds] = useState<number[]>([]);
   const bootstrapped = useRef(false);
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
   const pagesQuery = useQuery({ queryKey: ['note-pages', notebookId], queryFn: () => get<NotePage[]>(`/api/notebooks/${notebookId}/pages`), enabled: notebookId !== undefined });
@@ -49,6 +52,12 @@ export function NotebookPage(): JSX.Element {
   useEffect(() => {
     if (notebookId === undefined && notebooksQuery.data?.length) setNotebookId(notebooksQuery.data[0].id);
   }, [notebookId, notebooksQuery.data]);
+  useEffect(() => { setSelectedPageIds([]); }, [notebookId]);
+  useEffect(() => {
+    if (!pagesQuery.data) return;
+    const available = new Set(pagesQuery.data.map((page) => page.id));
+    setSelectedPageIds((ids) => ids.filter((id) => available.has(id)));
+  }, [pagesQuery.data]);
   useEffect(() => {
     if (pageId === undefined && pagesQuery.data?.length) setPageId(pagesQuery.data[0].id);
   }, [pageId, pagesQuery.data]);
@@ -71,6 +80,19 @@ export function NotebookPage(): JSX.Element {
   }, [pageId, pendingContent, pageQuery.data?.content]);
 
   const currentPage = pageQuery.data;
+  const selectedNotebook = notebooksQuery.data?.find((notebook) => notebook.id === notebookId);
+  const validSelectedPageIds = useMemo(() => {
+    const available = new Set((pagesQuery.data ?? []).map((page) => page.id));
+    return selectedPageIds.filter((id) => available.has(id));
+  }, [pagesQuery.data, selectedPageIds]);
+  const exportPages = async (): Promise<ReturnType<typeof noteExportDocument>> => {
+    const pages = await Promise.all(validSelectedPageIds.map((id) => get<NotePage>(`/api/note-pages/${id}`)));
+    if (currentPage && pendingContent && validSelectedPageIds.includes(currentPage.id)) {
+      const index = pages.findIndex((page) => page.id === currentPage.id);
+      if (index >= 0) pages[index] = { ...pages[index], content: pendingContent };
+    }
+    return noteExportDocument(`${selectedNotebook?.title ?? '笔记本'} · 笔记`, pages);
+  };
 
   const pageContext = useMemo(() => {
     if (!currentPage) {
@@ -94,6 +116,7 @@ export function NotebookPage(): JSX.Element {
       <div><h1>笔记本</h1><p>所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p></div>
       <Space>
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 助手</Button>
+        <ExportActions count={validSelectedPageIds.length} document={exportPages} />
         <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
           {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
         </Select>
@@ -104,7 +127,10 @@ export function NotebookPage(): JSX.Element {
       <section className="panel">
         <div className="panel-header"><h2>页面</h2><Button type="text" icon={<FilePlus2 size={16} />} onClick={() => setNewPageVisible(true)} aria-label="新建页面" /></div>
         <div className="panel-body">
-          {pagesQuery.isLoading ? <Spin /> : pagesQuery.data?.length ? <div className="note-list">{pagesQuery.data.map((page) => <div key={page.id} className={`note-page-item ${pageId === page.id ? 'selected' : ''}`} onClick={() => setPageId(page.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setPageId(page.id); }}><span>{page.title}</span>{pageId === page.id && <Save size={14} className="muted" />}</div>)}</div> : <div className="empty-state"><div><p>还没有页面</p><Button type="text" onClick={() => setNewPageVisible(true)}>创建第一页</Button></div></div>}
+          {pagesQuery.isLoading ? <Spin /> : pagesQuery.data?.length ? <div className="note-list">
+            <div className="selection-toolbar"><Checkbox checked={validSelectedPageIds.length === pagesQuery.data.length} indeterminate={validSelectedPageIds.length > 0 && validSelectedPageIds.length < pagesQuery.data.length} onChange={(checked) => setSelectedPageIds(checked ? pagesQuery.data.map((page) => page.id) : [])}>全选页面</Checkbox></div>
+            {pagesQuery.data.map((page) => <div key={page.id} className={`note-page-item ${pageId === page.id ? 'selected' : ''} ${validSelectedPageIds.includes(page.id) ? 'is-export-selected' : ''}`} onClick={() => setPageId(page.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setPageId(page.id); }}><span className="selection-line"><Checkbox aria-label={`选择页面：${page.title}`} checked={validSelectedPageIds.includes(page.id)} onClick={(event) => event.stopPropagation()} onChange={(checked) => setSelectedPageIds((ids) => checked ? [...ids, page.id] : ids.filter((id) => id !== page.id))} />{page.title}</span>{pageId === page.id && <Save size={14} className="muted" />}</div>)}
+          </div> : <div className="empty-state"><div><p>还没有页面</p><Button type="text" onClick={() => setNewPageVisible(true)}>创建第一页</Button></div></div>}
         </div>
       </section>
       <section>

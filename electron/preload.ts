@@ -12,5 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   dialog: {
     openTextFile: (): Promise<{ canceled: boolean; path?: string; content?: string }> => ipcRenderer.invoke('dialog:open-text-file')
+  },
+  exportFile: {
+    save: (request: { format: 'md' | 'html' | 'pdf'; suggestedName: string; content: string; html: string }): Promise<{ canceled: boolean; path?: string }> => ipcRenderer.invoke('export:save', request)
   }
 });

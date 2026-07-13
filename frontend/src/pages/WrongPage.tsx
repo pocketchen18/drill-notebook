@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Empty, Spin, Table, Tag, Typography } from '@arco-design/web-react';
 import { RotateCcw, Sparkles, XCircle } from 'lucide-react';
@@ -8,6 +8,8 @@ import type { Question } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 import { questionsToMarkdown } from '../lib/aiContext';
 import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
+import { ExportActions } from '../components/ExportActions';
+import { questionExportDocument } from '../lib/export';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -17,6 +19,13 @@ export function WrongPage(): JSX.Element {
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const query = useQuery({ queryKey: ['wrong'], queryFn: () => get<Question[]>('/api/quiz/wrong') });
   const rows = query.data ?? EMPTY_QUESTIONS;
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+  useEffect(() => {
+    if (!query.data) return;
+    const available = new Set(query.data.map((row) => row.id));
+    setSelectedIds((ids) => ids.filter((id) => available.has(id)));
+  }, [query.data]);
 
   const pageContext = useMemo(() => ({
     kind: 'wrong' as const,
@@ -35,6 +44,7 @@ export function WrongPage(): JSX.Element {
           <p>这里显示每道题最近一次回答错误且尚未纠正的记录。</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
           <Button icon={<Sparkles size={16} />} disabled={!rows.length} onClick={() => setAiOpen(true)}>AI 分析错题</Button>
           <Button type="primary" icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
         </div>
@@ -52,6 +62,7 @@ export function WrongPage(): JSX.Element {
               rowKey="id"
               data={rows}
               pagination={false}
+              rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(Number)) }}
               columns={[
                 { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{stem}</Typography.Text> },
                 { title: '类型', dataIndex: 'type', width: 100, render: (type: string) => (type === 'multiple' ? '多选' : '单选') },

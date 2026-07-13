@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react';
+import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
 import { BookOpenText, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
 import type { Bank, Question } from '../lib/types';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
+import { ExportActions } from '../components/ExportActions';
+import { questionExportDocument } from '../lib/export';
 
 const { Text } = Typography;
 
@@ -31,6 +33,7 @@ export function BankPage(): JSX.Element {
   const [selectedId, setSelectedId] = useState<number>();
   const [createVisible, setCreateVisible] = useState(false);
   const [newName, setNewName] = useState('');
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>([]);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const questionsQuery = useQuery({
     queryKey: ['questions', selectedId],
@@ -41,6 +44,12 @@ export function BankPage(): JSX.Element {
   useEffect(() => {
     if (selectedId === undefined && banksQuery.data?.length) setSelectedId(banksQuery.data[0].id);
   }, [banksQuery.data, selectedId]);
+  useEffect(() => { setSelectedQuestionIds([]); }, [selectedId]);
+  useEffect(() => {
+    if (!questionsQuery.data) return;
+    const available = new Set(questionsQuery.data.map((question) => question.id));
+    setSelectedQuestionIds((ids) => ids.filter((id) => available.has(id)));
+  }, [questionsQuery.data]);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['banks'] });
@@ -107,6 +116,8 @@ export function BankPage(): JSX.Element {
 
   const selectedBank = banksQuery.data?.find((bank) => bank.id === selectedId);
   const questions = questionsQuery.data ?? [];
+  const selectedQuestions = questions.filter((question) => selectedQuestionIds.includes(question.id));
+  const allSelected = questions.length > 0 && selectedQuestionIds.length === questions.length;
 
   return (
     <main className="page">
@@ -145,15 +156,21 @@ export function BankPage(): JSX.Element {
               <h2>{selectedBank?.name ?? '选择题库'}</h2>
               {selectedBank && <Text type="secondary">支持单选和多选，重复导入会自动跳过。</Text>}
             </div>
-            {selectedBank && <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>}
+            {selectedBank && <Space>
+              <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
+              <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
+            </Space>}
           </div>
           <div className="panel-body">
             {questionsQuery.isLoading ? <Spin /> : questions.length ? (
               <div className="question-list">
+                <div className="selection-toolbar">
+                  <Checkbox checked={allSelected} indeterminate={selectedQuestionIds.length > 0 && !allSelected} onChange={(checked) => setSelectedQuestionIds(checked ? questions.map((question) => question.id) : [])}>全选当前题库</Checkbox>
+                </div>
                 {questions.map((question) => (
-                  <div className="question-row" key={question.id}>
+                  <div className={`question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
                     <div className="question-row-top">
-                      <MarkdownContent className="question-stem" value={question.stem} />
+                      <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} /><MarkdownContent className="question-stem" value={question.stem} /></div>
                       <Tag color={question.type === 'multiple' ? 'purple' : 'arcoblue'}>{question.type === 'multiple' ? '多选' : '单选'}</Tag>
                     </div>
                     <div className="question-options">{question.options.map((option) => <div className="question-option" key={option.key}><strong>{option.key}.</strong><MarkdownContent inline value={option.text} /></div>)}</div>

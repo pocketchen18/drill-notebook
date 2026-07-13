@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { clearPortableTemp, getPortablePaths, setupPortablePaths, type PortablePaths } from './paths';
 import { startBackend, stopBackend, type BackendHandle } from './java-bridge';
 
@@ -33,11 +34,27 @@ function createWindow(): void {
     }
   });
 
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+
   const entry = rendererEntry();
   if (/^https?:\/\//.test(entry)) {
     void mainWindow.loadURL(entry);
   } else {
     void mainWindow.loadFile(entry);
+  }
+}
+
+function isTrustedRendererUrl(url: string): boolean {
+  const expected = rendererEntry();
+  try {
+    const actualUrl = new URL(url);
+    if (/^https?:\/\//.test(expected)) return actualUrl.origin === new URL(expected).origin;
+    return actualUrl.href.split('#')[0] === pathToFileURL(expected).href;
+  } catch {
+    return false;
   }
 }
 
@@ -66,6 +83,36 @@ ipcMain.handle('dialog:open-text-file', async () => {
   if (result.canceled || result.filePaths.length === 0) return { canceled: true };
   const selected = result.filePaths[0];
   return { canceled: false, path: selected, content: fs.readFileSync(selected, 'utf8') };
+});
+ipcMain.handle('export:save', async (event, request: unknown) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Export request rejected from an untrusted page.');
+  if (!request || typeof request !== 'object') throw new Error('Invalid export request.');
+  const value = request as Record<string, unknown>;
+  const format = value.format;
+  if (format !== 'md' && format !== 'html' && format !== 'pdf') throw new Error('Unsupported export format.');
+  if (typeof value.suggestedName !== 'string' || typeof value.content !== 'string' || typeof value.html !== 'string') throw new Error('Invalid export content.');
+  const filters = format === 'md'
+    ? [{ name: 'Markdown', extensions: ['md'] }]
+    : format === 'html' ? [{ name: 'HTML', extensions: ['html'] }] : [{ name: 'PDF', extensions: ['pdf'] }];
+  const options = { defaultPath: value.suggestedName, filters };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return { canceled: true };
+  if (format !== 'pdf') {
+    fs.writeFileSync(result.filePath, value.content, 'utf8');
+    return { canceled: false, path: result.filePath };
+  }
+  const exportWindow = new BrowserWindow({
+    show: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true }
+  });
+  try {
+    await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(value.html)}`);
+    const pdf = await exportWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+    fs.writeFileSync(result.filePath, pdf);
+    return { canceled: false, path: result.filePath };
+  } finally {
+    exportWindow.destroy();
+  }
 });
 
 app.whenReady().then(async () => {
