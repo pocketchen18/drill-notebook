@@ -18,11 +18,38 @@ out/
 electron-builder-cache/
 .mvn/wrapper/dists/
 *.tsbuildinfo
+/jre/
+
+# Browser automation, visual QA and coverage artifacts
+/.playwright-mcp/
+/playwright-report/
+/test-results/
+/blob-report/
+/qa-artifacts/
+coverage/
+.nyc_output/
+*.har
+*.trace.zip
+
+# Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.mp4
+/*.webm
 
 # Environment files, credentials and private keys
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
+/.npmrc
+/config.local.*
+/app-config.local.*
+/application-local.*
+/settings.local.*
 secrets/
 credentials/
 *.pem
@@ -54,10 +81,19 @@ portable-data/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
 *.sqlite-*
+*.sqlite-journal
 *.log
+*.log.*
+*.pid
+*.port
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+.attach_pid*
 
 # Python and other local development environments
 .venv/

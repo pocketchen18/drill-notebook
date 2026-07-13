@@ -34,6 +34,13 @@ describe('export documents', () => {
     expect(document.markdown).toContain('## 第二页');
   });
 
+  it('exports essay reference answers with advisory wording', () => {
+    const essay: Question = { id: 2, bankId: 1, type: 'essay', stem: '说明设计', options: [], answer: '参考方案' };
+    const document = questionExportDocument('解答题', [essay]);
+    expect(document.markdown).toContain('题型：解答');
+    expect(document.markdown).toContain('**参考答案：** 参考方案');
+  });
+
   it('renders lists and code without introducing scripts', async () => {
     const html = await markdownToHtml('- item\n\n```js\nconst x = "<tag>";\n```');
     expect(html).toContain('<ul>');

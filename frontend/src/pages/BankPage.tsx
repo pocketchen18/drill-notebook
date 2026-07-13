@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
-import { BookOpenText, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { BookOpenText, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
 import type { Bank, Question } from '../lib/types';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { ExportActions } from '../components/ExportActions';
 import { questionExportDocument } from '../lib/export';
+import { QuestionEditorModal } from '../components/QuestionEditorModal';
+import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 
 const { Text } = Typography;
 
@@ -34,6 +36,8 @@ export function BankPage(): JSX.Element {
   const [createVisible, setCreateVisible] = useState(false);
   const [newName, setNewName] = useState('');
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>([]);
+  const [questionEditorVisible, setQuestionEditorVisible] = useState(false);
+  const [editingQuestion, setEditingQuestion] = useState<Question>();
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const questionsQuery = useQuery({
     queryKey: ['questions', selectedId],
@@ -91,6 +95,12 @@ export function BankPage(): JSX.Element {
       Message.success(`导入完成：新增 ${result.imported}，跳过 ${result.skipped}，失败 ${result.failed}`);
       if (result.errors?.length) Message.warning(result.errors.slice(0, 2).join('；'));
     },
+    onError: (error) => Message.error(error.message)
+  });
+
+  const deleteQuestionMutation = useMutation({
+    mutationFn: (id: number) => del<void>(`/api/questions/${id}`),
+    onSuccess: () => { invalidate(); Message.success('题目已删除'); },
     onError: (error) => Message.error(error.message)
   });
 
@@ -154,10 +164,11 @@ export function BankPage(): JSX.Element {
           <div className="panel-header">
             <div>
               <h2>{selectedBank?.name ?? '选择题库'}</h2>
-              {selectedBank && <Text type="secondary">支持单选和多选，重复导入会自动跳过。</Text>}
+              {selectedBank && <Text type="secondary">支持单选、多选、填空、判断和解答题，重复导入会自动跳过。</Text>}
             </div>
             {selectedBank && <Space>
               <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
+              <Button icon={<Plus size={15} />} onClick={() => { setEditingQuestion(undefined); setQuestionEditorVisible(true); }}>新建题目</Button>
               <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
             </Space>}
           </div>
@@ -171,7 +182,7 @@ export function BankPage(): JSX.Element {
                   <div className={`question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
                     <div className="question-row-top">
                       <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} /><MarkdownContent className="question-stem" value={question.stem} /></div>
-                      <Tag color={question.type === 'multiple' ? 'purple' : 'arcoblue'}>{question.type === 'multiple' ? '多选' : '单选'}</Tag>
+                      <Space><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag><Button type="text" size="mini" icon={<Edit3 size={14} />} onClick={() => { setEditingQuestion(question); setQuestionEditorVisible(true); }} aria-label="编辑题目" /><Popconfirm title="删除这道题？" onOk={() => deleteQuestionMutation.mutate(question.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} aria-label="删除题目" /></Popconfirm></Space>
                     </div>
                     <div className="question-options">{question.options.map((option) => <div className="question-option" key={option.key}><strong>{option.key}.</strong><MarkdownContent inline value={option.text} /></div>)}</div>
                     {question.chapter && <Text type="secondary">章节：{question.chapter}</Text>}
@@ -185,6 +196,7 @@ export function BankPage(): JSX.Element {
       <Modal title="新建题库" visible={createVisible} onCancel={() => setCreateVisible(false)} onOk={() => { if (!newName.trim()) { Message.warning('请输入题库名称'); return; } createMutation.mutate(); }} confirmLoading={createMutation.isPending} autoFocus={false}>
         <Input autoFocus placeholder="例如：Java 基础" value={newName} onChange={setNewName} onPressEnter={() => { if (newName.trim()) createMutation.mutate(); }} />
       </Modal>
+      {selectedId && <QuestionEditorModal bankId={selectedId} question={editingQuestion} visible={questionEditorVisible} onClose={() => setQuestionEditorVisible(false)} onSaved={invalidate} />}
     </main>
   );
 }

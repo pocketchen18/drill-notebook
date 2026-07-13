@@ -30,6 +30,25 @@ CREATE TABLE IF NOT EXISTS question (
 CREATE INDEX IF NOT EXISTS idx_question_bank_id ON question(bank_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_question_bank_hash ON question(bank_id, content_hash);
 
+CREATE TABLE IF NOT EXISTS knowledge_point (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_id INTEGER REFERENCES question_bank(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    category TEXT,
+    tags TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_point_bank ON knowledge_point(bank_id, category, id);
+
+CREATE TABLE IF NOT EXISTS knowledge_point_question (
+    knowledge_point_id INTEGER NOT NULL REFERENCES knowledge_point(id) ON DELETE CASCADE,
+    question_id INTEGER NOT NULL REFERENCES question(id) ON DELETE CASCADE,
+    PRIMARY KEY (knowledge_point_id, question_id)
+);
+
 CREATE TABLE IF NOT EXISTS answer_record (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question_id INTEGER NOT NULL REFERENCES question(id),
@@ -37,6 +56,8 @@ CREATE TABLE IF NOT EXISTS answer_record (
     is_correct INTEGER,
     time_spent INTEGER,
     session_id TEXT,
+    grading_status TEXT,
+    grading_json TEXT,
     answered_at TEXT DEFAULT (datetime('now'))
 );
 

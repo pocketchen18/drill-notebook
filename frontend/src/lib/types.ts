@@ -1,4 +1,4 @@
-export type QuestionType = 'single' | 'multiple';
+export type QuestionType = 'single' | 'multiple' | 'fill' | 'true_false' | 'essay';
 
 export interface QuestionOption {
   key: string;
@@ -17,6 +17,19 @@ export interface Question {
   tags?: string[];
   chapter?: string;
   groupId?: string;
+  orderInGroup?: number;
+}
+
+export interface KnowledgePoint {
+  id: number;
+  bankId?: number;
+  title: string;
+  content: string;
+  category?: string;
+  tags: string[];
+  questionIds: number[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Bank {
@@ -50,10 +63,23 @@ export interface QuizSession {
   questions: Question[];
 }
 
+export interface GradingResult {
+  version?: number;
+  score?: number;
+  suggestedCorrect?: boolean;
+  confidence?: number;
+  explanation?: string;
+  model?: string;
+  available?: boolean;
+  message?: string;
+}
+
 export interface SubmitResult {
-  isCorrect: boolean;
+  isCorrect: boolean | null;
   correctAnswer: string;
   analysis?: string;
+  gradingStatus?: 'deterministic' | 'ai_suggested' | 'unavailable' | 'ungraded';
+  grading?: GradingResult | null;
 }
 
 export interface AiConfig {

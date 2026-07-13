@@ -46,26 +46,28 @@ public class MarkdownQuestionParser {
             if (colon <= 0) continue;
             metadata.put(line.substring(0, colon).trim().toLowerCase(), line.substring(colon + 1).trim());
         }
-        String type = metadata.getOrDefault("type", "").toLowerCase();
-        if (!type.equals("single") && !type.equals("multiple")) throw new IllegalArgumentException("题型必须是 single 或 multiple");
+        String type = QuestionTypeRules.requireType(metadata.get("type"));
         String answer = stripValue(metadata.get("answer"));
-        if (answer == null || answer.isBlank()) throw new IllegalArgumentException("题目缺少 answer");
+        boolean choice = QuestionTypeRules.isChoice(type);
 
         List<String> stemLines = new ArrayList<>();
         List<String> analysisLines = new ArrayList<>();
+        List<String> answerLines = new ArrayList<>();
         List<Map<String, String>> options = new ArrayList<>();
         boolean inStem = false;
         boolean inAnalysis = false;
+        boolean inAnswer = false;
         for (String line : body.replace('\r', '\n').split("\n")) {
             String clean = line.trim();
             if (clean.startsWith("###")) {
                 String heading = clean.substring(3).trim();
                 inStem = heading.contains("题干") || heading.equalsIgnoreCase("stem");
                 inAnalysis = heading.contains("解析") || heading.equalsIgnoreCase("analysis");
+                inAnswer = heading.contains("参考答案") || heading.equalsIgnoreCase("reference answer") || heading.equalsIgnoreCase("answer");
                 continue;
             }
             Matcher option = OPTION.matcher(line);
-            if (option.matches()) {
+            if (choice && !inAnswer && !inAnalysis && option.matches()) {
                 Map<String, String> item = new LinkedHashMap<>();
                 item.put("key", option.group(1).toUpperCase());
                 item.put("text", option.group(2).trim());
@@ -73,17 +75,20 @@ public class MarkdownQuestionParser {
                 inStem = false;
                 continue;
             }
-            if (inAnalysis) analysisLines.add(line);
-            else if (inStem || options.isEmpty()) stemLines.add(line);
+            if (inAnswer) answerLines.add(line);
+            else if (inAnalysis) analysisLines.add(line);
+            else if (inStem || (choice && options.isEmpty())) stemLines.add(line);
         }
         String stem = joinMeaningful(stemLines);
         if (stem.isBlank()) throw new IllegalArgumentException("题干不能为空");
-        if (options.isEmpty()) throw new IllegalArgumentException("题目至少需要一个选项");
+        if ((answer == null || answer.isBlank()) && !answerLines.isEmpty()) answer = joinMeaningful(answerLines);
+        answer = QuestionTypeRules.canonicalAnswer(type, answer);
+        QuestionTypeRules.validate(type, answer, options);
         String tags = metadata.get("tags");
         String chapter = stripValue(metadata.get("chapter"));
         String groupId = stripValue(metadata.get("group_id"));
         int difficulty = parseDifficulty(metadata.get("difficulty"));
-        return new ParsedQuestion(type, stem, options, answer.toUpperCase(), joinMeaningful(analysisLines), difficulty, parseTags(tags), chapter, groupId, parseInteger(metadata.get("order_in_group")));
+        return new ParsedQuestion(type, stem, options, answer, joinMeaningful(analysisLines), difficulty, parseTags(tags), chapter, groupId, parseInteger(metadata.get("order_in_group")));
     }
 
     private static String joinMeaningful(List<String> lines) {
@@ -105,8 +110,10 @@ public class MarkdownQuestionParser {
     }
 
     private static int parseDifficulty(String value) {
-        int parsed = parseInteger(value) == null ? 3 : parseInteger(value);
-        return Math.max(1, Math.min(5, parsed));
+        if (value == null || value.isBlank()) return 3;
+        Integer parsed = parseInteger(value);
+        if (parsed == null || parsed < 1 || parsed > 5) throw new IllegalArgumentException("difficulty 必须是 1 到 5 的整数");
+        return parsed;
     }
 
     private static Integer parseInteger(String value) {
