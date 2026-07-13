@@ -4,6 +4,7 @@ import com.drillnotebook.app.model.QuestionRecord;
 import com.drillnotebook.app.repository.BankRepository;
 import com.drillnotebook.app.repository.QuestionRepository;
 import com.drillnotebook.app.service.QuestionImportService;
+import com.drillnotebook.app.service.QuestionTypeRules;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
@@ -59,13 +60,14 @@ public class BankController {
     @PostMapping("/banks/{id}/questions")
     public Map<String, Object> createQuestion(@PathVariable long id, @RequestBody Map<String, Object> body) {
         findBank(id);
-        String type = required(body, "type").toLowerCase();
-        if (!type.equals("single") && !type.equals("multiple")) throw new IllegalArgumentException("题型必须是 single 或 multiple");
+        String type = QuestionTypeRules.requireType(required(body, "type"));
         String stem = required(body, "stem");
-        String answer = required(body, "answer").toUpperCase();
+        String answer = QuestionTypeRules.canonicalAnswer(type, string(body, "answer"));
         try {
             @SuppressWarnings("unchecked") List<Map<String, String>> options = (List<Map<String, String>>) body.getOrDefault("options", List.of());
-            long questionId = questions.insert(id, type, stem, questions.optionsJson(options), answer, string(body, "analysis"), integer(body, "difficulty", 3), questions.tagsJson(List.of()), string(body, "chapter"), string(body, "groupId"), integerNullable(body, "orderInGroup"), null);
+            QuestionTypeRules.validate(type, answer, options);
+            List<String> tags = body.get("tags") instanceof List<?> values ? values.stream().map(String::valueOf).map(String::trim).filter(value -> !value.isBlank()).toList() : List.of();
+            long questionId = questions.insert(id, type, stem, questions.optionsJson(options), answer, string(body, "analysis"), difficulty(body, "difficulty", 3), questions.tagsJson(tags), string(body, "chapter"), string(body, "groupId"), integerNullable(body, "orderInGroup"), null);
             return questions.findById(questionId).toMap(true);
         } catch (Exception error) { throw new IllegalArgumentException("题目保存失败"); }
     }
@@ -93,6 +95,14 @@ public class BankController {
     private static String required(Map<String, Object> body, String key) { String value = string(body, key); if (value == null || value.isBlank()) throw new IllegalArgumentException("缺少 " + key); return value.trim(); }
     private static String string(Map<String, Object> body, String key) { Object value = body.get(key); return value == null ? null : String.valueOf(value); }
     private static String stringOr(Map<String, Object> body, String key, String fallback) { String value = string(body, key); return value == null || value.isBlank() ? fallback : value; }
-    private static int integer(Map<String, Object> body, String key, int fallback) { Integer value = integerNullable(body, key); return value == null ? fallback : value; }
     private static Integer integerNullable(Map<String, Object> body, String key) { Object value = body.get(key); if (value == null) return null; try { return Integer.valueOf(String.valueOf(value)); } catch (NumberFormatException error) { return null; } }
+    private static int difficulty(Map<String, Object> body, String key, int fallback) {
+        Object raw = body.get(key);
+        if (raw == null || String.valueOf(raw).isBlank()) return fallback;
+        final int value;
+        try { value = Integer.parseInt(String.valueOf(raw)); }
+        catch (NumberFormatException error) { throw new IllegalArgumentException("难度必须是 1 到 5 的整数"); }
+        if (value < 1 || value > 5) throw new IllegalArgumentException("难度必须是 1 到 5 的整数");
+        return value;
+    }
 }

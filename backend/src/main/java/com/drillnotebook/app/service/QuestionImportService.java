@@ -31,7 +31,12 @@ public class QuestionImportService {
             MarkdownQuestionParser.ParsedQuestion item = parsed.get(index);
             try {
                 String hash = hash(item);
-                if (questions.findByHash(bankId, hash) != null) { skipped++; continue; }
+                String legacyHash = legacyHash(item);
+                if (questions.findByHash(bankId, hash) != null
+                        || (!legacyHash.equals(hash) && questions.findByHash(bankId, legacyHash) != null)) {
+                    skipped++;
+                    continue;
+                }
                 questions.insert(bankId, item.type(), item.stem(), questions.optionsJson(item.options()), item.answer(), item.analysis(), item.difficulty(), questions.tagsJson(item.tags()), item.chapter(), item.groupId(), item.orderInGroup(), hash);
                 imported++;
             } catch (Exception error) {
@@ -43,8 +48,16 @@ public class QuestionImportService {
     }
 
     public static String hash(MarkdownQuestionParser.ParsedQuestion item) throws NoSuchAlgorithmException, JsonProcessingException {
-        String options = item.options().toString();
-        byte[] value = MessageDigest.getInstance("SHA-256").digest((item.stem() + options + item.answer()).getBytes(StandardCharsets.UTF_8));
+        String prefix = QuestionTypeRules.isChoice(item.type()) ? "" : item.type();
+        return digest(prefix + item.stem() + item.options() + item.answer());
+    }
+
+    static String legacyHash(MarkdownQuestionParser.ParsedQuestion item) throws NoSuchAlgorithmException {
+        return digest(item.stem() + item.options() + item.answer());
+    }
+
+    private static String digest(String material) throws NoSuchAlgorithmException {
+        byte[] value = MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8));
         return HexFormat.of().formatHex(value);
     }
 

@@ -1,6 +1,8 @@
 package com.drillnotebook.app.repository;
 
 import com.drillnotebook.app.model.QuestionRecord;
+import com.drillnotebook.app.service.QuestionTypeRules;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.PreparedStatement;
@@ -65,13 +67,32 @@ public class QuestionRepository {
 
     public void update(long id, Map<String, Object> body) throws JsonProcessingException {
         QuestionRecord current = findById(id);
-        String type = body.get("type") == null ? current.type : String.valueOf(body.get("type"));
-        String stem = body.get("stem") == null ? current.stem : String.valueOf(body.get("stem"));
-        String answer = body.get("answer") == null ? current.answer : String.valueOf(body.get("answer"));
+        String type = QuestionTypeRules.requireType(body.get("type") == null ? current.type : String.valueOf(body.get("type")));
+        String stem = body.get("stem") == null ? current.stem : String.valueOf(body.get("stem")).trim();
+        if (stem == null || stem.isBlank()) throw new IllegalArgumentException("题干不能为空");
+        String answer = QuestionTypeRules.canonicalAnswer(type, body.get("answer") == null ? current.answer : String.valueOf(body.get("answer")));
         String analysis = body.get("analysis") == null ? current.analysis : String.valueOf(body.get("analysis"));
-        String options = body.get("options") == null ? mapper.writeValueAsString(current.options) : mapper.writeValueAsString(body.get("options"));
-        jdbc.update("UPDATE question SET type = ?, stem = ?, options = ?, answer = ?, analysis = ? WHERE id = ?", type, stem, options, answer, analysis, id);
+        List<Map<String, String>> optionValues = body.get("options") == null ? current.options : mapper.convertValue(body.get("options"), new TypeReference<>() {});
+        QuestionTypeRules.validate(type, answer, optionValues);
+        String options = mapper.writeValueAsString(optionValues);
+        int difficulty = difficulty(body.get("difficulty"), current.difficulty == null ? 3 : current.difficulty);
+        String tags = body.get("tags") == null ? mapper.writeValueAsString(current.tags) : mapper.writeValueAsString(body.get("tags"));
+        String chapter = body.containsKey("chapter") ? text(body.get("chapter")) : current.chapter;
+        String groupId = body.containsKey("groupId") ? text(body.get("groupId")) : current.groupId;
+        Integer orderInGroup = body.containsKey("orderInGroup") ? integer(body.get("orderInGroup")) : current.orderInGroup;
+        jdbc.update("UPDATE question SET type = ?, stem = ?, options = ?, answer = ?, analysis = ?, difficulty = ?, tags = ?, chapter = ?, group_id = ?, order_in_group = ? WHERE id = ?", type, stem, options, answer, analysis, difficulty, tags, chapter, groupId, orderInGroup, id);
         rebuildFts();
+    }
+
+    private static String text(Object value) { return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value).trim(); }
+    private static Integer integer(Object value) { try { return value == null || String.valueOf(value).isBlank() ? null : Integer.valueOf(String.valueOf(value)); } catch (NumberFormatException error) { return null; } }
+    private static int difficulty(Object raw, int fallback) {
+        if (raw == null || String.valueOf(raw).isBlank()) return fallback;
+        final int value;
+        try { value = Integer.parseInt(String.valueOf(raw)); }
+        catch (NumberFormatException error) { throw new IllegalArgumentException("难度必须是 1 到 5 的整数"); }
+        if (value < 1 || value > 5) throw new IllegalArgumentException("难度必须是 1 到 5 的整数");
+        return value;
     }
 
     public void delete(long id) {
@@ -80,8 +101,11 @@ public class QuestionRepository {
         rebuildFts();
     }
 
-    public void recordAnswer(long questionId, String userAnswer, boolean correct, int timeSpent, String sessionId) {
-        jdbc.update("INSERT INTO answer_record(question_id, user_answer, is_correct, time_spent, session_id) VALUES (?, ?, ?, ?, ?)", questionId, userAnswer, correct ? 1 : 0, timeSpent, sessionId);
+    public void recordAnswer(long questionId, String userAnswer, Boolean correct, int timeSpent, String sessionId, String gradingStatus, Map<String, Object> grading) {
+        String gradingJson;
+        try { gradingJson = grading == null ? null : mapper.writeValueAsString(grading); }
+        catch (JsonProcessingException error) { throw new IllegalArgumentException("判题结果无法保存"); }
+        jdbc.update("INSERT INTO answer_record(question_id, user_answer, is_correct, time_spent, session_id, grading_status, grading_json) VALUES (?, ?, ?, ?, ?, ?, ?)", questionId, userAnswer, correct == null ? null : (correct ? 1 : 0), timeSpent, sessionId, gradingStatus, gradingJson);
     }
 
     public List<QuestionRecord> wrongQuestions() {
@@ -95,9 +119,17 @@ public class QuestionRepository {
     }
 
     public List<Map<String, Object>> sessionAnswers(String sessionId) {
-        return jdbc.query("SELECT question_id, user_answer, is_correct, time_spent, answered_at FROM answer_record WHERE session_id = ? ORDER BY id", (result, row) -> {
+        return jdbc.query("SELECT question_id, user_answer, is_correct, time_spent, grading_status, grading_json, answered_at FROM answer_record WHERE session_id = ? ORDER BY id", (result, row) -> {
             Map<String, Object> item = new LinkedHashMap<>(); item.put("questionId", result.getLong("question_id")); item.put("userAnswer", result.getString("user_answer"));
-            item.put("isCorrect", result.getInt("is_correct")); item.put("timeSpent", result.getInt("time_spent")); item.put("answeredAt", result.getString("answered_at")); return item;
+            Object rawCorrect = result.getObject("is_correct");
+            item.put("isCorrect", rawCorrect == null ? null : ((Number) rawCorrect).intValue() == 1);
+            item.put("timeSpent", result.getInt("time_spent")); item.put("gradingStatus", result.getString("grading_status"));
+            String gradingJson = result.getString("grading_json");
+            if (gradingJson != null && !gradingJson.isBlank()) {
+                try { item.put("grading", mapper.readValue(gradingJson, new TypeReference<Map<String, Object>>() {})); }
+                catch (JsonProcessingException error) { item.put("grading", Map.of()); }
+            }
+            item.put("answeredAt", result.getString("answered_at")); return item;
         }, sessionId);
     }
 

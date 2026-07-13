@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
-import { BookOpenText, BrainCircuit, FileText, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
+import { BookOpenCheck, BookOpenText, BrainCircuit, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore } from './stores/uiStore';
 import { BankPage } from './pages/BankPage';
@@ -9,12 +9,16 @@ import { WrongPage } from './pages/WrongPage';
 import { NotebookPage } from './pages/NotebookPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AiAssistant } from './components/AiAssistant';
+import { QuestionStudyPage } from './pages/QuestionStudyPage';
+import { KnowledgePointPage } from './pages/KnowledgePointPage';
 
 const { Sider, Header, Content } = Layout;
 
 const navItems = [
   { key: '/banks', label: '题库', icon: <BookOpenText size={17} /> },
   { key: '/quiz', label: '刷题', icon: <Target size={17} /> },
+  { key: '/memorize', label: '背题', icon: <BookOpenCheck size={17} /> },
+  { key: '/knowledge', label: '背知识点', icon: <Layers3 size={17} /> },
   { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
   { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
   { key: '/settings', label: '设置', icon: <Settings size={17} /> }
@@ -102,6 +106,8 @@ export function AppRoutes(): JSX.Element {
       <Route path="/" element={<Navigate to="/banks" replace />} />
       <Route path="/banks" element={<BankPage />} />
       <Route path="/quiz" element={<QuizPage />} />
+      <Route path="/memorize" element={<QuestionStudyPage />} />
+      <Route path="/knowledge" element={<KnowledgePointPage />} />
       <Route path="/wrong" element={<WrongPage />} />
       <Route path="/notebooks" element={<NotebookPage />} />
       <Route path="/ai" element={<Navigate to="/settings" replace />} />

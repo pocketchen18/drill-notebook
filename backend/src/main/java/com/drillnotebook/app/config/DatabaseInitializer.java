@@ -7,13 +7,14 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.ResultSet;
 import javax.sql.DataSource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 @Component
 public class DatabaseInitializer {
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 3;
     private final DataSource dataSource;
 
     public DatabaseInitializer(DataSource dataSource) {
@@ -39,6 +40,8 @@ public class DatabaseInitializer {
                 String trimmed = sql.trim();
                 if (!trimmed.isEmpty()) statement.execute(trimmed);
             }
+            ensureColumn(connection, statement, "answer_record", "grading_status", "TEXT");
+            ensureColumn(connection, statement, "answer_record", "grading_json", "TEXT");
             Integer current = null;
             try (var result = statement.executeQuery("SELECT version FROM schema_version LIMIT 1")) {
                 if (result.next()) current = result.getInt(1);
@@ -49,5 +52,13 @@ public class DatabaseInitializer {
         } catch (SQLException error) {
             throw new IllegalStateException("Unable to initialize SQLite schema", error);
         }
+    }
+
+    private static void ensureColumn(Connection connection, Statement statement, String table, String column, String definition) throws SQLException {
+        boolean exists = false;
+        try (ResultSet result = connection.getMetaData().getColumns(null, null, table, column)) {
+            exists = result.next();
+        }
+        if (!exists) statement.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
     }
 }

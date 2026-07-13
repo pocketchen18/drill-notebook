@@ -10,6 +10,7 @@ import { questionsToMarkdown } from '../lib/aiContext';
 import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 import { ExportActions } from '../components/ExportActions';
 import { questionExportDocument } from '../lib/export';
+import { questionTypeLabel } from '../lib/quiz';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -65,7 +66,7 @@ export function WrongPage(): JSX.Element {
               rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(Number)) }}
               columns={[
                 { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{stem}</Typography.Text> },
-                { title: '类型', dataIndex: 'type', width: 100, render: (type: string) => (type === 'multiple' ? '多选' : '单选') },
+                { title: '类型', dataIndex: 'type', width: 100, render: (_: unknown, row: Question) => questionTypeLabel(row.type) },
                 { title: '章节', dataIndex: 'chapter', width: 160, render: (chapter?: string) => chapter || '未分类' },
                 { title: '操作', width: 100, render: (_: unknown, row: Question) => <Button type="text" onClick={() => navigate(`/quiz?questionIds=${row.id}`)}>练习</Button> }
               ]}

@@ -15,21 +15,31 @@ import org.springframework.stereotype.Service;
 @Service
 public class QuizService {
     private final QuestionRepository questions;
+    private final AiService ai;
     private final Map<String, SessionState> sessions = new ConcurrentHashMap<>();
 
-    public QuizService(QuestionRepository questions) { this.questions = questions; }
+    public QuizService(QuestionRepository questions, AiService ai) { this.questions = questions; this.ai = ai; }
 
     public Map<String, Object> start(Map<String, Object> body) {
         List<Long> requested = toIds(body.get("questionIds"));
         List<QuestionRecord> selected;
-        if (!requested.isEmpty()) selected = new ArrayList<>(questions.findByIds(requested));
+        if (!requested.isEmpty()) {
+            Map<Long, QuestionRecord> byId = questions.findByIds(requested).stream().collect(Collectors.toMap((question) -> question.id, (question) -> question));
+            selected = requested.stream().distinct().map(byId::get).filter(java.util.Objects::nonNull).collect(Collectors.toCollection(ArrayList::new));
+        }
         else {
             Object bankValue = body.get("bankId");
             if (bankValue == null) throw new IllegalArgumentException("需要 bankId 或 questionIds");
             selected = new ArrayList<>(questions.findByBank(Long.parseLong(String.valueOf(bankValue))));
             Map<String, Object> filter = body.get("filter") instanceof Map<?, ?> value ? (Map<String, Object>) value : Map.of();
-            if (filter.get("type") != null) selected.removeIf((question) -> !String.valueOf(filter.get("type")).equalsIgnoreCase(question.type));
-            if (filter.get("chapter") != null) selected.removeIf((question) -> !String.valueOf(filter.get("chapter")).equals(question.chapter));
+            List<String> requestedTypes = strings(filter.get("types"));
+            final List<String> types = requestedTypes.isEmpty() && filter.get("type") != null ? List.of(String.valueOf(filter.get("type"))) : requestedTypes;
+            if (!types.isEmpty()) selected.removeIf((question) -> types.stream().noneMatch(type -> type.equalsIgnoreCase(question.type)));
+            List<String> requestedChapters = strings(filter.get("chapters"));
+            final List<String> chapters = requestedChapters.isEmpty() && filter.get("chapter") != null ? List.of(String.valueOf(filter.get("chapter"))) : requestedChapters;
+            if (!chapters.isEmpty()) selected.removeIf((question) -> question.chapter == null || !chapters.contains(question.chapter));
+            List<String> tags = strings(filter.get("tags"));
+            if (!tags.isEmpty()) selected.removeIf((question) -> question.tags == null || question.tags.stream().noneMatch(tags::contains));
         }
         if (selected.isEmpty()) throw new IllegalArgumentException("没有可练习的题目");
         if (Boolean.parseBoolean(String.valueOf(body.getOrDefault("shuffle", true)))) selected = shuffleGroups(selected);
@@ -62,9 +72,32 @@ public class QuizService {
         if (!session.questionIds().contains(questionId)) throw new IllegalArgumentException("题目不属于当前练习");
         QuestionRecord question = questions.findById(questionId);
         String userAnswer = answerText(body.get("userAnswer"));
-        boolean correct = normalize(userAnswer).equals(normalize(question.answer));
-        questions.recordAnswer(questionId, userAnswer, correct, body.get("timeSpent") == null ? 0 : Integer.parseInt(String.valueOf(body.get("timeSpent"))), sessionId);
-        return Map.of("isCorrect", correct, "correctAnswer", question.answer, "analysis", question.analysis == null ? "" : question.analysis);
+        if (userAnswer.isBlank()) throw new IllegalArgumentException("答案不能为空");
+        Boolean correct = null;
+        String gradingStatus = "deterministic";
+        Map<String, Object> grading = null;
+        if ("essay".equals(question.type)) {
+            boolean useAi = !Boolean.FALSE.equals(body.get("useAiGrading")) && !"false".equalsIgnoreCase(String.valueOf(body.get("useAiGrading")));
+            if (useAi) {
+                try {
+                    grading = ai.gradeEssay(question, userAnswer, String.valueOf(body.getOrDefault("masterPassword", "")));
+                    gradingStatus = "ai_suggested";
+                } catch (IllegalArgumentException error) {
+                    gradingStatus = "unavailable";
+                    grading = Map.of("version", 1, "available", false, "message", "AI 辅助判题不可用，答案已保存。请结合参考答案自行复核。");
+                }
+            } else {
+                gradingStatus = "ungraded";
+                grading = Map.of("version", 1, "available", false, "message", "已保存答案，本次未使用 AI 辅助判题。");
+            }
+        } else {
+            correct = QuestionTypeRules.deterministicCorrect(question.type, userAnswer, question.answer);
+        }
+        questions.recordAnswer(questionId, userAnswer, correct, body.get("timeSpent") == null ? 0 : Integer.parseInt(String.valueOf(body.get("timeSpent"))), sessionId, gradingStatus, grading);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("isCorrect", correct); response.put("correctAnswer", question.answer == null ? "" : question.answer); response.put("analysis", question.analysis == null ? "" : question.analysis);
+        response.put("gradingStatus", gradingStatus); response.put("grading", grading);
+        return response;
     }
 
     public List<Map<String, Object>> wrong() { return questions.wrongQuestions().stream().map((question) -> question.toMap(true)).toList(); }
@@ -73,8 +106,10 @@ public class QuizService {
         SessionState session = sessions.get(sessionId);
         if (session == null) throw new IllegalArgumentException("练习 session 不存在或已过期");
         List<Map<String, Object>> answers = questions.sessionAnswers(sessionId);
-        long correct = answers.stream().filter((answer) -> Integer.valueOf(1).equals(answer.get("isCorrect"))).count();
-        return Map.of("sessionId", sessionId, "total", session.questionIds().size(), "answered", answers.size(), "correct", correct, "wrong", answers.size() - correct, "answers", answers);
+        long correct = answers.stream().filter((answer) -> Boolean.TRUE.equals(answer.get("isCorrect"))).count();
+        long wrong = answers.stream().filter((answer) -> Boolean.FALSE.equals(answer.get("isCorrect"))).count();
+        long ungraded = answers.stream().filter((answer) -> answer.get("isCorrect") == null).count();
+        return Map.of("sessionId", sessionId, "total", session.questionIds().size(), "answered", answers.size(), "correct", correct, "wrong", wrong, "ungraded", ungraded, "answers", answers);
     }
 
     private static String answerText(Object value) {
@@ -83,14 +118,14 @@ public class QuizService {
         return String.valueOf(value);
     }
 
-    private static String normalize(String value) {
-        return java.util.Arrays.stream(value.toUpperCase().split(","))
-                .map(String::trim).filter((item) -> !item.isBlank()).distinct().sorted().collect(Collectors.joining(","));
-    }
-
     private static List<Long> toIds(Object value) {
         if (!(value instanceof List<?> list)) return List.of();
         return list.stream().map((item) -> Long.parseLong(String.valueOf(item))).toList();
+    }
+
+    private static List<String> strings(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().map(String::valueOf).map(String::trim).filter(item -> !item.isBlank()).toList();
     }
 
     private record SessionState(List<Long> questionIds) {}

@@ -1,4 +1,5 @@
 import type { NotePage, Question } from './types';
+import { questionTypeLabel } from './quiz';
 
 function childNodes(node: Record<string, unknown>): Record<string, unknown>[] {
   return Array.isArray(node.content) ? node.content.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : [];
@@ -15,14 +16,15 @@ function questionMarkdown(question: Question): string {
     .map((option) => `${option?.key ?? ''}. ${option?.text ?? ''}`)
     .join('\n');
   const stem = question.stem ?? '';
-  const answer = question.answer ? `\n\n**答案：** ${question.answer}` : '';
+  const answer = question.answer ? `\n\n**${question.type === 'essay' ? '参考答案' : '答案'}：** ${question.answer}` : '';
   const analysis = question.analysis ? `\n\n**解析：**\n\n${question.analysis}` : '';
   const metadata = [
+    `题型：${questionTypeLabel(question.type)}`,
     question.chapter ? `章节：${question.chapter}` : '',
     question.tags?.length ? `标签：${question.tags.join('、')}` : '',
     question.difficulty !== undefined ? `难度：${question.difficulty}` : ''
   ].filter(Boolean).join('；');
-  return `### ${stem}${metadata ? `\n\n> ${metadata}` : ''}\n\n${options}${answer}${analysis}`;
+  return `### ${stem}${metadata ? `\n\n> ${metadata}` : ''}${options ? `\n\n${options}` : ''}${answer}${analysis}`;
 }
 
 export function questionsToMarkdown(questions: Question[] | null | undefined): string {

@@ -1,6 +1,6 @@
 # Drill Notebook
 
-Drill Notebook is a Windows-first, green-portable Standard MVP for Markdown question banks, quizzes, wrong-answer practice, a TipTap notebook, and an optional backend-proxied AI chat.
+Drill Notebook is a Windows-first, green-portable Standard MVP for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, a TipTap notebook, and optional backend-proxied AI assistance.
 
 ## Requirements
 
@@ -66,7 +66,7 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 
 ## MVP scope
 
-Included: single-choice and multiple-choice Markdown import, idempotent import, quiz sessions, wrong-answer tracking, notebooks with autosave, KaTeX math, Mermaid diagrams, QuestionBlock snapshots, encrypted custom OpenAI-compatible API keys, chat, and text summaries.
+Included: single-choice, multiple-choice, fill-in, true/false, and essay Markdown import; advanced session ordering; question and knowledge-point memorization; wrong-answer tracking; notebooks with autosave; KaTeX, Mermaid, snapshots, exports; encrypted OpenAI-compatible AI chat and advisory essay grading.
 
 Deferred: PDF import, spaced repetition, knowledge graphs, exam simulation, video or multimodal import, collaboration, SQLCipher full-database encryption, and AI content generation beyond chat and summary.
 
@@ -85,10 +85,30 @@ npm run start:check
 
 ### 功能说明
 
-- `题库`：导入 Markdown 单选/多选题库，重复导入会自动跳过。
+- `题库`：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。
 - `刷题`：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切换上一题/下一题。
+- `背题` / `背知识点`：按题型、章节、标签或具体条目批量选择，支持随机重排、手动调整顺序和会话内跳转。
 - `笔记本`：公式、Mermaid 和 Markdown 块**默认渲染**，点击块进入编辑，完成/失焦后回到渲染视图（类似 Obsidian Live Preview）。
 - `AI`：全局悬浮球 + 侧边栏（`Ctrl+J`），在刷题/错题/笔记页自动携带当前上下文；助手回复可一键「插入笔记」。API 连接在「设置」中配置。
+
+### Markdown 题型格式
+
+每道题使用 YAML frontmatter，题目之间用单独一行 `===` 分隔。选择题必须提供选项和 `answer`；填空题提供文本 `answer`；判断题的标准答案使用 `true` 或 `false`。解答题不要求固定答案，可在正文中加入可选的参考答案：
+
+```markdown
+---
+type: essay
+tags: [jvm, gc]
+---
+### 题干
+简述垃圾回收的目标。
+### 参考答案
+识别并回收不可达对象，释放内存。
+### 解析
+可结合可达性分析展开。
+```
+
+解答题提交后会尝试调用「设置」中已配置的模型。模型只提供建议得分、置信度和说明，不写入确定的对错；AI 未配置或调用失败时答案仍会保存，也不会被误记为错题。
 
 ### 打包
 
