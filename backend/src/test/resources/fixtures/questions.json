@@ -1,0 +1,58 @@
+{
+  "questions": [
+    {
+      "type": "single",
+      "stem": "Java 中用于定义类的关键字是什么？",
+      "options": [
+        {"key": "A", "text": "function"},
+        {"key": "B", "text": "class"},
+        {"key": "C", "text": "struct"},
+        {"key": "D", "text": "type"}
+      ],
+      "answer": "B",
+      "analysis": "Java 使用 class 关键字声明类。",
+      "difficulty": 2,
+      "tags": ["java", "basics"],
+      "chapter": "Java 基础",
+      "groupId": "intro",
+      "orderInGroup": 1
+    },
+    {
+      "type": "multiple",
+      "stem": "以下哪些属于 Java 集合接口？",
+      "options": [
+        {"key": "A", "text": "List"},
+        {"key": "B", "text": "Thread"},
+        {"key": "C", "text": "Set"},
+        {"key": "D", "text": "String"}
+      ],
+      "answer": "A,C",
+      "analysis": "List 和 Set 都是 Java 集合框架中的接口。",
+      "difficulty": 3,
+      "tags": ["java", "collection"],
+      "chapter": "Java 基础",
+      "groupId": "intro",
+      "orderInGroup": 2
+    },
+    {
+      "type": "fill",
+      "stem": "JVM 的英文全称是什么？",
+      "answer": "Java Virtual Machine",
+      "analysis": "JVM 是 Java Virtual Machine 的缩写。",
+      "difficulty": 2
+    },
+    {
+      "type": "true_false",
+      "stem": "Java 字节码可以由不同平台上的 JVM 执行。",
+      "answer": "true",
+      "analysis": "JVM 屏蔽了底层平台差异。",
+      "difficulty": 1
+    },
+    {
+      "type": "essay",
+      "stem": "简述 Java 垃圾回收的目标和基本判断思路。",
+      "analysis": "解答题没有固定答案；参考答案用于复核。",
+      "difficulty": 4
+    }
+  ]
+}
