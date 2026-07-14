@@ -121,7 +121,7 @@ export function BankPage(): JSX.Element {
   const openImportMarkdown = async (): Promise<void> => {
     if (!selectedId) { Message.warning('请先创建或选择题库'); return; }
     if (window.api) {
-      const result = await window.api.dialog.openTextFile();
+      const result = await window.api.dialog.openTextFile(['md', 'markdown', 'txt']);
       if (!result.canceled && result.content !== undefined) importMutation.mutate(result.content);
       return;
     }
@@ -131,7 +131,7 @@ export function BankPage(): JSX.Element {
   const openImportJson = async (): Promise<void> => {
     if (!selectedId) { Message.warning('请先创建或选择题库'); return; }
     if (window.api) {
-      const result = await window.api.dialog.openTextFile();
+      const result = await window.api.dialog.openTextFile(['json']);
       if (!result.canceled && result.content !== undefined) importJsonMutation.mutate(result.content);
       return;
     }
