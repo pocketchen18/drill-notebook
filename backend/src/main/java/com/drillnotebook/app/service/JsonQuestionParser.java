@@ -42,9 +42,20 @@ public class JsonQuestionParser {
 
     public List<MarkdownQuestionParser.ParsedQuestion> parse(String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("JSON 内容为空");
+        String cleaned = stripMarkdownFence(source);
         JsonNode root;
-        try { root = mapper.readTree(source); }
-        catch (Exception error) { throw new IllegalArgumentException("JSON 格式不合法：" + error.getMessage()); }
+        try {
+            root = mapper.readTree(cleaned);
+        } catch (Exception firstError) {
+            String repaired = repairUnescapedQuotes(cleaned);
+            try {
+                root = mapper.readTree(repaired);
+            } catch (Exception secondError) {
+                String preview = cleaned.length() > 500 ? cleaned.substring(0, 500) + "..." : cleaned;
+                throw new IllegalArgumentException("JSON 格式不合法：" + firstError.getMessage()
+                        + "；AI 原始返回前 500 字符：" + preview);
+            }
+        }
 
         JsonNode questionsNode = root.isArray() ? root : root.path("questions");
         if (!questionsNode.isArray() || questionsNode.isEmpty()) throw new IllegalArgumentException("没有找到题目");
@@ -125,6 +136,82 @@ public class JsonQuestionParser {
         if (value.isMissingNode() || value.isNull()) return null;
         String text = value.asText();
         return text == null ? null : text.trim();
+    }
+
+    /**
+     * 去掉 AI 返回中常见的 Markdown 代码围栏（```json ... ```），以及首尾多余空白。
+     */
+    private static String stripMarkdownFence(String source) {
+        String trimmed = source.trim();
+        if (trimmed.startsWith("```")) {
+            int firstNewline = trimmed.indexOf('\n');
+            if (firstNewline > 0) trimmed = trimmed.substring(firstNewline + 1);
+            else trimmed = trimmed.substring(3);
+            trimmed = trimmed.trim();
+            if (trimmed.endsWith("```")) trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
+        }
+        return trimmed;
+    }
+
+    /**
+     * 尝试修复 JSON 字符串值里未转义的双引号。
+     * <p>
+     * AI 模型经常把题干/选项里的双引号直接写进 JSON 字符串而不转义成 {@code \"}，
+     * 导致 Jackson 解析失败。这里用一个简单的状态机扫描 JSON 文本：
+     * 在字符串值内部遇到双引号时，判断它是否"真的"是字符串结束符——
+     * 如果后面紧跟的是 JSON 结构字符（逗号、冒号、括号、空白），认为是结束符；
+     * 否则认为是未转义的内容字符，前面补一个反斜杠。
+     * <p>
+     * 这不是完美的修复方案（无法处理嵌套引号的所有边界情况），但能覆盖
+     * AI 返回 JSON 时最常见的双引号转义缺失问题，让导入流程继续往前走。
+     */
+    private static String repairUnescapedQuotes(String source) {
+        if (source == null || source.isEmpty()) return source;
+        StringBuilder out = new StringBuilder(source.length() + 16);
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (escaped) {
+                out.append(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                out.append(c);
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                if (!inString) {
+                    inString = true;
+                    out.append(c);
+                    continue;
+                }
+                // 在字符串内部遇到双引号：判断是否为字符串结束符
+                int next = peekNonWhitespace(source, i + 1);
+                // 字符串结束符后面应该跟 JSON 结构字符：, : } ] 或行尾
+                if (next < 0 || next == ',' || next == ':' || next == '}' || next == ']') {
+                    inString = false;
+                    out.append(c);
+                } else {
+                    // 认为是未转义的内容双引号，补一个反斜杠
+                    out.append('\\').append('"');
+                }
+                continue;
+            }
+            out.append(c);
+        }
+        return out.toString();
+    }
+
+    private static int peekNonWhitespace(String source, int from) {
+        for (int i = from; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+            return c;
+        }
+        return -1;
     }
 
 }

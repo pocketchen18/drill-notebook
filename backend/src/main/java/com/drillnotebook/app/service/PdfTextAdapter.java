@@ -18,6 +18,12 @@ public class PdfTextAdapter {
     private static final Pattern OPTION = Pattern.compile("^\\s*([A-Da-d])[.、\\)）]\\s*(.*)$");
     private static final Pattern ANSWER_MARKER =
             Pattern.compile("(?:答案|正确答案|答)[：:]\\s*([A-Da-d、,\\s]+)|【答案】\\s*([A-Da-d、,\\s]+)");
+    /** 答案前缀（答案：/正确答案：/答：），用于 ANSWER_MARKER 不命中时回退捕获整段答案文本。 */
+    private static final Pattern ANSWER_PREFIX =
+            Pattern.compile("^\\s*(?:答案|正确答案|答)[：:]\\s*(.*)$");
+    /** 解析前缀（解析：/【解析】/【分析】），命中时既进入解析状态又保留同行内容。 */
+    private static final Pattern ANALYSIS_PREFIX =
+            Pattern.compile("^\\s*(?:解析|【解析】|【分析】)[：:]?\\s*(.*)$");
     private static final Pattern REFERENCE_SECTION =
             Pattern.compile("参考答案|答案及解析|答案与解析|参考答案及解析|参考答案$", Pattern.CASE_INSENSITIVE);
 
@@ -77,23 +83,34 @@ public class PdfTextAdapter {
                 if (answerMatcher.find()) {
                     String answer = answerMatcher.group(1) != null ? answerMatcher.group(1) : answerMatcher.group(2);
                     current.inlineAnswer = cleanAnswer(answer);
-                } else if (line.contains("解析") || line.contains("【解析】") || line.contains("【分析】")) {
-                    current.inAnalysis = true;
-                } else if (current.inAnalysis) {
-                    if (!line.isBlank()) current.analysisLines.add(line.trim());
                 } else {
-                    Matcher optionMatcher = OPTION.matcher(line);
-                    if (optionMatcher.find()) {
-                        Map<String, String> option = new LinkedHashMap<>();
-                        option.put("key", optionMatcher.group(1).toUpperCase());
-                        option.put("text", optionMatcher.group(2).trim());
-                        current.options.add(option);
-                    } else if (!line.isBlank()) {
-                        if (current.options.isEmpty()) {
-                            current.stem += "\n" + line.trim();
-                        } else {
-                            Map<String, String> last = current.options.get(current.options.size() - 1);
-                            last.put("text", last.get("text") + " " + line.trim());
+                    Matcher prefixMatcher = ANSWER_PREFIX.matcher(line);
+                    if (prefixMatcher.find()) {
+                        String answer = prefixMatcher.group(1).trim();
+                        if (!answer.isBlank()) current.inlineAnswer = answer;
+                    } else if (line.contains("解析") || line.contains("【解析】") || line.contains("【分析】")) {
+                        current.inAnalysis = true;
+                        Matcher analysisMatcher = ANALYSIS_PREFIX.matcher(line);
+                        if (analysisMatcher.find()) {
+                            String content = analysisMatcher.group(1).trim();
+                            if (!content.isBlank()) current.analysisLines.add(content);
+                        }
+                    } else if (current.inAnalysis) {
+                        if (!line.isBlank()) current.analysisLines.add(line.trim());
+                    } else {
+                        Matcher optionMatcher = OPTION.matcher(line);
+                        if (optionMatcher.find()) {
+                            Map<String, String> option = new LinkedHashMap<>();
+                            option.put("key", optionMatcher.group(1).toUpperCase());
+                            option.put("text", optionMatcher.group(2).trim());
+                            current.options.add(option);
+                        } else if (!line.isBlank()) {
+                            if (current.options.isEmpty()) {
+                                current.stem += "\n" + line.trim();
+                            } else {
+                                Map<String, String> last = current.options.get(current.options.size() - 1);
+                                last.put("text", last.get("text") + " " + line.trim());
+                            }
                         }
                     }
                 }
