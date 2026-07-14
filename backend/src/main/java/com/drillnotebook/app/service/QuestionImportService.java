@@ -7,6 +7,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -14,19 +15,31 @@ import org.springframework.stereotype.Service;
 @Service
 public class QuestionImportService {
     private final MarkdownQuestionParser parser;
+    private final JsonQuestionParser jsonParser;
     private final QuestionRepository questions;
 
-    public QuestionImportService(MarkdownQuestionParser parser, QuestionRepository questions) {
+    public QuestionImportService(MarkdownQuestionParser parser, JsonQuestionParser jsonParser, QuestionRepository questions) {
         this.parser = parser;
+        this.jsonParser = jsonParser;
         this.questions = questions;
     }
 
     public ImportResult importMarkdown(long bankId, String source) {
+        List<MarkdownQuestionParser.ParsedQuestion> parsed;
+        try { parsed = parser.parse(source); } catch (IllegalArgumentException error) { return new ImportResult(0, 0, 1, List.of(error.getMessage()), "rules"); }
+        return importParsed(bankId, parsed, "rules");
+    }
+
+    public ImportResult importJson(long bankId, String source) {
+        List<MarkdownQuestionParser.ParsedQuestion> parsed;
+        try { parsed = jsonParser.parse(source); } catch (IllegalArgumentException error) { return new ImportResult(0, 0, 1, List.of(error.getMessage()), "rules"); }
+        return importParsed(bankId, parsed, "rules");
+    }
+
+    public ImportResult importParsed(long bankId, List<MarkdownQuestionParser.ParsedQuestion> parsed, String strategy) {
         List<String> errors = new ArrayList<>();
         int imported = 0;
         int skipped = 0;
-        List<MarkdownQuestionParser.ParsedQuestion> parsed;
-        try { parsed = parser.parse(source); } catch (IllegalArgumentException error) { return new ImportResult(0, 0, 1, List.of(error.getMessage())); }
         for (int index = 0; index < parsed.size(); index++) {
             MarkdownQuestionParser.ParsedQuestion item = parsed.get(index);
             try {
@@ -44,7 +57,7 @@ public class QuestionImportService {
             }
         }
         questions.rebuildFts();
-        return new ImportResult(imported, skipped, errors.size(), errors);
+        return new ImportResult(imported, skipped, errors.size(), errors, strategy);
     }
 
     public static String hash(MarkdownQuestionParser.ParsedQuestion item) throws NoSuchAlgorithmException, JsonProcessingException {
@@ -61,7 +74,15 @@ public class QuestionImportService {
         return HexFormat.of().formatHex(value);
     }
 
-    public record ImportResult(int imported, int skipped, int failed, List<String> errors) {
-        public Map<String, Object> toMap() { return Map.of("imported", imported, "skipped", skipped, "failed", failed, "errors", errors); }
+    public record ImportResult(int imported, int skipped, int failed, List<String> errors, String strategy) {
+        public Map<String, Object> toMap() {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("imported", imported);
+            result.put("skipped", skipped);
+            result.put("failed", failed);
+            result.put("errors", errors);
+            result.put("strategy", strategy);
+            return result;
+        }
     }
 }

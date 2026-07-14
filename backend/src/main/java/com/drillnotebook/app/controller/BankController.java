@@ -5,6 +5,7 @@ import com.drillnotebook.app.repository.BankRepository;
 import com.drillnotebook.app.repository.QuestionRepository;
 import com.drillnotebook.app.service.QuestionImportService;
 import com.drillnotebook.app.service.QuestionTypeRules;
+import com.drillnotebook.app.service.PdfImportService;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
@@ -26,9 +27,10 @@ public class BankController {
     private final BankRepository banks;
     private final QuestionRepository questions;
     private final QuestionImportService importer;
+    private final PdfImportService pdfImporter;
 
-    public BankController(BankRepository banks, QuestionRepository questions, QuestionImportService importer) {
-        this.banks = banks; this.questions = questions; this.importer = importer;
+    public BankController(BankRepository banks, QuestionRepository questions, QuestionImportService importer, PdfImportService pdfImporter) {
+        this.banks = banks; this.questions = questions; this.importer = importer; this.pdfImporter = pdfImporter;
     }
 
     @GetMapping("/banks")
@@ -86,6 +88,24 @@ public class BankController {
         String content = body.isTextual() ? body.asText() : body.path("content").asText(null);
         if (content == null) throw new IllegalArgumentException("缺少 Markdown 内容");
         return importer.importMarkdown(id, content).toMap();
+    }
+
+    @PostMapping("/banks/{id}/import/json")
+    public Map<String, Object> importJson(@PathVariable long id, @RequestBody JsonNode body) {
+        findBank(id);
+        String content = body.isTextual() ? body.asText() : body.path("content").asText(null);
+        if (content == null) throw new IllegalArgumentException("缺少 JSON 内容");
+        return importer.importJson(id, content).toMap();
+    }
+
+    @PostMapping("/banks/{id}/import/pdf")
+    public Map<String, Object> importPdf(@PathVariable long id, @RequestBody JsonNode body) {
+        findBank(id);
+        String content = body.isTextual() ? body.asText() : body.path("content").asText(null);
+        if (content == null) throw new IllegalArgumentException("缺少 PDF 内容");
+        boolean forceAi = body.path("forceAi").asBoolean(false);
+        String masterPassword = body.path("masterPassword").asText(null);
+        return pdfImporter.importPdf(id, content, forceAi, masterPassword).toMap();
     }
 
     private Map<String, Object> findBank(long id) {
