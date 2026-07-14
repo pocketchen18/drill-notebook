@@ -1,0 +1,26 @@
+[
+  {
+    "type": "single",
+    "stem": "下列哪个不是 Java 的基本类型？",
+    "options": [
+      {"key": "A", "text": "int"},
+      {"key": "B", "text": "String"},
+      {"key": "C", "text": "boolean"},
+      {"key": "D", "text": "long"}
+    ],
+    "answer": "B",
+    "difficulty": 2
+  },
+  {
+    "type": "multiple",
+    "stem": "以下哪些是 Java 关键字？",
+    "options": [
+      {"key": "A", "text": "final"},
+      {"key": "B", "text": "interface"},
+      {"key": "C", "text": "goto"},
+      {"key": "D", "text": "main"}
+    ],
+    "answer": "A,B",
+    "difficulty": 3
+  }
+]

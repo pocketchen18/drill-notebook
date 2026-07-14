@@ -1,0 +1,16 @@
+1. Java 中用于定义类的关键字是什么？
+A. function
+B. class
+C. struct
+D. type
+答案：B
+解析：Java 使用 class 关键字声明类。
+
+2. 创建 Java 对象时必须使用的关键字是
+A. class
+B. new
+C. create
+D. static
+
+参考答案及解析
+2. B  new 关键字用于在堆内存为对象分配空间并初始化。

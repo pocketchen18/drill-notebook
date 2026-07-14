@@ -33,7 +33,7 @@ class QuestionImportServiceTest {
         MarkdownQuestionParser.ParsedQuestion item = parser.parse(source).get(0);
         repository.insert(bankId, item.type(), item.stem(), repository.optionsJson(item.options()), item.answer(), item.analysis(), item.difficulty(), repository.tagsJson(item.tags()), item.chapter(), item.groupId(), item.orderInGroup(), QuestionImportService.legacyHash(item));
 
-        QuestionImportService.ImportResult result = new QuestionImportService(parser, repository).importMarkdown(bankId, source);
+        QuestionImportService.ImportResult result = new QuestionImportService(parser, new JsonQuestionParser(new ObjectMapper()), repository).importMarkdown(bankId, source);
 
         assertEquals(0, result.imported());
         assertEquals(1, result.skipped());

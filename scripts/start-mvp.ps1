@@ -47,13 +47,22 @@ function Require-Command {
 function Invoke-Checked {
     param(
         [string]$Command,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [string]$WorkingDirectory
     )
 
     Write-Host (">> " + $Command + ' ' + ($Arguments -join ' ')) -ForegroundColor DarkGray
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE`: $Command"
+    $previousDirectory = (Get-Location).Path
+    try {
+        if ($WorkingDirectory) {
+            Set-Location -LiteralPath $WorkingDirectory
+        }
+        & $Command @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Command failed with exit code $LASTEXITCODE`: $Command"
+        }
+    } finally {
+        Set-Location -LiteralPath $previousDirectory
     }
 }
 
@@ -104,7 +113,7 @@ if (-not (Test-Path -LiteralPath $electronExe) -or -not (Test-Path -LiteralPath 
     if ($NoInstall) {
         throw 'Node dependencies are missing. Run npm install, or rerun without -NoInstall.'
     }
-    Invoke-Checked 'npm.cmd' @('install', '--no-audit', '--no-fund')
+    Invoke-Checked 'npm.cmd' @('install', '--no-audit', '--no-fund') $workspace
 }
 
 $buildFrontendAndElectron = $Rebuild -or
@@ -130,14 +139,14 @@ if ($CheckOnly) {
 }
 
 if ($buildFrontendAndElectron) {
-    Invoke-Checked 'npm.cmd' @('run', 'build')
+    Invoke-Checked 'npm.cmd' @('run', 'build') $workspace
 }
 if ($buildBackend) {
     $mavenWrapper = Join-Path $workspace 'mvnw.cmd'
     if (-not (Test-Path -LiteralPath $mavenWrapper)) {
         throw "Maven wrapper not found: $mavenWrapper"
     }
-    Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', '-DskipTests', 'package')
+    Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', '-DskipTests', 'package') $workspace
 }
 
 if (-not (Test-Path -LiteralPath $electronExe)) {

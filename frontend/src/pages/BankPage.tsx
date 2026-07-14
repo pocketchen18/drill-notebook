@@ -1,27 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
-import { BookOpenText, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { BookOpenText, Braces, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
 import type { Bank, Question } from '../lib/types';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { ExportActions } from '../components/ExportActions';
+import { PdfImportButton } from '../components/PdfImportButton';
 import { questionExportDocument } from '../lib/export';
 import { QuestionEditorModal } from '../components/QuestionEditorModal';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 
 const { Text } = Typography;
 
-function PageHeading({ onCreate, onImport, importing }: { onCreate: () => void; onImport: () => void; importing: boolean }): JSX.Element {
+function PageHeading({ onCreate, onImportMarkdown, onImportJson, importingMarkdown, importingJson, pdfImport }: { onCreate: () => void; onImportMarkdown: () => void; onImportJson: () => void; importingMarkdown: boolean; importingJson: boolean; pdfImport: React.ReactNode }): JSX.Element {
   return (
     <div className="page-heading">
       <div>
         <h1>题库</h1>
-        <p>导入 Markdown 题库，管理题目并进入练习。</p>
+        <p>导入 Markdown、JSON 或 PDF 题库，管理题目并进入练习。</p>
       </div>
       <Space>
-        <Button icon={<FileUp size={16} />} loading={importing} onClick={onImport}>导入 Markdown</Button>
+        {pdfImport}
+        <Button icon={<FileUp size={16} />} loading={importingMarkdown} onClick={onImportMarkdown}>导入 Markdown</Button>
+        <Button icon={<Braces size={16} />} loading={importingJson} onClick={onImportJson}>导入 JSON</Button>
         <Button type="primary" icon={<Plus size={16} />} onClick={onCreate}>新建题库</Button>
       </Space>
     </div>
@@ -32,6 +35,7 @@ export function BankPage(): JSX.Element {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
+  const jsonFileInput = useRef<HTMLInputElement>(null);
   const [selectedId, setSelectedId] = useState<number>();
   const [createVisible, setCreateVisible] = useState(false);
   const [newName, setNewName] = useState('');
@@ -98,29 +102,53 @@ export function BankPage(): JSX.Element {
     onError: (error) => Message.error(error.message)
   });
 
+  const importJsonMutation = useMutation({
+    mutationFn: (content: string) => post<{ imported: number; skipped: number; failed: number; errors?: string[] }>(`/api/banks/${selectedId}/import/json`, { content }),
+    onSuccess: (result) => {
+      invalidate();
+      Message.success(`导入完成：新增 ${result.imported}，跳过 ${result.skipped}，失败 ${result.failed}`);
+      if (result.errors?.length) Message.warning(result.errors.slice(0, 2).join('；'));
+    },
+    onError: (error) => Message.error(error.message)
+  });
+
   const deleteQuestionMutation = useMutation({
     mutationFn: (id: number) => del<void>(`/api/questions/${id}`),
     onSuccess: () => { invalidate(); Message.success('题目已删除'); },
     onError: (error) => Message.error(error.message)
   });
 
-  const openImport = async (): Promise<void> => {
-    if (!selectedId) {
-      Message.warning('请先创建或选择题库');
-      return;
-    }
+  const openImportMarkdown = async (): Promise<void> => {
+    if (!selectedId) { Message.warning('请先创建或选择题库'); return; }
     if (window.api) {
-      const result = await window.api.dialog.openTextFile();
+      const result = await window.api.dialog.openTextFile(['md', 'markdown', 'txt']);
       if (!result.canceled && result.content !== undefined) importMutation.mutate(result.content);
       return;
     }
     fileInput.current?.click();
   };
 
-  const onFallbackFile = (event: React.ChangeEvent<HTMLInputElement>): void => {
+  const openImportJson = async (): Promise<void> => {
+    if (!selectedId) { Message.warning('请先创建或选择题库'); return; }
+    if (window.api) {
+      const result = await window.api.dialog.openTextFile(['json']);
+      if (!result.canceled && result.content !== undefined) importJsonMutation.mutate(result.content);
+      return;
+    }
+    jsonFileInput.current?.click();
+  };
+
+  const onFallbackMarkdown = (event: React.ChangeEvent<HTMLInputElement>): void => {
     const file = event.target.files?.[0];
     if (!file) return;
     void file.text().then((content) => importMutation.mutate(content));
+    event.target.value = '';
+  };
+
+  const onFallbackJson = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    void file.text().then((content) => importJsonMutation.mutate(content));
     event.target.value = '';
   };
 
@@ -131,8 +159,16 @@ export function BankPage(): JSX.Element {
 
   return (
     <main className="page">
-      <PageHeading onCreate={() => setCreateVisible(true)} onImport={() => void openImport()} importing={importMutation.isPending} />
-      <input ref={fileInput} type="file" accept=".md,.markdown,.txt" hidden onChange={onFallbackFile} />
+      <PageHeading
+        onCreate={() => setCreateVisible(true)}
+        onImportMarkdown={() => void openImportMarkdown()}
+        onImportJson={() => void openImportJson()}
+        importingMarkdown={importMutation.isPending}
+        importingJson={importJsonMutation.isPending}
+        pdfImport={selectedId ? <PdfImportButton bankId={selectedId} onImported={invalidate} /> : null}
+      />
+      <input ref={fileInput} type="file" accept=".md,.markdown,.txt" hidden onChange={onFallbackMarkdown} />
+      <input ref={jsonFileInput} type="file" accept=".json,application/json" hidden onChange={onFallbackJson} />
       <div className="content-grid">
         <section className="panel">
           <div className="panel-header">

@@ -75,10 +75,12 @@ ipcMain.handle('app:set-config', (_event, value: unknown) => {
   const config = value && typeof value === 'object' && 'theme' in value && value.theme === 'dark' ? { theme: 'dark' } : { theme: 'light' };
   fs.writeFileSync(path.join(portablePaths.config, 'app-config.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
 });
-ipcMain.handle('dialog:open-text-file', async () => {
+ipcMain.handle('dialog:open-text-file', async (_event, extensions?: string[]) => {
+  const ext = extensions && extensions.length > 0 ? extensions : ['md', 'markdown', 'txt'];
+  const filterName = ext.includes('json') ? 'JSON' : ext.includes('pdf') ? 'PDF' : 'Markdown';
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
-    filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }]
+    filters: [{ name: filterName, extensions: ext }]
   });
   if (result.canceled || result.filePaths.length === 0) return { canceled: true };
   const selected = result.filePaths[0];

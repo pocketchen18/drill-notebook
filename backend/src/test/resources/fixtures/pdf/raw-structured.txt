@@ -1,0 +1,15 @@
+1. Java 中用于定义类的关键字是什么？
+A. function
+B. class
+C. struct
+D. type
+答案：B
+解析：Java 使用 class 关键字声明类。
+
+2. 以下哪些属于 Java 集合接口？
+A. List
+B. Thread
+C. Set
+D. String
+答案：A、C
+解析：List 和 Set 都是 Java 集合框架中的接口。

@@ -86,6 +86,18 @@ export function setupPortablePaths(): PortablePaths {
 export function clearPortableTemp(paths: PortablePaths): void {
   if (!fs.existsSync(paths.tmp)) return;
   for (const entry of fs.readdirSync(paths.tmp)) {
-    fs.rmSync(path.join(paths.tmp, entry), { recursive: true, force: true });
+    try {
+      fs.rmSync(path.join(paths.tmp, entry), { recursive: true, force: true });
+    } catch (error) {
+      // On Windows, files still held by a just-killed backend process or by
+      // Electron itself report EBUSY/EPERM. They are harmless leftovers that
+      // will be recreated on next startup, so swallow these errors instead
+      // of crashing the app on quit.
+      if (error && typeof error === 'object' && 'code' in error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EBUSY' || code === 'EPERM' || code === 'ENOENT') continue;
+      }
+      throw error;
+    }
   }
 }
