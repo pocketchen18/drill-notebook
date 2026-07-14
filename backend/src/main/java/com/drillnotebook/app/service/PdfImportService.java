@@ -68,8 +68,23 @@ public class PdfImportService {
                     return importService.importParsed(bankId, parsed, "rules");
                 } catch (Exception ignored) { /* fall through */ }
             }
-            throw new IllegalArgumentException("规则解析失败且 AI 兜底不可用：" + aiError.getMessage());
+            String hint = looksLikeMarkdownArtifact(rawText)
+                ? "此 PDF 的版式需 AI 解析但未配置 AI API Key，请在设置中配置后再试"
+                : "规则解析失败且 AI 兜底不可用：" + aiError.getMessage();
+            throw new IllegalArgumentException(hint);
         }
+    }
+
+    /**
+     * 识别 PDF 提取出的文本是否含"规整 Markdown 转 PDF 再提取"的残迹。
+     * 命中说明此 PDF 本不该走 Adapter（Adapter 是给版式 Y/X/Z 题目文本用的），最该走 AI。
+     */
+    private static boolean looksLikeMarkdownArtifact(String rawText) {
+        if (rawText == null) return false;
+        String normalized = rawText.replace("\r\n", "\n").replace('\r', '\n');
+        long fences = normalized.lines().filter(l -> l.trim().equals("===")).count();
+        long typeLines = normalized.lines().filter(l -> l.startsWith("type:") && l.contains("answer:")).count();
+        return fences >= 2 && typeLines >= 2;
     }
 
     private QuestionImportService.ImportResult importViaAi(long bankId, String rawText, String masterPassword, boolean forced) {
