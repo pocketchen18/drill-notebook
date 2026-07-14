@@ -142,3 +142,12 @@ prompts/
 ai-prompts/
 *.prompt
 *.prompt.md
+.atomcode.md
+.superpowers/sdd/progress.md
+backend/src/test/resources/fixtures/六级真题.md
+backend/src/test/resources/fixtures/java.md
+backend/src/test/resources/fixtures/java.pdf
+docs/**
+!docs/
+!docs/jlink.md
+!docs/import-formats.md
