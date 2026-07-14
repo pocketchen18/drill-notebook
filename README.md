@@ -66,9 +66,9 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 
 ## MVP scope
 
-Included: single-choice, multiple-choice, fill-in, true/false, and essay Markdown import; advanced session ordering; question and knowledge-point memorization; wrong-answer tracking; notebooks with autosave; KaTeX, Mermaid, snapshots, exports; encrypted OpenAI-compatible AI chat and advisory essay grading.
+Included: single-choice, multiple-choice, fill-in, true/false, and essay Markdown import; PDF import with rule-based parsing and AI fallback; advanced session ordering; question and knowledge-point memorization; wrong-answer tracking; notebooks with autosave; KaTeX, Mermaid, snapshots, exports; encrypted OpenAI-compatible AI chat and advisory essay grading.
 
-Deferred: PDF import, spaced repetition, knowledge graphs, exam simulation, video or multimodal import, collaboration, SQLCipher full-database encryption, and AI content generation beyond chat and summary.
+Deferred: spaced repetition, knowledge graphs, exam simulation, video or multimodal import, collaboration, SQLCipher full-database encryption, and AI content generation beyond chat and summary.
 
 ## 中文说明
 
@@ -85,7 +85,7 @@ npm run start:check
 
 ### 功能说明
 
-- `题库`：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。
+- `题库`：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。支持导入 Markdown，也可导入 PDF（规则解析为主，置信度不足时由已配置的 AI 兜底）。
 - `刷题`：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切换上一题/下一题。
 - `背题` / `背知识点`：按题型、章节、标签或具体条目批量选择，支持随机重排、手动调整顺序和会话内跳转。
 - `笔记本`：公式、Mermaid 和 Markdown 块**默认渲染**，点击块进入编辑，完成/失焦后回到渲染视图（类似 Obsidian Live Preview）。

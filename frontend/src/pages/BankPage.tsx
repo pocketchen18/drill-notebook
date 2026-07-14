@@ -7,20 +7,22 @@ import type { Bank, Question } from '../lib/types';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { ExportActions } from '../components/ExportActions';
+import { PdfImportButton } from '../components/PdfImportButton';
 import { questionExportDocument } from '../lib/export';
 import { QuestionEditorModal } from '../components/QuestionEditorModal';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 
 const { Text } = Typography;
 
-function PageHeading({ onCreate, onImport, importing }: { onCreate: () => void; onImport: () => void; importing: boolean }): JSX.Element {
+function PageHeading({ onCreate, onImport, importing, pdfImport }: { onCreate: () => void; onImport: () => void; importing: boolean; pdfImport: React.ReactNode }): JSX.Element {
   return (
     <div className="page-heading">
       <div>
         <h1>题库</h1>
-        <p>导入 Markdown 题库，管理题目并进入练习。</p>
+        <p>导入 Markdown 或 PDF 题库，管理题目并进入练习。</p>
       </div>
       <Space>
+        {pdfImport}
         <Button icon={<FileUp size={16} />} loading={importing} onClick={onImport}>导入 Markdown</Button>
         <Button type="primary" icon={<Plus size={16} />} onClick={onCreate}>新建题库</Button>
       </Space>
@@ -131,7 +133,12 @@ export function BankPage(): JSX.Element {
 
   return (
     <main className="page">
-      <PageHeading onCreate={() => setCreateVisible(true)} onImport={() => void openImport()} importing={importMutation.isPending} />
+      <PageHeading
+        onCreate={() => setCreateVisible(true)}
+        onImport={() => void openImport()}
+        importing={importMutation.isPending}
+        pdfImport={selectedId ? <PdfImportButton bankId={selectedId} onImported={invalidate} /> : null}
+      />
       <input ref={fileInput} type="file" accept=".md,.markdown,.txt" hidden onChange={onFallbackFile} />
       <div className="content-grid">
         <section className="panel">
