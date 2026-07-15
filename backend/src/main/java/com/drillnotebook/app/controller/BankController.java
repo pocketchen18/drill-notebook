@@ -71,12 +71,12 @@ public class BankController {
             List<String> tags = body.get("tags") instanceof List<?> values ? values.stream().map(String::valueOf).map(String::trim).filter(value -> !value.isBlank()).toList() : List.of();
             long questionId = questions.insert(id, type, stem, questions.optionsJson(options), answer, string(body, "analysis"), difficulty(body, "difficulty", 3), questions.tagsJson(tags), string(body, "chapter"), string(body, "groupId"), integerNullable(body, "orderInGroup"), null);
             return questions.findById(questionId).toMap(true);
-        } catch (Exception error) { throw new IllegalArgumentException("题目保存失败"); }
+        } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("题目保存失败: " + error.getMessage()); }
     }
 
     @PutMapping("/questions/{id}")
     public Map<String, Object> updateQuestion(@PathVariable long id, @RequestBody Map<String, Object> body) {
-        try { questions.update(id, body); return questions.findById(id).toMap(true); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); } catch (Exception error) { throw new IllegalArgumentException("题目保存失败"); }
+        try { questions.update(id, body); return questions.findById(id).toMap(true); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("题目保存失败: " + error.getMessage()); }
     }
 
     @DeleteMapping("/questions/{id}")
