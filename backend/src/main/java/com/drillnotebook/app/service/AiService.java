@@ -16,11 +16,14 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AiService {
+    private static final Logger log = LoggerFactory.getLogger(AiService.class);
     private final AiConfigRepository configs;
     private final ApiKeyEncryptor encryptor;
     private final ObjectMapper mapper;
@@ -100,6 +103,7 @@ public class AiService {
 
     public String parseQuestionsFromText(String rawText, String masterPassword) {
         if (rawText == null || rawText.isBlank()) throw new IllegalArgumentException("待解析文本不能为空");
+        log.info("AI 解析 PDF：rawText 长度 {} 字符", rawText.length());
         AiConfigRepository.ConfigRow config = requireConfig();
         try {
             List<Map<String, Object>> messages = List.of(
@@ -108,13 +112,19 @@ public class AiService {
                             "只返回一个 JSON 对象，不要 Markdown：" +
                             "{\"questions\":[{\"type\":\"single|multiple|fill|true_false|essay\"," +
                             "\"stem\":\"题干\",\"options\":[{\"key\":\"A\",\"text\":\"选项\"}]," +
-                            "\"answer\":\"A\",\"analysis\":\"解析\"}]}"),
+                            "\"answer\":\"A\",\"analysis\":\"解析\"}]}\n" +
+                            "重要：JSON 字符串值里的双引号必须转义成 \\\"。例如选项文本是空字符串 \"\" 时，" +
+                            "正确写法是 \"text\":\"\\\"\\\"\"，错误写法是 \"text\":\"\"\"\"。" +
+                            "题干、选项、解析里出现的所有双引号都要这样转义。"),
                     Map.of("role", "user", "content", rawText));
-            return call(config, messages, masterPassword);
+            String reply = call(config, messages, masterPassword);
+            log.info("AI 解析 PDF 返回 {} 字符：{}", reply.length(),
+                    reply.length() > 2000 ? reply.substring(0, 2000) + "..." : reply);
+            return reply;
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalArgumentException("AI 解析暂时不可用");
+            throw new IllegalArgumentException("AI 解析暂时不可用：" + error.getMessage());
         }
     }
 
@@ -142,16 +152,36 @@ public class AiService {
                 if (config.endpoint().equalsIgnoreCase("mock://local")) return mockReply(messages);
                 String endpoint = config.endpoint().replaceAll("/+$", "");
                 String target = endpoint.endsWith("/chat/completions") ? endpoint : endpoint + "/chat/completions";
-                Map<String, Object> request = new LinkedHashMap<>(); request.put("model", config.model()); request.put("messages", messages); request.put("stream", false);
-                HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(60)).header("Content-Type", "application/json").header("Authorization", "Bearer " + apiKey).POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(request))).build();
-                HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+                log.info("AI 请求：model={} target={} timeout=180s", config.model(), target);
+                Map<String, Object> request = new LinkedHashMap<>();
+                request.put("model", config.model());
+                request.put("messages", messages);
+                request.put("stream", false);
+                request.put("max_tokens", 16000);
+                HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(180)).header("Content-Type", "application/json").header("Authorization", "Bearer " + apiKey).POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(request))).build();
+                long start = System.currentTimeMillis();
+                HttpResponse<String> response;
+                try {
+                    response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+                } catch (Exception sendError) {
+                    long elapsed = System.currentTimeMillis() - start;
+                    log.warn("AI 请求失败：耗时 {}ms，错误：{}", elapsed, sendError.getMessage());
+                    throw sendError;
+                }
+                long elapsed = System.currentTimeMillis() - start;
+                log.info("AI 响应：HTTP {} 耗时 {}ms bodyLen={}", response.statusCode(), elapsed, response.body() == null ? 0 : response.body().length());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IllegalArgumentException("AI 服务请求失败（HTTP " + response.statusCode() + "）");
                 JsonNode root = mapper.readTree(response.body());
+                String finishReason = root.path("choices").path(0).path("finish_reason").asText("");
                 String reply = root.path("choices").path(0).path("message").path("content").asText(null);
                 if (reply == null || reply.isBlank()) throw new IllegalArgumentException("AI 服务返回内容为空");
+                if ("length".equals(finishReason)) {
+                    log.warn("AI 响应被 max_tokens 截断（finish_reason=length），replyLen={}", reply.length());
+                    throw new IllegalArgumentException("AI 返回被 max_tokens 截断，PDF 题目过多，请尝试拆分 PDF 或减少题量");
+                }
                 return reply;
             } finally { apiKey = null; }
-        } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("AI 服务暂时不可用"); }
+        } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("AI 服务暂时不可用：" + error.getMessage()); }
     }
 
     private String mockReply(List<Map<String, Object>> messages) {
