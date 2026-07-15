@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.repository.KnowledgePointRepository;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -10,12 +11,38 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgePointImportService {
     private final KnowledgePointRepository points;
+    private final AiService aiService;
 
-    public KnowledgePointImportService(KnowledgePointRepository points) { this.points = points; }
+    public KnowledgePointImportService(KnowledgePointRepository points, AiService aiService) {
+        this.points = points;
+        this.aiService = aiService;
+    }
 
-    public Map<String, Object> importMarkdown(Long bankId, String source) {
+    /**
+     * 知识点 Markdown 导入：先走规则解析，规则失败时由 AI 兜底。
+     * headingLevel 控制按几级标题分块（1-6），恰好 N 个 # 开头的行作为知识点边界，
+     * 更浅或更深的标题行并入正文。AI 兜底把原文喂给模型，模型返回
+     * [{title,content,category,tags}] JSON，再统一入库。AI 不可用时透传错误。
+     */
+    public Map<String, Object> importMarkdown(Long bankId, String source, int headingLevel) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
-        List<Section> sections = parse(source);
+        if (headingLevel < 1 || headingLevel > 6) throw new IllegalArgumentException("标题级别必须在 1 到 6 之间");
+        ParseOutcome outcome;
+        try {
+            List<Section> sections = parse(source, headingLevel);
+            outcome = new ParseOutcome(sections, "rules");
+        } catch (IllegalArgumentException ruleError) {
+            List<Section> aiSections = aiService.parseKnowledgePointsFromText(source, headingLevel).stream()
+                    .map(KnowledgePointImportService::toSection)
+                    .toList();
+            if (aiSections.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "规则解析失败且 AI 兜底不可用："
+                                + (ruleError.getMessage() == null ? "未知错误" : ruleError.getMessage()));
+            }
+            outcome = new ParseOutcome(aiSections, "ai-fallback");
+        }
+        List<Section> sections = outcome.sections;
         int imported = 0;
         List<String> errors = new ArrayList<>();
         for (int index = 0; index < sections.size(); index++) {
@@ -27,23 +54,55 @@ public class KnowledgePointImportService {
                 errors.add("第 " + (index + 1) + " 个知识点：" + (error.getMessage() == null ? "导入失败" : error.getMessage()));
             }
         }
-        return Map.of("imported", imported, "failed", errors.size(), "errors", errors);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("imported", imported);
+        result.put("failed", errors.size());
+        result.put("errors", errors);
+        result.put("strategy", outcome.strategy);
+        return result;
     }
 
-    static List<Section> parse(String source) {
+    private static Section toSection(Map<String, Object> item) {
+        String title = stringOr(item.get("title"), null);
+        if (title == null || title.isBlank()) throw new IllegalArgumentException("AI 返回的知识点缺少 title");
+        String content = stringOr(item.get("content"), "");
+        if (content.isBlank()) throw new IllegalArgumentException("AI 返回的知识点内容为空：" + title);
+        String category = stringOr(item.get("category"), null);
+        List<String> tags = item.get("tags") instanceof List<?> list
+                ? list.stream().map(String::valueOf).map(String::trim).filter(s -> !s.isBlank()).toList()
+                : List.of();
+        return new Section(title.trim(), content.trim(), category, tags);
+    }
+
+    private static String stringOr(Object value, String fallback) {
+        if (value == null) return fallback;
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? fallback : text;
+    }
+
+    private record ParseOutcome(List<Section> sections, String strategy) {}
+
+    static List<Section> parse(String source, int headingLevel) {
+        if (headingLevel < 1 || headingLevel > 6) throw new IllegalArgumentException("标题级别必须在 1 到 6 之间");
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
+        String prefix = "#".repeat(headingLevel);
+        String headingPattern = "^" + prefix + "\\s+.+";
+        String stripPattern = "^" + prefix + "\\s+";
         List<Section> result = new ArrayList<>();
         String title = null;
         List<String> body = new ArrayList<>();
+        List<String> preamble = new ArrayList<>();
         for (String line : normalized.split("\n", -1)) {
-            if (line.matches("^#{1,2}\\s+.+")) {
+            if (line.matches(headingPattern)) {
                 if (title != null) result.add(section(title, body));
-                title = line.replaceFirst("^#{1,2}\\s+", "").trim();
-                body = new ArrayList<>();
+                title = line.replaceFirst(stripPattern, "").trim();
+                body = new ArrayList<>(preamble);
+                preamble.clear();
             } else if (title != null) body.add(line);
+            else preamble.add(line);
         }
         if (title != null) result.add(section(title, body));
-        if (result.isEmpty()) throw new IllegalArgumentException("请使用 # 或 ## 标题分隔知识点");
+        if (result.isEmpty()) throw new IllegalArgumentException("未找到 " + headingLevel + " 级标题，请检查标题级别或改用其他级别");
         return result;
     }
 
