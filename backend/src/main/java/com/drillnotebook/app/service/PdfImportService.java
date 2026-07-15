@@ -68,7 +68,10 @@ public class PdfImportService {
                     return importService.importParsed(bankId, parsed, "rules");
                 } catch (Exception ignored) { /* fall through */ }
             }
-            String hint = "规则解析失败且 AI 兜底不可用：" + (aiError.getMessage() == null ? "未知错误" : aiError.getMessage());
+            String hint = looksLikeMarkdownArtifact(rawText)
+                ? "此 PDF 的版式需 AI 解析但未配置 AI API Key，请在设置中配置后再试"
+                : "规则解析失败且 AI 兜底不可用：" + aiError.getMessage();
+                 (aiError.getMessage() == null ? "未知错误" : aiError.getMessage());
             throw new IllegalArgumentException(hint);
         }
     }
