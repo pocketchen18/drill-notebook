@@ -14,26 +14,42 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class QuestionImportService {
+
     private final MarkdownQuestionParser parser;
     private final JsonQuestionParser jsonParser;
     private final QuestionRepository questions;
+    private final ImportOrchestrator orchestrator;
+    private final QuestionMarkdownRuleStrategy mdRuleStrategy;
+    private final QuestionMarkdownAiStrategy mdAiStrategy;
+    private final QuestionJsonRuleStrategy jsonRuleStrategy;
+    private final QuestionJsonAiStrategy jsonAiStrategy;
 
-    public QuestionImportService(MarkdownQuestionParser parser, JsonQuestionParser jsonParser, QuestionRepository questions) {
+    public QuestionImportService(MarkdownQuestionParser parser, JsonQuestionParser jsonParser,
+                                  QuestionRepository questions, ImportOrchestrator orchestrator,
+                                  QuestionMarkdownRuleStrategy mdRuleStrategy,
+                                  QuestionMarkdownAiStrategy mdAiStrategy,
+                                  QuestionJsonRuleStrategy jsonRuleStrategy,
+                                  QuestionJsonAiStrategy jsonAiStrategy) {
         this.parser = parser;
         this.jsonParser = jsonParser;
         this.questions = questions;
+        this.orchestrator = orchestrator;
+        this.mdRuleStrategy = mdRuleStrategy;
+        this.mdAiStrategy = mdAiStrategy;
+        this.jsonRuleStrategy = jsonRuleStrategy;
+        this.jsonAiStrategy = jsonAiStrategy;
     }
 
     public ImportResult importMarkdown(long bankId, String source) {
-        List<MarkdownQuestionParser.ParsedQuestion> parsed;
-        try { parsed = parser.parse(source); } catch (IllegalArgumentException error) { return new ImportResult(0, 0, 1, List.of(error.getMessage()), "rules"); }
-        return importParsed(bankId, parsed, "rules");
+        ImportRequest req = new ImportRequest(bankId, source, null, null, false);
+        RuleResult result = orchestrator.run(mdRuleStrategy, mdAiStrategy, req);
+        return importParsed(bankId, result.parsed(), result.strategy());
     }
 
     public ImportResult importJson(long bankId, String source) {
-        List<MarkdownQuestionParser.ParsedQuestion> parsed;
-        try { parsed = jsonParser.parse(source); } catch (IllegalArgumentException error) { return new ImportResult(0, 0, 1, List.of(error.getMessage()), "rules"); }
-        return importParsed(bankId, parsed, "rules");
+        ImportRequest req = new ImportRequest(bankId, source, null, null, false);
+        RuleResult result = orchestrator.run(jsonRuleStrategy, jsonAiStrategy, req);
+        return importParsed(bankId, result.parsed(), result.strategy());
     }
 
     public ImportResult importParsed(long bankId, List<MarkdownQuestionParser.ParsedQuestion> parsed, String strategy) {
