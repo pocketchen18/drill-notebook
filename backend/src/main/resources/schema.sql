@@ -101,10 +101,23 @@ CREATE TABLE IF NOT EXISTS ai_config (
     params TEXT
 );
 
+CREATE TABLE IF NOT EXISTS ai_chat_session (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0,
+    model TEXT,
+    tags TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS ai_chat_message (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER REFERENCES ai_chat_session(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
-    content TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    content_cipher TEXT,
+    content_meta TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 

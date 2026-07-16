@@ -89,6 +89,17 @@ export interface AiConfig {
   hasKey: boolean;
 }
 
+export interface AiChatSession {
+  id: number;
+  title: string;
+  archived?: boolean;
+  model?: string;
+  tags?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  messageCount?: number;
+}
+
 export interface ChatContentPart {
   type: 'text' | 'image_url';
   text?: string;
@@ -96,7 +107,9 @@ export interface ChatContentPart {
 }
 
 export interface ChatMessage {
+  id?: number;
   role: 'user' | 'assistant' | 'system';
   content: string | ChatContentPart[];
   displayContent?: string;
+  createdAt?: string;
 }
