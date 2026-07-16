@@ -4,6 +4,7 @@ import { Button, Drawer, Dropdown, Input, Message, Select, Space, Tag, Typograph
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
 import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { AiChatSession, AiConfig, ChatContentPart, ChatMessage, NotePage, Notebook } from '../lib/types';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
