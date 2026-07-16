@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Drawer, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
-import { FilePlus2, Paperclip, Send, Sparkles, X } from 'lucide-react';
-import { get, post, put } from '../lib/api';
-import type { AiConfig, ChatContentPart, ChatMessage, NotePage, Notebook } from '../lib/types';
+import { Button, Drawer, Dropdown, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
+import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
+import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { del, get, post, put } from '../lib/api';
+import type { AiChatSession, AiConfig, ChatContentPart, ChatMessage, NotePage, Notebook } from '../lib/types';
 import { appendMarkdownBlock } from '../lib/aiContext';
+import { safeFileName } from '../lib/export';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
 
@@ -53,7 +55,13 @@ export function AiAssistant(): JSX.Element {
   const pageContext = useUiStore((state) => state.pageContext);
   const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks'), enabled: aiOpen });
+  const sessionsQuery = useQuery({
+    queryKey: ['ai-sessions'],
+    queryFn: () => get<AiChatSession[]>('/api/ai/sessions'),
+    enabled: aiOpen
+  });
 
+  const [sessionId, setSessionId] = useState<number>();
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -61,11 +69,21 @@ export function AiAssistant(): JSX.Element {
   const [targetNotebookId, setTargetNotebookId] = useState<number>();
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
+  const [exporting, setExporting] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef<RefInputType>(null);
 
   const targetPagesQuery = useQuery({
     queryKey: ['ai-drawer-pages', targetNotebookId],
     queryFn: () => get<NotePage[]>(`/api/notebooks/${targetNotebookId}/pages`),
     enabled: targetNotebookId !== undefined && aiOpen
+  });
+
+  const messagesQuery = useQuery({
+    queryKey: ['ai-session-messages', sessionId],
+    queryFn: () => get<ChatMessage[]>(`/api/ai/sessions/${sessionId}/messages`),
+    enabled: aiOpen && sessionId !== undefined
   });
 
   useEffect(() => {
@@ -83,6 +101,24 @@ export function AiAssistant(): JSX.Element {
   }, [targetPageId, targetPagesQuery.data]);
 
   useEffect(() => {
+    if (!sessionsQuery.data?.length) return;
+    if (sessionId === undefined || !sessionsQuery.data.some((item) => item.id === sessionId)) {
+      setSessionId(sessionsQuery.data[0].id);
+    }
+  }, [sessionId, sessionsQuery.data]);
+
+  useEffect(() => {
+    if (!messagesQuery.data) return;
+    setMessages(messagesQuery.data.map((item) => ({
+      id: item.id,
+      role: item.role,
+      content: item.content,
+      displayContent: typeof item.content === 'string' ? item.content : undefined,
+      createdAt: item.createdAt
+    })));
+  }, [messagesQuery.data]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'j') {
         event.preventDefault();
@@ -98,8 +134,83 @@ export function AiAssistant(): JSX.Element {
     [pageContext.markdown, usePageContext]
   );
 
+  const createSessionMutation = useMutation({
+    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
+    onSuccess: (session) => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+      setSessionId(session.id);
+      setMessages([]);
+      Message.success('已新建会话');
+    },
+    onError: (error) => Message.error(error.message)
+  });
+
+  const renameSessionMutation = useMutation({
+    mutationFn: ({ id, title }: { id: number; title: string }) => put<AiChatSession>(`/api/ai/sessions/${id}`, { title }),
+    onSuccess: (session) => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+      setSessionId(session.id);
+      setRenaming(false);
+      Message.success('会话已重命名');
+    },
+    onError: (error) => Message.error(error.message)
+  });
+
+  const currentSession = sessionsQuery.data?.find((item) => item.id === sessionId);
+
+  useEffect(() => {
+    if (!renaming) return;
+    const timer = window.setTimeout(() => {
+      const input = renameInputRef.current?.dom;
+      if (!input) return;
+      input.focus();
+      input.select();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renaming]);
+
+  const beginRename = (): void => {
+    if (sessionId === undefined || renameSessionMutation.isPending) return;
+    setRenameDraft(currentSession?.title ?? '');
+    setRenaming(true);
+  };
+
+  const cancelRename = (): void => {
+    setRenaming(false);
+    setRenameDraft('');
+  };
+
+  const commitRename = (): void => {
+    if (sessionId === undefined || renameSessionMutation.isPending) return;
+    const title = renameDraft.trim();
+    if (!title) {
+      Message.warning('标题不能为空');
+      const input = renameInputRef.current?.dom;
+      input?.focus();
+      input?.select();
+      return;
+    }
+    if (title === (currentSession?.title ?? '')) {
+      cancelRename();
+      return;
+    }
+    renameSessionMutation.mutate({ id: sessionId, title });
+  };
+
+  const deleteSessionMutation = useMutation({
+    mutationFn: (id: number) => del(`/api/ai/sessions/${id}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+      setSessionId(undefined);
+      setMessages([]);
+      Message.success('会话已删除');
+    },
+    onError: (error) => Message.error(error.message)
+  });
+
   const chatMutation = useMutation({
-    mutationFn: (request: ChatRequest) => post<{ reply: string }>('/api/ai/chat', {
+    mutationFn: (request: ChatRequest) => post<{ reply: string; sessionId: number }>('/api/ai/chat', {
+      sessionId,
       messages: [
         ...(contextMarkdown
           ? [{ role: 'system' as const, content: `你是学习助手。请结合以下当前页面上下文回答，必要时用 Markdown 与 LaTeX。\n\n${contextMarkdown}` }]
@@ -109,6 +220,7 @@ export function AiAssistant(): JSX.Element {
       ]
     }),
     onSuccess: (result, request) => {
+      if (result.sessionId && result.sessionId !== sessionId) setSessionId(result.sessionId);
       setMessages((current) => [
         ...current,
         { role: 'user', content: request.content, displayContent: request.displayContent },
@@ -116,6 +228,8 @@ export function AiAssistant(): JSX.Element {
       ]);
       setMessage('');
       setAttachments([]);
+      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+      void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', result.sessionId ?? sessionId] });
     },
     onError: (error) => Message.error(error.message)
   });
@@ -163,6 +277,10 @@ export function AiAssistant(): JSX.Element {
       Message.warning('请先在设置中配置 API Key');
       return;
     }
+    if (sessionId === undefined) {
+      Message.warning('请先选择或新建会话');
+      return;
+    }
     const textParts = [
       message.trim(),
       ...attachments.filter((item) => item.kind === 'text').map((item) => `[文件：${item.name}]\n${item.value}`)
@@ -174,6 +292,33 @@ export function AiAssistant(): JSX.Element {
       ? [{ type: 'text', text }, ...images.map((item) => ({ type: 'image_url' as const, image_url: { url: item.value } }))]
       : text;
     chatMutation.mutate({ content, displayContent: displayText });
+  };
+
+  const exportSession = async (format: 'md' | 'html' | 'json'): Promise<void> => {
+    if (sessionId === undefined) {
+      Message.warning('请先选择会话');
+      return;
+    }
+    if (!window.api) {
+      Message.error('导出功能仅在桌面应用中可用');
+      return;
+    }
+    setExporting(true);
+    try {
+      const payload = await get<{ title: string; content: string; format: string }>(`/api/ai/sessions/${sessionId}/export?format=${format}`);
+      const extension = format === 'json' ? 'json' : format;
+      const result = await window.api.exportFile.save({
+        format: format === 'json' ? 'md' : format,
+        suggestedName: `${safeFileName(payload.title)}.${extension}`,
+        content: payload.content,
+        html: format === 'html' ? payload.content : payload.content
+      });
+      if (!result.canceled) Message.success(`已导出到 ${result.path ?? '所选位置'}`);
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : '导出会话失败');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const quickPrompts = [
@@ -188,7 +333,7 @@ export function AiAssistant(): JSX.Element {
         <Sparkles size={22} />
       </button>
       <Drawer
-        width={420}
+        width={460}
         title={
           <div className="ai-drawer-title">
             <Sparkles size={16} />
@@ -203,6 +348,88 @@ export function AiAssistant(): JSX.Element {
         className="ai-drawer"
       >
         <div className="ai-drawer-body">
+          <div className="ai-session-bar">
+            {renaming ? (
+              <Input
+                ref={renameInputRef}
+                size="small"
+                className="ai-session-title-input"
+                value={renameDraft}
+                disabled={renameSessionMutation.isPending}
+                onChange={setRenameDraft}
+                onBlur={() => commitRename()}
+                onPressEnter={(event) => {
+                  event.preventDefault();
+                  commitRename();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                }}
+                aria-label="重命名会话"
+              />
+            ) : (
+              <button
+                type="button"
+                className="ai-session-title"
+                title="双击重命名"
+                disabled={sessionId === undefined}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  beginRename();
+                }}
+              >
+                <span className="ai-session-title-text">{currentSession?.title ?? (sessionsQuery.isLoading ? '加载会话…' : '选择会话')}</span>
+                {currentSession?.messageCount ? <span className="ai-session-title-count">{currentSession.messageCount}</span> : null}
+              </button>
+            )}
+            <Select
+              size="small"
+              placeholder="切换"
+              value={sessionId}
+              onChange={(value) => {
+                setRenaming(false);
+                setSessionId(Number(value));
+              }}
+              style={{ width: 108 }}
+              loading={sessionsQuery.isLoading}
+              aria-label="切换会话"
+            >
+              {sessionsQuery.data?.map((session) => (
+                <Select.Option key={session.id} value={session.id}>
+                  {session.title}{session.messageCount ? `（${session.messageCount}）` : ''}
+                </Select.Option>
+              ))}
+            </Select>
+            <Button size="small" type="outline" icon={<Plus size={14} />} loading={createSessionMutation.isPending} onClick={() => createSessionMutation.mutate()}>新建</Button>
+            <Dropdown
+              droplist={
+                <div className="ai-session-menu">
+                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('md')}>导出 Markdown</button>
+                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('html')}>导出 HTML</button>
+                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('json')}>导出 JSON</button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={deleteSessionMutation.isPending || !sessionId || (sessionsQuery.data?.length ?? 0) <= 1}
+                    onClick={() => {
+                      if (sessionId === undefined) return;
+                      if (!window.confirm(`删除会话「${currentSession?.title ?? ''}」？消息将一并删除。`)) return;
+                      deleteSessionMutation.mutate(sessionId);
+                    }}
+                  >
+                    <Trash2 size={13} /> 删除会话
+                  </button>
+                </div>
+              }
+              position="br"
+            >
+              <Button size="small" type="text" icon={<MoreHorizontal size={16} />} aria-label="会话更多操作" />
+            </Dropdown>
+          </div>
+
           <div className={`ai-context-card${contextMarkdown ? ' has-context' : ''}`}>
             <div className="ai-context-card-top">
               <div>
@@ -226,11 +453,13 @@ export function AiAssistant(): JSX.Element {
           </div>
 
           <div className="ai-drawer-chat">
-            {messages.length ? messages.map((item, index) => {
+            {messagesQuery.isLoading ? (
+              <div className="empty-state ai-empty"><p>加载会话消息…</p></div>
+            ) : messages.length ? messages.map((item, index) => {
               const text = contentText(item.content, item.displayContent);
               const isAssistant = item.role === 'assistant';
               return (
-                <div key={`${item.role}-${index}`} className={`chat-message ${item.role}`}>
+                <div key={`${item.role}-${item.id ?? index}`} className={`chat-message ${item.role}`}>
                   <MarkdownContent value={text} />
                   {isAssistant ? (
                     <div className="chat-message-actions">
@@ -243,7 +472,7 @@ export function AiAssistant(): JSX.Element {
               <div className="empty-state ai-empty">
                 <div>
                   <Sparkles size={28} />
-                  <p>随时提问。回复右下角可一键插入笔记。</p>
+                  <p>当前会话还没有消息。可新建多个会话分别保存不同主题的对话。</p>
                 </div>
               </div>
             )}
@@ -303,9 +532,10 @@ export function AiAssistant(): JSX.Element {
               }}
             />
             <Button type="secondary" icon={<Paperclip size={16} />} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
-            <Button type="primary" icon={<Send size={16} />} loading={chatMutation.isPending} disabled={!configQuery.data?.hasKey} onClick={send} aria-label="发送" />
+            <Button type="primary" icon={<Send size={16} />} loading={chatMutation.isPending} disabled={!configQuery.data?.hasKey || sessionId === undefined} onClick={send} aria-label="发送" />
           </div>
           {!configQuery.data?.hasKey ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置」中配置 Endpoint 与 API Key 后即可使用。</Typography.Text> : null}
+          {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
         </div>
       </Drawer>
     </>

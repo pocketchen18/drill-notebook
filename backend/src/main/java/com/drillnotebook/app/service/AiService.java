@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.model.QuestionRecord;
+import com.drillnotebook.app.repository.AiChatSessionRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,27 +12,30 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AiService {
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
+    private static final int MAX_MESSAGES_PER_SESSION = 500;
     private final AiConfigRepository configs;
+    private final AiChatSessionRepository sessions;
     private final ApiKeyEncryptor encryptor;
     private final ObjectMapper mapper;
-    private final JdbcTemplate jdbc;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
 
-    public AiService(AiConfigRepository configs, ApiKeyEncryptor encryptor, ObjectMapper mapper, JdbcTemplate jdbc) {
-        this.configs = configs; this.encryptor = encryptor; this.mapper = mapper; this.jdbc = jdbc;
+    public AiService(AiConfigRepository configs, AiChatSessionRepository sessions, ApiKeyEncryptor encryptor, ObjectMapper mapper) {
+        this.configs = configs;
+        this.sessions = sessions;
+        this.encryptor = encryptor;
+        this.mapper = mapper;
     }
 
     public Map<String, Object> redactedConfig() {
@@ -65,14 +69,94 @@ public class AiService {
         return redactedConfig();
     }
 
+    public List<Map<String, Object>> listSessions(boolean includeArchived) {
+        sessions.ensureDefaultSession();
+        return sessions.list(includeArchived);
+    }
+
+    public Map<String, Object> createSession(Map<String, Object> body) {
+        String title = string(body, "title", "新会话");
+        AiConfigRepository.ConfigRow config = configs.find();
+        String model = body.containsKey("model")
+                ? nullBlankToNull(string(body, "model", ""))
+                : (config == null ? null : nullBlankToNull(config.model()));
+        long id = sessions.create(title.isBlank() ? "新会话" : title, model);
+        return sessions.find(id);
+    }
+
+    public Map<String, Object> updateSession(long id, Map<String, Object> body) {
+        requireSession(id);
+        String title = body.containsKey("title") ? string(body, "title", "") : null;
+        Boolean archived = body.containsKey("archived") ? Boolean.valueOf(String.valueOf(body.get("archived"))) : null;
+        String model = body.containsKey("model") ? string(body, "model", "") : null;
+        if (title != null && title.isBlank()) throw new IllegalArgumentException("会话标题不能为空");
+        sessions.update(id, title, archived, model);
+        return sessions.find(id);
+    }
+
+    public void deleteSession(long id) {
+        requireSession(id);
+        List<Map<String, Object>> all = sessions.list(true);
+        if (all.size() <= 1) throw new IllegalArgumentException("至少保留一个会话");
+        sessions.delete(id);
+    }
+
+    public List<Map<String, Object>> sessionMessages(long sessionId, String masterPassword) {
+        requireSession(sessionId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (AiChatSessionRepository.MessageRow row : sessions.messages(sessionId)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", row.id());
+            item.put("role", row.role());
+            item.put("content", decryptMessage(row, masterPassword));
+            item.put("createdAt", row.createdAt());
+            result.add(item);
+        }
+        return result;
+    }
+
+    public Map<String, Object> exportSession(long sessionId, String format, String masterPassword) {
+        Map<String, Object> session = requireSession(sessionId);
+        List<Map<String, Object>> messages = sessionMessages(sessionId, masterPassword);
+        String normalized = format == null || format.isBlank() ? "md" : format.trim().toLowerCase(Locale.ROOT);
+        if (!List.of("md", "html", "json").contains(normalized)) throw new IllegalArgumentException("导出格式必须是 md、html 或 json");
+        String title = String.valueOf(session.get("title"));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("format", normalized);
+        payload.put("title", title);
+        payload.put("session", session);
+        payload.put("messages", messages);
+        if ("json".equals(normalized)) {
+            try {
+                payload.put("content", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                        "version", 1,
+                        "exportedAt", java.time.Instant.now().toString(),
+                        "session", session,
+                        "messages", messages
+                )));
+            } catch (Exception error) {
+                throw new IllegalArgumentException("会话导出失败");
+            }
+        } else if ("html".equals(normalized)) {
+            payload.put("content", toHtmlExport(title, messages));
+        } else {
+            payload.put("content", toMarkdownExport(title, messages));
+        }
+        return payload;
+    }
+
     public Map<String, Object> chat(Map<String, Object> body) {
         AiConfigRepository.ConfigRow config = requireConfig();
         List<Map<String, Object>> messages = messages(body.get("messages"));
         if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
-        String reply = call(config, messages, string(body, "masterPassword", ""));
-        persist(messages.get(messages.size() - 1).get("role"), messages.get(messages.size() - 1).get("content"));
-        persist("assistant", reply);
-        return Map.of("reply", reply);
+        long sessionId = resolveSessionId(body);
+        String masterPassword = string(body, "masterPassword", "");
+        String reply = call(config, messages, masterPassword);
+        Map<String, Object> lastUser = messages.get(messages.size() - 1);
+        persistEncrypted(sessionId, String.valueOf(lastUser.get("role")), contentText(lastUser.get("content")), masterPassword);
+        persistEncrypted(sessionId, "assistant", reply, masterPassword);
+        maybeAutoTitle(sessionId, lastUser.get("content"));
+        return Map.of("reply", reply, "sessionId", sessionId);
     }
 
     public Map<String, Object> summarize(Map<String, Object> body) {
@@ -128,10 +212,86 @@ public class AiService {
         }
     }
 
+    /** @deprecated Prefer sessionMessages; kept for compatibility with older clients. */
     public List<Map<String, Object>> messages() {
-        List<Map<String, Object>> result = jdbc.query("SELECT role, content, created_at FROM ai_chat_message ORDER BY id DESC LIMIT 100", (row, index) -> Map.of("role", row.getString("role"), "content", row.getString("content"), "createdAt", row.getString("created_at")));
-        Collections.reverse(result);
-        return result;
+        long sessionId = sessions.ensureDefaultSession();
+        return sessionMessages(sessionId, "");
+    }
+
+    private long resolveSessionId(Map<String, Object> body) {
+        Object raw = body.get("sessionId");
+        if (raw == null || String.valueOf(raw).isBlank()) return sessions.ensureDefaultSession();
+        long sessionId = Long.parseLong(String.valueOf(raw));
+        requireSession(sessionId);
+        return sessionId;
+    }
+
+    private Map<String, Object> requireSession(long id) {
+        try {
+            return sessions.find(id);
+        } catch (EmptyResultDataAccessException error) {
+            throw new IllegalArgumentException("会话不存在");
+        }
+    }
+
+    private void persistEncrypted(long sessionId, String role, String content, String masterPassword) {
+        if (role == null || content == null) return;
+        try {
+            String material = contentMaterial(masterPassword);
+            ApiKeyEncryptor.EncryptedValue encrypted = encryptor.encrypt(content, material, masterPassword == null || masterPassword.isBlank() ? "fingerprint" : "password");
+            String meta = mapper.writeValueAsString(Map.of(
+                    "salt", encrypted.salt(),
+                    "iv", encrypted.iv(),
+                    "kdf", "Argon2id",
+                    "algorithm", "AES-256-GCM",
+                    "mode", encrypted.mode(),
+                    "version", 1
+            ));
+            sessions.insertMessage(sessionId, role, "", encrypted.encrypted(), meta);
+            pruneSession(sessionId);
+        } catch (Exception error) {
+            // Fall back to plaintext only if encryption fails unexpectedly so chat still works.
+            sessions.insertMessage(sessionId, role, content, null, null);
+            pruneSession(sessionId);
+        }
+    }
+
+    private void pruneSession(long sessionId) {
+        sessions.pruneToNewest(sessionId, MAX_MESSAGES_PER_SESSION);
+    }
+
+    private void maybeAutoTitle(long sessionId, Object content) {
+        try {
+            Map<String, Object> session = sessions.find(sessionId);
+            String title = String.valueOf(session.get("title"));
+            if (!"新会话".equals(title) && !"默认会话".equals(title)) return;
+            String text = contentText(content).replaceAll("\\s+", " ").trim();
+            if (text.isBlank()) return;
+            if (text.length() > 24) text = text.substring(0, 24) + "…";
+            sessions.update(sessionId, text, null, null);
+        } catch (Exception ignored) {
+            // Title auto-fill is optional.
+        }
+    }
+
+    private String decryptMessage(AiChatSessionRepository.MessageRow row, String masterPassword) {
+        if (row.contentCipher() != null && !row.contentCipher().isBlank() && row.contentMeta() != null && !row.contentMeta().isBlank()) {
+            try {
+                Map<String, Object> meta = mapper.readValue(row.contentMeta(), new TypeReference<>() {});
+                String mode = String.valueOf(meta.getOrDefault("mode", "fingerprint"));
+                String material = "password".equals(mode) ? masterPassword : encryptor.fingerprintMaterial();
+                if (material == null || material.isBlank()) return "[加密消息：需要主密码]";
+                return encryptor.decrypt(row.contentCipher(), String.valueOf(meta.get("salt")), String.valueOf(meta.get("iv")), material);
+            } catch (Exception error) {
+                return "[加密消息：无法解密]";
+            }
+        }
+        return row.content() == null ? "" : row.content();
+    }
+
+    private String contentMaterial(String masterPassword) {
+        if (masterPassword != null && !masterPassword.isBlank()) return masterPassword;
+        return encryptor.fingerprintMaterial();
     }
 
     private AiConfigRepository.ConfigRow requireConfig() {
@@ -224,12 +384,6 @@ public class AiService {
         }
     }
 
-    private void persist(Object role, Object content) {
-        if (role == null || content == null) return;
-        jdbc.update("INSERT INTO ai_chat_message(role, content) VALUES (?, ?)", String.valueOf(role), contentText(content));
-        jdbc.update("DELETE FROM ai_chat_message WHERE id NOT IN (SELECT id FROM ai_chat_message ORDER BY id DESC LIMIT 100)");
-    }
-
     private static List<Map<String, Object>> messages(Object value) {
         if (!(value instanceof List<?> list)) return List.of();
         List<Map<String, Object>> result = new ArrayList<>();
@@ -259,5 +413,52 @@ public class AiService {
         return String.valueOf(content);
     }
 
-    private static String string(Map<String, Object> body, String key, String fallback) { Object value = body.get(key); return value == null ? fallback : String.valueOf(value).trim(); }
+    private static String toMarkdownExport(String title, List<Map<String, Object>> messages) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("---\n");
+        builder.append("title: ").append(title.replace("\n", " ")).append('\n');
+        builder.append("source: Drill Notebook\n");
+        builder.append("---\n\n");
+        builder.append("# ").append(title).append("\n\n");
+        for (Map<String, Object> message : messages) {
+            String role = String.valueOf(message.get("role"));
+            String label = "assistant".equals(role) ? "AI" : "user".equals(role) ? "你" : role;
+            builder.append("#### ").append(label).append(":\n");
+            builder.append(String.valueOf(message.get("content"))).append("\n\n");
+        }
+        return builder.toString().trim() + "\n";
+    }
+
+    private static String toHtmlExport(String title, List<Map<String, Object>> messages) {
+        StringBuilder body = new StringBuilder();
+        for (Map<String, Object> message : messages) {
+            String role = String.valueOf(message.get("role"));
+            String label = "assistant".equals(role) ? "AI" : "user".equals(role) ? "你" : role;
+            body.append("<section class=\"msg ").append(escapeHtml(role)).append("\"><h3>")
+                    .append(escapeHtml(label)).append("</h3><pre>")
+                    .append(escapeHtml(String.valueOf(message.get("content"))))
+                    .append("</pre></section>");
+        }
+        return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>"
+                + escapeHtml(title)
+                + "</title><style>body{max-width:900px;margin:0 auto;padding:40px;font:16px/1.7 sans-serif}.msg{margin:18px 0;padding:12px 14px;border:1px solid #d9dce1;border-radius:8px}pre{white-space:pre-wrap;margin:0}</style></head><body><h1>"
+                + escapeHtml(title) + "</h1>" + body + "</body></html>";
+    }
+
+    private static String escapeHtml(String value) {
+        return value == null ? "" : value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
+    }
+
+    private static String string(Map<String, Object> body, String key, String fallback) {
+        Object value = body.get(key);
+        return value == null ? fallback : String.valueOf(value).trim();
+    }
+
+    private static String nullBlankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
 }
