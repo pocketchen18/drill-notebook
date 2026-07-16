@@ -161,7 +161,11 @@ if ([string]::IsNullOrWhiteSpace((Find-BackendJar))) {
 
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $oldAppRoot = $env:APP_ROOT
+$oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $env:APP_ROOT = $root
+# Some shells/tools export ELECTRON_RUN_AS_NODE=1, which makes Electron behave as plain Node
+# and breaks require('electron').app. Clear it for the app process only.
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 try {
     Write-Host "Starting Drill Notebook with APP_ROOT=$root" -ForegroundColor Cyan
     Write-Host 'Close the Electron window to stop the local Java backend.' -ForegroundColor DarkGray
@@ -173,4 +177,9 @@ try {
     }
 } finally {
     $env:APP_ROOT = $oldAppRoot
+    if ($null -eq $oldElectronRunAsNode) {
+        Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+    } else {
+        $env:ELECTRON_RUN_AS_NODE = $oldElectronRunAsNode
+    }
 }

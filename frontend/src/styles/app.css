@@ -177,6 +177,25 @@ button, input, textarea { font: inherit; }
 .ai-fab.is-open { background: #4e5969; box-shadow: 0 8px 20px rgba(0,0,0,.2); }
 .ai-drawer-title { display: inline-flex; align-items: center; gap: 8px; }
 .ai-drawer-body { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 120px); min-height: 420px; }
+.ai-session-bar { display: flex; align-items: center; gap: 8px; }
+.ai-session-title {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 28px;
+  padding: 0 10px; border: 1px solid transparent; border-radius: 6px;
+  background: var(--subtle-bg); color: inherit; text-align: left; cursor: text;
+}
+.ai-session-title:hover:not(:disabled) { border-color: var(--line); background: var(--panel-bg); }
+.ai-session-title:disabled { opacity: .6; cursor: default; }
+.ai-session-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13px; }
+.ai-session-title-count {
+  flex: 0 0 auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: #edf4ff; color: #155eef; font-size: 11px; line-height: 18px; text-align: center;
+}
+.ai-session-title-input { flex: 1; min-width: 0; }
+.ai-session-menu { display: grid; min-width: 160px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+.ai-session-menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.ai-session-menu button:hover:not(:disabled) { background: var(--hover-bg); }
+.ai-session-menu button:disabled { opacity: .45; cursor: not-allowed; }
+.ai-session-menu button.danger { color: #f53f3f; }
 .ai-context-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
 .ai-context-card.has-context { border-color: #b8d3ff; background: #f3f7ff; }
 .ai-context-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

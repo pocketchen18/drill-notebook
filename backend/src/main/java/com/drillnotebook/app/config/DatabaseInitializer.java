@@ -5,16 +5,16 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.ResultSet;
 import javax.sql.DataSource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 @Component
 public class DatabaseInitializer {
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
     private final DataSource dataSource;
 
     public DatabaseInitializer(DataSource dataSource) {
@@ -42,6 +42,12 @@ public class DatabaseInitializer {
             }
             ensureColumn(connection, statement, "answer_record", "grading_status", "TEXT");
             ensureColumn(connection, statement, "answer_record", "grading_json", "TEXT");
+            ensureColumn(connection, statement, "ai_chat_message", "session_id", "INTEGER");
+            ensureColumn(connection, statement, "ai_chat_message", "content_cipher", "TEXT");
+            ensureColumn(connection, statement, "ai_chat_message", "content_meta", "TEXT");
+            migrateAiChatSessions(statement);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_message_session ON ai_chat_message(session_id, id)");
             Integer current = null;
             try (var result = statement.executeQuery("SELECT version FROM schema_version LIMIT 1")) {
                 if (result.next()) current = result.getInt(1);
@@ -52,6 +58,22 @@ public class DatabaseInitializer {
         } catch (SQLException error) {
             throw new IllegalStateException("Unable to initialize SQLite schema", error);
         }
+    }
+
+    private static void migrateAiChatSessions(Statement statement) throws SQLException {
+        long defaultSessionId;
+        try (ResultSet existing = statement.executeQuery("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1")) {
+            if (existing.next()) {
+                defaultSessionId = existing.getLong(1);
+            } else {
+                statement.executeUpdate("INSERT INTO ai_chat_session(title) VALUES ('默认会话')");
+                try (ResultSet created = statement.executeQuery("SELECT last_insert_rowid()")) {
+                    created.next();
+                    defaultSessionId = created.getLong(1);
+                }
+            }
+        }
+        statement.executeUpdate("UPDATE ai_chat_message SET session_id = " + defaultSessionId + " WHERE session_id IS NULL");
     }
 
     private static void ensureColumn(Connection connection, Statement statement, String table, String column, String definition) throws SQLException {
