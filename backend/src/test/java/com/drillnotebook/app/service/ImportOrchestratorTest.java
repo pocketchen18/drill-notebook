@@ -102,4 +102,81 @@ class ImportOrchestratorTest {
                     req()));
         assertTrue(ex.getMessage().contains("AI broken"));
     }
+
+    @Test
+    void threeStep_ruleSuccess_neverCallsFallbackOrAi() {
+        RuleResult rule = result(2, "rules", false);
+        RuleResult got = orchestrator.run(
+                (r) -> rule,
+                (r) -> { throw new IllegalStateException("fallback should not be called"); },
+                (r) -> { throw new IllegalStateException("AI should not be called"); },
+                req());
+        assertSame(rule, got);
+    }
+
+    @Test
+    void threeStep_ruleThrows_fallbackSuccess_skipsAi() {
+        RuleResult fallback = result(2, "export-rules", false);
+        RuleResult got = orchestrator.run(
+                (r) -> { throw new IllegalArgumentException("rule broken"); },
+                (r) -> fallback,
+                (r) -> { throw new IllegalStateException("AI should not be called"); },
+                req());
+        assertSame(fallback, got);
+    }
+
+    @Test
+    void threeStep_ruleEmptyParsed_fallbackSuccess_skipsAi() {
+        RuleResult fallback = result(2, "export-rules", false);
+        RuleResult got = orchestrator.run(
+                (r) -> result(0, "rules", false),
+                (r) -> fallback,
+                (r) -> { throw new IllegalStateException("AI should not be called"); },
+                req());
+        assertSame(fallback, got);
+    }
+
+    @Test
+    void threeStep_ruleAndFallbackThrow_aiSuccess_returnsAi() {
+        RuleResult ai = result(3, "ai-fallback", false);
+        RuleResult got = orchestrator.run(
+                (r) -> { throw new IllegalArgumentException("rule broken"); },
+                (r) -> { throw new IllegalArgumentException("fallback broken"); },
+                (r) -> ai,
+                req());
+        assertSame(ai, got);
+    }
+
+    @Test
+    void threeStep_ruleEmpty_fallbackThrows_aiSuccess_returnsAi() {
+        RuleResult ai = result(3, "ai-fallback", false);
+        RuleResult got = orchestrator.run(
+                (r) -> result(0, "rules", false),
+                (r) -> { throw new IllegalArgumentException("fallback broken"); },
+                (r) -> ai,
+                req());
+        assertSame(ai, got);
+    }
+
+    @Test
+    void threeStep_allFail_throwsWithAiMessage() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+            orchestrator.run(
+                    (r) -> { throw new IllegalArgumentException("rule broken"); },
+                    (r) -> { throw new IllegalArgumentException("fallback broken"); },
+                    (r) -> { throw new IllegalArgumentException("AI broken"); },
+                    req()));
+        assertTrue(ex.getMessage().contains("AI broken"));
+    }
+
+    @Test
+    void threeStep_aiFails_fallbackHasParsed_returnsFallback() {
+        RuleResult fallback = result(2, "export-rules", false);
+        RuleResult got = orchestrator.run(
+                (r) -> { throw new IllegalArgumentException("rule broken"); },
+                (r) -> fallback,
+                (r) -> { throw new IllegalArgumentException("AI broken"); },
+                req());
+        assertSame(fallback, got);
+    }
 }

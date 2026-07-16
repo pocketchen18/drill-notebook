@@ -20,6 +20,7 @@ public class QuestionImportService {
     private final QuestionRepository questions;
     private final ImportOrchestrator orchestrator;
     private final QuestionMarkdownRuleStrategy mdRuleStrategy;
+    private final ExportMarkdownRuleStrategy exportRuleStrategy;
     private final QuestionMarkdownAiStrategy mdAiStrategy;
     private final QuestionJsonRuleStrategy jsonRuleStrategy;
     private final QuestionJsonAiStrategy jsonAiStrategy;
@@ -27,6 +28,7 @@ public class QuestionImportService {
     public QuestionImportService(MarkdownQuestionParser parser, JsonQuestionParser jsonParser,
                                   QuestionRepository questions, ImportOrchestrator orchestrator,
                                   QuestionMarkdownRuleStrategy mdRuleStrategy,
+                                  ExportMarkdownRuleStrategy exportRuleStrategy,
                                   QuestionMarkdownAiStrategy mdAiStrategy,
                                   QuestionJsonRuleStrategy jsonRuleStrategy,
                                   QuestionJsonAiStrategy jsonAiStrategy) {
@@ -35,6 +37,7 @@ public class QuestionImportService {
         this.questions = questions;
         this.orchestrator = orchestrator;
         this.mdRuleStrategy = mdRuleStrategy;
+        this.exportRuleStrategy = exportRuleStrategy;
         this.mdAiStrategy = mdAiStrategy;
         this.jsonRuleStrategy = jsonRuleStrategy;
         this.jsonAiStrategy = jsonAiStrategy;
@@ -42,7 +45,7 @@ public class QuestionImportService {
 
     public ImportResult importMarkdown(long bankId, String source) {
         ImportRequest req = new ImportRequest(bankId, source, null, null, false);
-        RuleResult result = orchestrator.run(mdRuleStrategy, mdAiStrategy, req);
+        RuleResult result = orchestrator.run(mdRuleStrategy, exportRuleStrategy, mdAiStrategy, req);
         return importParsed(bankId, result.parsed(), result.strategy());
     }
 

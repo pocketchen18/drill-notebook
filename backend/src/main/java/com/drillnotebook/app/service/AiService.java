@@ -124,7 +124,8 @@ public class AiService {
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalArgumentException("AI 解析暂时不可用：" + error.getMessage());
+            log.error("AI 解析失败", error);
+            throw new IllegalArgumentException("AI 解析暂时不可用，请稍后重试");
         }
     }
 
@@ -165,7 +166,8 @@ public class AiService {
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalArgumentException("AI 解析知识点暂时不可用：" + error.getMessage());
+            log.error("AI 解析知识点失败", error);
+            throw new IllegalArgumentException("AI 解析知识点暂时不可用，请稍后重试");
         }
     }
 
@@ -262,7 +264,7 @@ public class AiService {
                 }
                 return reply;
             } finally { apiKey = null; }
-        } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("AI 服务暂时不可用：" + error.getMessage()); }
+        } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { log.error("AI 调用失败", error); throw new IllegalArgumentException("AI 服务暂时不可用，请稍后重试"); }
     }
 
     private String mockReply(List<Map<String, Object>> messages) {

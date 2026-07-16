@@ -4,6 +4,7 @@ import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Tag, Typogra
 import { Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { Bank, NotePage, Notebook, Question, QuizSession, SubmitResult } from '../lib/types';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUiStore } from '../stores/uiStore';
@@ -41,7 +42,7 @@ function AddToNoteModal({ question, visible, onClose }: { question?: Question; v
       Message.success('题目已添加到笔记');
       onClose();
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '添加失败');
+      Message.error(friendlyMessage(error, '添加失败，请稍后重试'));
     }
   };
 
@@ -158,7 +159,7 @@ export function QuizPage(): JSX.Element {
       setAnswerStates({});
       setMasterPassword('');
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '无法开始练习');
+      Message.error(friendlyMessage(error, '无法开始练习，请稍后重试'));
     }
   };
 
@@ -181,7 +182,7 @@ export function QuizPage(): JSX.Element {
       setAnswerStates((states) => ({ ...states, [question.id]: { selected: [...selected], textAnswer, result: submission } }));
       setAnsweredIds((ids) => [...new Set([...ids, question.id])]);
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '提交失败');
+      Message.error(friendlyMessage(error, '提交失败，请稍后重试'));
     } finally { setSubmitting(false); }
   };
 

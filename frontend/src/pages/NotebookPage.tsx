@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
 import { FilePlus2, FolderPlus, Save, Sparkles } from 'lucide-react';
 import { get, post, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { NotePage, Notebook } from '../lib/types';
 import { NotebookEditor } from '../components/editor/NotebookEditor';
 import { useUiStore } from '../stores/uiStore';
@@ -35,12 +36,12 @@ export function NotebookPage(): JSX.Element {
   const createNotebook = useMutation({
     mutationFn: (title: string) => post<Notebook>('/api/notebooks', { title }),
     onSuccess: (notebook) => { setNotebookId(notebook.id); refresh(); Message.success('笔记本已创建'); },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '笔记本创建失败，请稍后重试'))
   });
   const createPage = useMutation({
     mutationFn: (title: string) => post<NotePage>(`/api/notebooks/${notebookId}/pages`, { title, content: { type: 'doc', content: [{ type: 'paragraph' }] } }),
     onSuccess: (page) => { setPageId(page.id); setNewPageVisible(false); setNewPageTitle(''); refresh(); Message.success('页面已创建'); },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '页面创建失败，请稍后重试'))
   });
 
   useEffect(() => {
@@ -73,7 +74,7 @@ export function NotebookPage(): JSX.Element {
       setSaveState('saving');
       void put(`/api/note-pages/${pageId}`, { content: pendingContent }).then(() => setSaveState('saved')).catch((error: unknown) => {
         setSaveState('pending');
-        Message.error(error instanceof Error ? error.message : '保存失败');
+        Message.error(friendlyMessage(error, '保存失败，请稍后重试'));
       });
     }, 1000);
     return () => window.clearTimeout(timer);

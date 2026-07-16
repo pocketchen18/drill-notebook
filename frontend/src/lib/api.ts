@@ -9,6 +9,40 @@ async function baseUrl(): Promise<string> {
   return baseUrlPromise;
 }
 
+/**
+ * API 错误：对外暴露稳定的 code 与面向用户的 message；
+ * 原始堆栈/details 仅在 console 中记录，不展示给用户。
+ */
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function extractCode(payload: unknown): string {
+  if (payload && typeof payload === 'object' && 'errorCode' in payload) {
+    return String((payload as { errorCode: unknown }).errorCode);
+  }
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    return String((payload as { error: unknown }).error);
+  }
+  return 'unknown';
+}
+
+function extractMessage(payload: unknown, status: number): string {
+  if (payload && typeof payload === 'object' && 'message' in payload) {
+    const value = (payload as { message: unknown }).message;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return `请求失败（${status}）`;
+}
+
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${await baseUrl()}${path}`, {
     ...init,
@@ -26,8 +60,11 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     payload = raw;
   }
   if (!response.ok) {
-    const message = typeof payload === 'object' && payload && 'message' in payload ? String(payload.message) : `请求失败（${response.status}）`;
-    throw new Error(message);
+    const code = extractCode(payload);
+    const message = extractMessage(payload, response.status);
+    // 内部日志：保留 code/message/status，便于排查
+    console.warn('[api] request failed', { path, code, status, message });
+    throw new ApiError(code, message, response.status);
   }
   return payload as T;
 }
