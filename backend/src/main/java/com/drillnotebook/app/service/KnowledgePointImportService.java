@@ -90,23 +90,37 @@ public class KnowledgePointImportService {
         String stripPattern = "^" + prefix + "\\s+";
         List<Section> result = new ArrayList<>();
         String title = null;
+        String inheritedCategory = null;
         List<String> body = new ArrayList<>();
         List<String> preamble = new ArrayList<>();
         for (String line : normalized.split("\n", -1)) {
+            int headingDepth = headingDepth(line);
             if (line.matches(headingPattern)) {
-                if (title != null) result.add(section(title, body));
+                if (title != null) result.add(section(title, body, inheritedCategory));
                 title = line.replaceFirst(stripPattern, "").trim();
                 body = new ArrayList<>(preamble);
                 preamble.clear();
+            } else if (headingDepth > 0 && headingDepth < headingLevel) {
+                inheritedCategory = line.replaceFirst("^#+\\s+", "").trim();
+                if (title != null) body.add(line);
+                else preamble.add(line);
             } else if (title != null) body.add(line);
             else preamble.add(line);
         }
-        if (title != null) result.add(section(title, body));
+        if (title != null) result.add(section(title, body, inheritedCategory));
         if (result.isEmpty()) throw new IllegalArgumentException("未找到 " + headingLevel + " 级标题，请检查标题级别或改用其他级别");
         return result;
     }
 
-    private static Section section(String title, List<String> lines) {
+    private static int headingDepth(String line) {
+        if (line == null || line.isEmpty() || line.charAt(0) != '#') return 0;
+        int depth = 0;
+        while (depth < line.length() && line.charAt(depth) == '#') depth++;
+        if (depth > 6 || depth >= line.length() || line.charAt(depth) != ' ') return 0;
+        return depth;
+    }
+
+    private static Section section(String title, List<String> lines, String inheritedCategory) {
         String category = null;
         List<String> tags = List.of();
         List<String> content = new ArrayList<>();
@@ -118,6 +132,7 @@ public class KnowledgePointImportService {
             else if (trimmed.toLowerCase().startsWith("tags:")) tags = splitTags(trimmed.substring("tags:".length()));
             else content.add(line);
         }
+        if (category == null) category = inheritedCategory;
         String markdown = String.join("\n", content).trim();
         if (markdown.isBlank()) throw new IllegalArgumentException("知识点内容不能为空：" + title);
         return new Section(title, markdown, category, tags);

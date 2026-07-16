@@ -151,3 +151,4 @@ docs/**
 !docs/
 !docs/jlink.md
 !docs/import-formats.md
+!docs/knowledge-point-import.md

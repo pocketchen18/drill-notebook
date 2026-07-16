@@ -83,6 +83,37 @@ class KnowledgePointImportServiceTest {
     }
 
     @Test
+    void inheritsCategoryFromShallowerHeading() {
+        List<KnowledgePointImportService.Section> sections = KnowledgePointImportService.parse("""
+                # 第一章：操作系统基础概念
+
+                ## 1. 分时操作系统
+                - **定义**：把 CPU 时间划分为很短的"时间片"。
+
+                ## 2. 并行与并发区别
+                - **并发**：宏观上"同时进行"。
+                """, 2);
+        assertEquals(2, sections.size());
+        assertEquals("1. 分时操作系统", sections.get(0).title());
+        assertEquals("第一章：操作系统基础概念", sections.get(0).category());
+        assertEquals("2. 并行与并发区别", sections.get(1).title());
+        assertEquals("第一章：操作系统基础概念", sections.get(1).category());
+    }
+
+    @Test
+    void explicitCategoryOverridesInherited() {
+        List<KnowledgePointImportService.Section> sections = KnowledgePointImportService.parse("""
+                # 父章节
+
+                ## 子节
+                分类：显式分类
+                正文内容。
+                """, 2);
+        assertEquals(1, sections.size());
+        assertEquals("显式分类", sections.get(0).category());
+    }
+
+    @Test
     void importMarkdownUsesRulesWhenHeadingsPresent() {
         KnowledgePointRepository points = mock(KnowledgePointRepository.class);
         AiService aiService = mock(AiService.class);
