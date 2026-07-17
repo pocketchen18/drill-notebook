@@ -4,6 +4,7 @@ import { Button, Drawer, Dropdown, Input, Message, Select, Space, Tag, Typograph
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
 import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { AiChatSession, AiConfig, ChatContentPart, ChatMessage, NotePage, Notebook } from '../lib/types';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
@@ -231,7 +232,7 @@ export function AiAssistant(): JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', result.sessionId ?? sessionId] });
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, 'AI 对话失败，请稍后重试'))
   });
 
   const insertMutation = useMutation({
@@ -246,7 +247,7 @@ export function AiAssistant(): JSX.Element {
       setPendingInsert(undefined);
       Message.success('已插入到笔记（可编辑 Markdown 块）');
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '插入笔记失败，请稍后重试'))
   });
 
   const loadAttachment = async (file: File): Promise<void> => {
@@ -267,7 +268,7 @@ export function AiAssistant(): JSX.Element {
       const value = (await file.text()).slice(0, 200_000);
       setAttachments((current) => [...current, { id: `${file.name}-${file.lastModified}`, name: file.name, kind: 'text', value, mime: file.type || 'text/plain' }]);
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '附件读取失败');
+      Message.error(friendlyMessage(error, '附件读取失败'));
     }
   };
 

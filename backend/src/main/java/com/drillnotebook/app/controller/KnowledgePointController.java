@@ -79,7 +79,8 @@ public class KnowledgePointController {
     public Map<String, Object> importMarkdown(@RequestBody Map<String, Object> body) {
         Long bankId = longValue(body.get("bankId"));
         if (bankId != null) banks.find(bankId);
-        return importer.importMarkdown(bankId, required(body, "content"));
+        int headingLevel = intOr(body.get("headingLevel"), 2);
+        return importer.importMarkdown(bankId, required(body, "content"), headingLevel);
     }
 
     private KnowledgePointRecord find(long id) {
@@ -95,6 +96,7 @@ public class KnowledgePointController {
     private static String string(Object value) { return value == null ? null : String.valueOf(value).trim(); }
     private static String stringOr(Object value, String fallback) { String text = string(value); return text == null || text.isBlank() ? fallback : text; }
     private static Long longValue(Object value) { if (value == null || String.valueOf(value).isBlank()) return null; return Long.valueOf(String.valueOf(value)); }
+    private static int intOr(Object value, int fallback) { if (value == null || String.valueOf(value).isBlank()) return fallback; try { return Integer.parseInt(String.valueOf(value).trim()); } catch (NumberFormatException error) { return fallback; } }
     private static List<String> strings(Object value) { return value instanceof List<?> list ? list.stream().map(String::valueOf).map(String::trim).filter(item -> !item.isBlank()).toList() : List.of(); }
     private static List<Long> longs(Object value) { return value instanceof List<?> list ? list.stream().map(item -> Long.valueOf(String.valueOf(item))).toList() : List.of(); }
 }

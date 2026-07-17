@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -36,6 +38,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class JsonQuestionParser {
+    private static final Logger log = LoggerFactory.getLogger(JsonQuestionParser.class);
     private final ObjectMapper mapper;
 
     public JsonQuestionParser(ObjectMapper mapper) { this.mapper = mapper; }
@@ -52,8 +55,8 @@ public class JsonQuestionParser {
                 root = mapper.readTree(repaired);
             } catch (Exception secondError) {
                 String preview = cleaned.length() > 500 ? cleaned.substring(0, 500) + "..." : cleaned;
-                throw new IllegalArgumentException("JSON 格式不合法：" + firstError.getMessage()
-                        + "；AI 原始返回前 500 字符：" + preview);
+                log.error("JSON 解析失败 first={} second={} preview={}", firstError.getMessage(), secondError.getMessage(), preview);
+                throw new IllegalArgumentException("题目 JSON 解析失败，请检查 AI 返回格式");
             }
         }
 

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 错误专用日志：只收 WARN/ERROR，按天滚动 + 单文件 50MB + 保留 14 天 -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/error.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{40} - %msg%n%rEx{full,org.springframework,zu,com.fasterxml,javax,java,sun,org.apache}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 业务包 INFO 级全量日志：沿用 application.properties 里的 logging.file.name，这里不动 -->
+    <!-- 只把 root 的 WARN/ERROR 同时路由到 ERROR_FILE -->
+    <root level="INFO">
+        <appender-ref ref="ERROR_FILE"/>
+    </root>
+</configuration>
