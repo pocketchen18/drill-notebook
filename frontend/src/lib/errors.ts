@@ -17,16 +17,21 @@ const FRIENDLY_MESSAGES: Record<string, string> = {
 
 /**
  * 把任意错误转成对外展示的简要 message。
- * - ApiError：优先用 error.code 对应的简要文案，缺失时回退到 error.message
- * - 其他 Error：返回 friendlyFallback
- * - 非错误：返回 friendlyFallback
+ * - ApiError：优先展示后端返回的具体 message；仅在 message 为空时回退 code 映射
+ * - 其他 Error：返回 error.message 或 friendlyFallback
  *
  * 同时把完整错误写入 console.error，便于开发者排查。
  */
 export function friendlyMessage(error: unknown, friendlyFallback: string): string {
   if (error instanceof ApiError) {
+    const specific = error.message?.trim();
+    // 后端已给出具体原因时直接展示，避免把「max_tokens 截断/超时」盖成笼统「请求参数无效」
+    if (specific && specific !== '请求参数无效' && !specific.startsWith('请求失败（')) {
+      console.error('[api] error detail', { code: error.code, status: error.status, message: error.message, cause: error });
+      return specific;
+    }
     const fromCode = FRIENDLY_MESSAGES[error.code];
-    const message = fromCode ?? (error.message || friendlyFallback);
+    const message = fromCode ?? (specific || friendlyFallback);
     console.error('[api] error detail', { code: error.code, status: error.status, message: error.message, cause: error });
     return message;
   }
