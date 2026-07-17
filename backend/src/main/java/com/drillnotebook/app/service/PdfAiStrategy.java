@@ -26,14 +26,26 @@ public class PdfAiStrategy implements AiFallbackStrategy {
         String rawText = textExtractor.extract(req.rawBytes());
         try {
             String json = aiService.parseQuestionsFromText(rawText, req.masterPassword());
+            boolean truncated = json != null && json.contains("__TRUNCATED_BY_MAX_TOKENS__");
+            if (truncated) {
+                json = json.replace("/*__TRUNCATED_BY_MAX_TOKENS__*/", "").replace("__TRUNCATED_BY_MAX_TOKENS__", "");
+            }
             List<MarkdownQuestionParser.ParsedQuestion> parsed = jsonParser.parse(json);
+            if (parsed.isEmpty()) {
+                throw new IllegalArgumentException(truncated
+                        ? "AI 返回被截断且无法解析出完整题目，请拆分 PDF 后重试"
+                        : "AI 未返回可导入的题目");
+            }
             return new RuleResult(parsed, List.of(), "ai-fallback", false);
         } catch (IllegalArgumentException aiError) {
-            String hint = looksLikeMarkdownArtifact(rawText)
-                    ? "此 PDF 的版式需 AI 解析但未配置 AI API Key，请在设置中配置后再试"
-                    : "规则解析失败且 AI 兜底不可用："
-                            + (aiError.getMessage() == null ? "未知错误" : aiError.getMessage());
-            throw new IllegalArgumentException(hint, aiError);
+            String detail = aiError.getMessage() == null ? "未知错误" : aiError.getMessage();
+            // 仅在“未配置 Key”类错误上使用环回 Markdown 专用提示，避免把超时/403 误报成未配置
+            boolean missingKey = detail.contains("请先配置 AI");
+            if (missingKey && looksLikeMarkdownArtifact(rawText)) {
+                throw new IllegalArgumentException("此 PDF 的版式需 AI 解析但未配置 AI API Key，请在设置中配置后再试", aiError);
+            }
+            // 不再二次包「规则解析失败且 AI 兜底不可用」，交给 ImportOrchestrator 统一包装
+            throw aiError;
         }
     }
 

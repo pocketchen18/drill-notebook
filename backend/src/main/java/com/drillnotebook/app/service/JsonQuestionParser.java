@@ -46,26 +46,48 @@ public class JsonQuestionParser {
     public List<MarkdownQuestionParser.ParsedQuestion> parse(String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("JSON 内容为空");
         String cleaned = stripMarkdownFence(source);
-        JsonNode root;
-        try {
-            root = mapper.readTree(cleaned);
-        } catch (Exception firstError) {
-            String repaired = repairUnescapedQuotes(cleaned);
+        JsonNode root = null;
+        Exception lastError = null;
+        List<String> candidates = new ArrayList<>();
+        candidates.add(cleaned);
+        candidates.add(repairUnescapedQuotes(cleaned));
+        String salvaged = salvageTruncatedQuestionsJson(cleaned);
+        if (salvaged != null && !salvaged.isBlank()) candidates.add(salvaged);
+        String salvagedRepaired = salvageTruncatedQuestionsJson(repairUnescapedQuotes(cleaned));
+        if (salvagedRepaired != null && !salvagedRepaired.isBlank()) candidates.add(salvagedRepaired);
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.isBlank()) continue;
             try {
-                root = mapper.readTree(repaired);
-            } catch (Exception secondError) {
-                String preview = cleaned.length() > 500 ? cleaned.substring(0, 500) + "..." : cleaned;
-                log.error("JSON 解析失败 first={} second={} preview={}", firstError.getMessage(), secondError.getMessage(), preview);
-                throw new IllegalArgumentException("题目 JSON 解析失败，请检查 AI 返回格式");
+                root = mapper.readTree(candidate);
+                break;
+            } catch (Exception error) {
+                lastError = error;
             }
+        }
+        if (root == null) {
+            String preview = cleaned.length() > 500 ? cleaned.substring(0, 500) + "..." : cleaned;
+            log.error("JSON 解析失败 last={} preview={}", lastError == null ? "unknown" : lastError.getMessage(), preview);
+            throw new IllegalArgumentException("题目 JSON 解析失败，请检查 AI 返回格式");
         }
 
         JsonNode questionsNode = root.isArray() ? root : root.path("questions");
         if (!questionsNode.isArray() || questionsNode.isEmpty()) throw new IllegalArgumentException("没有找到题目");
 
         List<MarkdownQuestionParser.ParsedQuestion> result = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
         for (int index = 0; index < questionsNode.size(); index++) {
-            result.add(parseQuestion(questionsNode.get(index), index + 1));
+            try {
+                result.add(parseQuestion(questionsNode.get(index), index + 1));
+            } catch (IllegalArgumentException error) {
+                // 截断 JSON 尾部常有半截题目：跳过坏题，保留已完整解析的题
+                errors.add(error.getMessage() == null ? ("第 " + (index + 1) + " 题无效") : error.getMessage());
+            }
+        }
+        if (result.isEmpty()) {
+            throw new IllegalArgumentException(errors.isEmpty() ? "没有找到有效题目" : errors.get(0));
+        }
+        if (!errors.isEmpty()) {
+            log.warn("JSON 导入跳过 {} 道坏题，成功 {} 道：{}", errors.size(), result.size(), String.join("；", errors.stream().limit(3).toList()));
         }
         return result;
     }
@@ -215,6 +237,71 @@ public class JsonQuestionParser {
             return c;
         }
         return -1;
+    }
+
+    /**
+     * 抢救被 max_tokens 截断的 questions JSON：截到最后一个完整对象，补齐闭合括号。
+     * 只用于 AI 兜底，失败时返回 null。
+     */
+    public static String salvageTruncatedQuestionsJson(String source) {
+        if (source == null || source.isBlank()) return null;
+        String text = stripMarkdownFence(source);
+        int arrayStart = text.indexOf('[');
+        if (arrayStart < 0) return null;
+        int lastCompleteObjectEnd = -1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = arrayStart; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) lastCompleteObjectEnd = i;
+            }
+        }
+        if (lastCompleteObjectEnd < 0) return null;
+        StringBuilder recovered = new StringBuilder();
+        // 若原文是 {"questions":[... 则保留前缀
+        int questionsKey = text.lastIndexOf("\"questions\"", arrayStart);
+        if (questionsKey >= 0) {
+            int brace = text.lastIndexOf('{', questionsKey);
+            if (brace >= 0) recovered.append(text, brace, arrayStart);
+            else recovered.append("{\"questions\":");
+        } else {
+            // 纯数组
+        }
+        recovered.append(text, arrayStart, lastCompleteObjectEnd + 1);
+        // 去掉末尾多余逗号
+        int end = recovered.length() - 1;
+        while (end > 0 && Character.isWhitespace(recovered.charAt(end))) end--;
+        int cursor = end;
+        // 从最后一个 } 往前扫，确保数组闭合
+        if (recovered.charAt(cursor) == '}') {
+            // ok
+        }
+        // 补齐 ] 与可能的 }
+        if (questionsKey >= 0) {
+            recovered.append("]}");
+        } else {
+            recovered.append(']');
+        }
+        // 清理 `},]` / `,]`
+        String normalized = recovered.toString().replaceAll(",\\s*]", "]").replaceAll(",\\s*}", "}");
+        return normalized;
     }
 
 }
