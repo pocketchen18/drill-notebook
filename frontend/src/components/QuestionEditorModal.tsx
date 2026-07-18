@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Form, Input, InputNumber, Message, Modal, Select } from '@arco-design/web-react';
 import { post, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { Question, QuestionOption, QuestionType } from '../lib/types';
 
 interface QuestionEditorModalProps {
@@ -44,7 +45,7 @@ export function QuestionEditorModal({ bankId, question, visible, onClose, onSave
       const payload = { type, stem: stem.trim(), options: parsedOptions, answer: normalizedAnswer, analysis: analysis.trim(), chapter: chapter.trim() || null, tags: tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean), difficulty };
       if (question) await put(`/api/questions/${question.id}`, payload); else await post(`/api/banks/${bankId}/questions`, payload);
       Message.success(question ? '题目已更新' : '题目已创建'); onSaved(); onClose();
-    } catch (error) { Message.error(error instanceof Error ? error.message : '题目保存失败'); }
+    } catch (error) { Message.error(friendlyMessage(error, '题目保存失败，请稍后重试')); }
     finally { setSaving(false); }
   };
 

@@ -56,6 +56,30 @@ class PdfTextAdapterTest {
         assertTrue(result.markdown().contains("type: multiple"), "顿号分隔答案应推断 multiple");
     }
 
+    @Test
+    void infersTrueFalseFromLiteralAnswer() {
+        String raw = """
+                4. Java 字节码可以用 JVM 执行。
+                答案：true
+                解析：Java 编译为字节码，用 JVM 解释执行。
+                """;
+        PdfTextAdapter.AdapterResult result = adapter.adapt(raw);
+        assertEquals(1, result.totalQuestions());
+        assertTrue(result.markdown().contains("type: true_false"), "答案 true 应推断 true_false");
+        assertTrue(result.markdown().contains("answer: true"), "应捕获答案 true");
+    }
+
+    @Test
+    void preservesInlineAnalysisContent() {
+        String raw = """
+                1. 题干一
+                答案：A
+                解析：这是同一行的解析内容。
+                """;
+        PdfTextAdapter.AdapterResult result = adapter.adapt(raw);
+        assertTrue(result.markdown().contains("这是同一行的解析内容"), "单行 解析：xxx 应保留解析内容");
+    }
+
     private static String readResource(String path) throws IOException {
         try (InputStream stream = PdfTextAdapterTest.class.getResourceAsStream(path)) {
             if (stream == null) throw new IllegalStateException("Missing resource: " + path);

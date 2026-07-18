@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button, Message, Select, Space } from '@arco-design/web-react';
 import { Download } from 'lucide-react';
 import { buildStandaloneHtml, safeFileName, type ExportDocument, type ExportFormat } from '../lib/export';
+import { friendlyMessage } from '../lib/errors';
 
 interface ExportActionsProps {
   count: number;
@@ -27,7 +28,7 @@ export function ExportActions({ count, document }: ExportActionsProps): JSX.Elem
       });
       if (!result.canceled) Message.success(`已导出到 ${result.path ?? '所选位置'}`);
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '导出失败');
+      Message.error(friendlyMessage(error, '导出失败，请稍后重试'));
     } finally {
       setExporting(false);
     }

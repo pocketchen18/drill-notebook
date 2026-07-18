@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
 import { BookOpenText, Braces, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { Bank, Question } from '../lib/types';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
@@ -73,7 +74,7 @@ export function BankPage(): JSX.Element {
       invalidate();
       Message.success('题库已创建');
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '题库创建失败，请稍后重试'))
   });
 
   const deleteMutation = useMutation({
@@ -83,13 +84,13 @@ export function BankPage(): JSX.Element {
       invalidate();
       Message.success('题库已删除');
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '题库删除失败，请稍后重试'))
   });
 
   const renameMutation = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) => put<Bank>(`/api/banks/${id}`, { name }),
     onSuccess: () => { invalidate(); Message.success('题库名称已更新'); },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '题库重命名失败，请稍后重试'))
   });
 
   const importMutation = useMutation({
@@ -99,7 +100,7 @@ export function BankPage(): JSX.Element {
       Message.success(`导入完成：新增 ${result.imported}，跳过 ${result.skipped}，失败 ${result.failed}`);
       if (result.errors?.length) Message.warning(result.errors.slice(0, 2).join('；'));
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, 'Markdown 导入失败，请稍后重试'))
   });
 
   const importJsonMutation = useMutation({
@@ -109,13 +110,13 @@ export function BankPage(): JSX.Element {
       Message.success(`导入完成：新增 ${result.imported}，跳过 ${result.skipped}，失败 ${result.failed}`);
       if (result.errors?.length) Message.warning(result.errors.slice(0, 2).join('；'));
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, 'JSON 导入失败，请稍后重试'))
   });
 
   const deleteQuestionMutation = useMutation({
     mutationFn: (id: number) => del<void>(`/api/questions/${id}`),
     onSuccess: () => { invalidate(); Message.success('题目已删除'); },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, '题目删除失败，请稍后重试'))
   });
 
   const openImportMarkdown = async (): Promise<void> => {

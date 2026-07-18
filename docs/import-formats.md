@@ -214,7 +214,32 @@ PDF 里反过来——`PdfTextAdapter` 输出的规整 Markdown frontmatter 用 
 
 ---
 
-## 3. 实操选择建议
+## 3. 导出格式的 round-trip 导入
+
+「题库」页的导出按钮会生成叙述式 Markdown（`### 题干` + `A.` 选项 + `**答案：**` + `**解析：**`，题间用 `---` 分隔，文件开头有 `# 标题` 行）。这种格式和第 1 节的「手写导入」格式（YAML frontmatter + `===` 分隔）不同。
+
+从 v0.1.0 起，导出的 `.md` 可以直接用「导入 Markdown」入口再导回，无需手动改成 frontmatter 格式。后端导入链路是三步：
+
+```
+旧 MarkdownQuestionParser（要求 frontmatter + === 分隔）
+  ↓ 失败（导出格式没 frontmatter）
+新 ExportMarkdownParser（解析 ### 题干 / **答案：** / --- 分隔）
+  ↓ 成功
+入库，strategy = "export-rules"
+```
+
+新解析器的行为：
+
+- **题型映射**：元数据引用块 `> ` 里的「题型：单选」等中文标签优先映射成枚举（单选→single、多选→multiple、填空→fill、判断→true_false、解答→essay）；缺失时按选项数 + 答案形态推断兜底。
+- **元数据回填**：`章节`/`标签`/`难度` 一并解析，`group_id` / `order_in_group` 恒为 `null`（导出格式未携带）。
+- **多行参考答案**：解答题的 `**参考答案：**` 后续行（直到 `**解析：**` 或块尾）作为答案收集。
+- **整批级失败**：源码为空抛异常；0 题返回空列表由 Orchestrator 切下一兜底。字段级错误（题干空、题型无效）抛 `IllegalArgumentException`，单题跳过不阻断整批导入。
+
+JSON 导入不受影响，仍走两步链路（JSON 规则 → JSON AI）。
+
+---
+
+## 4. 实操选择建议
 
 | 来源 | 选什么格式 | 为什么 |
 |---|---|---|
@@ -223,19 +248,20 @@ PDF 里反过来——`PdfTextAdapter` 输出的规整 Markdown frontmatter 用 
 | 题目 PDF 是「规整 Markdown 转 PDF」的环回产物 | PDF + 必须配 AI | 规则救不活，AI 兜底才行 |
 | 题目 PDF 中文乱码严重 | JSON | PDFBox 提不出干净文本，规则和 AI 都会受影响 |
 | 题目本来就是 Markdown | 不要走 PDF | 直接用「导入 Markdown」入口，绕开 PDFBox 提取这一层风险 |
+| 题库导出的 `.md` 要再导回 | 「导入 Markdown」入口 | v0.1.0+ 起导出格式可直接 round-trip，无需手动改格式 |
 
 ---
 
-## 4. 必死的反例
+## 5. 必死的反例
 
-### 4.1 环回 Markdown 转 PDF
+### 5.1 环回 Markdown 转 PDF
 
 「规整 Markdown → PDF → 再提取」的环回文本——题号丢了、`---` 围栏丢了、选项挤在一行 `A. 选项 B. 选项 C. 选项 D. 选项`、`===` 分隔符位置错位。这种 PDF 走规则路径**必败**，要么配 AI，要么别这么造。
 
-### 4.2 PDF 中文乱码严重
+### 5.2 PDF 中文乱码严重
 
 PDFBox 提不出干净文本（大量 `?` 替代中文），规则和 AI 都会受影响——改用 JSON。
 
-### 4.3 选项挤行
+### 5.3 选项挤行
 
 题干正文后直接接 `A. 选项 B. 选项 C. 选项 D. 选项` 挤在一行——`MarkdownQuestionParser` 的选项正则要求每行只放一个选项且行首匹配，挤行认不出。要么每行独占一个选项，要么走 AI。

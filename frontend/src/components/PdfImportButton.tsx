@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Button, Message } from '@arco-design/web-react';
 import { FileType } from 'lucide-react';
 import { post } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 
 interface PdfImportButtonProps {
   bankId: number;
@@ -54,7 +55,7 @@ export function PdfImportButton({ bankId, disabled, onImported }: PdfImportButto
       if (result.errors?.length) Message.warning(result.errors.slice(0, 2).join('；'));
       onImported?.();
     } catch (error) {
-      Message.error(`PDF 导入失败：${error instanceof Error ? error.message : '未知错误'}`);
+      Message.error(friendlyMessage(error, 'PDF 导入失败，请稍后重试'));
     } finally {
       setImporting(false);
     }

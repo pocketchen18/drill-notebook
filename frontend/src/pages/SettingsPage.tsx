@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Descriptions, Form, Input, Message, Spin, Switch, Typography } from '@arco-design/web-react';
 import { FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
 import { get, put } from '../lib/api';
+import { friendlyMessage } from '../lib/errors';
 import type { AiConfig } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 
@@ -33,7 +34,7 @@ export function SettingsPage(): JSX.Element {
       setPortable(info);
       setHealth(status);
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '后端不可用');
+      Message.error(friendlyMessage(error, '后端不可用'));
     } finally {
       setLoading(false);
     }
@@ -54,7 +55,7 @@ export function SettingsPage(): JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ['ai-config'] });
       Message.success('AI 配置已保存，密钥已加密存储');
     },
-    onError: (error) => Message.error(error.message)
+    onError: (error) => Message.error(friendlyMessage(error, 'AI 配置保存失败，请稍后重试'))
   });
 
   return <main className="page">
