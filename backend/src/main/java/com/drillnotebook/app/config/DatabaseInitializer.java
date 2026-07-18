@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class DatabaseInitializer {
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
     private final DataSource dataSource;
 
     public DatabaseInitializer(DataSource dataSource) {

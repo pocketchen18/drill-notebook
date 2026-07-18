@@ -112,3 +112,88 @@ CREATE VIRTUAL TABLE IF NOT EXISTS question_fts USING fts5(
     stem, answer, analysis, tags,
     content='question', content_rowid='id'
 );
+
+CREATE TABLE IF NOT EXISTS spaced_repetition_config (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT NOT NULL UNIQUE,
+    is_default        INTEGER NOT NULL DEFAULT 0,
+    intervals_json    TEXT NOT NULL DEFAULT '{"1":1,"2":6,"3":16,"4":36,"5":70}',
+    initial_ef        REAL NOT NULL DEFAULT 2.5,
+    minimum_ef        REAL NOT NULL DEFAULT 1.3,
+    max_interval_days INTEGER NOT NULL DEFAULT 365,
+    wrong_strategy    TEXT NOT NULL DEFAULT 'reduce_half',
+    wrong_fixed_days  REAL NOT NULL DEFAULT 1.0,
+    daily_new_limit   INTEGER NOT NULL DEFAULT 20,
+    daily_review_limit INTEGER NOT NULL DEFAULT 100,
+    priority_mode     TEXT NOT NULL DEFAULT 'due_first',
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS review_schedule (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type       TEXT NOT NULL,
+    item_id         INTEGER NOT NULL,
+    config_id       INTEGER REFERENCES spaced_repetition_config(id),
+    ef              REAL NOT NULL DEFAULT 2.5,
+    interval        REAL NOT NULL DEFAULT 0,
+    repetitions     INTEGER NOT NULL DEFAULT 0,
+    next_review     TEXT,
+    last_review     TEXT,
+    last_quality    INTEGER,
+    total_reviews   INTEGER NOT NULL DEFAULT 0,
+    total_wrong     INTEGER NOT NULL DEFAULT 0,
+    streak_correct  INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'new',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(item_type, item_id, config_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_schedule_due
+    ON review_schedule(item_type, next_review);
+CREATE INDEX IF NOT EXISTS idx_review_schedule_item
+    ON review_schedule(item_type, item_id);
+
+CREATE TABLE IF NOT EXISTS review_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id         INTEGER NOT NULL REFERENCES review_schedule(id) ON DELETE CASCADE,
+    quality             INTEGER NOT NULL,
+    response_time       INTEGER,
+    scheduled_interval  REAL,
+    actual_interval     REAL,
+    source              TEXT NOT NULL DEFAULT 'manual',
+    reviewed_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_log_schedule
+    ON review_log(schedule_id, reviewed_at DESC);
+
+INSERT OR IGNORE INTO spaced_repetition_config(name, is_default, intervals_json,
+    initial_ef, minimum_ef, max_interval_days,
+    wrong_strategy, wrong_fixed_days,
+    daily_new_limit, daily_review_limit, priority_mode)
+VALUES ('标准模式', 1,
+    '{"1":1,"2":6,"3":16,"4":36,"5":70}',
+    2.5, 1.3, 365,
+    'reduce_half', 1.0,
+    20, 100, 'due_first');
+
+INSERT OR IGNORE INTO spaced_repetition_config(name, is_default, intervals_json,
+    initial_ef, minimum_ef, max_interval_days,
+    wrong_strategy, wrong_fixed_days,
+    daily_new_limit, daily_review_limit, priority_mode)
+VALUES ('考前突击', 0,
+    '{"1":0.5,"2":1,"3":2,"4":4,"5":7,"6":14}',
+    2.0, 1.3, 30,
+    'reset', 0.5,
+    50, 200, 'worst_first');
+
+INSERT OR IGNORE INTO spaced_repetition_config(name, is_default, intervals_json,
+    initial_ef, minimum_ef, max_interval_days,
+    wrong_strategy, wrong_fixed_days,
+    daily_new_limit, daily_review_limit, priority_mode)
+VALUES ('保守学习', 0,
+    '{"1":1,"2":3,"3":7,"4":14,"5":30,"6":60,"7":120}',
+    2.5, 1.3, 365,
+    'reset', 1.0,
+    10, 50, 'due_first');
