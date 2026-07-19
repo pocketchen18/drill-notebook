@@ -1,6 +1,6 @@
 # Drill Notebook
 
-Drill Notebook is a Windows-first, green-portable Standard MVP for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, a TipTap notebook, and optional backend-proxied AI assistance.
+Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
 
 ## Requirements
 
@@ -46,9 +46,10 @@ pwsh -File scripts/portable-audit.ps1
 1. Run `start-mvp.cmd` and wait for the main window.
 2. Open `题库`, import `resources/sample-bank.md`, then open `刷题`.
 3. Submit one incorrect answer, open `错题`, and verify the question appears.
-4. Open `笔记本`, create or open a page, edit a formula/diagram/Markdown block, switch to `预览`, and verify Markdown, LaTeX, Mermaid and question-block content render.
+4. Open `笔记本`, create or open a page, edit a formula/diagram/Markdown block; formula/Mermaid/Markdown blocks render by default (click to edit). Add the current page (or multi-select pages) via **加入计划**.
 5. In `刷题`, use `1-4` to choose, `Enter` to submit, `Left/Right` or `P/N` to move between questions.
-6. Open `AI`, configure the local `mock://local` provider, load a wrong question/bank/note as summary context, attach a text file or image, and confirm the Markdown response can be inserted into a note.
+6. Open `设置` / AI config, set an OpenAI-compatible provider (or local `mock://local` if available), load a wrong question/bank/note as context, and confirm the Markdown response can be inserted into a note.
+7. After a quiz / memorize / knowledge session ends, the **本轮结束后的学习计划** dialog appears: pick candidates, set start/optional end dates, optionally enable **让 AI 帮忙排计划**, then write to the calendar. Open `日历` to review and **去学习**.
 
 Automated checks are available with `npm test`, `pwsh -File scripts/smoke-mvp.ps1`, and `pwsh -File scripts/portable-audit.ps1 -RunSmoke`.
 
@@ -66,9 +67,35 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 
 ## MVP scope
 
-Included: single-choice, multiple-choice, fill-in, true/false, and essay Markdown import; PDF import with rule-based parsing and AI fallback; advanced session ordering; question and knowledge-point memorization; wrong-answer tracking; notebooks with autosave; KaTeX, Mermaid, snapshots, exports; encrypted OpenAI-compatible AI chat and advisory essay grading.
+**Included**
 
-Deferred: spaced repetition, knowledge graphs, exam simulation, video or multimodal import, collaboration, SQLCipher full-database encryption, and AI content generation beyond chat and summary.
+- Question banks: single / multiple / fill / true-false / essay; Markdown import; PDF import (rules + AI fallback); JSON import paths
+- Quiz sessions, memorization (questions + knowledge points), wrong-book tracking
+- Notebooks with autosave, KaTeX / Mermaid / Markdown live blocks, export; note pages can be planned for review
+- **Study calendar / plans**: add questions, knowledge points, and note pages to dates; plan groups; same resource allowed multiple times on one day; complete while studying; year/month navigation
+- **Join plan / post-session plan** (user chooses AI or not):
+  - Manual: required start date, optional end date; no end → all on start day; with end → round-robin spread across the window
+  - Optional AI schedule: user prompt + enriched context (difficulty, wrong counts, tags, …) within the date window (default 5 days if end omitted; **no system hard max**); prompt cannot expand past the date controls; rule fallback if AI fails
+- AI chat (encrypted local history), advisory essay grading
+
+**Deferred / not full SRS**
+
+- Spaced-repetition algorithms (SM-2 etc.), knowledge graphs, exam simulation
+- Video or heavy multimodal import, collaboration, SQLCipher full-database encryption
+- Natural-language rewriting of the date window controls
+
+## Documentation
+
+| Doc | Description |
+|---|---|
+| [docs/jlink.md](docs/jlink.md) | Build embedded JRE for portable packaging |
+| [docs/import-formats.md](docs/import-formats.md) | PDF / JSON bank import formats |
+| [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | Knowledge-point Markdown import |
+| [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | Quiz Markdown parse / render flow |
+
+Design specs and implementation plans under `docs/superpowers/` are **local only** (gitignored). Word (`.docx` / `.doc` / `.docm`) is also not stored in git.
+
+---
 
 ## 中文说明
 
@@ -85,11 +112,24 @@ npm run start:check
 
 ### 功能说明
 
-- `题库`：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。支持导入 Markdown，也可导入 PDF（规则解析为主，置信度不足时由已配置的 AI 兜底）。
-- `刷题`：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切换上一题/下一题。
-- `背题` / `背知识点`：按题型、章节、标签或具体条目批量选择，支持随机重排、手动调整顺序和会话内跳转。
-- `笔记本`：公式、Mermaid 和 Markdown 块**默认渲染**，点击块进入编辑，完成/失焦后回到渲染视图（类似 Obsidian Live Preview）。
-- `AI`：全局悬浮球 + 侧边栏（`Ctrl+J`），支持多会话（新建/切换/删除/导出 Markdown·HTML·JSON）；消息经 AES-256-GCM 加密后写入本地 SQLite。在刷题/错题/笔记页自动携带当前上下文；助手回复可一键「插入笔记」。API 连接在「设置」中配置。
+- **题库**：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。支持 Markdown；也可导入 PDF（规则解析为主，不足时由已配置的 AI 兜底）及 JSON 等格式（见 `docs/import-formats.md`）。
+- **刷题**：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切题。设置页可批量「加入计划」。
+- **背题 / 背知识点**：按题型、章节、标签或具体条目批量选择，支持随机重排、手动顺序和会话内跳转；可加入计划。
+- **错题**：最近答错且未纠正的题目；可勾选加入计划或再练。
+- **笔记本**：公式、Mermaid 和 Markdown 块默认渲染，点击进入编辑。**当前页或勾选多页可加入计划**（笔记也可复习）；日历「去学习」可打开笔记。
+- **日历**：按月查看学习计划，可切换**年份 / 月份**。计划条目含题目、知识点、笔记页；支持完成勾选、整组删除、按日/组「去学习」（刷题 / 背知识点 / 复习笔记）。**同一天允许同一资源多条待办**（一天可复习多次）。
+- **加入计划**（各学习页）：
+  - **起始日必填，终止日可选**（是否开 AI 都可用）。
+  - **不开启 AI**：无终止 → 全部写到起始日；有终止 → 在窗口内按天**轮询均分**条目（除不尽时多出来的摊在前面几天，不是堆最后一天）。
+  - **开启「让 AI 排计划」**（可选）：可填需求/薄弱点提示词；系统附带难度、错题次数、标签等上下文；在起始～终止窗口内生成多日方案（无终止时默认 5 天窗口；**不设系统硬上限**）。提示词中的更大天数不能扩大日期窗口。AI 失败时规则降级。确认后一键写入。
+- **会话结束**（刷题 / 背题 / 背知识点结束，或背知识点「结束并推荐」）：
+  - 弹窗标题：**本轮结束后的学习计划**。
+  - 先展示规则候选并勾选；设起始/可选终止。
+  - **「让 AI 帮忙排计划」默认关闭**——由用户自主选择是否用 AI。
+  - 关 AI：手动写入（单日或日期范围均分）。
+  - 开 AI：填提示词 → 生成方案 → 一键添加到日历。
+- **从计划学习**：带 `planDate` / `planGroupId` / `planItemId` 时，刷题提交、背题标记、知识点揭示等会把对应计划项标为完成（中途退出也保留已完成项）。
+- **AI 助手**：全局悬浮球 + 侧边栏（`Ctrl+J`），多会话；消息经 AES-256-GCM 加密写入本地 SQLite。刷题/错题/笔记等可带上下文；回复可「插入笔记」。连接在「设置」中配置。
 
 ### Markdown 题型格式
 
@@ -109,6 +149,12 @@ tags: [jvm, gc]
 ```
 
 解答题提交后会尝试调用「设置」中已配置的模型。模型只提供建议得分、置信度和说明，不写入确定的对错；AI 未配置或调用失败时答案仍会保存，也不会被误记为错题。
+
+### 文档与 docx
+
+- 产品文档见上文 **Documentation** 表及 `docs/` 下已放行的 Markdown。
+- `docs/superpowers/`（设计 spec / 实现 plan）为本地工作材料，**已 gitignore，不提交**。
+- 仓库**不提交** `.docx` / `.doc` / `.docm`。需要 Word 时请从 Markdown 本地导出。
 
 ### 打包
 

@@ -118,6 +118,62 @@ public class QuestionRepository {
                 """, rowMapper);
     }
 
+    /**
+     * Aggregate answer stats for AI scheduling context.
+     * Keys: attemptCount, wrongCount, correctCount, lastIsCorrect (Boolean|null), lastAnsweredAt
+     */
+    public Map<Long, Map<String, Object>> answerStats(List<Long> questionIds) {
+        Map<Long, Map<String, Object>> result = new LinkedHashMap<>();
+        if (questionIds == null || questionIds.isEmpty()) {
+            return result;
+        }
+        String placeholders = String.join(",", Collections.nCopies(questionIds.size(), "?"));
+        List<Map<String, Object>> rows = jdbc.query(
+                "SELECT question_id, "
+                        + "COUNT(*) AS attempt_count, "
+                        + "SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_count, "
+                        + "SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count "
+                        + "FROM answer_record WHERE question_id IN (" + placeholders + ") "
+                        + "GROUP BY question_id",
+                (rs, rowNum) -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("questionId", rs.getLong("question_id"));
+                    row.put("attemptCount", rs.getInt("attempt_count"));
+                    row.put("wrongCount", rs.getInt("wrong_count"));
+                    row.put("correctCount", rs.getInt("correct_count"));
+                    return row;
+                },
+                questionIds.toArray());
+        for (Map<String, Object> row : rows) {
+            long qid = ((Number) row.get("questionId")).longValue();
+            Map<String, Object> stats = new LinkedHashMap<>();
+            stats.put("attemptCount", row.get("attemptCount"));
+            stats.put("wrongCount", row.get("wrongCount"));
+            stats.put("correctCount", row.get("correctCount"));
+            result.put(qid, stats);
+        }
+        List<Map<String, Object>> lasts = jdbc.query(
+                "SELECT a.question_id, a.is_correct, a.answered_at FROM answer_record a "
+                        + "WHERE a.id = (SELECT MAX(a2.id) FROM answer_record a2 WHERE a2.question_id = a.question_id) "
+                        + "AND a.question_id IN (" + placeholders + ")",
+                (rs, rowNum) -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("questionId", rs.getLong("question_id"));
+                    Object raw = rs.getObject("is_correct");
+                    row.put("lastIsCorrect", raw == null ? null : ((Number) raw).intValue() == 1);
+                    row.put("lastAnsweredAt", rs.getString("answered_at"));
+                    return row;
+                },
+                questionIds.toArray());
+        for (Map<String, Object> row : lasts) {
+            long qid = ((Number) row.get("questionId")).longValue();
+            Map<String, Object> stats = result.computeIfAbsent(qid, id -> new LinkedHashMap<>());
+            stats.put("lastIsCorrect", row.get("lastIsCorrect"));
+            stats.put("lastAnsweredAt", row.get("lastAnsweredAt"));
+        }
+        return result;
+    }
+
     public List<Map<String, Object>> sessionAnswers(String sessionId) {
         return jdbc.query("SELECT question_id, user_answer, is_correct, time_spent, grading_status, grading_json, answered_at FROM answer_record WHERE session_id = ? ORDER BY id", (result, row) -> {
             Map<String, Object> item = new LinkedHashMap<>(); item.put("questionId", result.getLong("question_id")); item.put("userAnswer", result.getString("user_answer"));

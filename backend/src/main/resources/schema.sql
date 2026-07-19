@@ -125,3 +125,32 @@ CREATE VIRTUAL TABLE IF NOT EXISTS question_fts USING fts5(
     stem, answer, analysis, tags,
     content='question', content_rowid='id'
 );
+
+CREATE TABLE IF NOT EXISTS study_plan_group (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT,
+    source TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS study_plan_item (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES study_plan_group(id) ON DELETE CASCADE,
+    plan_date TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'todo',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_plan_item_date_status ON study_plan_item(plan_date, status);
+CREATE INDEX IF NOT EXISTS idx_study_plan_item_group ON study_plan_item(group_id);
+CREATE INDEX IF NOT EXISTS idx_study_plan_item_resource ON study_plan_item(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_study_plan_group_date ON study_plan_group(plan_date, id);

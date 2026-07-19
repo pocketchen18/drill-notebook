@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Empty, Spin, Table, Tag, Typography } from '@arco-design/web-react';
-import { RotateCcw, Sparkles, XCircle } from 'lucide-react';
+import { CalendarPlus, RotateCcw, Sparkles, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { get } from '../lib/api';
 import type { Question } from '../lib/types';
@@ -11,6 +11,8 @@ import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 import { ExportActions } from '../components/ExportActions';
 import { questionExportDocument } from '../lib/export';
 import { questionTypeLabel } from '../lib/quiz';
+import { AddToPlanModal } from '../components/AddToPlanModal';
+import { truncateTitle } from '../lib/studyPlan';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -21,6 +23,8 @@ export function WrongPage(): JSX.Element {
   const query = useQuery({ queryKey: ['wrong'], queryFn: () => get<Question[]>('/api/quiz/wrong') });
   const rows = query.data ?? EMPTY_QUESTIONS;
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [planVisible, setPlanVisible] = useState(false);
+  const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   useEffect(() => {
     if (!query.data) return;
@@ -37,6 +41,11 @@ export function WrongPage(): JSX.Element {
 
   useRegisterPageContext(pageContext);
 
+  const openPlanForRows = (items: Question[]): void => {
+    setPlanItems(items.map((row) => ({ resourceId: row.id, title: truncateTitle(row.stem || `题目 #${row.id}`) })));
+    setPlanVisible(true);
+  };
+
   return (
     <main className="page">
       <div className="page-heading">
@@ -46,6 +55,7 @@ export function WrongPage(): JSX.Element {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
+          <Button icon={<CalendarPlus size={16} />} disabled={!selectedRows.length} onClick={() => openPlanForRows(selectedRows)}>加入计划</Button>
           <Button icon={<Sparkles size={16} />} disabled={!rows.length} onClick={() => setAiOpen(true)}>AI 分析错题</Button>
           <Button type="primary" icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
         </div>
@@ -68,7 +78,16 @@ export function WrongPage(): JSX.Element {
                 { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{stem}</Typography.Text> },
                 { title: '类型', dataIndex: 'type', width: 100, render: (_: unknown, row: Question) => questionTypeLabel(row.type) },
                 { title: '章节', dataIndex: 'chapter', width: 160, render: (chapter?: string) => chapter || '未分类' },
-                { title: '操作', width: 100, render: (_: unknown, row: Question) => <Button type="text" onClick={() => navigate(`/quiz?questionIds=${row.id}`)}>练习</Button> }
+                {
+                  title: '操作',
+                  width: 160,
+                  render: (_: unknown, row: Question) => (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <Button type="text" onClick={() => navigate(`/quiz?questionIds=${row.id}`)}>练习</Button>
+                      <Button type="text" onClick={() => openPlanForRows([row])}>加入计划</Button>
+                    </div>
+                  )
+                }
               ]}
             />
           ) : (
@@ -76,6 +95,13 @@ export function WrongPage(): JSX.Element {
           )}
         </div>
       </section>
+      <AddToPlanModal
+        visible={planVisible}
+        onClose={() => setPlanVisible(false)}
+        resourceType="question"
+        items={planItems}
+        defaultTitle="错题计划"
+      />
     </main>
   );
 }

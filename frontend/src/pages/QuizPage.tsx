@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react';
-import { Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, NotePage, Notebook, Question, QuizSession, SubmitResult } from '../lib/types';
@@ -13,6 +13,11 @@ import { questionsToMarkdown } from '../lib/aiContext';
 import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 import { AdvancedQuestionSelector } from '../components/AdvancedQuestionSelector';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
+import { AddToPlanModal } from '../components/AddToPlanModal';
+import { CompletePlanButton } from '../components/CompletePlanButton';
+import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendModal';
+import { completePlanResources, planScopeFromSearch } from '../lib/planProgress';
+import { truncateTitle } from '../lib/studyPlan';
 
 const { Text } = Typography;
 
@@ -65,6 +70,8 @@ export function QuizPage(): JSX.Element {
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const initialBank = Number(searchParams.get('bankId')) || undefined;
+  const { planItemId, planDate, planGroupId } = planScopeFromSearch(searchParams);
+  const hasPlanScope = Boolean(planItemId || planDate || planGroupId);
   const questionIds = useMemo(() => searchParams.get('questionIds')?.split(',').map(Number).filter(Boolean), [searchParams]);
   const [bankId, setBankId] = useState<number | undefined>(initialBank);
   const questionsQuery = useQuery({ queryKey: ['quiz-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined && !questionIds?.length });
@@ -80,6 +87,14 @@ export function QuizPage(): JSX.Element {
   const [noteVisible, setNoteVisible] = useState(false);
   const [answeredIds, setAnsweredIds] = useState<number[]>([]);
   const [answerStates, setAnswerStates] = useState<Record<number, AnsweredQuestionState>>({});
+  const [planVisible, setPlanVisible] = useState(false);
+  const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
+  const [recommendVisible, setRecommendVisible] = useState(false);
+  const [recommendPayload, setRecommendPayload] = useState<{
+    wrongQuestionIds?: number[];
+    answered?: Array<{ questionId: number; isCorrect: boolean | null }>;
+  }>({});
+  const recommendShownRef = useRef(false);
 
   useEffect(() => {
     if (!bankId && banksQuery.data?.length) setBankId(banksQuery.data[0].id);
@@ -158,6 +173,8 @@ export function QuizPage(): JSX.Element {
       setAnsweredIds([]);
       setAnswerStates({});
       setMasterPassword('');
+      recommendShownRef.current = false;
+      setRecommendVisible(false);
     } catch (error) {
       Message.error(friendlyMessage(error, '无法开始练习，请稍后重试'));
     }
@@ -181,6 +198,17 @@ export function QuizPage(): JSX.Element {
       setResult(submission);
       setAnswerStates((states) => ({ ...states, [question.id]: { selected: [...selected], textAnswer, result: submission } }));
       setAnsweredIds((ids) => [...new Set([...ids, question.id])]);
+      // 从计划进入时：作答即标完成（中途退出也保留）
+      if (hasPlanScope) {
+        void completePlanResources({
+          resourceType: 'question',
+          resourceIds: [question.id],
+          planDate,
+          groupId: planGroupId
+        }).catch(() => {
+          /* best-effort; do not block quiz */
+        });
+      }
     } catch (error) {
       Message.error(friendlyMessage(error, '提交失败，请稍后重试'));
     } finally { setSubmitting(false); }
@@ -197,10 +225,25 @@ export function QuizPage(): JSX.Element {
     setResult(saved?.result);
   };
 
+  const openSessionRecommend = (): void => {
+    if (recommendShownRef.current) return;
+    recommendShownRef.current = true;
+    const answered = Object.entries(answerStates).map(([id, state]) => ({
+      questionId: Number(id),
+      isCorrect: state.result.isCorrect
+    }));
+    const wrongQuestionIds = answered
+      .filter((item) => item.isCorrect === false)
+      .map((item) => item.questionId);
+    setRecommendPayload({ wrongQuestionIds, answered });
+    setRecommendVisible(true);
+  };
+
   const next = (): void => {
     if (!session) return;
     if (index >= session.questions.length - 1) {
       Message.success('本轮练习完成');
+      openSessionRecommend();
       return;
     }
     showQuestion(index + 1);
@@ -213,12 +256,56 @@ export function QuizPage(): JSX.Element {
 
   const jump = (nextIndex: number): void => { showQuestion(nextIndex); };
 
+  const openPlanForQuestions = (items: Question[]): void => {
+    if (!items.length) {
+      Message.warning('请先选择要加入计划的题目');
+      return;
+    }
+    setPlanItems(
+      items.map((item) => ({
+        resourceId: item.id,
+        title: truncateTitle(item.stem || `题目 #${item.id}`)
+      }))
+    );
+    setPlanVisible(true);
+  };
+
+  const setupPlanQuestions = useMemo(() => {
+    if (questionIds?.length) {
+      // Deep-link / 错题再练：questionsQuery 可能未按 bank 拉取，无题干时用占位标题仍可加入计划。
+      const byId = new Map((questionsQuery.data ?? []).map((item) => [item.id, item]));
+      return questionIds.map((id) => {
+        const found = byId.get(id);
+        if (found) return found;
+        return {
+          id,
+          bankId: bankId ?? 0,
+          type: 'single' as Question['type'],
+          stem: `题目 #${id}`,
+          options: []
+        };
+      });
+    }
+    const selected = new Set(selectedQuestionIds);
+    return (questionsQuery.data ?? []).filter((item) => selected.has(item.id));
+  }, [bankId, questionIds, questionsQuery.data, selectedQuestionIds]);
+
   return <main className="page">
     <div className="page-heading">
       <div><h1>刷题</h1><p>按筛选与编排顺序练习，提交后查看答案和解析。可用右下角 AI 助手讲解当前题。</p></div>
       <Space>
+        <CompletePlanButton planItemId={planItemId} />
+        {!session ? (
+          <Button
+            icon={<CalendarPlus size={16} />}
+            disabled={!setupPlanQuestions.length}
+            onClick={() => openPlanForQuestions(setupPlanQuestions)}
+          >
+            加入计划{setupPlanQuestions.length ? `（${setupPlanQuestions.length}）` : ''}
+          </Button>
+        ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>问 AI</Button>
-        <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); }}>重新选择</Button>
+        <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); recommendShownRef.current = false; setRecommendVisible(false); }}>重新选择</Button>
         <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
       </Space>
     </div>
@@ -261,6 +348,7 @@ export function QuizPage(): JSX.Element {
         </div>}
         <div className="quiz-actions">
           <Button icon={<FilePlus2 size={16} />} onClick={() => { setNoteQuestion(question); setNoteVisible(true); }}>添加到笔记</Button>
+          <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForQuestions([question])}>加入计划</Button>
           <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 讲解</Button>
           {!result ? <Button type="primary" loading={submitting} onClick={() => void submit()}>{question.type === 'essay' ? '提交并请求 AI 辅助判题' : '提交答案'}</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === session.questions.length - 1 ? '完成' : '下一题'}</Button>}
         </div>
@@ -268,5 +356,18 @@ export function QuizPage(): JSX.Element {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">数字 1-4 选择，Enter 提交，←/→ 或 P/N 切题 · Ctrl+J AI</Text></div>
     </div></div> : <Empty description="题库中没有可练习的题目" />}
     <AddToNoteModal question={noteQuestion} visible={noteVisible} onClose={() => setNoteVisible(false)} />
+    <AddToPlanModal
+      visible={planVisible}
+      onClose={() => setPlanVisible(false)}
+      resourceType="question"
+      items={planItems}
+      defaultTitle="刷题计划"
+    />
+    <SessionPlanRecommendModal
+      visible={recommendVisible}
+      onClose={() => setRecommendVisible(false)}
+      sessionType="quiz"
+      payload={recommendPayload}
+    />
   </main>;
 }
