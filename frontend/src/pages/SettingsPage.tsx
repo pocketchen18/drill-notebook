@@ -266,7 +266,7 @@ export function SettingsPage(): JSX.Element {
             <InputNumber value={reviewMinimumEf} onChange={(v) => v != null && setReviewMinimumEf(v)} min={1.0} max={3} step={0.1} />
           </Form.Item>
           <Form.Item label="最大间隔（天）">
-            <InputNumber value={reviewMaxIntervalDays} onChange={(v) => v != null && setReviewMaxIntervalDays(v)} min={7} max={9999} />
+            <InputNumber value={reviewMaxIntervalDays} onChange={(v) => v != null && setReviewMaxIntervalDays(v)} min={1} max={9999} />
           </Form.Item>
         </div>
         <div className="form-row">
@@ -276,7 +276,7 @@ export function SettingsPage(): JSX.Element {
             </Select>
           </Form.Item>
           <Form.Item label="固定/重置天数">
-            <InputNumber value={reviewWrongFixedDays} onChange={(v) => v != null && setReviewWrongFixedDays(v)} min={0.25} max={30} step={0.25} />
+            <InputNumber value={reviewWrongFixedDays} onChange={(v) => v != null && setReviewWrongFixedDays(v)} min={0.001} max={30} step={0.001} />
           </Form.Item>
         </div>
         <div className="form-row">
