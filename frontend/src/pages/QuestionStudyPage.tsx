@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Empty, Message, Select, Space, Switch, Tag, Typography } from '@arco-design/web-react';
 import { BookOpenCheck, CheckCircle2, ChevronLeft, ChevronRight, Eye, RotateCcw } from 'lucide-react';
 import { get } from '../lib/api';
@@ -10,6 +10,7 @@ import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 import { enrollItems, submitReview, getScheduleDetail, listConfigs, getDueItems } from '../lib/review';
 
 export function QuestionStudyPage(): JSX.Element {
+  const queryClient = useQueryClient();
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const [bankId, setBankId] = useState<number>();
   const questionsQuery = useQuery({ queryKey: ['study-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined });
@@ -127,7 +128,9 @@ export function QuestionStudyPage(): JSX.Element {
     if (!submittedReviewIds.has(question.id)) {
       setSubmittedReviewIds((prev) => new Set(prev).add(question.id));
       const quality = known ? 4 : 0;
-      void submitReviewForQuestion(question.id, quality);
+      void submitReviewForQuestion(question.id, quality).finally(() => {
+        void queryClient.invalidateQueries({ queryKey: ['review-due'] });
+      });
     }
 
     // 3. "记住了"才跳到下一题；"再看一次"留在当前题
