@@ -121,7 +121,6 @@ try {
     $resultLines.Add("QuestionBlock snapshot after delete: $($snapshotBlocks.Count)")
     $resultLines.Add("AI redacted config: hasKey=$($redacted.hasKey), mock chat returned=$($chat.reply -match '本地演示回复')")
     $resultLines.Add("AI multimodal mock: returned=$($multimodal.reply -match '图片附件')")
-    $resultLines.Add("Database: $($health.dbPath)")
     $resultLines | Set-Content -LiteralPath $evidence -Encoding utf8
     Write-Output ($resultLines -join [Environment]::NewLine)
 } catch {

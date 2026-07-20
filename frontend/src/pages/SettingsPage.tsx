@@ -9,7 +9,7 @@ import { useUiStore } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
 
-interface Health { status: string; appRoot: string; dbPath: string; }
+interface Health { status: string; }
 
 const WRONG_STRATEGY_OPTIONS = [
   { value: 'reduce_half', label: '间隔减半（推荐）' },

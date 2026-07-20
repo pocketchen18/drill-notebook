@@ -208,8 +208,7 @@ public class AiService {
                     Map.of("role", "user", "content", "请解析以下 PDF 提取文本为题目 JSON：\n\n" + rawText));
             // 结构化解析关闭 thinking：Qwen3 等模型默认思考会把超时预算耗尽
             String reply = call(config, messages, masterPassword, STRUCTURED_CALL);
-            log.info("AI 解析 PDF 返回 {} 字符：{}", reply.length(),
-                    reply.length() > 2000 ? reply.substring(0, 2000) + "..." : reply);
+            log.info("AI 解析 PDF 完成，返回 {} 字符", reply.length());
             return reply;
         } catch (IllegalArgumentException error) {
             throw error;
@@ -250,8 +249,7 @@ public class AiService {
                             "title、content、category、tags 里出现的所有双引号都要这样转义。"),
                     Map.of("role", "user", "content", rawText));
             String reply = call(config, messages, "", STRUCTURED_CALL);
-            log.info("AI 解析知识点返回 {} 字符：{}", reply.length(),
-                    reply.length() > 2000 ? reply.substring(0, 2000) + "..." : reply);
+            log.info("AI 解析知识点完成，返回 {} 字符", reply.length());
             return parseKnowledgePointsJson(reply);
         } catch (IllegalArgumentException error) {
             throw error;
