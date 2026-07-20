@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
-import { BookOpenCheck, BookOpenText, BrainCircuit, FileText, Layers3, Moon, Settings, Sun, Target, XCircle, RotateCw } from 'lucide-react';
+import { BookOpenCheck, BookOpenText, BrainCircuit, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore } from './stores/uiStore';
 import { BankPage } from './pages/BankPage';
@@ -11,8 +11,6 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AiAssistant } from './components/AiAssistant';
 import { QuestionStudyPage } from './pages/QuestionStudyPage';
 import { KnowledgePointPage } from './pages/KnowledgePointPage';
-import { ReviewPage } from './pages/ReviewPage';
-import { ReviewConfigPage } from './pages/ReviewConfigPage';
 
 const { Sider, Header, Content } = Layout;
 
@@ -21,7 +19,6 @@ const navItems = [
   { key: '/quiz', label: '刷题', icon: <Target size={17} /> },
   { key: '/memorize', label: '背题', icon: <BookOpenCheck size={17} /> },
   { key: '/knowledge', label: '背知识点', icon: <Layers3 size={17} /> },
-  { key: '/review', label: '记忆曲线', icon: <RotateCw size={17} /> },
   { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
   { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
   { key: '/settings', label: '设置', icon: <Settings size={17} /> }
@@ -111,8 +108,6 @@ export function AppRoutes(): JSX.Element {
       <Route path="/quiz" element={<QuizPage />} />
       <Route path="/memorize" element={<QuestionStudyPage />} />
       <Route path="/knowledge" element={<KnowledgePointPage />} />
-      <Route path="/review" element={<ReviewPage />} />
-      <Route path="/review/config" element={<ReviewConfigPage />} />
       <Route path="/wrong" element={<WrongPage />} />
       <Route path="/notebooks" element={<NotebookPage />} />
       <Route path="/ai" element={<Navigate to="/settings" replace />} />

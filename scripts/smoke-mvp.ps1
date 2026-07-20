@@ -16,6 +16,10 @@ foreach ($databaseFile in @('study.db', 'study.db-shm', 'study.db-wal')) {
 Remove-Item -LiteralPath (Join-Path $root 'runtime\backend.port') -Force -ErrorAction SilentlyContinue
 
 if (-not (Test-Path $jar)) { throw "Backend jar not found: $jar. Run mvn -f backend/pom.xml package first." }
+$jdk17 = Join-Path $env:USERPROFILE '.jdk\jdk-17\jdk-17.0.19+10'
+if (-not (Test-Path (Join-Path $jdk17 'bin\java.exe'))) { throw "JDK 17 not found at $jdk17. Place a JDK 17 there or adjust the path." }
+$javaCmd = Join-Path $jdk17 'bin\java.exe'
+
 $javaHome = Join-Path $root 'runtime\java-home'
 $tmp = Join-Path $root 'runtime\tmp'
 New-Item -ItemType Directory -Force -Path $javaHome, $tmp | Out-Null
@@ -37,7 +41,7 @@ $stderrTask = $null
 $resultLines = [System.Collections.Generic.List[string]]::new()
 try {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = 'java.exe'
+    $startInfo.FileName = $javaCmd
     $startInfo.WorkingDirectory = $root
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -84,8 +88,34 @@ try {
     $aiConfig = Invoke-RestMethod -Method Put -Uri "$base/api/ai/config" -ContentType 'application/json' -Body (@{ provider = 'custom'; endpoint = 'mock://local'; model = 'local-demo'; apiKey = 'demo-local-key' } | ConvertTo-Json)
     $redacted = Invoke-RestMethod -Uri "$base/api/ai/config"
     $chat = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body (@{ messages = @(@{ role = 'user'; content = '你好' }) } | ConvertTo-Json -Depth 10)
-    $multimodal = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body (@{ messages = @(@{ role = 'user'; content = @(@{ type = 'text'; text = '请描述图片' }, @{ type = 'image_url'; image_url = @{ url = 'data:image/png;base64,AA==' } }) }) } | ConvertTo-Json -Depth 10)
+    $multimodalBody = '{"messages":[{"role":"user","content":[{"type":"text","text":"请描述图片"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}'
+    $multimodal = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body $multimodalBody
     if (-not $redacted.hasKey -or $chat.reply -notmatch '本地演示回复' -or $multimodal.reply -notmatch '图片附件') { throw 'AI configuration/chat assertion failed.' }
+
+    # ── 记忆曲线 ──
+    $configs = Invoke-RestMethod "$base/api/review/configs"
+    if ($configs.Count -lt 3) { throw "Review configs expected >= 3, got $($configs.Count)" }
+    $hasVerify = ($configs | Where-Object { $_.name -eq '验证模式' }).Count -gt 0
+    if (-not $hasVerify) { throw '验证模式 config missing' }
+
+    $enrolled = Invoke-RestMethod -Method Post -Uri "$base/api/review/enroll" -ContentType 'application/json' `
+        -Body (@{ itemType = 'question'; itemIds = @(@($session.questions[0].id), @($session.questions[1].id)); configId = $configs[0].id } | ConvertTo-Json -Depth 10)
+    $enrolledCount = ($enrolled | Where-Object { $_.status -eq 'enrolled' }).Count
+    if ($enrolledCount -ne 2) { throw "Enroll expected 2, got $enrolledCount" }
+
+    $due = Invoke-RestMethod "$base/api/review/due?type=question&configId=$($configs[0].id)"
+    if ($due.Count -lt 1) { throw "Due items expected >= 1, got $($due.Count)" }
+
+    $submit = Invoke-RestMethod -Method Post -Uri "$base/api/review/submit" -ContentType 'application/json' `
+        -Body (@{ scheduleId = $due[0].id; quality = 4; source = 'smoke' } | ConvertTo-Json)
+    if ($null -eq $submit.logId -or $submit.ef -le 1) { throw 'SM-2 submit result invalid' }
+
+    $stats = Invoke-RestMethod "$base/api/review/stats?configId=$($configs[0].id)"
+    if ($stats.totalEnrolled -lt 1) { throw 'Review stats enrolled count invalid' }
+
+    $detail = Invoke-RestMethod "$base/api/review/schedule/question/$($session.questions[0].id)"
+    if (-not $detail.enrolled -or $detail.recentLogs.Count -lt 1) { throw 'Review schedule detail invalid' }
+
     $resultLines.Add("Health: $($health.status)")
     $resultLines.Add("Imported: $($first.imported), skipped on re-import: $($second.skipped)")
     $resultLines.Add("Session question count: $($session.questions.Count)")

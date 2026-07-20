@@ -210,3 +210,13 @@ VALUES ('保守学习', 0,
     2.5, 1.3, 365,
     'reset', 1.0,
     10, 50, 'due_first');
+
+INSERT OR IGNORE INTO spaced_repetition_config(name, is_default, intervals_json,
+    initial_ef, minimum_ef, max_interval_days,
+    wrong_strategy, wrong_fixed_days,
+    daily_new_limit, daily_review_limit, priority_mode)
+VALUES ('验证模式', 0,
+    '{"1":0.003,"2":0.007,"3":0.014,"4":0.028,"5":0.056}',
+    2.5, 1.3, 1,
+    'reset', 0.003,
+    100, 500, 'due_first');

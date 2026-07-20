@@ -198,6 +198,23 @@ public class ReviewRepository {
         return jdbc.query(sql.toString(), scheduleRowMapper, params.toArray());
     }
 
+    /** 返回所有非 mastered 的登记项（不限到期状态） */
+    public List<ReviewSchedule> findAllActiveItems(String itemType, Long configId) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT * FROM review_schedule WHERE status IN ('new','learning','review')");
+        List<Object> params = new ArrayList<>();
+        if (itemType != null) {
+            sql.append(" AND item_type = ?");
+            params.add(itemType);
+        }
+        if (configId != null) {
+            sql.append(" AND config_id = ?");
+            params.add(configId);
+        }
+        sql.append(" ORDER BY status = 'new' DESC, next_review ASC");
+        return jdbc.query(sql.toString(), scheduleRowMapper, params.toArray());
+    }
+
     @Transactional
     public long createSchedule(String itemType, long itemId, Long configId) {
         KeyHolder holder = new GeneratedKeyHolder();

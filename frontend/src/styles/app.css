@@ -276,15 +276,6 @@ button, input, textarea { font: inherit; }
 .quality-4:hover, .quality-4:focus-visible { border-color: #27ae60; color: #27ae60; }
 .quality-5:hover, .quality-5:focus-visible { border-color: #8e44ad; color: #8e44ad; }
 .quality-rating { padding: 12px 0; }
-.answer-reveal { padding: 12px; margin: 10px 0; border-radius: 6px; background: var(--subtle-bg); }
-.answer-reveal strong { display: block; margin-bottom: 4px; }
-.analysis-block { padding: 12px; margin: 10px 0; border-left: 3px solid var(--color-success); border-radius: 0 6px 6px 0; background: var(--subtle-bg); }
-.option-list { list-style: none; padding: 0; margin: 12px 0; }
-.option-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 6px; }
-.option-item.correct { border-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 10%, transparent); }
-.option-key { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--subtle-bg); font-weight: 700; font-size: 13px; flex-shrink: 0; }
-.option-text { flex: 1; }
-.option-check { color: var(--color-success); flex-shrink: 0; }
 .palette-red { border-color: #e74c3c !important; color: #e74c3c; }
 .palette-orange { border-color: #e67e22 !important; color: #e67e22; }
 .palette-green { border-color: #27ae60 !important; color: #27ae60; }
