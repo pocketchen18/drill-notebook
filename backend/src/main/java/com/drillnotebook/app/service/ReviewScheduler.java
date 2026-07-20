@@ -39,7 +39,7 @@ public class ReviewScheduler {
         newEf = Math.max(newEf, config.minimumEf);
         newInterval = Math.min(newInterval, config.maxIntervalDays);
 
-        double minInterval = config.initialEf < 2.0 ? 0.125 : 0.25;
+        double minInterval = getConfigMinInterval(config);
         newInterval = Math.max(newInterval, minInterval);
 
         LocalDateTime nextReview = LocalDateTime.now().plusMinutes((long) (newInterval * 24 * 60));
@@ -78,13 +78,19 @@ public class ReviewScheduler {
 
     private double applyWrongStrategy(double currentInterval,
                                       SpacedRepetitionConfig config) {
+        double floor = getConfigMinInterval(config);
         return switch (config.wrongStrategy) {
             case "reset"          -> config.wrongFixedDays;
-            case "reduce_half"    -> Math.max(currentInterval / 2.0, 0.25);
-            case "reduce_quarter" -> Math.max(currentInterval * 0.75, 0.25);
+            case "reduce_half"    -> Math.max(currentInterval / 2.0, floor);
+            case "reduce_quarter" -> Math.max(currentInterval * 0.75, floor);
             case "fixed"          -> config.wrongFixedDays;
             default               -> 1.0;
         };
+    }
+
+    private double getConfigMinInterval(SpacedRepetitionConfig config) {
+        return Math.min(0.25, config.intervals.values().stream()
+                .mapToDouble(Long::doubleValue).min().orElse(0.25));
     }
 
     private String determineStatus(double interval, int repetitions) {

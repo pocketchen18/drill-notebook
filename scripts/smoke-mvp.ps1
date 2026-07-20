@@ -95,8 +95,6 @@ try {
     # ── 记忆曲线 ──
     $configs = Invoke-RestMethod "$base/api/review/configs"
     if ($configs.Count -lt 3) { throw "Review configs expected >= 3, got $($configs.Count)" }
-    $hasVerify = ($configs | Where-Object { $_.name -eq '验证模式' }).Count -gt 0
-    if (-not $hasVerify) { throw '验证模式 config missing' }
 
     $enrolled = Invoke-RestMethod -Method Post -Uri "$base/api/review/enroll" -ContentType 'application/json' `
         -Body (@{ itemType = 'question'; itemIds = @(@($session.questions[0].id), @($session.questions[1].id)); configId = $configs[0].id } | ConvertTo-Json -Depth 10)

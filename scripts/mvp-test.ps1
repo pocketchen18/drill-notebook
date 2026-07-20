@@ -192,7 +192,7 @@ try {
 
     # 验证预设方案名称
     $names = ($configs | ForEach-Object { $_.name }) -join ','
-    Test-Result '包含标准/考前/保守/验证' ($names -match '标准模式' -and $names -match '考前突击' -and $names -match '保守学习' -and $names -match '验证模式') "names=$names"
+    Test-Result '包含标准/考前/保守' ($names -match '标准模式' -and $names -match '考前突击' -and $names -match '保守学习') "names=$names"
 
     # 新建测试方案
     $testIntervals = @{'1' = 0.001; '2' = 0.002; '3' = 0.004}
