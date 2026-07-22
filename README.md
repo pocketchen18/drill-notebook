@@ -1,6 +1,6 @@
 # Drill Notebook
 
-Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
+Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, an **SM-2-style spaced-repetition review** module, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
 
 ## Requirements
 
@@ -73,14 +73,17 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 - Quiz sessions, memorization (questions + knowledge points), wrong-book tracking
 - Notebooks with autosave, KaTeX / Mermaid / Markdown live blocks, export; note pages can be planned for review
 - **Study calendar / plans**: add questions, knowledge points, and note pages to dates; plan groups; same resource allowed multiple times on one day; complete while studying; year/month navigation
+- **Spaced-repetition review (SM-2 style)**: enroll questions / knowledge points into a review config; per-item EF / interval / repetitions / status (`new` → `learning` → `review` → `mastered`); review log history; multiple configs (`标准模式` / `考前突击` / `保守学习`), default flag, custom interval tables, wrong-answer strategy, daily new/review limits and priority mode
+- **Today queue**: enrolled-due items (curve) and calendar todos (plan) merged into one per-day queue with quality scoring and auto-advance; resumable across reloads
+- **Calendar SRS overlay**: per-day due counts and red overdue markers come from `review_schedule`, independent of the manual plan items
 - **Join plan / post-session plan** (user chooses AI or not):
   - Manual: required start date, optional end date; no end → all on start day; with end → round-robin spread across the window
   - Optional AI schedule: user prompt + enriched context (difficulty, wrong counts, tags, …) within the date window (default 5 days if end omitted; **no system hard max**); prompt cannot expand past the date controls; rule fallback if AI fails
 - AI chat (encrypted local history), advisory essay grading
 
-**Deferred / not full SRS**
+**Deferred**
 
-- Spaced-repetition algorithms (SM-2 etc.), knowledge graphs, exam simulation
+- Knowledge graphs, exam simulation
 - Video or heavy multimodal import, collaboration, SQLCipher full-database encryption
 - Natural-language rewriting of the date window controls
 
@@ -92,6 +95,7 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 | [docs/import-formats.md](docs/import-formats.md) | PDF / JSON bank import formats |
 | [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | Knowledge-point Markdown import |
 | [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | Quiz Markdown parse / render flow |
+| [docs/review-srs.md](docs/review-srs.md) | Spaced-repetition review (SM-2): schema, API, configs, today queue, calendar overlay |
 
 Design specs and implementation plans under `docs/superpowers/` are **local only** (gitignored). Word (`.docx` / `.doc` / `.docm`) is also not stored in git.
 
@@ -117,7 +121,9 @@ npm run start:check
 - **背题 / 背知识点**：按题型、章节、标签或具体条目批量选择，支持随机重排、手动顺序和会话内跳转；可加入计划。
 - **错题**：最近答错且未纠正的题目；可勾选加入计划或再练。
 - **笔记本**：公式、Mermaid 和 Markdown 块默认渲染，点击进入编辑。**当前页或勾选多页可加入计划**（笔记也可复习）；日历「去学习」可打开笔记。
-- **日历**：按月查看学习计划，可切换**年份 / 月份**。计划条目含题目、知识点、笔记页；支持完成勾选、整组删除、按日/组「去学习」（刷题 / 背知识点 / 复习笔记）。**同一天允许同一资源多条待办**（一天可复习多次）。
+- **日历**：按月查看学习计划，可切换**年份 / 月份**。计划条目含题目、知识点、笔记页；支持完成勾选、整组删除、按日/组「去学习」（刷题 / 背知识点 / 复习笔记）。**同一天允许同一资源多条待办**（一天可复习多次）。日历还会叠加**间隔重复复习**的到期/逾期标记，与手动计划互相独立。
+- **复习（间隔重复 SM-2 风格）**：把题目或知识点加入复习方案后，系统按 EF / 间隔 / 连续正确次数等推算下次到期时间，状态在 `new → learning → review → mastered` 之间流转；每次提交记录一条 `review_log`。可同时存在多套方案（`标准模式` / `考前突击` / `保守学习`），其中一套标记为默认；每套方案可自定义间隔表、答错策略（间隔减半 / 重置 / 减少 25% / 固定天数）、每日新学/复习上限与排序策略。配置入口：**设置 → 复习方案** 或独立的「复习配置」页。
+- **今日队列**：日历页顶部的「今日队列」面板把**已加入复习方案且今日到期**的条目（curve）和**当日计划待办**（plan）合并成一个队列；答完一题自动推进到下一条；刷新或重启会保留进度。
 - **加入计划**（各学习页）：
   - **起始日必填，终止日可选**（是否开 AI 都可用）。
   - **不开启 AI**：无终止 → 全部写到起始日；有终止 → 在窗口内按天**轮询均分**条目（除不尽时多出来的摊在前面几天，不是堆最后一天）。

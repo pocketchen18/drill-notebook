@@ -90,7 +90,23 @@ public class NotebookRepository {
         if (content != null) jdbc.update("UPDATE note_page SET content = ?, updated_at = datetime('now') WHERE id = ?", write(content), pageId);
     }
 
-    public void deletePage(long pageId) { jdbc.update("DELETE FROM note_page WHERE id = ?", pageId); }
+    public void deletePage(long pageId) {
+        List<Long> groupIds = jdbc.query(
+                "SELECT DISTINCT group_id FROM study_plan_item WHERE resource_type = 'note_page' AND resource_id = ?",
+                (rs, row) -> rs.getLong(1),
+                pageId);
+        jdbc.update("DELETE FROM study_plan_item WHERE resource_type = 'note_page' AND resource_id = ?", pageId);
+        for (Long groupId : groupIds) {
+            if (groupId == null) continue;
+            Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM study_plan_item WHERE group_id = ?", Integer.class, groupId);
+            if (count != null && count == 0) {
+                jdbc.update("DELETE FROM study_plan_group WHERE id = ?", groupId);
+            }
+        }
+        jdbc.update("DELETE FROM note_question_ref WHERE note_id = ?", pageId);
+        jdbc.update("DELETE FROM note_page WHERE id = ?", pageId);
+    }
 
     public Map<String, Object> addQuestionSnapshot(long pageId, QuestionRecord question) {
         Map<String, Object> page = findPage(pageId);

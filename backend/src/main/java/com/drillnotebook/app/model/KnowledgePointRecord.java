@@ -16,6 +16,7 @@ public class KnowledgePointRecord {
     public String content;
     public String category;
     public List<String> tags = new ArrayList<>();
+    public List<String> headingPath = new ArrayList<>();
     public String createdAt;
     public String updatedAt;
 
@@ -29,6 +30,12 @@ public class KnowledgePointRecord {
         point.category = result.getString("category");
         point.createdAt = result.getString("created_at");
         point.updatedAt = result.getString("updated_at");
+        try {
+            String pathJson = result.getString("heading_path");
+            if (pathJson != null && !pathJson.isBlank()) point.headingPath = mapper.readValue(pathJson, new TypeReference<>() {});
+        } catch (Exception error) {
+            throw new SQLException("Invalid knowledge-point heading_path JSON", error);
+        }
         try {
             String tagsJson = result.getString("tags");
             if (tagsJson != null && !tagsJson.isBlank()) point.tags = mapper.readValue(tagsJson, new TypeReference<>() {});
@@ -46,6 +53,7 @@ public class KnowledgePointRecord {
         result.put("content", content);
         result.put("category", category);
         result.put("tags", tags);
+        result.put("headingPath", headingPath);
         result.put("questionIds", questionIds);
         result.put("createdAt", createdAt);
         result.put("updatedAt", updatedAt);

@@ -5,8 +5,6 @@ import com.drillnotebook.app.model.ReviewSchedule;
 import com.drillnotebook.app.model.SpacedRepetitionConfig;
 import com.drillnotebook.app.repository.QuestionRepository;
 import com.drillnotebook.app.repository.ReviewRepository;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,14 +21,18 @@ public class ReviewService {
 
     private final ReviewRepository reviewRepo;
     private final QuestionRepository questionRepo;
-    private final ReviewScheduler scheduler;
+    private final ReviewScheduleApplier applier;
+    private final CompletionSyncService completionSync;
 
-    private static final DateTimeFormatter ISO_DATETIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    public ReviewService(ReviewRepository reviewRepo, QuestionRepository questionRepo) {
+    public ReviewService(
+            ReviewRepository reviewRepo,
+            QuestionRepository questionRepo,
+            ReviewScheduleApplier applier,
+            CompletionSyncService completionSync) {
         this.reviewRepo = reviewRepo;
         this.questionRepo = questionRepo;
-        this.scheduler = new ReviewScheduler();
+        this.applier = applier;
+        this.completionSync = completionSync;
     }
 
     @Transactional
@@ -66,54 +68,42 @@ public class ReviewService {
         reviewRepo.deleteSchedulesByItems(itemType, itemIds);
     }
 
+    /**
+     * Review session submit: advances SRS (with same-day extra policy) and marks one plan todo
+     * for the schedule's item when present. Response fields stay compatible with /api/review/submit.
+     */
     @Transactional
     public Map<String, Object> submit(long scheduleId, int quality, Integer responseTime,
                                        String source) {
-        if (quality < 0 || quality > 5) {
-            throw new IllegalArgumentException("quality must be 0-5");
-        }
-
-        ReviewSchedule schedule = reviewRepo.findScheduleById(scheduleId);
-        if (schedule == null) throw new IllegalArgumentException("schedule not found: " + scheduleId);
-
-        SpacedRepetitionConfig config;
-        if (schedule.configId != null) {
-            config = reviewRepo.findConfigById(schedule.configId);
-        } else {
-            config = reviewRepo.findDefaultConfig();
-        }
-        if (config == null) throw new IllegalStateException("no config found");
-
-        int isCorrect = quality >= 3 ? 1 : 0;
-
-        String now = LocalDateTime.now().format(ISO_DATETIME);
-        double actualInterval = scheduler.calculateActualInterval(schedule.lastReview, now);
-
-        ReviewScheduler.ScheduleResult next = scheduler.schedule(quality, schedule, config);
-
-        reviewRepo.updateSchedule(scheduleId, next.ef, next.interval, next.repetitions,
-                next.nextReview, now, quality, isCorrect, next.status);
-
-        long logId = reviewRepo.insertLog(scheduleId, quality, responseTime,
-                schedule.interval, actualInterval, source);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("logId", logId);
-        result.put("scheduleId", scheduleId);
-        result.put("ef", next.ef);
-        result.put("interval", next.interval);
-        result.put("repetitions", next.repetitions);
-        result.put("nextReview", next.nextReview);
-        result.put("status", next.status);
-        return result;
+        return completionSync.completeByScheduleId(scheduleId, quality, responseTime, source);
     }
 
+    /**
+     * Full schedule advance + review log (no plan hook). Kept for direct SRS-only advances.
+     */
+    @Transactional
+    public Map<String, Object> applyQuality(long scheduleId, int quality, Integer responseTime,
+                                            String source) {
+        return applier.applyQuality(scheduleId, quality, responseTime, source);
+    }
+
+    /**
+     * Quiz auto-submit: only if already enrolled. Never auto-enrolls.
+     *
+     * @return SRS submit map when enrolled; otherwise {@code {skipped:true, reason:"not_enrolled"}}.
+     */
     @Transactional
     public Map<String, Object> autoSubmitFromQuiz(long questionId, boolean isCorrect,
                                                     Integer timeSpent, Long configId) {
         ReviewSchedule schedule = reviewRepo.findScheduleByItem("question", questionId, configId);
+        if (schedule == null && configId != null) {
+            schedule = reviewRepo.findScheduleByItem("question", questionId, null);
+        }
         if (schedule == null) {
-            schedule = findOrCreateSchedule("question", questionId, configId);
+            Map<String, Object> skipped = new LinkedHashMap<>();
+            skipped.put("skipped", true);
+            skipped.put("reason", "not_enrolled");
+            return skipped;
         }
 
         int quality;
@@ -124,13 +114,6 @@ public class ReviewService {
         }
 
         return submit(schedule.id, quality, timeSpent, "quiz");
-    }
-
-    private ReviewSchedule findOrCreateSchedule(String itemType, long itemId, Long configId) {
-        ReviewSchedule existing = reviewRepo.findScheduleByItem(itemType, itemId, configId);
-        if (existing != null) return existing;
-        long id = reviewRepo.createSchedule(itemType, itemId, configId);
-        return reviewRepo.findScheduleById(id);
     }
 
     public List<Map<String, Object>> getDueItems(String itemType, Long configId,
@@ -201,6 +184,25 @@ public class ReviewService {
 
     public List<ReviewLog> getLogs(long scheduleId, int limit) {
         return reviewRepo.findLogsBySchedule(scheduleId, limit);
+    }
+
+    /**
+     * Calendar overlay: count SRS schedules due on each day in [from, to],
+     * plus those already overdue relative to real today. Returned as two
+     * parallel lists so the frontend can render a due marker and a red
+     * overdue marker independently.
+     */
+    public Map<String, Object> calendarStats(String from, String to, Long configIdOrNull) {
+        String realToday = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+        List<Map<String, Object>> due = reviewRepo.countDueByDay(from, to, configIdOrNull);
+        List<Map<String, Object>> overdue = reviewRepo.countOverdueByDay(from, to, realToday, configIdOrNull);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("from", from);
+        result.put("to", to);
+        result.put("realToday", realToday);
+        result.put("due", due);
+        result.put("overdue", overdue);
+        return result;
     }
 
     // ===================== 配置管理 =====================

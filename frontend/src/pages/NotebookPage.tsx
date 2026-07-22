@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
 import { CalendarPlus, FilePlus2, FolderPlus, Save, Sparkles } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { NotePage, Notebook } from '../lib/types';
@@ -14,12 +14,19 @@ import { ExportActions } from '../components/ExportActions';
 import { noteExportDocument } from '../lib/export';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { CompletePlanButton } from '../components/CompletePlanButton';
+import { DayQueueSessionBar, finishDayQueueStep } from '../components/DayQueueSessionBar';
 import { truncateTitle } from '../lib/studyPlan';
 
 export function NotebookPage(): JSX.Element {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const planItemId = Number(searchParams.get('planItemId')) || undefined;
   const pageIdFromQuery = Number(searchParams.get('pageId')) || undefined;
+  const dayQueueMode = searchParams.get('dayQueue') === '1';
+  const pageIdsFromQuery = useMemo(
+    () => searchParams.get('pageIds')?.split(',').map(Number).filter(Boolean) ?? [],
+    [searchParams]
+  );
   const queryClient = useQueryClient();
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const [notebookId, setNotebookId] = useState<number>();
@@ -167,11 +174,26 @@ export function NotebookPage(): JSX.Element {
 
   useRegisterPageContext(pageContext);
 
+  const continueDayQueueFromNotes = (): void => {
+    if (!dayQueueMode) return;
+    finishDayQueueStep(navigate);
+  };
+
   return <main className="page">
+    {dayQueueMode ? <DayQueueSessionBar /> : null}
     <div className="page-heading">
       <div><h1>笔记本</h1><p>所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p></div>
       <Space>
-        <CompletePlanButton planItemId={planItemId} />
+        <CompletePlanButton
+          planItemId={planItemId}
+          resourceType={pageIdFromQuery ? 'note_page' : pageId ? 'note_page' : undefined}
+          resourceId={pageIdFromQuery ?? pageId}
+        />
+        {dayQueueMode ? (
+          <Button type="primary" onClick={continueDayQueueFromNotes}>
+            {pageIdsFromQuery.length > 1 ? '笔记段完成，继续' : '完成今日任务'}
+          </Button>
+        ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 助手</Button>
         <ExportActions count={validSelectedPageIds.length} document={exportPages} />
         <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>

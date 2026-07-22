@@ -217,19 +217,41 @@ public class ReviewRepository {
 
     @Transactional
     public long createSchedule(String itemType, long itemId, Long configId) {
+        // New cards must be due immediately so they appear in the calendar today-queue
+        // (queue filters date(next_review) <= day; NULL next_review was invisible).
+        String now = LocalDateTime.now().format(ISO_DATETIME);
         KeyHolder holder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO review_schedule(item_type, item_id, config_id) VALUES (?, ?, ?)",
+                "INSERT INTO review_schedule(item_type, item_id, config_id, status, next_review, interval, repetitions) "
+                    + "VALUES (?, ?, ?, 'new', ?, 0, 0)",
                 Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, itemType);
             ps.setLong(2, itemId);
             if (configId == null) ps.setObject(3, null);
             else ps.setLong(3, configId);
+            ps.setString(4, now);
             return ps;
         }, holder);
         Number key = holder.getKey();
         return key == null ? jdbc.queryForObject("SELECT last_insert_rowid()", Long.class) : key.longValue();
+    }
+
+    /** Rows with NULL next_review that are still new/learning (legacy enroll before next_review was set). */
+    public List<ReviewSchedule> findNewWithoutNextReview(String itemTypeOrNull, Long configIdOrNull) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT * FROM review_schedule WHERE next_review IS NULL AND status IN ('new', 'learning')");
+        List<Object> params = new ArrayList<>();
+        if (itemTypeOrNull != null) {
+            sql.append(" AND item_type = ?");
+            params.add(itemTypeOrNull);
+        }
+        if (configIdOrNull != null) {
+            sql.append(" AND config_id = ?");
+            params.add(configIdOrNull);
+        }
+        sql.append(" ORDER BY id ASC");
+        return jdbc.query(sql.toString(), scheduleRowMapper, params.toArray());
     }
 
     @Transactional
@@ -243,6 +265,14 @@ public class ReviewRepository {
             "UPDATE review_schedule SET ef=?, interval=?, repetitions=?, next_review=?, last_review=?, last_quality=?, total_reviews=total_reviews+1, total_wrong=total_wrong+?, streak_correct=CASE WHEN ? = 1 THEN streak_correct+1 ELSE 0 END, status=?, updated_at=? WHERE id=?",
             ef, interval, repetitions, nextReview, lastReview, lastQuality,
             wrongIncrement, isCorrect, status, now, id);
+    }
+
+    /** Adjust next_review/interval only (no total_reviews bump). Used after queue clear-view-day. */
+    public void updateNextReviewOnly(long id, String nextReview, double interval) {
+        String now = LocalDateTime.now().format(ISO_DATETIME);
+        jdbc.update(
+            "UPDATE review_schedule SET next_review=?, interval=?, updated_at=? WHERE id=?",
+            nextReview, interval, now, id);
     }
 
     public int countNewToday(String itemType, Long configId) {
@@ -356,8 +386,92 @@ public class ReviewRepository {
 
     public List<ReviewLog> findLogsBySchedule(long scheduleId, int limit) {
         return jdbc.query(
-            "SELECT * FROM review_log WHERE schedule_id = ? ORDER BY reviewed_at DESC LIMIT ?",
+            "SELECT * FROM review_log WHERE schedule_id = ? ORDER BY reviewed_at DESC, id DESC LIMIT ?",
             logRowMapper, scheduleId, limit);
+    }
+
+    /**
+     * True if a same-day review_log exists that advances the schedule (not source = 'extra').
+     * NULL or any non-extra source counts as main.
+     */
+    public boolean hasMainAdvanceOnDate(long scheduleId, String ymd) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM review_log WHERE schedule_id = ? "
+                + "AND date(reviewed_at) = date(?) "
+                + "AND IFNULL(source, '') <> 'extra'",
+            Integer.class, scheduleId, ymd);
+        return n != null && n > 0;
+    }
+
+    /**
+     * Schedules whose next_review falls exactly on ymd. Strict due rule only —
+     * items with NULL next_review are excluded (new pool is handled elsewhere).
+     * Overdue items stay pinned to their original next_review day and do NOT
+     * spill into subsequent days' queues.
+     */
+    public List<ReviewSchedule> findDueOnOrBefore(String ymd, String itemTypeOrNull, Long configIdOrNull) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT * FROM review_schedule WHERE next_review IS NOT NULL AND date(next_review) = date(?)");
+        List<Object> params = new ArrayList<>();
+        params.add(ymd);
+        if (itemTypeOrNull != null) {
+            sql.append(" AND item_type = ?");
+            params.add(itemTypeOrNull);
+        }
+        if (configIdOrNull != null) {
+            sql.append(" AND config_id = ?");
+            params.add(configIdOrNull);
+        }
+        sql.append(" ORDER BY next_review ASC");
+        return jdbc.query(sql.toString(), scheduleRowMapper, params.toArray());
+    }
+
+    /**
+     * Count SRS schedules whose next_review falls on each day in [from, to].
+     * Used by the calendar view to overlay memory-curve due markers per day.
+     * Only non-mastered, non-new-legacy rows with a concrete next_review are counted.
+     */
+    public List<Map<String, Object>> countDueByDay(String from, String to, Long configIdOrNull) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT date(next_review) as due_date, COUNT(*) as due_count "
+                + "FROM review_schedule "
+                + "WHERE next_review IS NOT NULL "
+                + "AND date(next_review) BETWEEN date(?) AND date(?) "
+                + "AND status IN ('new','learning','review')");
+        List<Object> params = new ArrayList<>();
+        params.add(from);
+        params.add(to);
+        if (configIdOrNull != null) {
+            sql.append(" AND config_id = ?");
+            params.add(configIdOrNull);
+        }
+        sql.append(" GROUP BY date(next_review) ORDER BY due_date");
+        return jdbc.queryForList(sql.toString(), params.toArray());
+    }
+
+    /**
+     * Count schedules that are overdue relative to real today (next_review < today)
+     * and still not mastered. Grouped by date(next_review) so the calendar can mark
+     * the original due day with a red/overdue indicator.
+     */
+    public List<Map<String, Object>> countOverdueByDay(String from, String to, String realToday, Long configIdOrNull) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT date(next_review) as due_date, COUNT(*) as overdue_count "
+                + "FROM review_schedule "
+                + "WHERE next_review IS NOT NULL "
+                + "AND date(next_review) < date(?) "
+                + "AND date(next_review) BETWEEN date(?) AND date(?) "
+                + "AND status IN ('new','learning','review')");
+        List<Object> params = new ArrayList<>();
+        params.add(realToday);
+        params.add(from);
+        params.add(to);
+        if (configIdOrNull != null) {
+            sql.append(" AND config_id = ?");
+            params.add(configIdOrNull);
+        }
+        sql.append(" GROUP BY date(next_review) ORDER BY due_date");
+        return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
     public List<Map<String, Object>> dailyStats(String itemType, Long configId, int days) {

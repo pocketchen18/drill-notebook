@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react';
 import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, NotePage, Notebook, Question, QuizSession, SubmitResult } from '../lib/types';
@@ -15,8 +15,10 @@ import { AdvancedQuestionSelector } from '../components/AdvancedQuestionSelector
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { CompletePlanButton } from '../components/CompletePlanButton';
+import { DayQueueSessionBar, finishDayQueueStep } from '../components/DayQueueSessionBar';
 import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendModal';
-import { completePlanResources, planScopeFromSearch } from '../lib/planProgress';
+import { planScopeFromSearch } from '../lib/planProgress';
+import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
 
 const { Text } = Typography;
@@ -65,14 +67,22 @@ function AddToNoteModal({ question, visible, onClose }: { question?: Question; v
 }
 
 export function QuizPage(): JSX.Element {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { setSessionId } = useSessionStore();
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const initialBank = Number(searchParams.get('bankId')) || undefined;
-  const { planItemId, planDate, planGroupId } = planScopeFromSearch(searchParams);
-  const hasPlanScope = Boolean(planItemId || planDate || planGroupId);
+  const { planItemId, planDate } = planScopeFromSearch(searchParams);
   const questionIds = useMemo(() => searchParams.get('questionIds')?.split(',').map(Number).filter(Boolean), [searchParams]);
+  const autoStart = searchParams.get('autoStart') === '1';
+  const dayQueueMode = searchParams.get('dayQueue') === '1';
+  /** From calendar memory-curve queue: right/wrong drives SRS with forceAdvance. */
+  const fromQueue = searchParams.get('fromQueue') === '1' || dayQueueMode;
+  const scheduleIdFromQuery = Number(searchParams.get('scheduleId')) || undefined;
+  /** Single-resource deep link → CompletePlanButton can target that resource. */
+  const planResourceId = questionIds?.length === 1 ? questionIds[0] : undefined;
   const [bankId, setBankId] = useState<number | undefined>(initialBank);
   const questionsQuery = useQuery({ queryKey: ['quiz-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined && !questionIds?.length });
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>(questionIds ?? []);
@@ -95,6 +105,7 @@ export function QuizPage(): JSX.Element {
     answered?: Array<{ questionId: number; isCorrect: boolean | null }>;
   }>({});
   const recommendShownRef = useRef(false);
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     if (!bankId && banksQuery.data?.length) setBankId(banksQuery.data[0].id);
@@ -180,6 +191,14 @@ export function QuizPage(): JSX.Element {
     }
   };
 
+  // Day-queue / deep-link: auto start once when questionIds present.
+  useEffect(() => {
+    if (!autoStart || !questionIds?.length || autoStartedRef.current || session) return;
+    autoStartedRef.current = true;
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- start once per deep link
+  }, [autoStart, questionIds, session]);
+
   const choose = (key: string): void => {
     if (!question || result) return;
     setSelected((current) => question.type === 'multiple' ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key].sort() : [key]);
@@ -198,17 +217,45 @@ export function QuizPage(): JSX.Element {
       setResult(submission);
       setAnswerStates((states) => ({ ...states, [question.id]: { selected: [...selected], textAnswer, result: submission } }));
       setAnsweredIds((ids) => [...new Set([...ids, question.id])]);
-      // 从计划进入时：作答即标完成（中途退出也保留）
-      if (hasPlanScope) {
-        void completePlanResources({
-          resourceType: 'question',
-          resourceIds: [question.id],
-          planDate,
-          groupId: planGroupId
-        }).catch(() => {
+      // Right/wrong → mastery for memory curve when enrolled.
+      // fromQueue: forceAdvance + planDate so backend clears 提前/到期 after a pass.
+      const viewDay = planDate || new Date().toISOString().slice(0, 10);
+      void completeStudy({
+        resourceType: 'question',
+        resourceId: question.id,
+        isCorrect: submission.isCorrect ?? undefined,
+        // Explicit quality: correct ≈ 熟悉(4), wrong ≈ 不会(0).
+        quality:
+          submission.isCorrect === true ? 4 : submission.isCorrect === false ? 0 : undefined,
+        responseTime: 0,
+        source: fromQueue ? 'today_queue' : 'quiz',
+        planItemId: planItemId && planResourceId === question.id ? planItemId : undefined,
+        // Always send a view day for queue clears (today if missing).
+        planDate: fromQueue ? viewDay : planDate,
+        scheduleId: scheduleIdFromQuery,
+        forceAdvance: fromQueue || submission.isCorrect === true
+      })
+        .then((syncResult) => {
+          const next = syncResult.srs?.nextReview;
+          const nextDay = next && next.length >= 10 ? next.slice(0, 10) : null;
+          if (syncResult.skippedSrs === 'not_enrolled') {
+            if (fromQueue) Message.info('本题未加入记忆曲线，仅记录答题');
+            return;
+          }
+          if (submission.isCorrect === true && nextDay) {
+            Message.success(`答对，已掌握推进；下次约 ${nextDay}（应已离开今日队列）`);
+          } else if (submission.isCorrect === false && nextDay) {
+            Message.warning(`答错，按「不会」缩短间隔，下次约 ${nextDay}（可能仍在今日队列）`);
+          }
+          // Refetch queue so 提前 disappears without manual refresh.
+          void queryClient.invalidateQueries({ queryKey: ['study-today'] });
+          void queryClient.invalidateQueries({ queryKey: ['today'] });
+          void queryClient.invalidateQueries({ queryKey: ['review-due'] });
+          void queryClient.invalidateQueries({ queryKey: ['study-plans'] });
+        })
+        .catch(() => {
           /* best-effort; do not block quiz */
         });
-      }
     } catch (error) {
       Message.error(friendlyMessage(error, '提交失败，请稍后重试'));
     } finally { setSubmitting(false); }
@@ -242,6 +289,9 @@ export function QuizPage(): JSX.Element {
   const next = (): void => {
     if (!session) return;
     if (index >= session.questions.length - 1) {
+      if (dayQueueMode && finishDayQueueStep(navigate)) {
+        return;
+      }
       Message.success('本轮练习完成');
       openSessionRecommend();
       return;
@@ -291,10 +341,15 @@ export function QuizPage(): JSX.Element {
   }, [bankId, questionIds, questionsQuery.data, selectedQuestionIds]);
 
   return <main className="page">
+    {dayQueueMode ? <DayQueueSessionBar /> : null}
     <div className="page-heading">
       <div><h1>刷题</h1><p>按筛选与编排顺序练习，提交后查看答案和解析。可用右下角 AI 助手讲解当前题。</p></div>
       <Space>
-        <CompletePlanButton planItemId={planItemId} />
+        <CompletePlanButton
+          planItemId={planItemId}
+          resourceType={planResourceId ? 'question' : undefined}
+          resourceId={planResourceId}
+        />
         {!session ? (
           <Button
             icon={<CalendarPlus size={16} />}
@@ -306,7 +361,9 @@ export function QuizPage(): JSX.Element {
         ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>问 AI</Button>
         <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); recommendShownRef.current = false; setRecommendVisible(false); }}>重新选择</Button>
-        <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
+        {!autoStart || !session ? (
+          <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
+        ) : null}
       </Space>
     </div>
     {!session ? <section className="panel study-setup-panel">
@@ -365,7 +422,10 @@ export function QuizPage(): JSX.Element {
     />
     <SessionPlanRecommendModal
       visible={recommendVisible}
-      onClose={() => setRecommendVisible(false)}
+      onClose={() => {
+        recommendShownRef.current = false;
+        setRecommendVisible(false);
+      }}
       sessionType="quiz"
       payload={recommendPayload}
     />

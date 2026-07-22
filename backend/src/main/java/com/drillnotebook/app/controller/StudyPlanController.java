@@ -81,6 +81,12 @@ public class StudyPlanController {
         return plans.applySchedule(body);
     }
 
+    /** 会话结束双写：可选加入记忆曲线 + 可选写入学习日历。 */
+    @PostMapping("/recommend/session-apply")
+    public Map<String, Object> sessionApply(@RequestBody Map<String, Object> body) {
+        return plans.sessionApply(body);
+    }
+
     @PostMapping("/recommend/ai-note")
     public Map<String, Object> aiNote(@RequestBody Map<String, Object> body) {
         return ai.writePlanNote(body);

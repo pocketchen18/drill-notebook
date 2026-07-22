@@ -1,3 +1,4 @@
+import { get, post } from './api';
 import type { Question } from './types';
 
 export interface QuestionFilters {
@@ -34,4 +35,74 @@ export function shuffleIds(ids: number[], random: () => number = Math.random): n
     [result[index], result[target]] = [result[target], result[index]];
   }
   return result;
+}
+
+/** Merged plan todo + SRS due item from GET /api/study/today */
+export type TodayQueueItem = {
+  id: string;
+  kind: 'plan' | 'due' | 'plan_and_due';
+  resourceType: string;
+  resourceId: number;
+  title: string;
+  planItemId?: number;
+  scheduleId?: number;
+  due?: boolean;
+  overdue?: boolean;
+  srsStatus?: string;
+  /** SRS next_review day (YYYY-MM-DD), when known. */
+  nextReview?: string | null;
+  /** Newly enrolled card (first review). */
+  isNew?: boolean;
+  groupId?: number;
+  groupTitle?: string;
+  note?: string | null;
+};
+
+export type TodayQueueResponse = {
+  date: string;
+  items: TodayQueueItem[];
+  stats: Record<string, number>;
+};
+
+export type CompleteStudyBody = {
+  resourceType: string;
+  resourceId: number;
+  quality?: number;
+  isCorrect?: boolean;
+  responseTime?: number;
+  source?: string;
+  planDate?: string;
+  planItemId?: number;
+  /** Prefer this schedule when present (queue due rows). */
+  scheduleId?: number;
+  configId?: number;
+  /** Skip same-day extra short-circuit; second correct also advances SRS. */
+  forceAdvance?: boolean;
+};
+
+export type CompleteStudySrsResult = {
+  logId?: number;
+  scheduleId?: number;
+  nextReview?: string;
+  status?: string;
+  ef?: number;
+  interval?: number;
+  repetitions?: number;
+  extra?: boolean;
+};
+
+export type CompleteStudyResult = {
+  srs?: CompleteStudySrsResult | null;
+  planItem?: unknown;
+  extraPractice?: boolean;
+  skippedSrs?: string;
+};
+
+export function fetchToday(date?: string) {
+  const q = date ? `?date=${encodeURIComponent(date)}` : '';
+  return get<TodayQueueResponse>(`/api/study/today${q}`);
+}
+
+export function completeStudy(body: CompleteStudyBody) {
+  return post<CompleteStudyResult>('/api/study/complete', body);
 }

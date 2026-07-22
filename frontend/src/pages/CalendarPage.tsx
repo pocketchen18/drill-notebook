@@ -29,6 +29,8 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { del, get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
+import { completeStudy } from '../lib/study';
+import { TodayQueuePanel } from '../components/TodayQueuePanel';
 import {
   collectTodoKnowledgePointIds,
   collectTodoKnowledgePointIdsFromGroups,
@@ -246,6 +248,25 @@ export function CalendarPage(): JSX.Element {
     queryFn: () => get<StudyPlanRangeResponse>(`/api/study-plans?from=${range.from}&to=${range.to}`)
   });
 
+  // SRS due + overdue counts per day, overlaid on the calendar grid.
+  // Due = memory-curve items whose next_review falls on that day.
+  // Overdue = next_review < real today, still not mastered — rendered as a red dot.
+  type CalendarStatsRow = { due_date?: string; due_count?: number; overdue_count?: number };
+  type CalendarStatsResponse = {
+    from: string;
+    to: string;
+    realToday: string;
+    due: CalendarStatsRow[];
+    overdue: CalendarStatsRow[];
+  };
+  const srsStatsQuery = useQuery({
+    queryKey: ['review-calendar-stats', range.from, range.to],
+    queryFn: () => get<CalendarStatsResponse>(`/api/review/calendar-stats?from=${range.from}&to=${range.to}`),
+    // The plan range query already covers the month; SRS stats are independent.
+    // Stale data is fine since invalidation keys differ.
+    staleTime: 0
+  });
+
   const dayGroupsFromCache = useMemo(() => {
     const days = monthQuery.data?.days ?? [];
     const hit = days.find((d) => d.date === selectedDate);
@@ -271,15 +292,33 @@ export function CalendarPage(): JSX.Element {
   const dayLoading = selectedInViewMonth ? monthQuery.isLoading : dayQuery.isLoading;
 
   const todoByDate = useMemo(() => {
-    const map = new Map<string, { todos: number; total: number }>();
+    const map = new Map<string, { todos: number; total: number; srsDue: number; srsOverdue: number }>();
     for (const day of monthQuery.data?.days ?? []) {
       map.set(day.date, {
         todos: todoCountForDay(day.groups),
-        total: totalCountForDay(day.groups)
+        total: totalCountForDay(day.groups),
+        srsDue: 0,
+        srsOverdue: 0
       });
     }
+    // Overlay SRS due counts (memory-curve items whose next_review falls on that day).
+    for (const row of srsStatsQuery.data?.due ?? []) {
+      const date = row.due_date;
+      if (!date) continue;
+      const entry = map.get(date) ?? { todos: 0, total: 0, srsDue: 0, srsOverdue: 0 };
+      entry.srsDue = row.due_count ?? 0;
+      map.set(date, entry);
+    }
+    // Overlay overdue counts (next_review < real today, still not mastered) — red dot.
+    for (const row of srsStatsQuery.data?.overdue ?? []) {
+      const date = row.due_date;
+      if (!date) continue;
+      const entry = map.get(date) ?? { todos: 0, total: 0, srsDue: 0, srsOverdue: 0 };
+      entry.srsOverdue = row.overdue_count ?? 0;
+      map.set(date, entry);
+    }
     return map;
-  }, [monthQuery.data]);
+  }, [monthQuery.data, srsStatsQuery.data]);
 
   const selectDate = (ymd: string): void => {
     setSelectedDate(ymd);
@@ -335,11 +374,30 @@ export function CalendarPage(): JSX.Element {
   const invalidatePlans = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ['study-plans'] });
     await queryClient.invalidateQueries({ queryKey: ['study-plans-day'] });
+    await queryClient.invalidateQueries({ queryKey: ['study-today'] });
   };
 
   const toggleItem = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: PlanStatus }) =>
-      put<StudyPlanItem>(`/api/study-plans/items/${id}`, { status }),
+    mutationFn: async ({
+      item,
+      status
+    }: {
+      item: StudyPlanItem;
+      status: PlanStatus;
+    }) => {
+      if (status === 'done') {
+        // Plan-only complete through fused engine (no quality → SRS skipped).
+        await completeStudy({
+          resourceType: item.resourceType,
+          resourceId: item.resourceId,
+          planItemId: item.id,
+          planDate: item.planDate || selectedDate,
+          source: 'calendar'
+        });
+        return;
+      }
+      await put<StudyPlanItem>(`/api/study-plans/items/${item.id}`, { status: 'todo' });
+    },
     onSuccess: async () => {
       await invalidatePlans();
     },
@@ -446,7 +504,7 @@ export function CalendarPage(): JSX.Element {
       <div className="page-heading">
         <div>
           <h1>日历</h1>
-          <p>按月查看学习计划，勾选完成或跳转到对应学习页。</p>
+          <p>月历规划学习；选中日期（默认今天）下方为合并队列：计划待办 + 到期复习。</p>
         </div>
         <Space>
           <Button onClick={goToday}>今天</Button>
@@ -532,10 +590,12 @@ export function CalendarPage(): JSX.Element {
                     const stats = todoByDate.get(cell.ymd);
                     const isSelected = cell.ymd === selectedDate;
                     const isToday = cell.ymd === today;
+                    const hasOverdue = (stats?.srsOverdue ?? 0) > 0;
                     const className = [
                       'calendar-day-cell',
                       isSelected ? 'selected' : '',
-                      isToday ? 'today' : ''
+                      isToday ? 'today' : '',
+                      hasOverdue ? 'has-overdue' : ''
                     ]
                       .filter(Boolean)
                       .join(' ');
@@ -564,6 +624,23 @@ export function CalendarPage(): JSX.Element {
                             ) : null}
                           </span>
                         ) : null}
+                        {stats && stats.srsDue > 0 ? (
+                          <span
+                            className="calendar-srs-due"
+                            title={`记忆曲线到期 ${stats.srsDue} 项`}
+                          >
+                            <span className="calendar-srs-due-dot" />
+                            <span className="calendar-srs-due-count">{stats.srsDue}</span>
+                          </span>
+                        ) : null}
+                        {stats && stats.srsOverdue > 0 ? (
+                          <span
+                            className="calendar-srs-overdue"
+                            title={`逾期未复习 ${stats.srsOverdue} 项`}
+                          >
+                            <span className="calendar-srs-overdue-dot" />
+                          </span>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -573,15 +650,19 @@ export function CalendarPage(): JSX.Element {
           </div>
         </section>
 
-        <section className="panel">
+        <div className="calendar-day-column">
+          <TodayQueuePanel date={selectedDate} />
+
+          <section className="panel">
           <div className="panel-header">
-            <h2>{selectedDate}</h2>
+            <h2>自主安排 · {selectedDate}</h2>
             <Space size={8} wrap>
+              <Tag color="arcoblue" size="small">日历计划</Tag>
               <Tag color={groups.length ? 'arcoblue' : 'gray'}>
                 {groups.reduce((n, g) => n + g.totalCount, 0)} 项
               </Tag>
               {groups.length > 0 ? (
-                <BatchStudyButton target={dayStudyTarget} size="small" type="primary" label="去学习" />
+                <BatchStudyButton target={dayStudyTarget} size="small" type="primary" label="批量去学习" />
               ) : null}
             </Space>
           </div>
@@ -591,7 +672,7 @@ export function CalendarPage(): JSX.Element {
             ) : groups.length === 0 ? (
               <Empty
                 icon={<CalendarIcon size={34} />}
-                description="这一天还没有学习计划。可从刷题、背题、知识点、错题或笔记本选择内容加入计划（笔记也可复习）。"
+                description="这一天还没有自主安排的计划分组。记忆曲线到期项请看上方队列（紫色）；也可从刷题/知识点等加入计划。"
               />
             ) : (
               groups.map((group) => {
@@ -664,7 +745,7 @@ export function CalendarPage(): JSX.Element {
                           disabled={toggleItem.isPending}
                           onChange={(checked) =>
                             toggleItem.mutate({
-                              id: item.id,
+                              item,
                               status: checked ? 'done' : 'todo'
                             })
                           }
@@ -715,6 +796,7 @@ export function CalendarPage(): JSX.Element {
             )}
           </div>
         </section>
+        </div>
       </div>
 
       <Modal

@@ -79,6 +79,19 @@ public class ReviewController {
         return review.getStats(type, configId);
     }
 
+    /**
+     * Calendar overlay: per-day SRS due counts + overdue counts for a date range.
+     * Used by the calendar view to mark days with memory-curve due items and red
+     * overdue indicators.
+     */
+    @GetMapping("/calendar-stats")
+    public Map<String, Object> calendarStats(
+            @RequestParam String from,
+            @RequestParam String to,
+            @RequestParam(required = false) Long configId) {
+        return review.calendarStats(from, to, configId);
+    }
+
     @GetMapping("/schedule/{type}/{id}")
     public Map<String, Object> getSchedule(@PathVariable String type, @PathVariable long id) {
         ReviewSchedule schedule = review.getSchedule(type, id);

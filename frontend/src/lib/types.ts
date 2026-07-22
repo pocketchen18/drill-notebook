@@ -27,6 +27,7 @@ export interface KnowledgePoint {
   content: string;
   category?: string;
   tags: string[];
+  headingPath?: string[];
   questionIds: number[];
   createdAt?: string;
   updatedAt?: string;

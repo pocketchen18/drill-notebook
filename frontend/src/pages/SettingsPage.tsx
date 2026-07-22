@@ -8,6 +8,13 @@ import type { AiConfig } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
+import {
+  LS_ENROLL_DEFAULT,
+  LS_FORCE_ADVANCE,
+  LS_PLAN_DEFAULT,
+  readBoolPref,
+  writeBoolPref
+} from '../lib/sessionPrefs';
 
 interface Health { status: string; }
 
@@ -56,6 +63,11 @@ export function SettingsPage(): JSX.Element {
   const [reviewDailyNewLimit, setReviewDailyNewLimit] = useState(20);
   const [reviewDailyReviewLimit, setReviewDailyReviewLimit] = useState(100);
   const [reviewPriorityMode, setReviewPriorityMode] = useState<string>('due_first');
+
+  // Session / study preferences (localStorage)
+  const [enrollDefault, setEnrollDefault] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
+  const [planDefault, setPlanDefault] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
+  const [forceAdvance, setForceAdvance] = useState(() => readBoolPref(LS_FORCE_ADVANCE, false));
 
   const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
 
@@ -177,6 +189,55 @@ export function SettingsPage(): JSX.Element {
             <Switch checked={theme === 'dark'} onChange={toggleTheme} />
           </div>
           <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-header"><h2>学习偏好</h2></div>
+        <div className="panel-body form-stack">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>会话结束默认加入记忆曲线</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">会话推荐弹窗「加入记忆曲线」的默认开关。</Typography.Text>
+            </div>
+            <Switch
+              checked={enrollDefault}
+              onChange={(checked) => {
+                setEnrollDefault(checked);
+                writeBoolPref(LS_ENROLL_DEFAULT, checked);
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>会话结束默认写入日历</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">会话推荐弹窗「加入学习日历」的默认开关。</Typography.Text>
+            </div>
+            <Switch
+              checked={planDefault}
+              onChange={(checked) => {
+                setPlanDefault(checked);
+                writeBoolPref(LS_PLAN_DEFAULT, checked);
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>同日正确重复推进曲线</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">
+                开启后，在日历队列完成时若同日已正确过一次，仍会推进 SRS（默认计为额外练习不改到期日）。
+              </Typography.Text>
+            </div>
+            <Switch
+              checked={forceAdvance}
+              onChange={(checked) => {
+                setForceAdvance(checked);
+                writeBoolPref(LS_FORCE_ADVANCE, checked);
+              }}
+            />
+          </div>
         </div>
       </section>
       <section className="panel settings-ai-panel">

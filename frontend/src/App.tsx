@@ -111,6 +111,7 @@ export function AppRoutes(): JSX.Element {
       <Route path="/memorize" element={<QuestionStudyPage />} />
       <Route path="/knowledge" element={<KnowledgePointPage />} />
       <Route path="/wrong" element={<WrongPage />} />
+      <Route path="/today" element={<Navigate to="/calendar" replace />} />
       <Route path="/calendar" element={<CalendarPage />} />
       <Route path="/notebooks" element={<NotebookPage />} />
       <Route path="/ai" element={<Navigate to="/settings" replace />} />

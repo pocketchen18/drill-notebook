@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS knowledge_point (
     content TEXT NOT NULL,
     category TEXT,
     tags TEXT,
+    heading_path TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

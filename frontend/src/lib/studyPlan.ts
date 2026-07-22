@@ -281,7 +281,8 @@ export function planNotePath(
 export function planStudyPath(
   item: Pick<StudyPlanItem, 'resourceType' | 'resourceId' | 'id'>,
   groupId?: number,
-  planDate?: string
+  planDate?: string,
+  options?: { preferMemorize?: boolean }
 ): string {
   const params = new URLSearchParams();
   if (item.resourceType === 'question') {
@@ -298,6 +299,11 @@ export function planStudyPath(
   if (planDate) {
     params.set('planDate', planDate);
   }
+  // Memory-curve review: open memorize page (quality rating) instead of quiz (right/wrong only).
+  if (item.resourceType === 'question' && options?.preferMemorize) {
+    params.set('fromQueue', '1');
+    return `/memorize?${params.toString()}`;
+  }
   const base =
     item.resourceType === 'question'
       ? '/quiz'
@@ -305,4 +311,22 @@ export function planStudyPath(
         ? '/knowledge'
         : '/notebooks';
   return `${base}?${params.toString()}`;
+}
+
+/** Open memorize flow for one or more questions (SRS quality rating). */
+export function planMemorizePath(
+  questionIds: number[],
+  options?: { planDate?: string; planItemId?: number; scheduleId?: number }
+): string {
+  const unique = uniquePositiveIds(questionIds);
+  if (!unique.length) {
+    throw new Error('没有可背的题目');
+  }
+  const params = new URLSearchParams();
+  params.set('questionIds', unique.join(','));
+  params.set('fromQueue', '1');
+  if (options?.planDate) params.set('planDate', options.planDate);
+  if (options?.planItemId != null) params.set('planItemId', String(options.planItemId));
+  if (options?.scheduleId != null) params.set('scheduleId', String(options.scheduleId));
+  return `/memorize?${params.toString()}`;
 }

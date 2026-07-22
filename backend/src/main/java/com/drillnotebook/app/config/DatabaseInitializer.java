@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class DatabaseInitializer {
-    private static final int SCHEMA_VERSION = 5;
+    private static final int SCHEMA_VERSION = 6;
     private final DataSource dataSource;
 
     public DatabaseInitializer(DataSource dataSource) {
@@ -45,6 +45,7 @@ public class DatabaseInitializer {
             ensureColumn(connection, statement, "ai_chat_message", "session_id", "INTEGER");
             ensureColumn(connection, statement, "ai_chat_message", "content_cipher", "TEXT");
             ensureColumn(connection, statement, "ai_chat_message", "content_meta", "TEXT");
+            ensureColumn(connection, statement, "knowledge_point", "heading_path", "TEXT");
             migrateAiChatSessions(statement);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_message_session ON ai_chat_message(session_id, id)");

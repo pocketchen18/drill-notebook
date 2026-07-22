@@ -382,13 +382,22 @@ public class AiService {
 
     /**
      * AI 兜底解析知识点 Markdown。rawText 是不可信数据。
-     * headingLevel 控制按几级标题分块（1-6）。
+     * 自动按文档里实际出现的最深一级标题作为知识点边界（1-6）。
      * AI 需返回 JSON 数组：[{title,content,category,tags}]，tags 为字符串数组。
      * 返回值为已解析的列表（每项是 {title,content,category,tags} 的 Map）。
      */
-    public List<Map<String, Object>> parseKnowledgePointsFromText(String rawText, int headingLevel) {
+    public List<Map<String, Object>> parseKnowledgePointsFromText(String rawText) {
         if (rawText == null || rawText.isBlank()) throw new IllegalArgumentException("待解析文本不能为空");
-        if (headingLevel < 1 || headingLevel > 6) throw new IllegalArgumentException("标题级别必须在 1 到 6 之间");
+        // 先扫一遍找出文档里实际出现的最深一级标题（1-6）
+        String normalized = rawText.replace("\r\n", "\n").replace('\r', '\n');
+        int headingLevel = 6;
+        boolean found = false;
+        for (String line : normalized.split("\n", -1)) {
+            int depth = headingDepth(line);
+            if (depth > 0 && depth < headingLevel) headingLevel = depth;
+            if (depth > 0) found = true;
+        }
+        if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
         String prefix = "#".repeat(headingLevel);
         log.info("AI 解析知识点 Markdown：rawText 长度 {} 字符，按 {} 级标题分块", rawText.length(), headingLevel);
         AiConfigRepository.ConfigRow config = requireConfig();
@@ -419,6 +428,14 @@ public class AiService {
             log.error("AI 解析知识点失败", error);
             throw new IllegalArgumentException("AI 解析知识点暂时不可用，请稍后重试");
         }
+    }
+
+    private static int headingDepth(String line) {
+        if (line == null || line.isEmpty() || line.charAt(0) != '#') return 0;
+        int depth = 0;
+        while (depth < line.length() && line.charAt(depth) == '#') depth++;
+        if (depth > 6 || depth >= line.length() || line.charAt(depth) != ' ') return 0;
+        return depth;
     }
 
     private List<Map<String, Object>> parseKnowledgePointsJson(String raw) {

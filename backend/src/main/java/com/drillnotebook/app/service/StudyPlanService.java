@@ -34,18 +34,24 @@ public class StudyPlanService {
     private final KnowledgePointRepository points;
     private final NotebookRepository notebooks;
     private final AiService ai;
+    private final CompletionSyncService completionSync;
+    private final ReviewService reviewService;
 
     public StudyPlanService(
             StudyPlanRepository plans,
             QuestionRepository questions,
             KnowledgePointRepository points,
             NotebookRepository notebooks,
-            AiService ai) {
+            AiService ai,
+            CompletionSyncService completionSync,
+            ReviewService reviewService) {
         this.plans = plans;
         this.questions = questions;
         this.points = points;
         this.notebooks = notebooks;
         this.ai = ai;
+        this.completionSync = completionSync;
+        this.reviewService = reviewService;
     }
 
     public Map<String, Object> createGroup(Map<String, Object> body) {
@@ -148,14 +154,45 @@ public class StudyPlanService {
     }
 
     public Map<String, Object> updateItem(long id, Map<String, Object> body) {
-        plans.findItem(id);
+        Map<String, Object> current = plans.findItem(id);
         String planDate = body.containsKey("planDate") ? requireDate(body.get("planDate")) : null;
         String note = body.containsKey("note") ? string(body.get("note")) : null;
         String status = body.containsKey("status") ? string(body.get("status")) : null;
         if (status != null && !status.isBlank() && !"todo".equals(status) && !"done".equals(status)) {
             throw new IllegalArgumentException("status 必须是 todo 或 done");
         }
-        plans.updateItem(id, planDate, note, blankToNull(status));
+
+        // status → done: route through CompletionSync (plan mark + optional SRS quality)
+        if ("done".equals(status) && !"done".equals(string(current.get("status")))) {
+            Map<String, Object> syncBody = new LinkedHashMap<>();
+            syncBody.put("resourceType", current.get("resourceType"));
+            syncBody.put("resourceId", current.get("resourceId"));
+            syncBody.put("planItemId", id);
+            String itemPlanDate = string(current.get("planDate"));
+            if (!itemPlanDate.isBlank()) {
+                syncBody.put("planDate", itemPlanDate);
+            }
+            if (body.containsKey("quality") && body.get("quality") != null) {
+                syncBody.put("quality", body.get("quality"));
+            } else if (body.containsKey("isCorrect") && body.get("isCorrect") != null) {
+                syncBody.put("isCorrect", body.get("isCorrect"));
+            }
+            if (body.containsKey("responseTime") && body.get("responseTime") != null) {
+                syncBody.put("responseTime", body.get("responseTime"));
+            }
+            if (body.containsKey("source") && body.get("source") != null) {
+                syncBody.put("source", body.get("source"));
+            } else {
+                syncBody.put("source", "calendar");
+            }
+            completionSync.onItemCompleted(syncBody);
+            // Apply non-status fields if present
+            if (planDate != null || note != null) {
+                plans.updateItem(id, planDate, note, null);
+            }
+        } else {
+            plans.updateItem(id, planDate, note, blankToNull(status));
+        }
         Map<String, Object> item = plans.findItem(id);
         return toItemMap(item, isResourceMissing(string(item.get("resourceType")), longValue(item.get("resourceId"), -1)));
     }
@@ -170,11 +207,12 @@ public class StudyPlanService {
     }
 
     /**
-     * Mark plan items done by resource. Used when the user studies from a plan session
-     * (including mid-session exit): answered questions / viewed knowledge points complete
-     * matching todo rows immediately.
+     * Mark plan items done by resource via CompletionSync (one earliest todo per resource id).
+     * Plan-only unless quality/isCorrect is provided. Does not auto-enroll SRS.
+     * Note: previously marked ALL matching todos; now marks one earliest per id per call.
+     * optional groupId is accepted for API compat but not used by the sync engine path.
      *
-     * Body: resourceType, resourceIds (list), optional planDate, optional groupId
+     * Body: resourceType, resourceIds (list), optional planDate, optional quality/isCorrect
      */
     public Map<String, Object> completeByResources(Map<String, Object> body) {
         if (body == null) {
@@ -192,14 +230,36 @@ public class StudyPlanService {
         if (body.containsKey("planDate") && body.get("planDate") != null && !string(body.get("planDate")).isBlank()) {
             planDate = requireDate(body.get("planDate"));
         }
-        Long groupId = null;
-        if (body.containsKey("groupId") && body.get("groupId") != null && !string(body.get("groupId")).isBlank()) {
-            long gid = longValue(body.get("groupId"), -1);
-            if (gid > 0) {
-                groupId = gid;
+        int updated = 0;
+        for (Long resourceId : resourceIds) {
+            Map<String, Object> syncBody = new LinkedHashMap<>();
+            syncBody.put("resourceType", resourceType);
+            syncBody.put("resourceId", resourceId);
+            syncBody.put("source", "session");
+            if (planDate != null) {
+                syncBody.put("planDate", planDate);
+            } else {
+                // No planDate: resolve one earliest todo across any day (compat with prior API)
+                Map<String, Object> earliest = plans.findEarliestTodo(null, resourceType, resourceId);
+                if (earliest == null) {
+                    continue;
+                }
+                syncBody.put("planItemId", earliest.get("id"));
+                syncBody.put("planDate", earliest.get("planDate"));
+            }
+            if (body.containsKey("quality") && body.get("quality") != null) {
+                syncBody.put("quality", body.get("quality"));
+            } else if (body.containsKey("isCorrect") && body.get("isCorrect") != null) {
+                syncBody.put("isCorrect", body.get("isCorrect"));
+            }
+            if (body.containsKey("responseTime") && body.get("responseTime") != null) {
+                syncBody.put("responseTime", body.get("responseTime"));
+            }
+            Map<String, Object> result = completionSync.onItemCompleted(syncBody);
+            if (result.get("planItem") != null) {
+                updated++;
             }
         }
-        int updated = plans.markTodoDoneByResources(resourceType, resourceIds, planDate, groupId);
         return Map.of("updated", updated);
     }
 
@@ -410,6 +470,140 @@ public class StudyPlanService {
         window.put("spanDays", span);
         window.put("endDateProvided", true);
         return window;
+    }
+
+    /**
+     * Session dual-write: optional SRS enroll + optional calendar applySchedule.
+     * body: enroll:boolean, writePlan:boolean, configId?, itemType?, itemIds? or candidates[],
+     *       groups?: same as applySchedule.
+     * note_page is never enrolled. Both enroll and writePlan false → 400.
+     */
+    public Map<String, Object> sessionApply(Map<String, Object> body) {
+        Map<String, Object> safe = body == null ? Map.of() : body;
+        boolean enroll = booleanValue(safe.get("enroll"));
+        boolean writePlan = booleanValue(safe.get("writePlan"));
+        if (!enroll && !writePlan) {
+            throw new IllegalArgumentException("请至少选择「加入记忆曲线」或「加入学习日历」");
+        }
+
+        Long configId = null;
+        if (safe.containsKey("configId") && safe.get("configId") != null && !string(safe.get("configId")).isBlank()) {
+            long raw = longValue(safe.get("configId"), -1);
+            if (raw > 0) {
+                configId = raw;
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (enroll) {
+            if (reviewService == null) {
+                throw new IllegalStateException("复习服务未配置");
+            }
+            Map<String, List<Long>> byType = resolveEnrollTargets(safe);
+            List<Map<String, Object>> enrollResults = new ArrayList<>();
+            int enrolledCount = 0;
+            int alreadyCount = 0;
+            for (Map.Entry<String, List<Long>> entry : byType.entrySet()) {
+                if (entry.getValue().isEmpty()) {
+                    continue;
+                }
+                List<Map<String, Object>> batch = reviewService.enroll(entry.getKey(), entry.getValue(), configId);
+                for (Map<String, Object> row : batch) {
+                    Map<String, Object> withType = new LinkedHashMap<>(row);
+                    withType.put("itemType", entry.getKey());
+                    enrollResults.add(withType);
+                    if ("already_enrolled".equals(string(row.get("status")))) {
+                        alreadyCount++;
+                    } else {
+                        enrolledCount++;
+                    }
+                }
+            }
+            Map<String, Object> enrollPayload = new LinkedHashMap<>();
+            enrollPayload.put("results", enrollResults);
+            enrollPayload.put("enrolled", enrolledCount);
+            enrollPayload.put("alreadyEnrolled", alreadyCount);
+            enrollPayload.put("total", enrollResults.size());
+            result.put("enroll", enrollPayload);
+        }
+        if (writePlan) {
+            List<Map<String, Object>> groups = asMapList(safe.get("groups"));
+            if (groups.isEmpty()) {
+                throw new IllegalArgumentException("计划分组不能为空");
+            }
+            result.put("plan", applySchedule(Map.of("groups", groups)));
+        }
+        return result;
+    }
+
+    /**
+     * Collect question / knowledge_point ids for SRS enroll (never note_page).
+     * Prefer explicit itemType+itemIds when provided; otherwise scan candidates/groups items.
+     */
+    private Map<String, List<Long>> resolveEnrollTargets(Map<String, Object> safe) {
+        Map<String, List<Long>> byType = new LinkedHashMap<>();
+        byType.put("question", new ArrayList<>());
+        byType.put("knowledge_point", new ArrayList<>());
+        Set<String> seen = new LinkedHashSet<>();
+
+        String itemType = string(safe.get("itemType"));
+        List<Long> itemIds = toIds(safe.get("itemIds"));
+        if (!itemType.isBlank() && !itemIds.isEmpty()) {
+            if ("note_page".equals(itemType)) {
+                return byType;
+            }
+            if (!"question".equals(itemType) && !"knowledge_point".equals(itemType)) {
+                throw new IllegalArgumentException("itemType 必须是 question 或 knowledge_point");
+            }
+            for (Long id : itemIds) {
+                String key = itemType + ":" + id;
+                if (seen.add(key)) {
+                    byType.get(itemType).add(id);
+                }
+            }
+            return byType;
+        }
+
+        List<Map<String, Object>> candidates = asMapList(safe.get("candidates"));
+        if (candidates.isEmpty()) {
+            // fall back to items inside groups
+            for (Map<String, Object> g : asMapList(safe.get("groups"))) {
+                candidates = new ArrayList<>(candidates);
+                candidates.addAll(asMapList(g.get("items")));
+            }
+        }
+        for (Map<String, Object> raw : candidates) {
+            String rt = string(raw.get("resourceType"));
+            if (rt.isBlank()) {
+                rt = string(raw.get("itemType"));
+            }
+            long rid = longValue(raw.get("resourceId"), -1);
+            if (rid <= 0) {
+                rid = longValue(raw.get("itemId"), -1);
+            }
+            if (rid <= 0 || "note_page".equals(rt)) {
+                continue;
+            }
+            if (!"question".equals(rt) && !"knowledge_point".equals(rt)) {
+                continue;
+            }
+            String key = rt + ":" + rid;
+            if (seen.add(key)) {
+                byType.get(rt).add(rid);
+            }
+        }
+        return byType;
+    }
+
+    private static boolean booleanValue(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        String s = String.valueOf(value).trim();
+        return "true".equalsIgnoreCase(s) || "1".equals(s);
     }
 
     /**
@@ -640,20 +834,38 @@ public class StudyPlanService {
     }
 
     private Map<String, Object> assembleDays(List<Map<String, Object>> groups) {
+        // Auto-purge plan rows whose resource was deleted (no more "资源已失效" stubs).
+        purgeMissingResources(groups);
+
         List<Long> groupIds = groups.stream().map(g -> longValue(g.get("id"), -1)).filter(id -> id > 0).toList();
+        // Re-read groups after purge (some may have been deleted as empty)
+        List<Map<String, Object>> liveGroups = new ArrayList<>();
+        for (Map<String, Object> group : groups) {
+            long gid = longValue(group.get("id"), -1);
+            if (gid <= 0) continue;
+            try {
+                liveGroups.add(plans.findGroup(gid));
+            } catch (Exception ignored) {
+                // group deleted during purge
+            }
+        }
+
         Map<Long, List<Map<String, Object>>> itemsByGroup = new LinkedHashMap<>();
-        for (Map<String, Object> item : plans.findItemsForGroups(groupIds)) {
+        List<Long> liveIds = liveGroups.stream().map(g -> longValue(g.get("id"), -1)).filter(id -> id > 0).toList();
+        for (Map<String, Object> item : plans.findItemsForGroups(liveIds)) {
             long groupId = longValue(item.get("groupId"), -1);
-            Map<String, Object> mapped = toItemMap(
-                    item,
-                    isResourceMissing(string(item.get("resourceType")), longValue(item.get("resourceId"), -1)));
+            // After purge, remaining resources exist
+            Map<String, Object> mapped = toItemMap(item, false);
             itemsByGroup.computeIfAbsent(groupId, ignored -> new ArrayList<>()).add(mapped);
         }
 
         Map<String, List<Map<String, Object>>> byDate = new LinkedHashMap<>();
-        for (Map<String, Object> group : groups) {
+        for (Map<String, Object> group : liveGroups) {
             long groupId = longValue(group.get("id"), -1);
             List<Map<String, Object>> items = itemsByGroup.getOrDefault(groupId, List.of());
+            if (items.isEmpty()) {
+                continue;
+            }
             Map<String, Object> groupMap = toGroupMap(group, items);
             String date = string(group.get("planDate"));
             byDate.computeIfAbsent(date, ignored -> new ArrayList<>()).add(groupMap);
@@ -672,6 +884,29 @@ public class StudyPlanService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("days", days);
         return response;
+    }
+
+    /** Delete plan items (and empty groups) for resources that no longer exist. */
+    private void purgeMissingResources(List<Map<String, Object>> groups) {
+        List<Long> groupIds = groups.stream().map(g -> longValue(g.get("id"), -1)).filter(id -> id > 0).toList();
+        if (groupIds.isEmpty()) {
+            return;
+        }
+        for (Map<String, Object> item : plans.findItemsForGroups(groupIds)) {
+            String rt = string(item.get("resourceType"));
+            long rid = longValue(item.get("resourceId"), -1);
+            long itemId = longValue(item.get("id"), -1);
+            long groupId = longValue(item.get("groupId"), -1);
+            if (itemId <= 0 || rid <= 0) {
+                continue;
+            }
+            if (isResourceMissing(rt, rid)) {
+                plans.deleteItem(itemId);
+                if (groupId > 0) {
+                    plans.deleteGroupIfEmpty(groupId);
+                }
+            }
+        }
     }
 
     private void addCandidate(List<Map<String, Object>> candidates, String resourceType, long resourceId) {

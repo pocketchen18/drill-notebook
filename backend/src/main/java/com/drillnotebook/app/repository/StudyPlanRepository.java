@@ -177,6 +177,48 @@ public class StudyPlanRepository {
     }
 
     /**
+     * Lowest-id todo for resource. When {@code planDate} is non-blank, scoped to that day;
+     * when null/blank, earliest across all dates ({@code plan_date ASC, id ASC}).
+     */
+    public Map<String, Object> findEarliestTodo(String planDate, String resourceType, long resourceId) {
+        if (planDate == null || planDate.isBlank()) {
+            List<Map<String, Object>> rows = jdbc.query(
+                    "SELECT id, group_id, plan_date, resource_type, resource_id, title, note, status, completed_at, created_at, updated_at "
+                            + "FROM study_plan_item WHERE resource_type = ? "
+                            + "AND resource_id = ? AND status = 'todo' ORDER BY plan_date ASC, id ASC LIMIT 1",
+                    ITEM_MAPPER,
+                    resourceType,
+                    resourceId);
+            return rows.isEmpty() ? null : rows.get(0);
+        }
+        List<Map<String, Object>> rows = jdbc.query(
+                "SELECT id, group_id, plan_date, resource_type, resource_id, title, note, status, completed_at, created_at, updated_at "
+                        + "FROM study_plan_item WHERE plan_date = ? AND resource_type = ? "
+                        + "AND resource_id = ? AND status = 'todo' ORDER BY id ASC LIMIT 1",
+                ITEM_MAPPER,
+                planDate,
+                resourceType,
+                resourceId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /** Mark single item done if still todo; returns update count (0 if already done / missing). */
+    public int markItemDone(long itemId) {
+        return jdbc.update(
+                "UPDATE study_plan_item SET status = 'done', completed_at = datetime('now'), updated_at = datetime('now') "
+                        + "WHERE id = ? AND status = 'todo'",
+                itemId);
+    }
+
+    public List<Map<String, Object>> findTodosOnDate(String planDate) {
+        return jdbc.query(
+                "SELECT id, group_id, plan_date, resource_type, resource_id, title, note, status, completed_at, created_at, updated_at "
+                        + "FROM study_plan_item WHERE plan_date = ? AND status = 'todo' ORDER BY id ASC",
+                ITEM_MAPPER,
+                planDate);
+    }
+
+    /**
      * Mark matching todo items as done. Optional scope filters narrow the update.
      * Returns number of rows updated.
      */
@@ -227,5 +269,27 @@ public class StudyPlanRepository {
                 "UPDATE study_plan_item SET plan_date = ?, updated_at = datetime('now') WHERE group_id = ? AND status = 'todo'",
                 planDate,
                 groupId);
+    }
+
+    /**
+     * Remove all plan items for a resource; delete empty groups left behind.
+     * @return number of plan items removed
+     */
+    public int deleteItemsByResource(String resourceType, long resourceId) {
+        List<Long> groupIds = jdbc.query(
+                "SELECT DISTINCT group_id FROM study_plan_item WHERE resource_type = ? AND resource_id = ?",
+                (rs, row) -> rs.getLong(1),
+                resourceType,
+                resourceId);
+        int deleted = jdbc.update(
+                "DELETE FROM study_plan_item WHERE resource_type = ? AND resource_id = ?",
+                resourceType,
+                resourceId);
+        for (Long groupId : groupIds) {
+            if (groupId != null) {
+                deleteGroupIfEmpty(groupId);
+            }
+        }
+        return deleted;
     }
 }

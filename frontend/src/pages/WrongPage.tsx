@@ -28,13 +28,39 @@ export function WrongPage(): JSX.Element {
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   const enrollMutation = useMutation({
-    mutationFn: () => enrollItems('question', selectedIds),
+    mutationFn: (ids: number[]) => enrollItems('question', ids),
     onSuccess: (result) => {
       const enrolled = result.filter((r) => r.status === 'enrolled').length;
-      Message.success(`已将 ${enrolled} 道错题加入记忆曲线复习计划`);
+      const already = result.filter((r) => r.status === 'already_enrolled').length;
+      if (enrolled > 0 && already > 0) {
+        Message.success(`新加入记忆曲线 ${enrolled} 道，另有 ${already} 道已在复习中`);
+      } else if (enrolled > 0) {
+        Message.success({
+          content: `已将 ${enrolled} 道错题加入记忆曲线。请打开「日历 → 今天」，筛「记忆曲线」查看（标签：新学/待新学）。`,
+          duration: 6000
+        });
+      } else if (already > 0) {
+        Message.info(
+          `${already} 道已在记忆曲线中。打开日历「今天」→ 筛「记忆曲线」；若曾加入过且已推到未来日期，今天可能暂不显示。`
+        );
+      } else {
+        Message.warning('没有可加入的题目');
+      }
     },
-    onError: (error) => Message.error(error.message),
+    onError: (error) => Message.error(error instanceof Error ? error.message : '加入记忆曲线失败，请稍后重试'),
   });
+
+  const enrollSelected = (): void => {
+    if (!selectedIds.length) {
+      Message.warning('请先勾选要加入记忆曲线的错题');
+      return;
+    }
+    enrollMutation.mutate(selectedIds);
+  };
+
+  const enrollOne = (id: number): void => {
+    enrollMutation.mutate([id]);
+  };
   useEffect(() => {
     if (!query.data) return;
     const available = new Set(query.data.map((row) => row.id));
@@ -60,14 +86,30 @@ export function WrongPage(): JSX.Element {
       <div className="page-heading">
         <div>
           <h1>错题</h1>
-          <p>这里显示每道题最近一次回答错误且尚未纠正的记录。</p>
+          <p>
+            最近一次答错且尚未纠正的题目。勾选后点「加入记忆曲线」进入间隔复习；「加入日历计划」仅钉日期。
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
-          <Button icon={<CalendarPlus size={16} />} disabled={!selectedRows.length} onClick={() => openPlanForRows(selectedRows)}>加入计划</Button>
-          <Button icon={<BrainCircuit size={16} />} disabled={!selectedIds.length} loading={enrollMutation.isPending} onClick={() => enrollMutation.mutate()}>加入复习计划</Button>
+          <Button
+            icon={<CalendarPlus size={16} />}
+            disabled={!selectedRows.length}
+            onClick={() => openPlanForRows(selectedRows)}
+          >
+            加入日历计划
+          </Button>
+          <Button
+            type="primary"
+            icon={<BrainCircuit size={16} />}
+            disabled={!selectedIds.length}
+            loading={enrollMutation.isPending}
+            onClick={enrollSelected}
+          >
+            加入记忆曲线
+          </Button>
           <Button icon={<Sparkles size={16} />} disabled={!rows.length} onClick={() => setAiOpen(true)}>AI 分析错题</Button>
-          <Button type="primary" icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
+          <Button icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
         </div>
       </div>
       <section className="panel">
@@ -90,11 +132,18 @@ export function WrongPage(): JSX.Element {
                 { title: '章节', dataIndex: 'chapter', width: 160, render: (chapter?: string) => chapter || '未分类' },
                 {
                   title: '操作',
-                  width: 160,
+                  width: 260,
                   render: (_: unknown, row: Question) => (
-                    <div style={{ display: 'flex', gap: 4 }}>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       <Button type="text" onClick={() => navigate(`/quiz?questionIds=${row.id}`)}>练习</Button>
-                      <Button type="text" onClick={() => openPlanForRows([row])}>加入计划</Button>
+                      <Button
+                        type="text"
+                        loading={enrollMutation.isPending}
+                        onClick={() => enrollOne(row.id)}
+                      >
+                        记忆曲线
+                      </Button>
+                      <Button type="text" onClick={() => openPlanForRows([row])}>日历计划</Button>
                     </div>
                   )
                 }

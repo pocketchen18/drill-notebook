@@ -10,6 +10,7 @@ import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.repository.KnowledgePointRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.QuestionRepository;
+import com.drillnotebook.app.repository.ReviewRepository;
 import com.drillnotebook.app.repository.StudyPlanRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
@@ -47,7 +48,11 @@ class StudyPlanServiceTest {
         questions = new QuestionRepository(jdbc, mapper);
         points = new KnowledgePointRepository(jdbc, mapper);
         notebooks = new NotebookRepository(jdbc, mapper);
-        service = new StudyPlanService(plans, questions, points, notebooks, null);
+        ReviewRepository reviews = new ReviewRepository(jdbc, mapper);
+        ReviewScheduleApplier applier = new ReviewScheduleApplier(reviews);
+        CompletionSyncService completionSync = new CompletionSyncService(reviews, plans, applier);
+        ReviewService reviewService = new ReviewService(reviews, questions, applier, completionSync);
+        service = new StudyPlanService(plans, questions, points, notebooks, null, completionSync, reviewService);
 
         jdbc.update("INSERT INTO question_bank(name) VALUES ('Bank')");
         bankId = jdbc.queryForObject("SELECT id FROM question_bank", Long.class);
@@ -55,9 +60,107 @@ class StudyPlanServiceTest {
         questionId = jdbc.queryForObject("SELECT id FROM question ORDER BY id LIMIT 1", Long.class);
         jdbc.update("INSERT INTO question(bank_id, type, stem, answer) VALUES (?, 'single', '题干乙', 'B')", bankId);
         questionId2 = jdbc.queryForObject("SELECT id FROM question ORDER BY id DESC LIMIT 1", Long.class);
-        pointId = points.insert(bankId, "知识点甲", "内容", "分类", List.of(), List.of());
+        pointId = points.insert(bankId, "知识点甲", "内容", "分类", List.of(), List.of(), List.of());
         long notebookId = notebooks.insert("本子");
         pageId = notebooks.insertPage(notebookId, "笔记页", null);
+    }
+
+    @Test
+    void sessionApply_bothFalse_throws() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.sessionApply(Map.of("enroll", false, "writePlan", false)));
+        assertTrue(error.getMessage().contains("至少选择"));
+    }
+
+    @Test
+    void sessionApply_enrollAndPlan() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enroll", true);
+        body.put("writePlan", true);
+        body.put("candidates", List.of(
+                Map.of("resourceType", "question", "resourceId", questionId, "title", "甲"),
+                Map.of("resourceType", "knowledge_point", "resourceId", pointId, "title", "知"),
+                Map.of("resourceType", "note_page", "resourceId", pageId, "title", "笔记")));
+        body.put("groups", List.of(Map.of(
+                "planDate", "2026-07-22",
+                "title", "会话计划",
+                "items", List.of(
+                        item("question", questionId, "甲", ""),
+                        item("knowledge_point", pointId, "知", ""),
+                        item("note_page", pageId, "页", "")))));
+
+        Map<String, Object> result = service.sessionApply(body);
+        assertNotNull(result.get("enroll"));
+        assertNotNull(result.get("plan"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> enroll = (Map<String, Object>) result.get("enroll");
+        assertEquals(2, ((Number) enroll.get("total")).intValue());
+        assertEquals(2, ((Number) enroll.get("enrolled")).intValue());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> enrollRows = (List<Map<String, Object>>) enroll.get("results");
+        assertTrue(enrollRows.stream().noneMatch(r -> "note_page".equals(r.get("itemType"))));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = (Map<String, Object>) result.get("plan");
+        assertEquals(1, ((Number) plan.get("createdGroups")).intValue());
+        assertEquals(3, ((Number) plan.get("createdItems")).intValue());
+    }
+
+    @Test
+    void sessionApply_enrollOnly() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enroll", true);
+        body.put("writePlan", false);
+        body.put("itemType", "question");
+        body.put("itemIds", List.of(questionId, questionId2));
+
+        Map<String, Object> result = service.sessionApply(body);
+        assertNotNull(result.get("enroll"));
+        assertFalse(result.containsKey("plan"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> enroll = (Map<String, Object>) result.get("enroll");
+        assertEquals(2, ((Number) enroll.get("enrolled")).intValue());
+
+        // second call marks already_enrolled
+        Map<String, Object> again = service.sessionApply(body);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> enroll2 = (Map<String, Object>) again.get("enroll");
+        assertEquals(2, ((Number) enroll2.get("alreadyEnrolled")).intValue());
+    }
+
+    @Test
+    void sessionApply_writePlanOnly() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enroll", false);
+        body.put("writePlan", true);
+        body.put("groups", List.of(Map.of(
+                "planDate", "2026-07-23",
+                "title", "仅日历",
+                "items", List.of(item("question", questionId, "甲", "")))));
+
+        Map<String, Object> result = service.sessionApply(body);
+        assertFalse(result.containsKey("enroll"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = (Map<String, Object>) result.get("plan");
+        assertEquals(1, ((Number) plan.get("createdGroups")).intValue());
+    }
+
+    @Test
+    void sessionApply_skipsNotePageForEnroll() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enroll", true);
+        body.put("writePlan", false);
+        body.put("itemType", "note_page");
+        body.put("itemIds", List.of(pageId));
+
+        Map<String, Object> result = service.sessionApply(body);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> enroll = (Map<String, Object>) result.get("enroll");
+        assertEquals(0, ((Number) enroll.get("total")).intValue());
     }
 
     @Test
@@ -220,10 +323,10 @@ class StudyPlanServiceTest {
     }
 
     @Test
-    void listDay_marksResourceMissing() {
-        Map<String, Object> created = service.createGroup(createBody(
+    void listDay_autoPurgesDeletedResourcesInsteadOfMissingFlag() {
+        service.createGroup(createBody(
                 "2026-07-21",
-                "含失效",
+                "含将删题",
                 "manual",
                 List.of(
                         item("question", questionId, "活", ""),
@@ -239,17 +342,15 @@ class StudyPlanServiceTest {
         List<Map<String, Object>> groups = (List<Map<String, Object>>) days.get(0).get("groups");
         assertEquals(1, groups.size());
         assertEquals(0, groups.get(0).get("doneCount"));
-        assertEquals(3, groups.get(0).get("totalCount"));
+        // question purged; KP + note remain
+        assertEquals(2, groups.get(0).get("totalCount"));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) groups.get(0).get("items");
-        Map<String, Boolean> missingByKey = new LinkedHashMap<>();
-        for (Map<String, Object> item : items) {
-            String key = item.get("resourceType") + ":" + ((Number) item.get("resourceId")).longValue();
-            missingByKey.put(key, Boolean.TRUE.equals(item.get("resourceMissing")));
-        }
-        assertTrue(missingByKey.get("question:" + questionId));
-        assertFalse(missingByKey.get("knowledge_point:" + pointId));
-        assertFalse(missingByKey.get("note_page:" + pageId));
+        assertEquals(2, items.size());
+        assertTrue(items.stream().noneMatch(i ->
+                "question".equals(i.get("resourceType"))
+                        && ((Number) i.get("resourceId")).longValue() == questionId));
+        assertTrue(items.stream().noneMatch(i -> Boolean.TRUE.equals(i.get("resourceMissing"))));
     }
 
     @Test
@@ -364,6 +465,56 @@ class StudyPlanServiceTest {
                 "endDate", "2026-07-19",
                 "candidates", List.of(
                         Map.of("resourceType", "question", "resourceId", questionId, "title", "甲")))));
+    }
+
+    @Test
+    void deleteQuestion_removesPlanItemsAndDoesNotShowMissing() {
+        service.createGroup(createBody(
+                "2026-07-21",
+                "含将删题",
+                "manual",
+                List.of(
+                        item("question", questionId, "甲", ""),
+                        item("question", questionId2, "乙", ""))));
+
+        questions.delete(questionId);
+
+        Map<String, Object> day = service.listDay("2026-07-21");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> days = (List<Map<String, Object>>) day.get("days");
+        assertEquals(1, days.size());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> groups = (List<Map<String, Object>>) days.get(0).get("groups");
+        assertEquals(1, groups.size());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) groups.get(0).get("items");
+        assertEquals(1, items.size());
+        assertEquals(questionId2, ((Number) items.get(0).get("resourceId")).longValue());
+        assertEquals(false, items.get(0).get("resourceMissing"));
+    }
+
+    @Test
+    void listDay_purgesOrphanPlanItemsWithoutShowingMissing() {
+        // Simulate legacy orphan: plan row points at non-existent question id
+        long groupId = plans.insertGroup("2026-07-22", "孤儿", null, "manual");
+        plans.insertItem(groupId, "2026-07-22", "question", 999999L, "已删题", null);
+        plans.insertItem(groupId, "2026-07-22", "question", questionId, "还在", null);
+
+        Map<String, Object> day = service.listDay("2026-07-22");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> days = (List<Map<String, Object>>) day.get("days");
+        assertEquals(1, days.size());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> groups = (List<Map<String, Object>>) days.get(0).get("groups");
+        assertEquals(1, groups.size());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) groups.get(0).get("items");
+        assertEquals(1, items.size());
+        assertEquals(questionId, ((Number) items.get(0).get("resourceId")).longValue());
+        // orphan row deleted from DB
+        Integer orphans = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM study_plan_item WHERE resource_id = 999999", Integer.class);
+        assertEquals(0, orphans);
     }
 
     private static Map<String, Object> createBody(String planDate, String title, String source, List<Map<String, Object>> items) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  Checkbox,
   Form,
   Input,
   Message,
@@ -14,6 +15,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { post } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
+import { enrollItems } from '../lib/review';
 import {
   formatPlanWindowLabel,
   distributeItemsAcrossWindow,
@@ -107,6 +109,7 @@ export function AddToPlanModal({
   const [note, setNote] = useState(defaultNote);
   const [userPrompt, setUserPrompt] = useState('');
   const [useAiSchedule, setUseAiSchedule] = useState(false);
+  const [alsoEnroll, setAlsoEnroll] = useState(false);
   const [saving, setSaving] = useState(false);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [schedule, setSchedule] = useState<AiScheduleResponse | null>(null);
@@ -125,6 +128,20 @@ export function AddToPlanModal({
         ),
     [items, resourceType]
   );
+
+  /** question / knowledge_point only — note_page never enrolls */
+  const enrollableByType = useMemo(() => {
+    const map = new Map<'question' | 'knowledge_point', number[]>();
+    for (const item of resolvedItems) {
+      if (item.resourceType !== 'question' && item.resourceType !== 'knowledge_point') continue;
+      const list = map.get(item.resourceType) ?? [];
+      if (!list.includes(item.resourceId)) list.push(item.resourceId);
+      map.set(item.resourceType, list);
+    }
+    return map;
+  }, [resolvedItems]);
+
+  const canEnroll = enrollableByType.size > 0;
 
   const planWindowState = useMemo(() => {
     const start = planDate || tomorrowYmd();
@@ -145,10 +162,24 @@ export function AddToPlanModal({
     setNote(defaultNote);
     setUserPrompt('');
     setUseAiSchedule(false);
+    setAlsoEnroll(false);
     setSaving(false);
     setScheduleLoading(false);
     setSchedule(null);
   }, [visible, defaultDate, defaultTitle, defaultNote]);
+
+  const maybeEnroll = async (): Promise<void> => {
+    if (!alsoEnroll || !canEnroll) return;
+    for (const [itemType, itemIds] of enrollableByType) {
+      try {
+        await enrollItems(itemType, itemIds);
+      } catch {
+        // soft-fail: plan already written
+        Message.warning('计划已写入，但加入记忆曲线失败，可稍后在复习页手动加入');
+        return;
+      }
+    }
+  };
 
   // 关闭 AI 时清空方案
   useEffect(() => {
@@ -250,12 +281,14 @@ export function AddToPlanModal({
           source,
           items: groups[0].items
         });
+        await maybeEnroll();
         const skippedCount = response.skipped?.length ?? 0;
         const createdCount = response.items?.length ?? 0;
+        const enrollHint = alsoEnroll && canEnroll ? '（已尝试加入记忆曲线）' : '';
         if (skippedCount > 0) {
-          Message.success(`已添加 ${createdCount} 项到学习计划（另有 ${skippedCount} 项未写入）`);
+          Message.success(`已添加 ${createdCount} 项到学习计划（另有 ${skippedCount} 项未写入）${enrollHint}`);
         } else {
-          Message.success(`已添加 ${createdCount} 项到学习计划`);
+          Message.success(`已添加 ${createdCount} 项到学习计划${enrollHint}`);
         }
       } else {
         const result = await post<ApplyScheduleResponse>('/api/study-plans/recommend/apply-schedule', {
@@ -266,12 +299,14 @@ export function AddToPlanModal({
             items: g.items
           }))
         });
+        await maybeEnroll();
         const failedCount = result.failed?.length ?? 0;
         Message.success({
           content: (
             <span>
               已按 {groups.length} 天写入 {result.createdGroups} 组 / {result.createdItems} 项
               {failedCount ? `（${failedCount} 组失败）` : ''}
+              {alsoEnroll && canEnroll ? ' · 已尝试加入记忆曲线' : ''}
               <Button
                 type="text"
                 size="mini"
@@ -313,6 +348,7 @@ export function AddToPlanModal({
           }))
         }))
       });
+      await maybeEnroll();
       const firstDate = schedule.groups[0]?.planDate;
       const failedCount = result.failed?.length ?? 0;
       Message.success({
@@ -320,6 +356,7 @@ export function AddToPlanModal({
           <span>
             已写入 {result.createdGroups} 组 / {result.createdItems} 项
             {failedCount ? `（${failedCount} 组失败）` : ''}
+            {alsoEnroll && canEnroll ? ' · 已尝试加入记忆曲线' : ''}
             {firstDate ? (
               <Button
                 type="text"
@@ -443,6 +480,14 @@ export function AddToPlanModal({
             </Text>
           </Space>
         </Form.Item>
+
+        {canEnroll ? (
+          <Form.Item>
+            <Checkbox checked={alsoEnroll} onChange={setAlsoEnroll}>
+              同时加入记忆曲线（题目/知识点；笔记不可入）
+            </Checkbox>
+          </Form.Item>
+        ) : null}
 
         {!useAiSchedule ? (
           <>

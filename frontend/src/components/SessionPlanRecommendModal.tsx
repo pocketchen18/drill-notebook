@@ -23,6 +23,12 @@ import {
   type PlanWindow
 } from '../lib/studyPlan';
 import type { PlanCandidate, PlanResourceType } from '../lib/types';
+import {
+  LS_ENROLL_DEFAULT,
+  LS_PLAN_DEFAULT,
+  readBoolPref,
+  writeBoolPref
+} from '../lib/sessionPrefs';
 
 const { Text, Title } = Typography;
 
@@ -66,10 +72,17 @@ interface AiScheduleResponse {
   window?: PlanWindow;
 }
 
-interface ApplyScheduleResponse {
-  createdGroups: number;
-  createdItems: number;
-  failed?: Array<{ planDate?: string; title?: string; reason?: string }>;
+interface SessionApplyResponse {
+  enroll?: {
+    enrolled?: number;
+    alreadyEnrolled?: number;
+    total?: number;
+  };
+  plan?: {
+    createdGroups: number;
+    createdItems: number;
+    failed?: Array<{ planDate?: string; title?: string; reason?: string }>;
+  };
 }
 
 function candidateKey(item: PlanCandidate): string {
@@ -100,6 +113,8 @@ export function SessionPlanRecommendModal({
   const [aiLoading, setAiLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [schedule, setSchedule] = useState<AiScheduleResponse | null>(null);
+  const [enrollEnabled, setEnrollEnabled] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
+  const [writePlanEnabled, setWritePlanEnabled] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
 
   const payloadKey = JSON.stringify(payload);
 
@@ -247,15 +262,38 @@ export function SessionPlanRecommendModal({
     }));
   };
 
-  const applyGroups = async (groups: ScheduleGroup[]): Promise<void> => {
-    if (!groups.length) {
+  const onEnrollChange = (checked: boolean): void => {
+    setEnrollEnabled(checked);
+    writeBoolPref(LS_ENROLL_DEFAULT, checked);
+  };
+
+  const onWritePlanChange = (checked: boolean): void => {
+    setWritePlanEnabled(checked);
+    writeBoolPref(LS_PLAN_DEFAULT, checked);
+  };
+
+  const applySession = async (groups: ScheduleGroup[]): Promise<void> => {
+    if (!enrollEnabled && !writePlanEnabled) {
+      Message.warning('请至少开启「加入记忆曲线」或「加入学习日历」');
+      return;
+    }
+    if (writePlanEnabled && !groups.length) {
       Message.warning('没有可写入的计划');
       return;
     }
     setApplying(true);
     try {
-      const result = await post<ApplyScheduleResponse>('/api/study-plans/recommend/apply-schedule', {
-        groups: groups.map((g) => ({
+      const body: Record<string, unknown> = {
+        enroll: enrollEnabled,
+        writePlan: writePlanEnabled,
+        candidates: selectedCandidates.map((item) => ({
+          resourceType: item.resourceType,
+          resourceId: item.resourceId,
+          title: item.title
+        }))
+      };
+      if (writePlanEnabled) {
+        body.groups = groups.map((g) => ({
           planDate: g.planDate,
           title: g.title,
           note: g.note,
@@ -264,32 +302,45 @@ export function SessionPlanRecommendModal({
             resourceId: it.resourceId,
             title: it.title
           }))
-        }))
-      });
-      const failedCount = result.failed?.length ?? 0;
+        }));
+      }
+      const result = await post<SessionApplyResponse>('/api/study-plans/recommend/session-apply', body);
+
+      const parts: string[] = [];
+      if (result.enroll) {
+        const n = result.enroll.enrolled ?? 0;
+        const already = result.enroll.alreadyEnrolled ?? 0;
+        parts.push(
+          already > 0 ? `记忆曲线 ${n} 项（另 ${already} 已在库）` : `记忆曲线 ${n} 项`
+        );
+      }
+      if (result.plan) {
+        const failedCount = result.plan.failed?.length ?? 0;
+        parts.push(
+          `日历 ${result.plan.createdGroups} 组 / ${result.plan.createdItems} 项` +
+            (failedCount ? `（${failedCount} 组失败）` : '')
+        );
+      }
       const firstDate = groups[0]?.planDate;
       Message.success({
         content: (
           <span>
-            已写入 {result.createdGroups} 组 / {result.createdItems} 项
-            {failedCount ? `（${failedCount} 组失败）` : ''}
-            {firstDate ? (
-              <Button
-                type="text"
-                size="mini"
-                style={{ marginLeft: 8 }}
-                onClick={() => navigate(`/calendar?date=${firstDate}`)}
-              >
-                查看日历
-              </Button>
-            ) : null}
+            {parts.join(' · ') || '已完成'}
+            <Button
+              type="text"
+              size="mini"
+              style={{ marginLeft: 8 }}
+              onClick={() => navigate(firstDate ? `/calendar?date=${firstDate}` : '/calendar')}
+            >
+              打开日历
+            </Button>
           </span>
         ),
         duration: 6000
       });
       onClose();
     } catch (error) {
-      Message.error(friendlyMessage(error, '写入计划失败，请稍后重试'));
+      Message.error(friendlyMessage(error, '提交失败，请稍后重试'));
     } finally {
       setApplying(false);
     }
@@ -300,19 +351,28 @@ export function SessionPlanRecommendModal({
       Message.warning('请至少选择一项内容');
       return;
     }
-    if (planWindowState.error) {
-      Message.warning(planWindowState.error);
+    if (!enrollEnabled && !writePlanEnabled) {
+      Message.warning('请至少开启「加入记忆曲线」或「加入学习日历」');
       return;
     }
-    if (useAiSchedule) {
-      if (!schedule?.groups?.length) {
-        Message.warning('请先生成 AI 方案，或关闭「让 AI 排计划」后手动写入');
+    if (writePlanEnabled) {
+      if (planWindowState.error) {
+        Message.warning(planWindowState.error);
         return;
       }
-      void applyGroups(schedule.groups);
+      if (useAiSchedule) {
+        if (!schedule?.groups?.length) {
+          Message.warning('请先生成 AI 方案，或关闭「让 AI 排计划」后手动写入');
+          return;
+        }
+        void applySession(schedule.groups);
+        return;
+      }
+      void applySession(buildManualGroups());
       return;
     }
-    void applyGroups(buildManualGroups());
+    // enroll only — groups not required
+    void applySession([]);
   };
 
   const windowInvalid = Boolean(planWindowState.error);
@@ -335,12 +395,21 @@ export function SessionPlanRecommendModal({
     applying ||
     aiLoading ||
     !selectedCandidates.length ||
-    windowInvalid ||
-    (useAiSchedule && !schedule?.groups?.length);
+    (!enrollEnabled && !writePlanEnabled) ||
+    (writePlanEnabled &&
+      (windowInvalid || (useAiSchedule && !schedule?.groups?.length)));
 
-  const manualPreview = !useAiSchedule && selectedCandidates.length && !windowInvalid
-    ? buildManualGroups()
-    : [];
+  const manualPreview =
+    writePlanEnabled && !useAiSchedule && selectedCandidates.length && !windowInvalid
+      ? buildManualGroups()
+      : [];
+
+  const okText = (() => {
+    if (enrollEnabled && writePlanEnabled) return useAiSchedule || endDate.trim() ? '双写提交' : '写入记忆曲线与日历';
+    if (enrollEnabled) return '加入记忆曲线';
+    if (writePlanEnabled) return useAiSchedule ? '一键添加到日历' : endDate.trim() ? '按日期范围写入' : '写入计划';
+    return '提交';
+  })();
 
   return (
     <Modal
@@ -348,7 +417,7 @@ export function SessionPlanRecommendModal({
       visible={visible}
       onCancel={onClose}
       onOk={onSubmit}
-      okText={useAiSchedule ? '一键添加到日历' : endDate.trim() ? '按日期范围写入' : '写入计划'}
+      okText={okText}
       confirmLoading={applying || aiLoading}
       okButtonProps={{ disabled: okDisabled }}
       cancelText="跳过"
@@ -402,99 +471,122 @@ export function SessionPlanRecommendModal({
           </Checkbox.Group>
 
           <Form layout="vertical">
-            <Form.Item label="起始日" required>
-              <Input type="date" value={startDate} onChange={onStartDateChange} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="终止日（可选）">
-              <Input type="date" value={endDate} onChange={onEndDateChange} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item>
-              {planWindowState.error ? (
-                <Text type="error" style={{ display: 'block' }}>
-                  {planWindowState.error}
-                </Text>
-              ) : (
-                <>
-                  <Text type="secondary" style={{ display: 'block' }}>
-                    {scheduleWindowLabel}
+            <Form.Item label="写入目标">
+              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                <Space align="center">
+                  <Switch checked={enrollEnabled} onChange={onEnrollChange} />
+                  <Text>加入记忆曲线</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    （题目/知识点；笔记不可入曲线）
                   </Text>
-                  {!useAiSchedule ? (
-                    <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-                      {endDate.trim()
-                        ? '未开 AI：所选内容将在窗口内按天大致均分写入。'
-                        : '未开 AI 且未设终止日：全部写入起始日。'}
-                    </Text>
-                  ) : null}
-                  {useAiSchedule && planWindowState.window && planWindowState.window.spanDays >= 21 ? (
-                    <Text type="warning" style={{ display: 'block', marginTop: 4 }}>
-                      当前窗口较长，生成可能较慢，请耐心等待。
-                    </Text>
-                  ) : null}
-                </>
-              )}
-            </Form.Item>
-
-            <Form.Item label="让 AI 帮忙排计划">
-              <Space align="start">
-                <Switch checked={useAiSchedule} onChange={setUseAiSchedule} />
-                <Text type="secondary">
-                  默认关闭。开启后可根据难度、错题次数、标签和你的提示词生成多日方案；关闭则由你自选日期并均分写入。
-                </Text>
+                </Space>
+                <Space align="center">
+                  <Switch checked={writePlanEnabled} onChange={onWritePlanChange} />
+                  <Text>加入学习日历</Text>
+                </Space>
+                {!enrollEnabled && !writePlanEnabled ? (
+                  <Text type="error">请至少开启一项</Text>
+                ) : null}
               </Space>
             </Form.Item>
 
-            <Form.Item label="分组标题">
-              <Input
-                value={groupTitle}
-                onChange={(value) => {
-                  setGroupTitle(value);
-                  setSchedule(null);
-                }}
-                placeholder={suggestedTitle}
-                maxLength={80}
-              />
-            </Form.Item>
-
-            {!useAiSchedule ? (
-              <Form.Item label="备注">
-                <Input.TextArea
-                  value={note}
-                  onChange={setNote}
-                  placeholder="可选"
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                />
-              </Form.Item>
-            ) : (
+            {writePlanEnabled ? (
               <>
-                <Form.Item label="你的需求 / 薄弱点（提示词）">
-                  <Input.TextArea
-                    value={userPrompt}
-                    onChange={setUserPrompt}
-                    placeholder="例如：优先巩固本轮错题；公式类多安排两天；每天控制在 30 分钟内……"
-                    autoSize={{ minRows: 3, maxRows: 6 }}
-                    maxLength={1000}
-                    showWordLimit
-                  />
-                  <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
-                    将与难度、错题次数、标签等一并发送给 AI；不可突破上方日期窗口。
-                  </Text>
+                <Form.Item label="起始日" required>
+                  <Input type="date" value={startDate} onChange={onStartDateChange} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item label="终止日（可选）">
+                  <Input type="date" value={endDate} onChange={onEndDateChange} style={{ width: '100%' }} />
                 </Form.Item>
                 <Form.Item>
-                  <Button
-                    type="primary"
-                    long
-                    loading={aiLoading}
-                    disabled={!selectedCandidates.length || windowInvalid}
-                    onClick={() => void generateAi()}
-                  >
-                    {schedule ? '重新生成 AI 方案' : '生成 AI 方案'}
-                  </Button>
+                  {planWindowState.error ? (
+                    <Text type="error" style={{ display: 'block' }}>
+                      {planWindowState.error}
+                    </Text>
+                  ) : (
+                    <>
+                      <Text type="secondary" style={{ display: 'block' }}>
+                        {scheduleWindowLabel}
+                      </Text>
+                      {!useAiSchedule ? (
+                        <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+                          {endDate.trim()
+                            ? '未开 AI：所选内容将在窗口内按天大致均分写入。'
+                            : '未开 AI 且未设终止日：全部写入起始日。'}
+                        </Text>
+                      ) : null}
+                      {useAiSchedule && planWindowState.window && planWindowState.window.spanDays >= 21 ? (
+                        <Text type="warning" style={{ display: 'block', marginTop: 4 }}>
+                          当前窗口较长，生成可能较慢，请耐心等待。
+                        </Text>
+                      ) : null}
+                    </>
+                  )}
                 </Form.Item>
+
+                <Form.Item label="让 AI 帮忙排计划">
+                  <Space align="start">
+                    <Switch checked={useAiSchedule} onChange={setUseAiSchedule} />
+                    <Text type="secondary">
+                      默认关闭。开启后可根据难度、错题次数、标签和你的提示词生成多日方案；关闭则由你自选日期并均分写入。
+                    </Text>
+                  </Space>
+                </Form.Item>
+
+                <Form.Item label="分组标题">
+                  <Input
+                    value={groupTitle}
+                    onChange={(value) => {
+                      setGroupTitle(value);
+                      setSchedule(null);
+                    }}
+                    placeholder={suggestedTitle}
+                    maxLength={80}
+                  />
+                </Form.Item>
+
+                {!useAiSchedule ? (
+                  <Form.Item label="备注">
+                    <Input.TextArea
+                      value={note}
+                      onChange={setNote}
+                      placeholder="可选"
+                      autoSize={{ minRows: 2, maxRows: 4 }}
+                    />
+                  </Form.Item>
+                ) : (
+                  <>
+                    <Form.Item label="你的需求 / 薄弱点（提示词）">
+                      <Input.TextArea
+                        value={userPrompt}
+                        onChange={setUserPrompt}
+                        placeholder="例如：优先巩固本轮错题；公式类多安排两天；每天控制在 30 分钟内……"
+                        autoSize={{ minRows: 3, maxRows: 6 }}
+                        maxLength={1000}
+                        showWordLimit
+                      />
+                      <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+                        将与难度、错题次数、标签等一并发送给 AI；不可突破上方日期窗口。
+                      </Text>
+                    </Form.Item>
+                    <Form.Item>
+                      <Button
+                        type="primary"
+                        long
+                        loading={aiLoading}
+                        disabled={!selectedCandidates.length || windowInvalid}
+                        onClick={() => void generateAi()}
+                      >
+                        {schedule ? '重新生成 AI 方案' : '生成 AI 方案'}
+                      </Button>
+                    </Form.Item>
+                  </>
+                )}
               </>
-            )}
+            ) : null}
           </Form>
 
-          {useAiSchedule ? (
+          {writePlanEnabled && useAiSchedule ? (
             aiLoading ? (
               <div style={{ textAlign: 'center', padding: 16 }}>
                 <Spin tip="AI 正在根据数据与你的提示词安排计划…" />
@@ -553,7 +645,7 @@ export function SessionPlanRecommendModal({
             ) : (
               <Text type="secondary">开启 AI 后请先点击「生成 AI 方案」，再写入日历。</Text>
             )
-          ) : manualPreview.length > 0 ? (
+          ) : writePlanEnabled && manualPreview.length > 0 ? (
             <Space direction="vertical" style={{ width: '100%' }} size="small">
               <Text type="secondary">手动预览（确认后写入）</Text>
               {manualPreview.map((group, idx) => (

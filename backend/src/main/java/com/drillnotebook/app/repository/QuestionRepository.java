@@ -97,6 +97,26 @@ public class QuestionRepository {
 
     public void delete(long id) {
         jdbc.update("DELETE FROM answer_record WHERE question_id = ?", id);
+        // Memory-curve schedules for this question (logs cascade via schedule FK)
+        jdbc.update(
+                "DELETE FROM review_log WHERE schedule_id IN (SELECT id FROM review_schedule WHERE item_type = 'question' AND item_id = ?)",
+                id);
+        jdbc.update("DELETE FROM review_schedule WHERE item_type = 'question' AND item_id = ?", id);
+        // Calendar plan items + empty groups
+        List<Long> groupIds = jdbc.query(
+                "SELECT DISTINCT group_id FROM study_plan_item WHERE resource_type = 'question' AND resource_id = ?",
+                (rs, row) -> rs.getLong(1),
+                id);
+        jdbc.update("DELETE FROM study_plan_item WHERE resource_type = 'question' AND resource_id = ?", id);
+        for (Long groupId : groupIds) {
+            if (groupId == null) continue;
+            Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM study_plan_item WHERE group_id = ?", Integer.class, groupId);
+            if (count != null && count == 0) {
+                jdbc.update("DELETE FROM study_plan_group WHERE id = ?", groupId);
+            }
+        }
+        jdbc.update("DELETE FROM knowledge_point_question WHERE question_id = ?", id);
         jdbc.update("DELETE FROM question WHERE id = ?", id);
         rebuildFts();
     }
