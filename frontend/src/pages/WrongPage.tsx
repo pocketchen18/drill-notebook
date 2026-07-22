@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Button, Empty, Spin, Table, Tag, Typography } from '@arco-design/web-react';
-import { CalendarPlus, RotateCcw, Sparkles, XCircle } from 'lucide-react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Button, Empty, Message, Spin, Table, Tag, Typography } from '@arco-design/web-react';
+import { BrainCircuit, CalendarPlus, RotateCcw, Sparkles, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { get } from '../lib/api';
 import type { Question } from '../lib/types';
@@ -13,6 +13,7 @@ import { questionExportDocument } from '../lib/export';
 import { questionTypeLabel } from '../lib/quiz';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { truncateTitle } from '../lib/studyPlan';
+import { enrollItems } from '../lib/review';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -26,6 +27,14 @@ export function WrongPage(): JSX.Element {
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+  const enrollMutation = useMutation({
+    mutationFn: () => enrollItems('question', selectedIds),
+    onSuccess: (result) => {
+      const enrolled = result.filter((r) => r.status === 'enrolled').length;
+      Message.success(`已将 ${enrolled} 道错题加入记忆曲线复习计划`);
+    },
+    onError: (error) => Message.error(error.message),
+  });
   useEffect(() => {
     if (!query.data) return;
     const available = new Set(query.data.map((row) => row.id));
@@ -56,6 +65,7 @@ export function WrongPage(): JSX.Element {
         <div style={{ display: 'flex', gap: 8 }}>
           <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
           <Button icon={<CalendarPlus size={16} />} disabled={!selectedRows.length} onClick={() => openPlanForRows(selectedRows)}>加入计划</Button>
+          <Button icon={<BrainCircuit size={16} />} disabled={!selectedIds.length} loading={enrollMutation.isPending} onClick={() => enrollMutation.mutate()}>加入复习计划</Button>
           <Button icon={<Sparkles size={16} />} disabled={!rows.length} onClick={() => setAiOpen(true)}>AI 分析错题</Button>
           <Button type="primary" icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
         </div>
