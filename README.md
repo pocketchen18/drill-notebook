@@ -1,39 +1,216 @@
-# Drill Notebook
+# Drill Notebook（面向开发者）
 
-Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, an **SM-2-style spaced-repetition review** module, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
+| 项 | 说明 |
+|---|---|
+| 平台 | Windows 优先，**绿色便携**（数据默认不写系统目录） |
+| 架构 | Electron 壳 + React/TS 渲染进程 + 内嵌 Spring Boot（Java）+ SQLite |
+| 通信 | 后端仅监听 `127.0.0.1`，前端 HTTP 调用本地 API |
+| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话 |
 
-## Requirements
+---
 
-- Node.js 20 or newer
-- JDK 17 or newer (the Maven project targets Java 17; JDK 21 is also compatible)
-- Maven 3.9 or newer, or use the checked-in `mvnw.cmd` wrapper
+## 目录
 
-## Development
+1. [功能列表（按版本）](#1-功能列表按版本)
+2. [操作与交互逻辑](#2-操作与交互逻辑)
+3. [技术架构与目录](#3-技术架构与目录)
+4. [本地开发与验证](#4-本地开发与验证)
+5. [文档索引](#5-文档索引)
+6. [约束与安全](#6-约束与安全)
 
-### One-click start
+---
 
-Double-click `start-mvp.cmd`. On the first run it installs missing Node dependencies, builds the frontend/Electron entrypoints and backend jar, then opens the desktop app. The app uses `runtime-portable/` as its development data root; closing the Electron window stops the local Java backend.
+## 1. 功能列表（按版本）
 
-The equivalent commands are:
+### 1.1 基础能力（v0.1–v0.2 骨架 + 持续增强）
 
-```powershell
-npm start
-npm run start:check
+| 模块 | 能力摘要 |
+|---|---|
+| **题库** | 题库 CRUD；题型：`single` / `multiple` / `fill` / `true_false` / `essay`；Markdown 导入（`===` 分题 + YAML frontmatter）；重复导入按内容哈希跳过 |
+| **刷题** | 会话抽题、提交判分、进度与快捷键；可「加入计划」「问 AI」「添加到笔记」 |
+| **错题** | 最近一次答错且未纠正的题目列表；再练 / 加入计划 / AI 分析 |
+| **笔记本** | TipTap 编辑器；KaTeX / Mermaid / Markdown 块默认渲染、点击编辑；自动保存；可加入计划 |
+| **AI 助手** | 全局悬浮球 + 侧栏（`Ctrl+J`）；页面上下文注入；回复插入笔记；密钥加密；请求经 Java 代理 |
+| **设置** | 主题（明/暗）、便携路径信息、AI Endpoint/Key/Model、复习方案配置、会话偏好 |
+| **便携运行** | `APP_ROOT` 下数据 / 日志 / 缓存 / PID；不写注册表依赖 |
+
+### 1.2 v0.3
+
+| 能力 | 说明 |
+|---|---|
+| **PDF 导入** | 规则解析为主；可配置 AI 兜底解析（见 `docs/import-formats.md`） |
+| **统一导入 AI 兜底** | PDF / Markdown / JSON 等路径可走同一套 AI 补全逻辑 |
+| **导出** | 题库 / 笔记 / 错题等支持 **Markdown、PDF、HTML** 等导出；可自定义勾选、多选（见前端 `ExportActions`） |
+| **高级挑题与打乱** | 刷题 / 背题 / 背知识点：按题型、章节、标签等筛选；随机 / 手动顺序 / 组内保序等策略（`AdvancedQuestionSelector`） |
+| **知识点导入** | Markdown 分级导入，可 AI 兜底与自定义分类（`docs/knowledge-point-import.md`） |
+
+### 1.3 v0.4
+
+| 能力 | 说明 |
+|---|---|
+| **记忆曲线（SM-2 风格）** | 题目 / 知识点加入复习方案；EF、间隔、重复次数、状态流转；答错策略可配；多方案（标准 / 考前突击 / 保守等） |
+| **背题 / 背知识点全流程** | 与复习方案深度集成：方案选择、仅待复习、评分（选项交互 / 0–5 等）；会话结束可推荐加入计划 |
+| **学习日历** | 年/月导航；按日查看计划组；完成勾选、去学习；同日可重复安排同一资源 |
+| **加入计划** | 各学习面一键添加：起始日必填、终止日可选；可选 AI 排程（失败规则降级） |
+| **会话结束推荐** | 刷题 / 背题 / 背知识点结束后弹窗「本轮结束后的学习计划」 |
+| **今日队列** | 日历侧：记忆曲线到期项 + 当日计划待办合并；可续进度 |
+| **日历 SRS 叠加** | 日期格上显示到期/逾期标记（与手动计划独立） |
+| **AI 多会话** | 新建 / 切换 / 重命名 / 删除会话；消息 AES-GCM 加密持久化到 SQLite；可导出会话 |
+
+### 1.4 明确后置（未作为当前目标）
+
+- 知识图谱、完整考试模拟、视频等多模态导入、多人协作  
+- SQLCipher 整库加密、自然语言改写日期控件等  
+
+---
+
+## 2. 操作与交互逻辑
+
+以下为**推荐操作步骤**（UI 文案以中文界面为准）。
+
+### 2.1 启动应用
+
+1. 双击 `start-mvp.cmd`，或执行 `npm start`。  
+2. 首次会安装依赖并构建前端 / Electron / 后端 jar。  
+3. 开发数据默认写在便携数据根目录（由 `APP_ROOT` / 启动脚本决定，不入库）。  
+4. 关闭 Electron 窗口应停止本地 Java 后端。
+
+环境检查（不启动 GUI）：`npm run start:check`  
+强制重建后启动：`npm start -- -Rebuild`
+
+### 2.2 题库：导入与维护
+
+1. 打开侧栏 **题库**。  
+2. **新建题库** 或选中已有题库。  
+3. **导入 Markdown**：选择符合格式的 `.md`（见 [2.9](#29-markdown-题库格式)）；重复题自动跳过。  
+4. **导入 PDF**（v0.3）：选择 PDF；规则解析失败或不足时，若已配置 AI，可触发 AI 兜底。  
+5. 在题目列表可编辑、删除、勾选后 **导出**（MD/PDF/HTML 等，以界面按钮为准）。  
+6. 进入 **刷题** 或将题目 **加入计划** / 加入复习方案（设置中的复习方案）。
+
+### 2.3 刷题
+
+1. **刷题** → 选择题库与题量（或从错题「再练」、从计划「去学习」带参进入）。  
+2. 可使用 **高级挑题**（题型/章节/标签等）与打乱选项。  
+3. 答题快捷键：`1–4` 选选项，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切题。  
+4. 提交后查看对错与解析；可将题 **添加到笔记**、**问 AI**、**加入计划**。  
+5. **会话结束**后：弹出「本轮结束后的学习计划」→ 勾选候选 → 设起始/终止日 → 可选「让 AI 帮忙排计划」→ 写入日历。
+
+### 2.4 背题 / 背知识点
+
+1. **背题** 或 **背知识点**。  
+2. 选择范围：题库/知识点集、筛选、顺序策略。  
+3. 选择 **复习方案**（记忆曲线）；可开「仅待复习」。  
+4. 学习过程中按界面评分（背题选项/高亮、知识点 0–5 等），系统更新间隔与下次到期。  
+5. 可随时 **加入计划**；结束后同样可走会话结束推荐弹窗。
+
+### 2.5 错题
+
+1. 打开 **错题**。  
+2. 列表为「最近一次答错且尚未纠正」的题目。  
+3. **再练一遍** 进入刷题会话；可 **AI 分析错题**、**加入计划**。
+
+### 2.6 笔记本
+
+1. **笔记本** → 选择/新建笔记本与页面。  
+2. 编辑：正文 + 工具栏插入 **公式 / 图表 / Markdown 块**。  
+3. **默认渲染**；**点击块**进入编辑；完成/失焦或 `Ctrl/⌘+Enter` 结束编辑。  
+4. 自动保存状态显示在标题旁。  
+5. 当前页或勾选多页可 **加入计划**；AI 回复可「插入笔记」。
+
+### 2.7 日历与今日队列
+
+1. **日历**：切换年/月；点击日期查看当日计划组。  
+2. 计划组：完成勾选、删除、**去学习**（跳转刷题/背知识点/笔记等）。  
+3. 日期格可能显示 **计划待办数** 与 **SRS 到期/逾期** 标记。  
+4. 页面上的 **今日队列**：合并「今日记忆曲线到期」与「当日计划」；答完可自动下一项；刷新后尽量续进度。
+
+### 2.8 加入计划（通用弹窗逻辑）
+
+1. 在刷题 / 背题 / 知识点 / 错题 / 笔记等处点 **加入计划**。  
+2. **起始日必填**，**终止日可选**。  
+3. **不开启 AI**：  
+   - 无终止日 → 全部写到起始日；  
+   - 有终止日 → 在区间内按天轮询均分条目。  
+4. **开启 AI 排计划**：填写需求提示词 → 在日期窗口内生成多日方案（无终止时默认约 5 天窗口）→ 确认写入；失败则规则降级。  
+5. 到 **日历** 检查并「去学习」。
+
+### 2.9 Markdown 题库格式
+
+- 题与题之间单独一行 `===`。  
+- 每题 YAML frontmatter：`type`、`answer`（按题型）、`tags`、`chapter` 等。  
+- 选择题：选项 + `answer`；判断：`true`/`false`；填空：文本答案；解答题可无固定答案，可写参考答案。  
+- 细则与 PDF/JSON：`docs/import-formats.md`、`docs/quiz-markdown-flow.md`。
+
+### 2.10 AI 助手
+
+1. 右下角悬浮球或 **`Ctrl+J`** 打开侧栏。  
+2. **设置** 中配置 Provider / Endpoint / Model / API Key（密钥加密存储，渲染进程不持明文）。  
+3. 在刷题/错题/笔记等页打开时，可自动带上 **当前页面上下文**（可关闭「使用」）。  
+4. 支持多会话：新建 / 切换 / 双击标题重命名 / 删除；消息落库加密。  
+5. 助手消息可 **插入笔记**（选笔记本+页面）。  
+6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。
+
+### 2.11 设置
+
+1. **界面**：深色主题开关（同步 Arco `arco-theme` + `html[data-theme]`）。  
+2. **便携**：应用根目录、数据库路径、后端健康状态。  
+3. **AI 连接**：见上。  
+4. **复习方案**：创建/编辑/删除方案；间隔表、EF、答错策略、每日新学/复习上限、优先级；默认方案标记。  
+5. **会话偏好**：是否默认加入复习、默认计划、强制推进等（localStorage）。
+
+### 2.12 主题（深色模式）
+
+1. 顶栏开关切换 `light` / `dark`。  
+2. 实现要点（开发者）：  
+   - `document.documentElement.dataset.theme`  
+   - `document.body` 的 `arco-theme="dark"`（Arco 组件与 Portal）  
+   - CSS 变量定义在 `html` / `:root`，避免 Drawer 挂到 body 时丢变量  
+   - 本地 `localStorage['drill-notebook-theme']` 作首屏兜底；Electron `config` 持久化  
+
+---
+
+## 3. 技术架构与目录
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Electron 主进程（窗口、便携路径、单实例、拉起/回收 Java）   │
+└───────────────────────────┬─────────────────────────────┘
+                            │ spawn + HTTP 127.0.0.1
+┌───────────────────────────▼─────────────────────────────┐
+│  Spring Boot + SQLite（题库/会话/计划/SRS/AI 配置与会话）  │
+└───────────────────────────┬─────────────────────────────┘
+                            │ fetch API
+┌───────────────────────────▼─────────────────────────────┐
+│  React + Arco + TipTap + Zustand + React Query            │
+└─────────────────────────────────────────────────────────┘
 ```
 
-`npm run start:check` only verifies Node, Java, dependencies and build outputs. Use `npm start -- -Rebuild` after changing source when a fresh build is needed. `-NoInstall` prevents the startup script from installing dependencies automatically.
+| 路径 | 职责 |
+|---|---|
+| `electron/` | 主进程、preload、路径与 Java 桥 |
+| `frontend/` | UI、状态、导出、学习/日历/复习交互 |
+| `backend/` | REST、导入解析、SRS、AI 代理、SQLite |
+| `resources/` | 示例题库等静态资源 |
+| `scripts/` | 启动、smoke、便携审计、辅助脚本 |
+| `docs/` | 专题说明（导入/导出/打包等） |
+
+更细的模块说明见 [docs/architecture.md](docs/architecture.md)。
+
+---
+
+## 4. 本地开发与验证
+
+### 4.1 环境
+
+- Node.js 20+  
+- JDK 17+（Maven 3.9+ 或仓库内 `mvnw.cmd`）  
+
+### 4.2 常用命令
 
 ```powershell
 npm install
 npm run build:backend
-npm run dev
-```
-
-`npm run dev` starts the Vite renderer and Electron. Electron starts the backend jar and uses `runtime-portable/` as the simulated application root during development. The backend can also be started directly with `npm run dev:backend`; set `APP_ROOT` to choose a different portable root.
-
-Useful checks:
-
-```powershell
+npm run dev                 # Vite + Electron
 npm run build:frontend
 npm run build:electron
 npm test
@@ -41,127 +218,44 @@ pwsh -File scripts/smoke-mvp.ps1
 pwsh -File scripts/portable-audit.ps1
 ```
 
-### Manual self-test
+### 4.3 便携打包
 
-1. Run `start-mvp.cmd` and wait for the main window.
-2. Open `题库`, import `resources/sample-bank.md`, then open `刷题`.
-3. Submit one incorrect answer, open `错题`, and verify the question appears.
-4. Open `笔记本`, create or open a page, edit a formula/diagram/Markdown block; formula/Mermaid/Markdown blocks render by default (click to edit). Add the current page (or multi-select pages) via **加入计划**.
-5. In `刷题`, use `1-4` to choose, `Enter` to submit, `Left/Right` or `P/N` to move between questions.
-6. Open `设置` / AI config, set an OpenAI-compatible provider (or local `mock://local` if available), load a wrong question/bank/note as context, and confirm the Markdown response can be inserted into a note.
-7. After a quiz / memorize / knowledge session ends, the **本轮结束后的学习计划** dialog appears: pick candidates, set start/optional end dates, optionally enable **让 AI 帮忙排计划**, then write to the calendar. Open `日历` to review and **去学习**.
+1. 按 [docs/jlink.md](docs/jlink.md) 生成 `jre\bin\java.exe`。  
+2. `npm run package:portable` → 输出在 `dist\`。  
+3. 无 JRE 时脚本应拒绝打包。
 
-Automated checks are available with `npm test`, `pwsh -File scripts/smoke-mvp.ps1`, and `pwsh -File scripts/portable-audit.ps1 -RunSmoke`.
+### 4.4 建议自测清单
 
-## Portable behavior
+1. 导入 `resources/sample-bank.md` → 刷题 → 故意答错 → 错题出现。  
+2. 笔记本插入公式/Mermaid → 默认渲染、点击可编辑。  
+3. 深色模式：设置页描述列表、笔记本正文、AI 侧栏标题/输入/会话列表文字可读。  
+4. 日历加入计划 → 今日队列可见 → 去学习。  
+5. 背题评分后「仅待复习」列表变化。  
+6. AI 多会话：新建、发消息、重启后消息仍在。  
 
-In a packaged build, the application root is the directory containing the executable. Electron user data, cache, temporary files, logs, runtime PID files, and the SQLite database are redirected below that root. The backend only listens on `127.0.0.1` and receives `APP_ROOT` from Electron.
+---
 
-The repository does not currently contain a built `.exe` or a JRE binary. To create a runnable portable package, install/build the workspace dependencies, create `jre\bin\java.exe` using [docs/jlink.md](docs/jlink.md), then run:
+## 5. 文档索引
 
-```powershell
-npm run package:portable
-```
-
-The resulting portable `.exe` is written under `dist\`. The packaging script refuses to run without the embedded JRE, so a generated package is expected to run without a system Java installation.
-
-## MVP scope
-
-**Included**
-
-- Question banks: single / multiple / fill / true-false / essay; Markdown import; PDF import (rules + AI fallback); JSON import paths
-- Quiz sessions, memorization (questions + knowledge points), wrong-book tracking
-- Notebooks with autosave, KaTeX / Mermaid / Markdown live blocks, export; note pages can be planned for review
-- **Study calendar / plans**: add questions, knowledge points, and note pages to dates; plan groups; same resource allowed multiple times on one day; complete while studying; year/month navigation
-- **Spaced-repetition review (SM-2 style)**: enroll questions / knowledge points into a review config; per-item EF / interval / repetitions / status (`new` → `learning` → `review` → `mastered`); review log history; multiple configs (`标准模式` / `考前突击` / `保守学习`), default flag, custom interval tables, wrong-answer strategy, daily new/review limits and priority mode
-- **Today queue**: enrolled-due items (curve) and calendar todos (plan) merged into one per-day queue with quality scoring and auto-advance; resumable across reloads
-- **Calendar SRS overlay**: per-day due counts and red overdue markers come from `review_schedule`, independent of the manual plan items
-- **Join plan / post-session plan** (user chooses AI or not):
-  - Manual: required start date, optional end date; no end → all on start day; with end → round-robin spread across the window
-  - Optional AI schedule: user prompt + enriched context (difficulty, wrong counts, tags, …) within the date window (default 5 days if end omitted; **no system hard max**); prompt cannot expand past the date controls; rule fallback if AI fails
-- AI chat (encrypted local history), advisory essay grading
-
-**Deferred**
-
-- Knowledge graphs, exam simulation
-- Video or heavy multimodal import, collaboration, SQLCipher full-database encryption
-- Natural-language rewriting of the date window controls
-
-## Documentation
-
-| Doc | Description |
+| 文档 | 内容 |
 |---|---|
-| [docs/jlink.md](docs/jlink.md) | Build embedded JRE for portable packaging |
-| [docs/import-formats.md](docs/import-formats.md) | PDF / JSON bank import formats |
-| [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | Knowledge-point Markdown import |
-| [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | Quiz Markdown parse / render flow |
-| [docs/review-srs.md](docs/review-srs.md) | Spaced-repetition review (SM-2): schema, API, configs, today queue, calendar overlay |
-
-Design specs and implementation plans under `docs/superpowers/` are **local only** (gitignored). Word (`.docx` / `.doc` / `.docm`) is also not stored in git.
+| [docs/architecture.md](docs/architecture.md) | 架构、模块边界、数据与主题 |
+| [docs/import-formats.md](docs/import-formats.md) | PDF / JSON 等导入格式 |
+| [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | 知识点 Markdown 导入 |
+| [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
+| [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 
 ---
 
-## 中文说明
+## 6. 约束与安全
 
-### 环境与启动
+- **便携**：用户数据、日志、缓存应落在应用根目录策略下（开发态见启动脚本使用的便携数据目录）。  
+- **网络**：业务 API 仅本机回环；外发仅为用户配置的 AI Endpoint。  
+- **密钥与会话**：API Key 与 AI 消息加密存储；前端不长期持有明文 Key。  
+- **健康检查**：生产构建避免在健康接口暴露敏感路径。  
 
-需要 Node.js 20+、JDK 17+。双击 `start-mvp.cmd` 即可启动；首次运行会自动安装依赖并构建前端、Electron 和 Java 后端。命令行等价方式：
-
-```powershell
-npm start
-npm run start:check
-```
-
-开发数据只写入工作区的 `runtime-portable\`。关闭 Electron 窗口会停止本地 Java 后端。
-
-### 功能说明
-
-- **题库**：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。支持 Markdown；也可导入 PDF（规则解析为主，不足时由已配置的 AI 兜底）及 JSON 等格式（见 `docs/import-formats.md`）。
-- **刷题**：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切题。设置页可批量「加入计划」。
-- **背题 / 背知识点**：按题型、章节、标签或具体条目批量选择，支持随机重排、手动顺序和会话内跳转；可加入计划。
-- **错题**：最近答错且未纠正的题目；可勾选加入计划或再练。
-- **笔记本**：公式、Mermaid 和 Markdown 块默认渲染，点击进入编辑。**当前页或勾选多页可加入计划**（笔记也可复习）；日历「去学习」可打开笔记。
-- **日历**：按月查看学习计划，可切换**年份 / 月份**。计划条目含题目、知识点、笔记页；支持完成勾选、整组删除、按日/组「去学习」（刷题 / 背知识点 / 复习笔记）。**同一天允许同一资源多条待办**（一天可复习多次）。日历还会叠加**间隔重复复习**的到期/逾期标记，与手动计划互相独立。
-- **复习（间隔重复 SM-2 风格）**：把题目或知识点加入复习方案后，系统按 EF / 间隔 / 连续正确次数等推算下次到期时间，状态在 `new → learning → review → mastered` 之间流转；每次提交记录一条 `review_log`。可同时存在多套方案（`标准模式` / `考前突击` / `保守学习`），其中一套标记为默认；每套方案可自定义间隔表、答错策略（间隔减半 / 重置 / 减少 25% / 固定天数）、每日新学/复习上限与排序策略。配置入口：**设置 → 复习方案** 或独立的「复习配置」页。
-- **今日队列**：日历页顶部的「今日队列」面板把**已加入复习方案且今日到期**的条目（curve）和**当日计划待办**（plan）合并成一个队列；答完一题自动推进到下一条；刷新或重启会保留进度。
-- **加入计划**（各学习页）：
-  - **起始日必填，终止日可选**（是否开 AI 都可用）。
-  - **不开启 AI**：无终止 → 全部写到起始日；有终止 → 在窗口内按天**轮询均分**条目（除不尽时多出来的摊在前面几天，不是堆最后一天）。
-  - **开启「让 AI 排计划」**（可选）：可填需求/薄弱点提示词；系统附带难度、错题次数、标签等上下文；在起始～终止窗口内生成多日方案（无终止时默认 5 天窗口；**不设系统硬上限**）。提示词中的更大天数不能扩大日期窗口。AI 失败时规则降级。确认后一键写入。
-- **会话结束**（刷题 / 背题 / 背知识点结束，或背知识点「结束并推荐」）：
-  - 弹窗标题：**本轮结束后的学习计划**。
-  - 先展示规则候选并勾选；设起始/可选终止。
-  - **「让 AI 帮忙排计划」默认关闭**——由用户自主选择是否用 AI。
-  - 关 AI：手动写入（单日或日期范围均分）。
-  - 开 AI：填提示词 → 生成方案 → 一键添加到日历。
-- **从计划学习**：带 `planDate` / `planGroupId` / `planItemId` 时，刷题提交、背题标记、知识点揭示等会把对应计划项标为完成（中途退出也保留已完成项）。
-- **AI 助手**：全局悬浮球 + 侧边栏（`Ctrl+J`），多会话；消息经 AES-256-GCM 加密写入本地 SQLite。刷题/错题/笔记等可带上下文；回复可「插入笔记」。连接在「设置」中配置。
-
-### Markdown 题型格式
-
-每道题使用 YAML frontmatter，题目之间用单独一行 `===` 分隔。选择题必须提供选项和 `answer`；填空题提供文本 `answer`；判断题的标准答案使用 `true` 或 `false`。解答题不要求固定答案，可在正文中加入可选的参考答案：
-
-```markdown
 ---
-type: essay
-tags: [jvm, gc]
----
-### 题干
-简述垃圾回收的目标。
-### 参考答案
-识别并回收不可达对象，释放内存。
-### 解析
-可结合可达性分析展开。
-```
 
-解答题提交后会尝试调用「设置」中已配置的模型。模型只提供建议得分、置信度和说明，不写入确定的对错；AI 未配置或调用失败时答案仍会保存，也不会被误记为错题。
+## 许可证
 
-### 文档与 docx
-
-- 产品文档见上文 **Documentation** 表及 `docs/` 下已放行的 Markdown。
-- `docs/superpowers/`（设计 spec / 实现 plan）为本地工作材料，**已 gitignore，不提交**。
-- 仓库**不提交** `.docx` / `.doc` / `.docm`。需要 Word 时请从 Markdown 本地导出。
-
-### 打包
-
-仓库默认不携带 JRE 和 exe。按照 `docs/jlink.md` 在仓库根目录生成 `jre\bin\java.exe`，然后执行 `npm run package:portable`，输出在 `dist\`。
+见仓库根目录 `LICENSE`。
