@@ -42,17 +42,19 @@ public class KnowledgePointRepository {
     }
 
     @Transactional
-    public long insert(Long bankId, String title, String content, String category, List<String> tags, List<Long> questionIds) throws JsonProcessingException {
+    public long insert(Long bankId, String title, String content, String category, List<String> tags, List<String> headingPath, List<Long> questionIds) throws JsonProcessingException {
         List<Long> validatedQuestionIds = validateQuestionIds(bankId, questionIds);
         KeyHolder holder = new GeneratedKeyHolder();
         String tagsJson = mapper.writeValueAsString(tags == null ? List.of() : tags);
+        String headingPathJson = mapper.writeValueAsString(headingPath == null ? List.of() : headingPath);
         jdbc.update(connection -> {
-            PreparedStatement statement = connection.prepareStatement("INSERT INTO knowledge_point(bank_id, title, content, category, tags) VALUES (?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS);
+            PreparedStatement statement = connection.prepareStatement("INSERT INTO knowledge_point(bank_id, title, content, category, tags, heading_path) VALUES (?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS);
             if (bankId == null) statement.setObject(1, null); else statement.setLong(1, bankId);
             statement.setString(2, title);
             statement.setString(3, content);
             statement.setString(4, category);
             statement.setString(5, tagsJson);
+            statement.setString(6, headingPathJson);
             return statement;
         }, holder);
         Number key = holder.getKey();
@@ -62,15 +64,36 @@ public class KnowledgePointRepository {
     }
 
     @Transactional
-    public void update(long id, String title, String content, String category, List<String> tags, List<Long> questionIds) throws JsonProcessingException {
+    public void update(long id, String title, String content, String category, List<String> tags, List<String> headingPath, List<Long> questionIds) throws JsonProcessingException {
         List<Long> validatedQuestionIds = validateQuestionIds(findById(id).bankId, questionIds);
-        jdbc.update("UPDATE knowledge_point SET title = ?, content = ?, category = ?, tags = ?, updated_at = datetime('now') WHERE id = ?", title, content, category, mapper.writeValueAsString(tags == null ? List.of() : tags), id);
+        jdbc.update("UPDATE knowledge_point SET title = ?, content = ?, category = ?, tags = ?, heading_path = ?, updated_at = datetime('now') WHERE id = ?",
+                title, content, category,
+                mapper.writeValueAsString(tags == null ? List.of() : tags),
+                mapper.writeValueAsString(headingPath == null ? List.of() : headingPath),
+                id);
         replaceQuestions(id, validatedQuestionIds);
     }
 
     @Transactional
     public void delete(long id) {
         jdbc.update("DELETE FROM knowledge_point_question WHERE knowledge_point_id = ?", id);
+        jdbc.update(
+                "DELETE FROM review_log WHERE schedule_id IN (SELECT id FROM review_schedule WHERE item_type = 'knowledge_point' AND item_id = ?)",
+                id);
+        jdbc.update("DELETE FROM review_schedule WHERE item_type = 'knowledge_point' AND item_id = ?", id);
+        List<Long> groupIds = jdbc.query(
+                "SELECT DISTINCT group_id FROM study_plan_item WHERE resource_type = 'knowledge_point' AND resource_id = ?",
+                (rs, row) -> rs.getLong(1),
+                id);
+        jdbc.update("DELETE FROM study_plan_item WHERE resource_type = 'knowledge_point' AND resource_id = ?", id);
+        for (Long groupId : groupIds) {
+            if (groupId == null) continue;
+            Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM study_plan_item WHERE group_id = ?", Integer.class, groupId);
+            if (count != null && count == 0) {
+                jdbc.update("DELETE FROM study_plan_group WHERE id = ?", groupId);
+            }
+        }
         jdbc.update("DELETE FROM knowledge_point WHERE id = ?", id);
     }
 

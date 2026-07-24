@@ -45,7 +45,7 @@ public class KnowledgePointController {
         Long bankId = longValue(body.get("bankId"));
         if (bankId != null) banks.find(bankId);
         try {
-            long id = points.insert(bankId, required(body, "title"), required(body, "content"), string(body.get("category")), strings(body.get("tags")), longs(body.get("questionIds")));
+            long id = points.insert(bankId, required(body, "title"), required(body, "content"), string(body.get("category")), strings(body.get("tags")), strings(body.get("headingPath")), longs(body.get("questionIds")));
             return toMap(points.findById(id));
         } catch (IllegalArgumentException error) {
             throw error;
@@ -63,6 +63,7 @@ public class KnowledgePointController {
                     stringOr(body.get("content"), current.content),
                     body.containsKey("category") ? string(body.get("category")) : current.category,
                     body.containsKey("tags") ? strings(body.get("tags")) : current.tags,
+                    body.containsKey("headingPath") ? strings(body.get("headingPath")) : current.headingPath,
                     body.containsKey("questionIds") ? longs(body.get("questionIds")) : points.questionIds(id));
             return toMap(points.findById(id));
         } catch (IllegalArgumentException error) {
@@ -79,8 +80,7 @@ public class KnowledgePointController {
     public Map<String, Object> importMarkdown(@RequestBody Map<String, Object> body) {
         Long bankId = longValue(body.get("bankId"));
         if (bankId != null) banks.find(bankId);
-        int headingLevel = intOr(body.get("headingLevel"), 2);
-        return importer.importMarkdown(bankId, required(body, "content"), headingLevel);
+        return importer.importMarkdown(bankId, required(body, "content"));
     }
 
     private KnowledgePointRecord find(long id) {

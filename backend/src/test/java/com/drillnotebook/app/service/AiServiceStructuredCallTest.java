@@ -2,6 +2,7 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.repository.AiConfigRepository;
@@ -78,5 +79,18 @@ class AiServiceStructuredCallTest {
         assertTrue(message.contains("403"));
         assertTrue(message.contains("API Key") || message.contains("权限"));
         assertTrue(message.contains("AccessDenied") || message.contains("denied"));
+    }
+
+    @Test
+    void writePlanNoteRejectsBlankTitles() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.writePlanNote(Map.of("titles", List.of(), "sessionType", "quiz")));
+        assertEquals("候选标题不能为空", error.getMessage());
+
+        IllegalArgumentException missing = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.writePlanNote(Map.of("sessionType", "quiz")));
+        assertEquals("候选标题不能为空", missing.getMessage());
     }
 }

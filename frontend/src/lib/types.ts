@@ -27,6 +27,7 @@ export interface KnowledgePoint {
   content: string;
   category?: string;
   tags: string[];
+  headingPath?: string[];
   questionIds: number[];
   createdAt?: string;
   updatedAt?: string;
@@ -112,4 +113,47 @@ export interface ChatMessage {
   content: string | ChatContentPart[];
   displayContent?: string;
   createdAt?: string;
+}
+
+export type PlanResourceType = 'question' | 'knowledge_point' | 'note_page';
+export type PlanSource = 'manual' | 'session_recommend';
+export type PlanStatus = 'todo' | 'done';
+
+export interface StudyPlanItem {
+  id: number;
+  groupId: number;
+  planDate: string;
+  resourceType: PlanResourceType;
+  resourceId: number;
+  title: string;
+  note?: string;
+  status: PlanStatus;
+  resourceMissing?: boolean;
+  completedAt?: string;
+}
+
+export interface StudyPlanGroup {
+  id: number;
+  planDate: string;
+  title: string;
+  note?: string;
+  source: PlanSource;
+  doneCount: number;
+  totalCount: number;
+  items: StudyPlanItem[];
+}
+
+export interface StudyPlanDay {
+  date: string;
+  groups: StudyPlanGroup[];
+}
+
+export interface StudyPlanRangeResponse {
+  days: StudyPlanDay[];
+}
+
+export interface PlanCandidate {
+  resourceType: PlanResourceType;
+  resourceId: number;
+  title: string;
 }

@@ -143,12 +143,23 @@ ai-prompts/
 *.prompt
 *.prompt.md
 .atomcode.md
-.superpowers/sdd/progress.md
+.superpowers/
+
 backend/src/test/resources/fixtures/六级真题.md
 backend/src/test/resources/fixtures/java.md
 backend/src/test/resources/fixtures/java.pdf
+
+# Word / Office exports (generate locally from Markdown if needed)
+*.docx
+*.doc
+*.docm
+
+# docs/: ignore by default; re-include only public product docs (not design/plan trees)
 docs/**
 !docs/
 !docs/jlink.md
 !docs/import-formats.md
 !docs/knowledge-point-import.md
+!docs/quiz-markdown-flow.md
+# Design specs / implementation plans stay local
+docs/superpowers/

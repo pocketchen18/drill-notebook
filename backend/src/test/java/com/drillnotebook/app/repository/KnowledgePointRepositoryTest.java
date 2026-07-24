@@ -28,13 +28,13 @@ class KnowledgePointRepositoryTest {
         long otherQuestionId = jdbc.queryForObject("SELECT id FROM question WHERE bank_id = ?", Long.class, otherBankId);
         KnowledgePointRepository repository = new KnowledgePointRepository(jdbc, new ObjectMapper());
 
-        long id = repository.insert(bankId, "JVM", "Heap", "Java", List.of("memory"), List.of(questionId, questionId));
+        long id = repository.insert(bankId, "JVM", "Heap", "Java", List.of("memory"), List.of(), List.of(questionId, questionId));
         assertEquals("JVM", repository.findById(id).title);
         assertEquals(List.of(questionId), repository.questionIds(id));
-        assertThrows(IllegalArgumentException.class, () -> repository.update(id, "JVM", "Heap", "Java", List.of(), List.of(otherQuestionId)));
-        assertThrows(IllegalArgumentException.class, () -> repository.update(id, "JVM", "Heap", "Java", List.of(), List.of(999999L)));
+        assertThrows(IllegalArgumentException.class, () -> repository.update(id, "JVM", "Heap", "Java", List.of(), List.of(), List.of(otherQuestionId)));
+        assertThrows(IllegalArgumentException.class, () -> repository.update(id, "JVM", "Heap", "Java", List.of(), List.of(), List.of(999999L)));
         assertEquals(List.of(questionId), repository.questionIds(id));
-        repository.update(id, "JVM memory", "Heap and stack", "Java", List.of("JVM"), List.of());
+        repository.update(id, "JVM memory", "Heap and stack", "Java", List.of("JVM"), List.of(), List.of());
         assertEquals("JVM memory", repository.findById(id).title);
         assertEquals(List.of(), repository.questionIds(id));
         repository.delete(id);

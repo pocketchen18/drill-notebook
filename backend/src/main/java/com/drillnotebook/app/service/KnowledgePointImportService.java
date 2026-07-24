@@ -20,19 +20,19 @@ public class KnowledgePointImportService {
 
     /**
      * 知识点 Markdown 导入：先走规则解析，规则失败时由 AI 兜底。
-     * headingLevel 控制按几级标题分块（1-6），恰好 N 个 # 开头的行作为知识点边界，
-     * 更浅或更深的标题行并入正文。AI 兜底把原文喂给模型，模型返回
-     * [{title,content,category,tags}] JSON，再统一入库。AI 不可用时透传错误。
+     * 自动按文档里实际出现的最深一级标题作为知识点边界（1-6），
+     * 更浅级别的标题行并入正文作 inheritedCategory，更深的并入正文并记入 headingPath。
+     * AI 兜底把原文喂给模型，模型返回 [{title,content,category,tags}] JSON，再统一入库。
+     * AI 不可用时透传错误。
      */
-    public Map<String, Object> importMarkdown(Long bankId, String source, int headingLevel) {
+    public Map<String, Object> importMarkdown(Long bankId, String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
-        if (headingLevel < 1 || headingLevel > 6) throw new IllegalArgumentException("标题级别必须在 1 到 6 之间");
         ParseOutcome outcome;
         try {
-            List<Section> sections = parse(source, headingLevel);
+            List<Section> sections = parse(source);
             outcome = new ParseOutcome(sections, "rules");
         } catch (IllegalArgumentException ruleError) {
-            List<Section> aiSections = aiService.parseKnowledgePointsFromText(source, headingLevel).stream()
+            List<Section> aiSections = aiService.parseKnowledgePointsFromText(source).stream()
                     .map(KnowledgePointImportService::toSection)
                     .toList();
             if (aiSections.isEmpty()) {
@@ -48,7 +48,7 @@ public class KnowledgePointImportService {
         for (int index = 0; index < sections.size(); index++) {
             Section section = sections.get(index);
             try {
-                points.insert(bankId, section.title(), section.content(), section.category(), section.tags(), List.of());
+                points.insert(bankId, section.title(), section.content(), section.category(), section.tags(), section.headingPath(), List.of());
                 imported++;
             } catch (Exception error) {
                 errors.add("第 " + (index + 1) + " 个知识点：" + (error.getMessage() == null ? "导入失败" : error.getMessage()));
@@ -71,7 +71,7 @@ public class KnowledgePointImportService {
         List<String> tags = item.get("tags") instanceof List<?> list
                 ? list.stream().map(String::valueOf).map(String::trim).filter(s -> !s.isBlank()).toList()
                 : List.of();
-        return new Section(title.trim(), content.trim(), category, tags);
+        return new Section(title.trim(), content.trim(), category, tags, List.of());
     }
 
     private static String stringOr(Object value, String fallback) {
@@ -82,32 +82,47 @@ public class KnowledgePointImportService {
 
     private record ParseOutcome(List<Section> sections, String strategy) {}
 
-    static List<Section> parse(String source, int headingLevel) {
-        if (headingLevel < 1 || headingLevel > 6) throw new IllegalArgumentException("标题级别必须在 1 到 6 之间");
+    static List<Section> parse(String source) {
+        if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
+        // 先扫一遍找出文档里实际出现的最深一级标题（1-6），用它作为知识点边界
+        int headingLevel = 6;
+        boolean found = false;
+        for (String line : normalized.split("\n", -1)) {
+            int depth = headingDepth(line);
+            if (depth > 0 && depth < headingLevel) headingLevel = depth;
+            if (depth > 0) found = true;
+        }
+        if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
         String prefix = "#".repeat(headingLevel);
         String headingPattern = "^" + prefix + "\\s+.+";
         String stripPattern = "^" + prefix + "\\s+";
         List<Section> result = new ArrayList<>();
         String title = null;
         String inheritedCategory = null;
+        List<String> headingPath = new ArrayList<>();
         List<String> body = new ArrayList<>();
         List<String> preamble = new ArrayList<>();
         for (String line : normalized.split("\n", -1)) {
             int headingDepth = headingDepth(line);
             if (line.matches(headingPattern)) {
-                if (title != null) result.add(section(title, body, inheritedCategory));
+                if (title != null) result.add(section(title, body, inheritedCategory, headingPath));
                 title = line.replaceFirst(stripPattern, "").trim();
+                headingPath = new ArrayList<>();
                 body = new ArrayList<>(preamble);
                 preamble.clear();
             } else if (headingDepth > 0 && headingDepth < headingLevel) {
                 inheritedCategory = line.replaceFirst("^#+\\s+", "").trim();
                 if (title != null) body.add(line);
                 else preamble.add(line);
+            } else if (headingDepth >= headingLevel && title != null) {
+                String deeperTitle = line.replaceFirst("^#+\\s+", "").trim();
+                headingPath.add(deeperTitle);
+                body.add(line);
             } else if (title != null) body.add(line);
             else preamble.add(line);
         }
-        if (title != null) result.add(section(title, body, inheritedCategory));
+        if (title != null) result.add(section(title, body, inheritedCategory, headingPath));
         if (result.isEmpty()) throw new IllegalArgumentException("未找到 " + headingLevel + " 级标题，请检查标题级别或改用其他级别");
         return result;
     }
@@ -120,7 +135,7 @@ public class KnowledgePointImportService {
         return depth;
     }
 
-    private static Section section(String title, List<String> lines, String inheritedCategory) {
+    private static Section section(String title, List<String> lines, String inheritedCategory, List<String> headingPath) {
         String category = null;
         List<String> tags = List.of();
         List<String> content = new ArrayList<>();
@@ -135,12 +150,12 @@ public class KnowledgePointImportService {
         if (category == null) category = inheritedCategory;
         String markdown = String.join("\n", content).trim();
         if (markdown.isBlank()) throw new IllegalArgumentException("知识点内容不能为空：" + title);
-        return new Section(title, markdown, category, tags);
+        return new Section(title, markdown, category, tags, List.copyOf(headingPath));
     }
 
     private static List<String> splitTags(String value) {
         return Arrays.stream(value.split("[,，]")).map(String::trim).filter(item -> !item.isBlank()).toList();
     }
 
-    record Section(String title, String content, String category, List<String> tags) {}
+    record Section(String title, String content, String category, List<String> tags, List<String> headingPath) {}
 }

@@ -1,13 +1,40 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Descriptions, Form, Input, Message, Spin, Switch, Typography } from '@arco-design/web-react';
-import { FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
+import { Button, Card, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
+import { Edit3, FolderOpen, Plus, RefreshCw, Sparkles, Star, Trash2 } from 'lucide-react';
 import { get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { AiConfig } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
+import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
+import type { SpacedRepetitionConfig } from '../lib/review';
+import {
+  LS_ENROLL_DEFAULT,
+  LS_FORCE_ADVANCE,
+  LS_PLAN_DEFAULT,
+  readBoolPref,
+  writeBoolPref
+} from '../lib/sessionPrefs';
 
-interface Health { status: string; appRoot: string; dbPath: string; }
+interface Health { status: string; }
+
+const WRONG_STRATEGY_OPTIONS = [
+  { value: 'reduce_half', label: '间隔减半（推荐）' },
+  { value: 'reset', label: '重置到 1 天' },
+  { value: 'reduce_quarter', label: '减少 25%' },
+  { value: 'fixed', label: '固定天数' },
+];
+
+const PRIORITY_OPTIONS = [
+  { value: 'due_first', label: '到期优先' },
+  { value: 'worst_first', label: '最不熟优先' },
+  { value: 'random', label: '随机顺序' },
+  { value: 'mixed', label: '新旧混合' },
+];
+
+const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
+  '1': 1, '2': 6, '3': 16, '4': 36, '5': 70,
+};
 
 export function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient();
@@ -21,6 +48,26 @@ export function SettingsPage(): JSX.Element {
   const [endpoint, setEndpoint] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+
+  // 复习方案编辑器 state
+  const [reviewEditorVisible, setReviewEditorVisible] = useState(false);
+  const [reviewEditing, setReviewEditing] = useState<SpacedRepetitionConfig>();
+  const [reviewName, setReviewName] = useState('');
+  const [reviewIsDefault, setReviewIsDefault] = useState(false);
+  const [reviewIntervalsJson, setReviewIntervalsJson] = useState(JSON.stringify(DEFAULT_REVIEW_INTERVALS, null, 2));
+  const [reviewInitialEf, setReviewInitialEf] = useState(2.5);
+  const [reviewMinimumEf, setReviewMinimumEf] = useState(1.3);
+  const [reviewMaxIntervalDays, setReviewMaxIntervalDays] = useState(365);
+  const [reviewWrongStrategy, setReviewWrongStrategy] = useState<string>('reduce_half');
+  const [reviewWrongFixedDays, setReviewWrongFixedDays] = useState(1.0);
+  const [reviewDailyNewLimit, setReviewDailyNewLimit] = useState(20);
+  const [reviewDailyReviewLimit, setReviewDailyReviewLimit] = useState(100);
+  const [reviewPriorityMode, setReviewPriorityMode] = useState<string>('due_first');
+
+  // Session / study preferences (localStorage)
+  const [enrollDefault, setEnrollDefault] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
+  const [planDefault, setPlanDefault] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
+  const [forceAdvance, setForceAdvance] = useState(() => readBoolPref(LS_FORCE_ADVANCE, false));
 
   const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
 
@@ -58,6 +105,64 @@ export function SettingsPage(): JSX.Element {
     onError: (error) => Message.error(friendlyMessage(error, 'AI 配置保存失败，请稍后重试'))
   });
 
+  // ---- 复习方案 ----
+
+  const reviewConfigsQuery = useQuery({
+    queryKey: ['review-configs'],
+    queryFn: () => listConfigs(),
+  });
+
+  const refreshReviewConfigs = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ['review-configs'] });
+  };
+
+  const openReviewEditor = (config?: SpacedRepetitionConfig): void => {
+    setReviewEditing(config);
+    setReviewName(config?.name ?? '');
+    setReviewIsDefault(config?.isDefault ?? false);
+    setReviewIntervalsJson(config ? JSON.stringify(config.intervals, null, 2) : JSON.stringify(DEFAULT_REVIEW_INTERVALS, null, 2));
+    setReviewInitialEf(config?.initialEf ?? 2.5);
+    setReviewMinimumEf(config?.minimumEf ?? 1.3);
+    setReviewMaxIntervalDays(config?.maxIntervalDays ?? 365);
+    setReviewWrongStrategy(config?.wrongStrategy ?? 'reduce_half');
+    setReviewWrongFixedDays(config?.wrongFixedDays ?? 1.0);
+    setReviewDailyNewLimit(config?.dailyNewLimit ?? 20);
+    setReviewDailyReviewLimit(config?.dailyReviewLimit ?? 100);
+    setReviewPriorityMode(config?.priorityMode ?? 'due_first');
+    setReviewEditorVisible(true);
+  };
+
+  const saveReviewConfigMutation = useMutation({
+    mutationFn: async () => {
+      let intervals: Record<string, number>;
+      try { intervals = JSON.parse(reviewIntervalsJson); }
+      catch { throw new Error('间隔配置 JSON 格式无效'); }
+      const config: Partial<SpacedRepetitionConfig> = {
+        name: reviewName, isDefault: reviewIsDefault, intervals,
+        initialEf: reviewInitialEf, minimumEf: reviewMinimumEf,
+        maxIntervalDays: reviewMaxIntervalDays,
+        wrongStrategy: reviewWrongStrategy as SpacedRepetitionConfig['wrongStrategy'],
+        wrongFixedDays: reviewWrongFixedDays,
+        dailyNewLimit: reviewDailyNewLimit, dailyReviewLimit: reviewDailyReviewLimit,
+        priorityMode: reviewPriorityMode as SpacedRepetitionConfig['priorityMode'],
+      };
+      if (reviewEditing) { await updateConfig(reviewEditing.id, config); }
+      else { await createConfig(config); }
+    },
+    onSuccess: () => {
+      refreshReviewConfigs();
+      setReviewEditorVisible(false);
+      Message.success(reviewEditing ? '复习方案已更新' : '复习方案已创建');
+    },
+    onError: (error) => Message.error(error instanceof Error ? error.message : '操作失败'),
+  });
+
+  const deleteReviewConfigMutation = useMutation({
+    mutationFn: (id: number) => deleteConfig(id),
+    onSuccess: () => { refreshReviewConfigs(); Message.success('方案已删除'); },
+    onError: (error) => Message.error(error instanceof Error ? error.message : '删除失败'),
+  });
+
   return <main className="page">
     <div className="page-heading">
       <div><h1>设置</h1><p>便携运行状态、主题与 AI 连接。日常对话请用右下角 AI 悬浮球或 Ctrl+J。</p></div>
@@ -86,6 +191,55 @@ export function SettingsPage(): JSX.Element {
           <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
         </div>
       </section>
+      <section className="panel">
+        <div className="panel-header"><h2>学习偏好</h2></div>
+        <div className="panel-body form-stack">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>会话结束默认加入记忆曲线</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">会话推荐弹窗「加入记忆曲线」的默认开关。</Typography.Text>
+            </div>
+            <Switch
+              checked={enrollDefault}
+              onChange={(checked) => {
+                setEnrollDefault(checked);
+                writeBoolPref(LS_ENROLL_DEFAULT, checked);
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>会话结束默认写入日历</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">会话推荐弹窗「加入学习日历」的默认开关。</Typography.Text>
+            </div>
+            <Switch
+              checked={planDefault}
+              onChange={(checked) => {
+                setPlanDefault(checked);
+                writeBoolPref(LS_PLAN_DEFAULT, checked);
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>同日正确重复推进曲线</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">
+                开启后，在日历队列完成时若同日已正确过一次，仍会推进 SRS（默认计为额外练习不改到期日）。
+              </Typography.Text>
+            </div>
+            <Switch
+              checked={forceAdvance}
+              onChange={(checked) => {
+                setForceAdvance(checked);
+                writeBoolPref(LS_FORCE_ADVANCE, checked);
+              }}
+            />
+          </div>
+        </div>
+      </section>
       <section className="panel settings-ai-panel">
         <div className="panel-header"><h2>AI 连接</h2></div>
         <div className="panel-body form-stack">
@@ -99,6 +253,107 @@ export function SettingsPage(): JSX.Element {
           <Typography.Text type="secondary">密钥经本地 Java 后端 Argon2id + AES-256-GCM 加密存储；对话从任意页面用悬浮助手唤出。</Typography.Text>
         </div>
       </section>
+
+      {/* 复习方案 */}
+      <section className="panel">
+        <div className="panel-header">
+          <h2>复习方案</h2>
+          <Button type="primary" size="small" icon={<Plus size={14} />} onClick={() => openReviewEditor()}>新建方案</Button>
+        </div>
+        <div className="panel-body">
+          {reviewConfigsQuery.isLoading ? <Spin /> : (reviewConfigsQuery.data ?? []).length === 0 ? (
+            <Empty description="暂无复习方案，请新建一个" />
+          ) : (
+            <div className="knowledge-grid">
+              {(reviewConfigsQuery.data ?? []).map((config) => (
+                <Card key={config.id} className="knowledge-item" style={{ position: 'relative' }}>
+                  <div className="knowledge-item-top">
+                    <div>
+                      <h3>
+                        {config.name}
+                        {config.isDefault && <Tag color="arcoblue" size="small" style={{ marginLeft: 8 }}><Star size={12} /> 默认</Tag>}
+                      </h3>
+                      <Space wrap>
+                        <Tag>每天新学 {config.dailyNewLimit} 项</Tag>
+                        <Tag>每天复习 {config.dailyReviewLimit} 项</Tag>
+                        <Tag color="orange">{WRONG_STRATEGY_OPTIONS.find((o) => o.value === config.wrongStrategy)?.label}</Tag>
+                        <Tag color="purple">{PRIORITY_OPTIONS.find((o) => o.value === config.priorityMode)?.label}</Tag>
+                      </Space>
+                    </div>
+                    <Space size={2}>
+                      <Button type="text" size="mini" icon={<Edit3 size={14} />} onClick={() => openReviewEditor(config)} />
+                      {!config.isDefault && (
+                        <Popconfirm title="删除此方案？" onOk={() => deleteReviewConfigMutation.mutate(config.id)}>
+                          <Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} />
+                        </Popconfirm>
+                      )}
+                    </Space>
+                  </div>
+                  <Typography.Paragraph type="secondary" style={{ margin: 0, marginTop: 8 }}>
+                    间隔：{Object.entries(config.intervals).map(([k, v]) => `第${k}次→${v}天`).join('，')}
+                    {' | '}EF: {config.initialEf}{' | '}最大间隔: {config.maxIntervalDays}天
+                  </Typography.Paragraph>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>}
+    <Modal
+      title={reviewEditing ? '编辑复习方案' : '新建复习方案'}
+      visible={reviewEditorVisible}
+      onCancel={() => setReviewEditorVisible(false)}
+      onOk={() => { if (!reviewName.trim()) { Message.warning('请输入方案名称'); return; } saveReviewConfigMutation.mutate(); }}
+      confirmLoading={saveReviewConfigMutation.isPending}
+      style={{ width: 680 }}
+      autoFocus={false}
+    >
+      <Form layout="vertical">
+        <Form.Item label="方案名称" required>
+          <Input value={reviewName} onChange={setReviewName} placeholder="例如：标准模式、考前突击" />
+        </Form.Item>
+        <Form.Item label="设为默认方案">
+          <Switch checked={reviewIsDefault} onChange={setReviewIsDefault} />
+        </Form.Item>
+        <Form.Item label="间隔配置（JSON，第N次通过后的天数）" required>
+          <Input.TextArea value={reviewIntervalsJson} onChange={setReviewIntervalsJson} autoSize={{ minRows: 3, maxRows: 8 }} />
+        </Form.Item>
+        <div className="form-row">
+          <Form.Item label="初始难度系数 (EF)">
+            <InputNumber value={reviewInitialEf} onChange={(v) => v != null && setReviewInitialEf(v)} min={1.3} max={5} step={0.1} />
+          </Form.Item>
+          <Form.Item label="最低难度系数">
+            <InputNumber value={reviewMinimumEf} onChange={(v) => v != null && setReviewMinimumEf(v)} min={1.0} max={3} step={0.1} />
+          </Form.Item>
+          <Form.Item label="最大间隔（天）">
+            <InputNumber value={reviewMaxIntervalDays} onChange={(v) => v != null && setReviewMaxIntervalDays(v)} min={1} max={9999} />
+          </Form.Item>
+        </div>
+        <div className="form-row">
+          <Form.Item label="答错后策略">
+            <Select value={reviewWrongStrategy} onChange={setReviewWrongStrategy}>
+              {WRONG_STRATEGY_OPTIONS.map((opt) => <Select.Option key={opt.value} value={opt.value}>{opt.label}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item label="固定/重置天数">
+            <InputNumber value={reviewWrongFixedDays} onChange={(v) => v != null && setReviewWrongFixedDays(v)} min={0.001} max={30} step={0.001} />
+          </Form.Item>
+        </div>
+        <div className="form-row">
+          <Form.Item label="每日新学上限">
+            <InputNumber value={reviewDailyNewLimit} onChange={(v) => v != null && setReviewDailyNewLimit(v)} min={0} max={1000} />
+          </Form.Item>
+          <Form.Item label="每日复习上限">
+            <InputNumber value={reviewDailyReviewLimit} onChange={(v) => v != null && setReviewDailyReviewLimit(v)} min={0} max={2000} />
+          </Form.Item>
+        </div>
+        <Form.Item label="排序策略">
+          <Radio.Group value={reviewPriorityMode} onChange={setReviewPriorityMode} direction="horizontal">
+            {PRIORITY_OPTIONS.map((opt) => <Radio key={opt.value} value={opt.value}>{opt.label}</Radio>)}
+          </Radio.Group>
+        </Form.Item>
+      </Form>
+    </Modal>
   </main>;
 }
