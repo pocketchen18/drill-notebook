@@ -48,6 +48,10 @@ export function SettingsPage(): JSX.Element {
   const [endpoint, setEndpoint] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [importProvider, setImportProvider] = useState('custom');
+  const [importEndpoint, setImportEndpoint] = useState('');
+  const [importModel, setImportModel] = useState('');
+  const [importApiKey, setImportApiKey] = useState('');
 
   // 复习方案编辑器 state
   const [reviewEditorVisible, setReviewEditorVisible] = useState(false);
@@ -90,19 +94,48 @@ export function SettingsPage(): JSX.Element {
   useEffect(() => { void load(); }, []);
   useEffect(() => {
     if (!configQuery.data) return;
-    setProvider(configQuery.data.provider || 'custom');
-    setEndpoint(configQuery.data.endpoint || '');
-    setModel(configQuery.data.model || '');
+    const chat = configQuery.data.chat ?? configQuery.data;
+    setProvider(chat.provider || 'custom');
+    setEndpoint(chat.endpoint || '');
+    setModel(chat.model || '');
+    const imp = configQuery.data.import;
+    if (imp) {
+      setImportProvider(imp.provider || 'custom');
+      setImportEndpoint(imp.endpoint || '');
+      setImportModel(imp.model || '');
+    }
   }, [configQuery.data]);
 
-  const saveMutation = useMutation({
-    mutationFn: () => put<AiConfig>('/api/ai/config', { provider, endpoint, model, apiKey: apiKey || undefined }),
+  const saveChatMutation = useMutation({
+    mutationFn: () => put<AiConfig>('/api/ai/config', {
+      purpose: 'chat',
+      provider,
+      endpoint,
+      model,
+      apiKey: apiKey || undefined
+    }),
     onSuccess: () => {
       setApiKey('');
       void queryClient.invalidateQueries({ queryKey: ['ai-config'] });
-      Message.success('AI 配置已保存，密钥已加密存储');
+      Message.success('主模型配置已保存，密钥已加密存储');
     },
-    onError: (error) => Message.error(friendlyMessage(error, 'AI 配置保存失败，请稍后重试'))
+    onError: (error) => Message.error(friendlyMessage(error, '主模型配置保存失败，请稍后重试'))
+  });
+
+  const saveImportMutation = useMutation({
+    mutationFn: () => put<AiConfig>('/api/ai/config', {
+      purpose: 'import',
+      provider: importProvider,
+      endpoint: importEndpoint,
+      model: importModel,
+      apiKey: importApiKey || undefined
+    }),
+    onSuccess: () => {
+      setImportApiKey('');
+      void queryClient.invalidateQueries({ queryKey: ['ai-config'] });
+      Message.success('导入兜底模型已保存，密钥已加密存储');
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '导入兜底配置保存失败，请稍后重试'))
   });
 
   // ---- 复习方案 ----
@@ -243,14 +276,46 @@ export function SettingsPage(): JSX.Element {
       <section className="panel settings-ai-panel">
         <div className="panel-header"><h2>AI 连接</h2></div>
         <div className="panel-body form-stack">
+          <div>
+            <Typography.Text bold>主模型（对话 / 总结 / 学习计划）</Typography.Text>
+            <br />
+            <Typography.Text type="secondary">侧栏助手、计划排程、解答题建议评分等走此配置。</Typography.Text>
+          </div>
           <Form layout="vertical">
             <Form.Item label="Provider"><Input value={provider} onChange={setProvider} placeholder="custom" /></Form.Item>
             <Form.Item label="Endpoint"><Input value={endpoint} onChange={setEndpoint} placeholder="https://api.example.com/v1 或 mock://local" /></Form.Item>
             <Form.Item label="Model"><Input value={model} onChange={setModel} placeholder="模型名称" /></Form.Item>
-            <Form.Item label="API Key"><Input.Password value={apiKey} onChange={setApiKey} placeholder={configQuery.data?.hasKey ? '已配置，留空表示不修改' : '输入 API Key'} /></Form.Item>
-            <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>保存配置</Button>
+            <Form.Item label="API Key">
+              <Input.Password
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder={(configQuery.data?.chat?.hasKey ?? configQuery.data?.hasKey) ? '已配置，留空表示不修改' : '输入 API Key'}
+              />
+            </Form.Item>
+            <Button type="primary" loading={saveChatMutation.isPending} onClick={() => saveChatMutation.mutate()}>保存主模型</Button>
           </Form>
-          <Typography.Text type="secondary">密钥经本地 Java 后端 Argon2id + AES-256-GCM 加密存储；对话从任意页面用悬浮助手唤出。</Typography.Text>
+
+          <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+            <Typography.Text bold>导入兜底模型（PDF / Markdown / JSON / 知识点）</Typography.Text>
+            <br />
+            <Typography.Text type="secondary">
+              仅用于导入时的 AI 解析，与主模型分开，可选用更便宜或更长上下文的模型以节省 token。
+            </Typography.Text>
+          </div>
+          <Form layout="vertical">
+            <Form.Item label="Provider"><Input value={importProvider} onChange={setImportProvider} placeholder="custom" /></Form.Item>
+            <Form.Item label="Endpoint"><Input value={importEndpoint} onChange={setImportEndpoint} placeholder="https://api.example.com/v1 或 mock://local" /></Form.Item>
+            <Form.Item label="Model"><Input value={importModel} onChange={setImportModel} placeholder="导入专用模型名" /></Form.Item>
+            <Form.Item label="API Key">
+              <Input.Password
+                value={importApiKey}
+                onChange={setImportApiKey}
+                placeholder={configQuery.data?.import?.hasKey ? '已配置，留空表示不修改' : '输入导入专用 API Key'}
+              />
+            </Form.Item>
+            <Button type="primary" loading={saveImportMutation.isPending} onClick={() => saveImportMutation.mutate()}>保存导入兜底模型</Button>
+          </Form>
+          <Typography.Text type="secondary">两套密钥均经本地 Java 后端 Argon2id + AES-256-GCM 加密存储；未配置导入模型时，PDF/知识 AI 兜底会提示单独配置。</Typography.Text>
         </div>
       </section>
 

@@ -18,13 +18,26 @@ function rendererEntry(): string {
   return path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
 }
 
+function windowBackgroundColor(): string {
+  try {
+    const configPath = path.join(portablePaths.config, 'app-config.json');
+    if (fs.existsSync(configPath)) {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as { theme?: string };
+      if (raw.theme === 'dark') return '#17181a';
+    }
+  } catch {
+    /* ignore */
+  }
+  return '#f5f7fa';
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1100,
     minHeight: 720,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

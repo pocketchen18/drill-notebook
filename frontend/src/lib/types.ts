@@ -83,11 +83,21 @@ export interface SubmitResult {
   grading?: GradingResult | null;
 }
 
-export interface AiConfig {
+/** 单套模型连接（主模型或导入兜底） */
+export interface AiModelSlot {
   provider: string;
   endpoint: string;
   model: string;
   hasKey: boolean;
+}
+
+/**
+ * AI 配置：主模型（对话/总结/计划）与导入兜底（PDF/MD/JSON/知识点解析）分轨。
+ * 顶层 provider/endpoint/model/hasKey 与 chat 相同，兼容旧代码。
+ */
+export interface AiConfig extends AiModelSlot {
+  chat?: AiModelSlot;
+  import?: AiModelSlot;
 }
 
 export interface AiChatSession {

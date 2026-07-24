@@ -43,16 +43,37 @@ public class AiService {
     }
 
     public Map<String, Object> redactedConfig() {
-        AiConfigRepository.ConfigRow row = configs.find();
+        Map<String, Object> chat = redactedSlot(configs.findChat());
+        Map<String, Object> importSlot = redactedSlot(configs.findImport());
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("provider", row == null || row.provider() == null ? "custom" : row.provider());
-        result.put("endpoint", row == null ? "" : row.endpoint());
-        result.put("model", row == null ? "" : row.model());
+        result.put("chat", chat);
+        result.put("import", importSlot);
+        // 兼容旧前端：顶层字段 = 主模型（对话）
+        result.put("provider", chat.get("provider"));
+        result.put("endpoint", chat.get("endpoint"));
+        result.put("model", chat.get("model"));
+        result.put("hasKey", chat.get("hasKey"));
+        return result;
+    }
+
+    private Map<String, Object> redactedSlot(AiConfigRepository.ConfigRow row) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("provider", row == null || row.provider() == null || row.provider().isBlank() ? "custom" : row.provider());
+        result.put("endpoint", row == null || row.endpoint() == null ? "" : row.endpoint());
+        result.put("model", row == null || row.model() == null ? "" : row.model());
         result.put("hasKey", row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank());
         return result;
     }
 
+    /**
+     * 保存模型配置。body.purpose: "chat"（默认，主模型）或 "import"（导入兜底）。
+     * 两套配置独立存储密钥与 endpoint，导入解析不再占用对话主模型额度。
+     */
     public Map<String, Object> saveConfig(Map<String, Object> body) {
+        String purpose = string(body, "purpose", AiConfigRepository.PURPOSE_CHAT).trim().toLowerCase(Locale.ROOT);
+        if (!AiConfigRepository.PURPOSE_CHAT.equals(purpose) && !AiConfigRepository.PURPOSE_IMPORT.equals(purpose)) {
+            throw new IllegalArgumentException("purpose 必须是 chat 或 import");
+        }
         String provider = string(body, "provider", "custom");
         String endpoint = string(body, "endpoint", "");
         String model = string(body, "model", "");
@@ -69,7 +90,7 @@ public class AiService {
                 metadata = mapper.writeValueAsString(Map.of("salt", value.salt(), "iv", value.iv(), "kdf", "Argon2id", "algorithm", "AES-256-GCM", "mode", value.mode()));
             } catch (Exception error) { throw new IllegalArgumentException("API Key 加密失败"); }
         }
-        configs.upsert(provider, endpoint, model, encrypted, metadata, "{}");
+        configs.upsert(purpose, provider, endpoint, model, encrypted, metadata, "{}");
         return redactedConfig();
     }
 
@@ -80,7 +101,7 @@ public class AiService {
 
     public Map<String, Object> createSession(Map<String, Object> body) {
         String title = string(body, "title", "新会话");
-        AiConfigRepository.ConfigRow config = configs.find();
+        AiConfigRepository.ConfigRow config = configs.findChat();
         String model = body.containsKey("model")
                 ? nullBlankToNull(string(body, "model", ""))
                 : (config == null ? null : nullBlankToNull(config.model()));
@@ -150,7 +171,7 @@ public class AiService {
     }
 
     public Map<String, Object> chat(Map<String, Object> body) {
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireChatConfig();
         List<Map<String, Object>> messages = messages(body.get("messages"));
         if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
         long sessionId = resolveSessionId(body);
@@ -164,7 +185,7 @@ public class AiService {
     }
 
     public Map<String, Object> summarize(Map<String, Object> body) {
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireChatConfig();
         String text = string(body, "text", "");
         if (text.isBlank()) throw new IllegalArgumentException("总结内容不能为空");
         String reply = call(config, List.of(Map.of("role", "system", "content", "总结以下学习内容"), Map.of("role", "user", "content", text)), string(body, "masterPassword", ""), DEFAULT_CALL);
@@ -179,7 +200,7 @@ public class AiService {
         Map<String, Object> safe = body == null ? Map.of() : body;
         List<String> titles = stringList(safe.get("titles"));
         if (titles.isEmpty()) throw new IllegalArgumentException("候选标题不能为空");
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireChatConfig();
         String sessionType = string(safe, "sessionType", "");
         String payload = "sessionType=" + sessionType + "\ntitles:\n" + String.join("\n", titles);
         String note = call(config, List.of(
@@ -201,7 +222,7 @@ public class AiService {
         if (candidates.isEmpty()) {
             throw new IllegalArgumentException("候选条目不能为空");
         }
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireChatConfig();
         String sessionType = string(safe, "sessionType", "");
         String startDate = string(safe, "startDate", "");
         String endDate = string(safe, "endDate", "");
@@ -334,7 +355,7 @@ public class AiService {
     }
 
     public Map<String, Object> gradeEssay(QuestionRecord question, String userAnswer, String masterPassword) {
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireChatConfig();
         try {
             String payload = mapper.writeValueAsString(Map.of(
                     "question", question.stem,
@@ -354,7 +375,7 @@ public class AiService {
     public String parseQuestionsFromText(String rawText, String masterPassword) {
         if (rawText == null || rawText.isBlank()) throw new IllegalArgumentException("待解析文本不能为空");
         log.info("AI 解析 PDF：rawText 长度 {} 字符", rawText.length());
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireImportConfig();
         try {
             List<Map<String, Object>> messages = List.of(
                     Map.of("role", "system", "content",
@@ -400,7 +421,7 @@ public class AiService {
         if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
         String prefix = "#".repeat(headingLevel);
         log.info("AI 解析知识点 Markdown：rawText 长度 {} 字符，按 {} 级标题分块", rawText.length(), headingLevel);
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireImportConfig();
         try {
             List<Map<String, Object>> messages = List.of(
                     Map.of("role", "system", "content",
@@ -478,7 +499,7 @@ public class AiService {
         }
     }
 
-    /** @deprecated Prefer sessionMessages; kept for compatibility with older clients. */
+    /** Prefer sessionMessages; kept for compatibility with older clients. */
     public List<Map<String, Object>> messages() {
         long sessionId = sessions.ensureDefaultSession();
         return sessionMessages(sessionId, "");
@@ -560,10 +581,18 @@ public class AiService {
         return encryptor.fingerprintMaterial();
     }
 
-    private AiConfigRepository.ConfigRow requireConfig() {
-        AiConfigRepository.ConfigRow config = configs.find();
-        if (config == null || config.encryptedKey() == null || config.encryptedKey().isBlank()) throw new IllegalArgumentException("请先配置 AI API Key");
-        if (config.endpoint() == null || config.endpoint().isBlank()) throw new IllegalArgumentException("请先配置 AI Endpoint");
+    private AiConfigRepository.ConfigRow requireChatConfig() {
+        return requireConfig(AiConfigRepository.PURPOSE_CHAT, "请先在设置中配置「主模型」AI API Key", "请先在设置中配置「主模型」Endpoint");
+    }
+
+    private AiConfigRepository.ConfigRow requireImportConfig() {
+        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「导入兜底」AI API Key", "请先在设置中配置「导入兜底」Endpoint");
+    }
+
+    private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {
+        AiConfigRepository.ConfigRow config = configs.find(purpose);
+        if (config == null || config.encryptedKey() == null || config.encryptedKey().isBlank()) throw new IllegalArgumentException(missingKeyMsg);
+        if (config.endpoint() == null || config.endpoint().isBlank()) throw new IllegalArgumentException(missingEndpointMsg);
         return config;
     }
 
