@@ -100,6 +100,12 @@ button, input, textarea { font: inherit; }
 .bank-item:hover { background: var(--hover-bg); }
 .bank-item.selected { border-color: var(--accent-border); background: var(--accent-soft); }
 .bank-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.bank-item-title-editable { cursor: text; border-radius: 4px; padding: 1px 2px; margin: -1px -2px; }
+.bank-item-title-editable:hover { background: var(--hover-bg); }
+.bank-panel-title { margin: 0; cursor: text; }
+.bank-item.is-renaming { cursor: default; }
+.bank-rename-input { width: 100%; max-width: 100%; }
+.bank-rename-input-header { max-width: 420px; margin-bottom: 4px; }
 .bank-item-meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .question-list { display: grid; gap: 12px; }
 .question-row { padding: 16px; border: 1px solid var(--line); border-radius: 6px; }

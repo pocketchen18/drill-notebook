@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
+import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
 import { BookOpenText, Braces, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -14,6 +15,9 @@ import { QuestionEditorModal } from '../components/QuestionEditorModal';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 
 const { Text } = Typography;
+
+/** Which UI surface is editing the bank name — list (left) vs header (right). Never both. */
+type BankRenameSurface = 'list' | 'header';
 
 function PageHeading({ onCreate, onImportMarkdown, onImportJson, importingMarkdown, importingJson, pdfImport }: { onCreate: () => void; onImportMarkdown: () => void; onImportJson: () => void; importingMarkdown: boolean; importingJson: boolean; pdfImport: React.ReactNode }): JSX.Element {
   return (
@@ -43,6 +47,11 @@ export function BankPage(): JSX.Element {
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>([]);
   const [questionEditorVisible, setQuestionEditorVisible] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<Question>();
+  const [renamingId, setRenamingId] = useState<number>();
+  const [renameSurface, setRenameSurface] = useState<BankRenameSurface | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const listRenameInputRef = useRef<RefInputType>(null);
+  const headerRenameInputRef = useRef<RefInputType>(null);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const questionsQuery = useQuery({
     queryKey: ['questions', selectedId],
@@ -60,8 +69,13 @@ export function BankPage(): JSX.Element {
     setSelectedQuestionIds((ids) => ids.filter((id) => available.has(id)));
   }, [questionsQuery.data]);
 
-  const invalidate = () => {
+  /** Invalidate bank lists everywhere (quiz / memorize / knowledge selectors). */
+  const invalidateBanksEverywhere = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['banks'] });
+  };
+
+  const invalidate = () => {
+    invalidateBanksEverywhere();
     void queryClient.invalidateQueries({ queryKey: ['questions', selectedId] });
   };
 
@@ -81,6 +95,7 @@ export function BankPage(): JSX.Element {
     mutationFn: (id: number) => del<void>(`/api/banks/${id}`),
     onSuccess: () => {
       setSelectedId(undefined);
+      cancelRename();
       invalidate();
       Message.success('题库已删除');
     },
@@ -89,9 +104,64 @@ export function BankPage(): JSX.Element {
 
   const renameMutation = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) => put<Bank>(`/api/banks/${id}`, { name }),
-    onSuccess: () => { invalidate(); Message.success('题库名称已更新'); },
+    onSuccess: (bank) => {
+      cancelRename();
+      // Prefer cache write so open quiz/memorize dropdowns refresh immediately
+      queryClient.setQueryData<Bank[]>(['banks'], (prev) =>
+        (prev ?? []).map((item) => (item.id === bank.id ? { ...item, name: bank.name } : item))
+      );
+      invalidateBanksEverywhere();
+      Message.success('题库名称已更新');
+    },
     onError: (error) => Message.error(friendlyMessage(error, '题库重命名失败，请稍后重试'))
   });
+
+  useEffect(() => {
+    if (renamingId === undefined || !renameSurface) return;
+    const timer = window.setTimeout(() => {
+      const input = (renameSurface === 'list' ? listRenameInputRef : headerRenameInputRef).current?.dom;
+      if (!input) return;
+      input.focus();
+      input.select();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renamingId, renameSurface]);
+
+  const beginRename = (bank: Bank, surface: BankRenameSurface, event?: React.MouseEvent | React.KeyboardEvent): void => {
+    event?.stopPropagation();
+    event?.preventDefault();
+    if (renameMutation.isPending) return;
+    // Only select bank when renaming from the list; header rename keeps current selection.
+    if (surface === 'list') setSelectedId(bank.id);
+    setRenameDraft(bank.name);
+    setRenamingId(bank.id);
+    setRenameSurface(surface);
+  };
+
+  const cancelRename = (): void => {
+    setRenamingId(undefined);
+    setRenameSurface(null);
+    setRenameDraft('');
+  };
+
+  const commitRename = (bank: Bank, surface: BankRenameSurface): void => {
+    if (renameMutation.isPending) return;
+    // Ignore blur from the surface that is no longer active
+    if (renamingId !== bank.id || renameSurface !== surface) return;
+    const name = renameDraft.trim();
+    if (!name) {
+      Message.warning('题库名称不能为空');
+      const input = (surface === 'list' ? listRenameInputRef : headerRenameInputRef).current?.dom;
+      input?.focus();
+      input?.select();
+      return;
+    }
+    if (name === bank.name) {
+      cancelRename();
+      return;
+    }
+    renameMutation.mutate({ id: bank.id, name });
+  };
 
   const importMutation = useMutation({
     mutationFn: (content: string) => post<{ imported: number; skipped: number; failed: number; errors?: string[] }>(`/api/banks/${selectedId}/import/markdown`, { content }),
@@ -179,29 +249,104 @@ export function BankPage(): JSX.Element {
           <div className="panel-body">
             {banksQuery.isLoading ? <Spin /> : banksQuery.data?.length ? (
               <div className="bank-list">
-                {banksQuery.data.map((bank) => (
-                  <div key={bank.id} className={`bank-item ${selectedId === bank.id ? 'selected' : ''}`} onClick={() => setSelectedId(bank.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedId(bank.id); }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="bank-item-title">{bank.name}</div>
-                      <div className="bank-item-meta">{bank.questionCount ?? 0} 道题</div>
+                {banksQuery.data.map((bank) => {
+                  const isListRenaming = renamingId === bank.id && renameSurface === 'list';
+                  return (
+                    <div
+                      key={bank.id}
+                      className={`bank-item ${selectedId === bank.id ? 'selected' : ''}${isListRenaming ? ' is-renaming' : ''}`}
+                      onClick={() => { if (!isListRenaming) setSelectedId(bank.id); }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (isListRenaming) return;
+                        if (event.key === 'Enter') setSelectedId(bank.id);
+                        if (event.key === 'F2') beginRename(bank, 'list', event);
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        {isListRenaming ? (
+                          <Input
+                            ref={listRenameInputRef}
+                            size="small"
+                            className="bank-rename-input"
+                            value={renameDraft}
+                            disabled={renameMutation.isPending}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={setRenameDraft}
+                            onBlur={() => commitRename(bank, 'list')}
+                            onPressEnter={(event) => {
+                              event.preventDefault();
+                              commitRename(bank, 'list');
+                            }}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                cancelRename();
+                              }
+                            }}
+                            aria-label="重命名题库"
+                          />
+                        ) : (
+                          <div
+                            className="bank-item-title bank-item-title-editable"
+                            title="双击重命名"
+                            onDoubleClick={(event) => beginRename(bank, 'list', event)}
+                          >
+                            {bank.name}
+                          </div>
+                        )}
+                        <div className="bank-item-meta">{bank.questionCount ?? 0} 道题 · 双击名称可改名</div>
+                      </div>
+                      <Space size={2}>
+                        <Popconfirm title="删除这个题库？" content="题库中的题目和答题记录也会删除。" onOk={() => deleteMutation.mutate(bank.id)}>
+                          <Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${bank.name}`} />
+                        </Popconfirm>
+                      </Space>
                     </div>
-                    <Space size={2}>
-                      <Button type="text" size="mini" onClick={(event) => { event.stopPropagation(); const name = window.prompt('题库名称', bank.name); if (name?.trim()) renameMutation.mutate({ id: bank.id, name: name.trim() }); }}>改名</Button>
-                      <Popconfirm title="删除这个题库？" content="题库中的题目和答题记录也会删除。" onOk={() => deleteMutation.mutate(bank.id)}>
-                        <Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${bank.name}`} />
-                      </Popconfirm>
-                    </Space>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : <Empty description="还没有题库" />}
           </div>
         </section>
         <section className="panel">
           <div className="panel-header">
-            <div>
-              <h2>{selectedBank?.name ?? '选择题库'}</h2>
-              {selectedBank && <Text type="secondary">支持单选、多选、填空、判断和解答题，重复导入会自动跳过。</Text>}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {selectedBank && renamingId === selectedBank.id && renameSurface === 'header' ? (
+                <Input
+                  ref={headerRenameInputRef}
+                  size="default"
+                  className="bank-rename-input bank-rename-input-header"
+                  value={renameDraft}
+                  disabled={renameMutation.isPending}
+                  onChange={setRenameDraft}
+                  onBlur={() => commitRename(selectedBank, 'header')}
+                  onPressEnter={(event) => {
+                    event.preventDefault();
+                    commitRename(selectedBank, 'header');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      cancelRename();
+                    }
+                  }}
+                  aria-label="重命名当前题库"
+                />
+              ) : (
+                <h2
+                  className={selectedBank ? 'bank-panel-title bank-item-title-editable' : undefined}
+                  title={selectedBank ? '双击重命名' : undefined}
+                  onDoubleClick={(event) => {
+                    if (selectedBank) beginRename(selectedBank, 'header', event);
+                  }}
+                >
+                  {selectedBank?.name ?? '选择题库'}
+                </h2>
+              )}
+              {selectedBank && <Text type="secondary">支持单选、多选、填空、判断和解答题，重复导入会自动跳过。双击标题可改名。</Text>}
             </div>
             {selectedBank && <Space>
               <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
