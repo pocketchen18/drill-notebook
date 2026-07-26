@@ -57,7 +57,19 @@
 | **日历 SRS 叠加** | 日期格上显示到期/逾期标记（与手动计划独立） |
 | **AI 多会话** | 新建 / 切换 / 重命名 / 删除会话；消息 AES-GCM 加密持久化到 SQLite；可导出会话 |
 
-### 1.4 明确后置（未作为当前目标）
+### 1.4 v0.5
+
+| 功能 | 说明 |
+|---|---|
+| **背知识点重构** | 列表/库视图分拆：`KnowledgeLibraryView`（题库选择 + 总览）+ `KnowledgeItemCard`（卡片网格）；点卡片本体进 `KnowledgeFullCardView` 全屏覆盖视图，含总结/还原/重新总结/修改/删除按钮，`Escape` 退出 |
+| **AI 总结知识点** | 三条路径：①总结并导入（选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库）②整库总结（对未总结卡逐条存原文+AI 浓缩+更新 `content`）③重新总结（对已总结卡从原文重跑）。详见 [docs/ai-summary.md](docs/ai-summary.md) |
+| **原文/总结双态切换** | 列表顶部「显示原文 / 显示总结」一键切换；单卡全屏视图内亦可切。`knowledge_point_original` 表存 `role=original`/`summary` 双快照，`knowledge_point.content` 在两态间切换 |
+| **PDF 导入版式参照样本** | `backend/src/test/resources/fixtures/pdf/sample-for-import-test.pdf` 作为版式 Y 的活模板，4 题全走规则路径成功 |
+| **导出格式 round-trip** | 题库导出的叙述式 `.md`（`### 题干` + `**答案：**` + `---` 分隔）可直接用「导入 Markdown」入口再导回，新增 `ExportMarkdownParser` 解析；无需手动改成 frontmatter 格式 |
+| **健康端点加固** | 生产构建移除健康接口敏感路径暴露；AI 日志脱敏；移除 `console` 残留 |
+| **冒烟与种子脚本** | `scripts/mvp-test.ps1`（后端核心接口冒烟）、`scripts/seed-test-bank.py`（Python 造题种子） |
+
+### 1.5 明确后置（未作为当前目标）
 
 - 知识图谱、完整考试模拟、视频等多模态导入、多人协作  
 - SQLCipher 整库加密、自然语言改写日期控件等  
@@ -102,6 +114,23 @@
 3. 选择 **复习方案**（记忆曲线）；可开「仅待复习」。  
 4. 学习过程中按界面评分（背题选项/高亮、知识点 0–5 等），系统更新间隔与下次到期。  
 5. 可随时 **加入计划**；结束后同样可走会话结束推荐弹窗。
+
+#### 2.4.1 背知识点（v0.5 重构 UI）
+
+1. **背知识点** → 顶部选择题库 → `KnowledgeLibraryView` 总览。  
+2. 卡片网格 `KnowledgeItemCard`：默认显示 AI 总结态（若有）。  
+3. 点卡片**本体**进入 `KnowledgeFullCardView` 全屏覆盖视图：  
+   - **总结 / 还原**：在原文态 ↔ 总结态之间切换；无总结时点此触发首次 AI 总结。  
+   - **重新总结**：仅「已总结」卡可点，从原文重跑 AI 总结。  
+   - **修改** / **删除**：关全屏进编辑器 / Popconfirm 确认删除。  
+   - `Escape` 退出全屏。  
+4. 列表顶部「显示原文 / 显示总结」一键切换全库已总结卡；并发调 `restore-original` / `restore-summary`，单张失败不阻塞其他。  
+5. 顶部 **AI 总结** 按钮打开 `AiSummaryModal`：  
+   - **总结并导入**：选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库（题库非空时弹 Popconfirm 确认**追加**导入）。  
+   - **总结当前知识库**：遍历该库**未总结**卡逐条存原文 + AI 浓缩 + 更新 `content`。  
+   - **重新总结**：遍历该库**已总结**卡从原文重跑。  
+   - 关掉 Modal 不会中断任务，完成后弹 Toast + 自动刷新。  
+   细节见 [docs/ai-summary.md](docs/ai-summary.md)。
 
 ### 2.5 错题
 
@@ -216,6 +245,8 @@ npm run build:electron
 npm test
 pwsh -File scripts/smoke-mvp.ps1
 pwsh -File scripts/portable-audit.ps1
+pwsh -File scripts/mvp-test.ps1   # 后端核心接口冒烟（v0.5+）
+python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 ```
 
 ### 4.3 便携打包
@@ -232,6 +263,10 @@ pwsh -File scripts/portable-audit.ps1
 4. 日历加入计划 → 今日队列可见 → 去学习。  
 5. 背题评分后「仅待复习」列表变化。  
 6. AI 多会话：新建、发消息、重启后消息仍在。  
+7. **背知识点**：导入知识点 → 点 **AI 总结** → 「总结当前知识库」 → 卡片正文被浓缩、列表顶部出现「显示原文 / 显示总结」切换 → 切换有效。  
+8. **单卡全屏视图**：点卡片本体 → 全屏覆盖视图 → 「重新总结」从原文重跑 → `Escape` 退出。  
+9. **导出 round-trip**：题库导出 `.md` → 用「导入 Markdown」入口再导回 → 题目再现（无需改格式）。  
+10. **冒烟脚本**：`pwsh -File scripts/mvp-test.ps1` 跑完后端核心接口回归。
 
 ---
 
@@ -243,6 +278,7 @@ pwsh -File scripts/portable-audit.ps1
 | [docs/import-formats.md](docs/import-formats.md) | PDF / JSON 等导入格式 |
 | [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
+| [docs/review-srs.md](docs/review-srs.md) | 间隔重复复习（SM-2 风格）：数据库、API、今日队列、日历叠加 |
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 | [docs/ai-summary.md](docs/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 

@@ -163,5 +163,6 @@ docs/**
 !docs/quiz-markdown-flow.md
 !docs/ai-summary.md
 !docs/architecture.md
+!docs/review-srs.md
 # Design specs / implementation plans stay local
 docs/superpowers/
