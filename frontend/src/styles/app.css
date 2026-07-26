@@ -191,9 +191,71 @@ button, input, textarea { font: inherit; }
 .knowledge-item.selected { border-color: #8bb8ff; box-shadow: 0 0 0 2px rgba(21,94,239,.06); }
 .knowledge-item-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; margin-bottom: 12px; }
 .knowledge-item h3 { margin: 0 0 7px; }
-.knowledge-study-title { margin: 12px 0 24px; font-size: 28px; }
-.knowledge-study-content { min-height: 300px; padding: 20px; border-radius: 8px; background: var(--subtle-bg); }
+.knowledge-study-title { margin: 12px 0 24px; font-size: 28px; color: var(--text-strong); }
+.knowledge-study-content { min-height: 300px; padding: 20px; border-radius: 8px; background: var(--subtle-bg); color: var(--text); }
 .linked-question-list { display: grid; gap: 7px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+/* 知识点全屏卡片（点击卡片后覆盖整页）— 必须跟主题变量，禁止写死 white */
+.knowledge-full-card {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: auto;
+  padding: 24px;
+  background: var(--page-bg);
+  color: var(--text);
+}
+.knowledge-full-card-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--page-bg);
+}
+.knowledge-full-card-progress {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.knowledge-full-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.knowledge-full-card-body {
+  max-width: 960px;
+  margin: 0 auto;
+}
+.knowledge-full-card-title {
+  margin: 0 0 16px;
+  color: var(--text-strong);
+  font-size: 26px;
+  line-height: 1.35;
+}
+.knowledge-full-card-content {
+  color: var(--text);
+  line-height: 1.75;
+}
+.knowledge-full-card-links {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  display: grid;
+  gap: 6px;
+}
+.knowledge-full-card-links strong {
+  color: var(--text-strong);
+}
 .editor-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
 .editor-content { min-height: 520px; padding: 24px 28px; }
