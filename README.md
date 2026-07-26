@@ -1,6 +1,6 @@
 # Drill Notebook
 
-Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, an **SM-2-style spaced-repetition review** module, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
+Drill Notebook is a Windows-first, green-portable learning app for Markdown question banks, quizzes, memorization, knowledge cards, wrong-answer practice, TipTap notebooks, a **study calendar / plan**, an **SM-2-style spaced-repetition review** module, **AI-powered knowledge-point summarization**, and optional backend-proxied AI assistance (chat + optional multi-day scheduling).
 
 ## Requirements
 
@@ -71,6 +71,7 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 
 - Question banks: single / multiple / fill / true-false / essay; Markdown import; PDF import (rules + AI fallback); JSON import paths
 - Quiz sessions, memorization (questions + knowledge points), wrong-book tracking
+- **AI-powered knowledge-point summarization**: one-click "总结并导入" / "总结当前知识库" / "重新总结"; original/summary snapshots persisted in `knowledge_point_original`; library-level "显示原文/显示总结" toggle; per-card full-screen view with summarize/restore/resummarize
 - Notebooks with autosave, KaTeX / Mermaid / Markdown live blocks, export; note pages can be planned for review
 - **Study calendar / plans**: add questions, knowledge points, and note pages to dates; plan groups; same resource allowed multiple times on one day; complete while studying; year/month navigation
 - **Spaced-repetition review (SM-2 style)**: enroll questions / knowledge points into a review config; per-item EF / interval / repetitions / status (`new` → `learning` → `review` → `mastered`); review log history; multiple configs (`标准模式` / `考前突击` / `保守学习`), default flag, custom interval tables, wrong-answer strategy, daily new/review limits and priority mode
@@ -95,7 +96,7 @@ The resulting portable `.exe` is written under `dist\`. The packaging script ref
 | [docs/import-formats.md](docs/import-formats.md) | PDF / JSON bank import formats |
 | [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | Knowledge-point Markdown import |
 | [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | Quiz Markdown parse / render flow |
-| [docs/review-srs.md](docs/review-srs.md) | Spaced-repetition review (SM-2): schema, API, configs, today queue, calendar overlay |
+| [docs/ai-summary.md](docs/ai-summary.md) | AI-powered knowledge-point summarization: schema, REST API, front-end interaction |
 
 Design specs and implementation plans under `docs/superpowers/` are **local only** (gitignored). Word (`.docx` / `.doc` / `.docm`) is also not stored in git.
 
@@ -119,6 +120,7 @@ npm run start:check
 - **题库**：导入或手动维护单选（`single`）、多选（`multiple`）、填空（`fill`）、判断（`true_false`）和解答题（`essay`），重复导入会自动跳过。支持 Markdown；也可导入 PDF（规则解析为主，不足时由已配置的 AI 兜底）及 JSON 等格式（见 `docs/import-formats.md`）。
 - **刷题**：数字键 `1-4` 选择答案，`Enter` 提交；`←`/`→`、`PageUp`/`PageDown` 或 `P`/`N` 切题。设置页可批量「加入计划」。
 - **背题 / 背知识点**：按题型、章节、标签或具体条目批量选择，支持随机重排、手动顺序和会话内跳转；可加入计划。
+- **AI 总结知识点**：「背知识点」页顶部 **AI 总结** 按钮弹出二级 Modal，提供三种操作：**总结并导入**（选一份 `.md` / `.txt`，AI 总结成符合标准导入格式的 Markdown 后入库）、**总结当前知识库**（对未总结的卡逐条存原文、AI 浓缩、更新正文）、**重新总结**（从已存原文重跑 AI 总结）。原文/总结双角色快照持久化在 `knowledge_point_original` 表；列表顶部「显示原文 / 显示总结」一键切换；点卡片本体进入单卡全屏视图，内含总结/还原/重新总结/修改/删除。详见 [docs/ai-summary.md](docs/ai-summary.md)。
 - **错题**：最近答错且未纠正的题目；可勾选加入计划或再练。
 - **笔记本**：公式、Mermaid 和 Markdown 块默认渲染，点击进入编辑。**当前页或勾选多页可加入计划**（笔记也可复习）；日历「去学习」可打开笔记。
 - **日历**：按月查看学习计划，可切换**年份 / 月份**。计划条目含题目、知识点、笔记页；支持完成勾选、整组删除、按日/组「去学习」（刷题 / 背知识点 / 复习笔记）。**同一天允许同一资源多条待办**（一天可复习多次）。日历还会叠加**间隔重复复习**的到期/逾期标记，与手动计划互相独立。

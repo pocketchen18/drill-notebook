@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS knowledge_point_question (
     PRIMARY KEY (knowledge_point_id, question_id)
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_point_original (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    point_id  INTEGER NOT NULL REFERENCES knowledge_point(id) ON DELETE CASCADE,
+    role      TEXT    NOT NULL CHECK (role IN ('original', 'summary')),
+    content   TEXT    NOT NULL,
+    saved_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (point_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kp_original_point ON knowledge_point_original(point_id);
+
 CREATE TABLE IF NOT EXISTS answer_record (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question_id INTEGER NOT NULL REFERENCES question(id),

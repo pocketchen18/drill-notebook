@@ -29,6 +29,7 @@ export interface KnowledgePoint {
   tags: string[];
   headingPath?: string[];
   questionIds: number[];
+  hasOriginal?: boolean;  // 是否已存原文（即「已总结」标记）
   createdAt?: string;
   updatedAt?: string;
 }

@@ -93,6 +93,7 @@ button, input, textarea { font: inherit; }
 .study-setup-panel { max-width: 1180px; margin: 0 auto; }
 .advanced-selector { display: grid; gap: 12px; width: 100%; }
 .advanced-filters { display: grid; grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(150px, 1fr)); gap: 10px; }
+.advanced-filters-compact { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: flex-start; }
 .selection-toolbar { justify-content: space-between; gap: 12px; }
 .advanced-selector-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 12px; min-height: 360px; }
 .selector-list, .selector-order { overflow: auto; max-height: 500px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-bg); }
