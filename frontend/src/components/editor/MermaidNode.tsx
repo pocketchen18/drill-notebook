@@ -2,15 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
-
-mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+import { ensureMermaidTheme } from '../../lib/mermaidTheme';
+import { useUiStore } from '../../stores/uiStore';
 
 function MermaidPreview({ code }: { code: string }): JSX.Element {
+  const theme = useUiStore((state) => state.theme);
   const [svg, setSvg] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
+    ensureMermaidTheme(theme);
     const id = `drill-mermaid-${Math.random().toString(36).slice(2)}`;
     void mermaid.render(id, code || 'flowchart TD\n  A[空]').then((result) => {
       if (!active) return;
@@ -23,7 +25,7 @@ function MermaidPreview({ code }: { code: string }): JSX.Element {
       }
     });
     return () => { active = false; };
-  }, [code]);
+  }, [code, theme]);
 
   if (svg) return <div className="mermaid-rendered" dangerouslySetInnerHTML={{ __html: svg }} />;
   return <pre className="muted mermaid-fallback">{error || code || '空图表'}</pre>;

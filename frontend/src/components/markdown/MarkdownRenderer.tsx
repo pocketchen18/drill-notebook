@@ -3,6 +3,8 @@ import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import MarkdownIt from 'markdown-it';
 import { renderToString } from 'katex';
+import { ensureMermaidTheme, readDocumentTheme } from '../../lib/mermaidTheme';
+import { useUiStore } from '../../stores/uiStore';
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -42,11 +44,9 @@ export function renderMarkdownHtml(value: string): string {
   return html;
 }
 
-function renderMermaidBlocks(root: HTMLDivElement): () => void {
-  if (!mermaidReady) {
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
-    mermaidReady = true;
-  }
+function renderMermaidBlocks(root: HTMLDivElement, appTheme: 'light' | 'dark'): () => void {
+  ensureMermaidTheme(appTheme);
+  mermaidReady = true;
   let active = true;
   const blocks = Array.from(root.querySelectorAll('pre code.language-mermaid'));
   void Promise.all(blocks.map(async (codeBlock) => {
@@ -74,12 +74,13 @@ export interface MarkdownContentProps {
 
 export function MarkdownContent({ value = '', className = '', inline = false }: MarkdownContentProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
+  const theme = useUiStore((state) => state.theme);
   const html = renderMarkdownHtml(value);
 
   useEffect(() => {
     if (!rootRef.current) return undefined;
-    return renderMermaidBlocks(rootRef.current);
-  }, [html]);
+    return renderMermaidBlocks(rootRef.current, theme ?? readDocumentTheme());
+  }, [html, theme]);
 
   return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()} dangerouslySetInnerHTML={{ __html: html }} />;
 }

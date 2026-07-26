@@ -41,10 +41,18 @@ function Shell(): JSX.Element {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    // Arco Design global dark mode (components + portaled Drawer/Modal/Select)
+    if (theme === 'dark') document.body.setAttribute('arco-theme', 'dark');
+    else document.body.removeAttribute('arco-theme');
+    try {
+      localStorage.setItem('drill-notebook-theme', theme);
+    } catch {
+      /* ignore */
+    }
   }, [theme]);
   useEffect(() => {
     void window.api?.config.get().then((config) => {
-      if (config.theme) setTheme(config.theme);
+      if (config.theme === 'dark' || config.theme === 'light') setTheme(config.theme);
       setConfigLoaded(true);
     }).catch(() => setConfigLoaded(true));
   }, [setTheme]);
