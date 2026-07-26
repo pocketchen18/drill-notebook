@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS note_question_ref (
 );
 
 CREATE TABLE IF NOT EXISTS ai_config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    purpose TEXT PRIMARY KEY,
     provider TEXT,
     endpoint TEXT,
     model TEXT,

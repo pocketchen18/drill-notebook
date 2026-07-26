@@ -54,7 +54,15 @@ export function AiAssistant(): JSX.Element {
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const toggleAi = useUiStore((state) => state.toggleAi);
   const pageContext = useUiStore((state) => state.pageContext);
-  const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
+  const configQuery = useQuery({
+    queryKey: ['ai-config'],
+    queryFn: async () => {
+      const raw = await get<AiConfig>('/api/ai/config');
+      // 兼容新旧 API：优先 chat 槽
+      const chat = raw.chat ?? raw;
+      return { ...raw, hasKey: chat.hasKey, provider: chat.provider, endpoint: chat.endpoint, model: chat.model, chat };
+    }
+  });
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks'), enabled: aiOpen });
   const sessionsQuery = useQuery({
     queryKey: ['ai-sessions'],
@@ -347,6 +355,8 @@ export function AiAssistant(): JSX.Element {
         footer={null}
         unmountOnExit={false}
         className="ai-drawer"
+        // Mount inside app root so CSS variables + theme cascade apply reliably
+        getPopupContainer={() => document.getElementById('root') ?? document.body}
       >
         <div className="ai-drawer-body">
           <div className="ai-session-bar">
