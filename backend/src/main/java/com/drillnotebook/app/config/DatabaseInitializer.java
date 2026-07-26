@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class DatabaseInitializer {
-    private static final int SCHEMA_VERSION = 6;
+    private static final int SCHEMA_VERSION = 7;
     private final DataSource dataSource;
 
     public DatabaseInitializer(DataSource dataSource) {
@@ -47,6 +47,7 @@ public class DatabaseInitializer {
             ensureColumn(connection, statement, "ai_chat_message", "content_meta", "TEXT");
             ensureColumn(connection, statement, "knowledge_point", "heading_path", "TEXT");
             migrateAiChatSessions(statement);
+            migrateAiConfigPurposes(connection, statement);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_message_session ON ai_chat_message(session_id, id)");
             Integer current = null;
@@ -58,6 +59,49 @@ public class DatabaseInitializer {
             connection.commit();
         } catch (SQLException error) {
             throw new IllegalStateException("Unable to initialize SQLite schema", error);
+        }
+    }
+
+    /**
+     * 将旧版 ai_config(id=1 单行) 迁移为 purpose 主键（chat / import），便于主模型与导入兜底分轨。
+     */
+    private static void migrateAiConfigPurposes(Connection connection, Statement statement) throws SQLException {
+        if (!tableExists(connection, "ai_config")) return;
+        if (columnExists(connection, "ai_config", "purpose")) return;
+
+        statement.execute("""
+                CREATE TABLE IF NOT EXISTS ai_config_purpose (
+                    purpose TEXT PRIMARY KEY,
+                    provider TEXT,
+                    endpoint TEXT,
+                    model TEXT,
+                    encrypted_key TEXT,
+                    key_meta TEXT,
+                    params TEXT
+                )
+                """);
+        // 旧表 id=1 → chat；import 行可缺省，由用户在设置中单独配置
+        try {
+            statement.executeUpdate("""
+                    INSERT OR IGNORE INTO ai_config_purpose(purpose, provider, endpoint, model, encrypted_key, key_meta, params)
+                    SELECT 'chat', provider, endpoint, model, encrypted_key, key_meta, params FROM ai_config WHERE id = 1
+                    """);
+        } catch (SQLException ignored) {
+            // 若旧表无 id 列或为空，忽略
+        }
+        statement.execute("DROP TABLE ai_config");
+        statement.execute("ALTER TABLE ai_config_purpose RENAME TO ai_config");
+    }
+
+    private static boolean tableExists(Connection connection, String table) throws SQLException {
+        try (ResultSet result = connection.getMetaData().getTables(null, null, table, null)) {
+            return result.next();
+        }
+    }
+
+    private static boolean columnExists(Connection connection, String table, String column) throws SQLException {
+        try (ResultSet result = connection.getMetaData().getColumns(null, null, table, column)) {
+            return result.next();
         }
     }
 

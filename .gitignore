@@ -161,5 +161,6 @@ docs/**
 !docs/import-formats.md
 !docs/knowledge-point-import.md
 !docs/quiz-markdown-flow.md
+!docs/architecture.md
 # Design specs / implementation plans stay local
 docs/superpowers/
