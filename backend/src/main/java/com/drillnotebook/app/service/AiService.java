@@ -466,7 +466,7 @@ public class AiService {
                 ## <浓缩标题>
                 <浓缩正文>
                 不要输出任何解释、围栏或额外 JSON。""";
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireImportConfig();
         try {
             List<Map<String, Object>> messages = List.of(
                     Map.of("role", "system", "content", systemPrompt),
@@ -503,7 +503,7 @@ public class AiService {
                 分类：Java
                 标签：JVM，内存
                 堆、栈、方法区的浓缩说明。""";
-        AiConfigRepository.ConfigRow config = requireConfig();
+        AiConfigRepository.ConfigRow config = requireImportConfig();
         try {
             List<Map<String, Object>> messages = List.of(
                     Map.of("role", "system", "content", systemPrompt),

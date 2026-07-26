@@ -30,7 +30,7 @@ class AiServiceSummarizeTest {
     @Test
     void summarizeKnowledgePointThrowsWhenNoKey() throws Exception {
         // configs.find() 返回 null → requireConfig 抛 IllegalArgumentException
-        when(configs.find()).thenReturn(null);
+        when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(null);
         assertThrows(IllegalArgumentException.class, () -> ai.summarizeKnowledgePoint("# 标题\n正文"));
     }
 
@@ -44,7 +44,7 @@ class AiServiceSummarizeTest {
                 "fake-encrypted-key",
                 "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
                 "{}");
-        when(configs.find()).thenReturn(config);
+        when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(config);
         // encryptor.decrypt 返回任意非空 key 即可（4 参数：encrypted, salt, iv, material）
         when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");
         when(encryptor.fingerprintMaterial()).thenReturn("fake-fingerprint");
@@ -68,7 +68,7 @@ class AiServiceSummarizeTest {
                 "fake-encrypted-key",
                 "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
                 "{}");
-        when(configs.find()).thenReturn(config);
+        when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(config);
         // encryptor.decrypt 返回任意非空 key 即可（4 参数：encrypted, salt, iv, material）
         when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");
         when(encryptor.fingerprintMaterial()).thenReturn("fake-fingerprint");
