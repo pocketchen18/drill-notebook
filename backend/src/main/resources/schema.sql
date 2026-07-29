@@ -252,3 +252,15 @@ VALUES ('保守学习', 0,
     'reset', 1.0,
     10, 50, 'due_first');
 
+CREATE TABLE IF NOT EXISTS note_attachment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id INTEGER NOT NULL REFERENCES note_page(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    sha256 TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_page ON note_attachment(page_id);

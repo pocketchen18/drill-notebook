@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Select, Space, Spin, Typography } from '@arco-design/web-react';
-import { CalendarPlus, FilePlus2, FolderPlus, Save, Sparkles } from 'lucide-react';
+import { CalendarPlus, FilePlus2, FolderPlus, Maximize2, Minimize2, Save, Sparkles } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -29,6 +29,7 @@ export function NotebookPage(): JSX.Element {
   );
   const queryClient = useQueryClient();
   const setAiOpen = useUiStore((state) => state.setAiOpen);
+  const setNotebookFocusMode = useUiStore((state) => state.setNotebookFocusMode);
   const [notebookId, setNotebookId] = useState<number>();
   const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery);
   const [newPageVisible, setNewPageVisible] = useState(false);
@@ -38,6 +39,8 @@ export function NotebookPage(): JSX.Element {
   const [selectedPageIds, setSelectedPageIds] = useState<number[]>([]);
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
+  const [focusMode, setFocusMode] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
   const bootstrapped = useRef(false);
   const deepLinkApplied = useRef(false);
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
@@ -127,6 +130,22 @@ export function NotebookPage(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [pageId, pendingContent, pageQuery.data?.content]);
 
+  useEffect(() => {
+    setNotebookFocusMode(focusMode);
+    return () => setNotebookFocusMode(false);
+  }, [focusMode, setNotebookFocusMode]);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && fullScreen) {
+        setFullScreen(false);
+        void window.api?.window.setFullScreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [fullScreen]);
+
   const currentPage = pageQuery.data;
   const selectedNotebook = notebooksQuery.data?.find((notebook) => notebook.id === notebookId);
   const validSelectedPageIds = useMemo(() => {
@@ -181,7 +200,7 @@ export function NotebookPage(): JSX.Element {
 
   return <main className="page">
     {dayQueueMode ? <DayQueueSessionBar /> : null}
-    <div className="page-heading">
+    {focusMode ? null : <div className="page-heading">
       <div><h1>笔记本</h1><p>所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p></div>
       <Space>
         <CompletePlanButton
@@ -196,13 +215,23 @@ export function NotebookPage(): JSX.Element {
         ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 助手</Button>
         <ExportActions count={validSelectedPageIds.length} document={exportPages} />
+        <Button
+          icon={fullScreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          onClick={async () => {
+            const next = !fullScreen;
+            setFullScreen(next);
+            await window.api?.window.setFullScreen(next);
+          }}
+        >
+          {fullScreen ? '退出全屏' : '全屏'}
+        </Button>
         <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
           {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
         </Select>
         <Button icon={<FolderPlus size={16} />} onClick={() => { const title = window.prompt('笔记本名称', '新笔记本'); if (title?.trim()) createNotebook.mutate(title.trim()); }}>新建笔记本</Button>
       </Space>
-    </div>
-    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className="note-layout">
+    </div>}
+    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className={`note-layout${focusMode ? ' is-focus' : ''}`}>
       <section className="panel">
         <div className="panel-header">
           <h2>页面</h2>
@@ -233,7 +262,7 @@ export function NotebookPage(): JSX.Element {
       </section>
       <section>
         {currentPage ? <>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+          {focusMode ? null : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
             <Input value={currentPage.title} onChange={(title) => { void put(`/api/note-pages/${currentPage.id}`, { title }); void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] }); }} style={{ maxWidth: 460 }} />
             <Space>
               <Button
@@ -244,8 +273,8 @@ export function NotebookPage(): JSX.Element {
               </Button>
               <Typography.Text type="secondary">{saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中…' : '等待保存…'}</Typography.Text>
             </Space>
-          </div>
-          <NotebookEditor content={pendingContent ?? currentPage.content} onChange={setPendingContent} />
+          </div>}
+          <NotebookEditor content={pendingContent ?? currentPage.content} onChange={setPendingContent} pageId={pageId} focusMode={focusMode} onFocusModeChange={setFocusMode} />
         </> : <div className="panel"><div className="empty-state"><div><p>选择一个页面开始记录。</p></div></div></div>}
       </section>
     </div> : <Empty description="正在创建默认笔记本…" />}

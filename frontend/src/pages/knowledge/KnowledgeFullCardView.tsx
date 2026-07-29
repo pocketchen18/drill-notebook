@@ -80,7 +80,7 @@ export function KnowledgeFullCardView({ point, total, index, questions, onClose,
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'white', overflow: 'auto', padding: 24 }}>
+    <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: 'white', overflow: 'auto', padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <Button type="text" icon={<ArrowLeft size={18} />} onClick={onClose}>返回</Button>
         <span style={{ color: '#6b7280' }}>第 {index + 1} / {total} 个知识点</span>

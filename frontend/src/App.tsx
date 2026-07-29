@@ -82,19 +82,21 @@ function Shell(): JSX.Element {
         </Menu>
       </Sider>
       <Layout>
-        <Header className="topbar">
-          <Typography.Title heading={5} className="topbar-title">{title}</Typography.Title>
-          <div className="topbar-actions">
-            <Typography.Text type="secondary" className="topbar-hint">AI · Ctrl+J</Typography.Text>
-            <Switch
-              checked={theme === 'dark'}
-              onChange={toggleTheme}
-              checkedText={<Moon size={14} />}
-              uncheckedText={<Sun size={14} />}
-              aria-label="切换主题"
-            />
-          </div>
-        </Header>
+        {useUiStore((state) => state.notebookFocusMode) ? null : (
+          <Header className="topbar">
+            <Typography.Title heading={5} className="topbar-title">{title}</Typography.Title>
+            <div className="topbar-actions">
+              <Typography.Text type="secondary" className="topbar-hint">AI · Ctrl+J</Typography.Text>
+              <Switch
+                checked={theme === 'dark'}
+                onChange={toggleTheme}
+                checkedText={<Moon size={14} />}
+                uncheckedText={<Sun size={14} />}
+                aria-label="切换主题"
+              />
+            </div>
+          </Header>
+        )}
         <Content><AppRoutes /></Content>
       </Layout>
       <AiAssistant />

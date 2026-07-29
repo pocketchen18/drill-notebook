@@ -24,6 +24,8 @@ interface UiState {
   pageContext: AiPageContext;
   setPageContext: (context: AiPageContext) => void;
   clearPageContext: () => void;
+  notebookFocusMode: boolean;
+  setNotebookFocusMode: (focus: boolean) => void;
 }
 
 const emptyContext: AiPageContext = { kind: 'none', title: '无页面上下文', markdown: '' };
@@ -51,5 +53,7 @@ export const useUiStore = create<UiState>((set) => ({
     }
     return { pageContext };
   }),
-  clearPageContext: () => set((state) => (state.pageContext.kind === 'none' ? state : { pageContext: emptyContext }))
+  clearPageContext: () => set((state) => (state.pageContext.kind === 'none' ? state : { pageContext: emptyContext })),
+  notebookFocusMode: false,
+  setNotebookFocusMode: (focus) => set({ notebookFocusMode: focus })
 }));
