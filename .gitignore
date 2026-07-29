@@ -31,6 +31,10 @@ coverage/
 *.har
 *.trace.zip
 
+# Workspace-local Rust toolchain, cargo caches and build targets
+.tooling/
+embedding-worker/target/
+
 # Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
 /*.png
 /*.jpg

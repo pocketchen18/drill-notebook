@@ -40,6 +40,14 @@ public class NotebookRepository {
         }, id);
     }
 
+    public boolean exists(long id) {
+        Integer value = jdbc.queryForObject(
+                "SELECT EXISTS(SELECT 1 FROM notebook WHERE id = ?)",
+                Integer.class,
+                id);
+        return value != null && value == 1;
+    }
+
     public long insert(String title) {
         KeyHolder holder = new GeneratedKeyHolder();
         jdbc.update(connection -> {

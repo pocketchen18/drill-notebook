@@ -161,8 +161,11 @@ if ([string]::IsNullOrWhiteSpace((Find-BackendJar))) {
 
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $oldAppRoot = $env:APP_ROOT
+$oldWorkerExe = $env:DRILL_EMBEDDING_WORKER_EXE
 $oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $env:APP_ROOT = $root
+# Embedding worker path: workspace-release binary (not compiled automatically).
+$env:DRILL_EMBEDDING_WORKER_EXE = Join-Path $workspace 'embedding-worker\target\x86_64-pc-windows-msvc\release\embedding-worker.exe'
 # Some shells/tools export ELECTRON_RUN_AS_NODE=1, which makes Electron behave as plain Node
 # and breaks require('electron').app. Clear it for the app process only.
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
@@ -177,6 +180,7 @@ try {
     }
 } finally {
     $env:APP_ROOT = $oldAppRoot
+    $env:DRILL_EMBEDDING_WORKER_EXE = $oldWorkerExe
     if ($null -eq $oldElectronRunAsNode) {
         Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
     } else {
