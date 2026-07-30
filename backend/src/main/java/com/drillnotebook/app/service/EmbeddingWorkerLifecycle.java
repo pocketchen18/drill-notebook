@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -134,6 +135,7 @@ public class EmbeddingWorkerLifecycle implements AutoCloseable {
     // Constructors
     // -------------------------------------------------------------------
 
+    @Autowired
     public EmbeddingWorkerLifecycle(PortablePathResolver paths, ObjectMapper mapper) {
         this.paths = paths;
         this.mapper = mapper;

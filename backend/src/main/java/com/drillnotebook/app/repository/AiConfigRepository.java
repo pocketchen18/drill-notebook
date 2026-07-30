@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 public class AiConfigRepository {
     public static final String PURPOSE_CHAT = "chat";
     public static final String PURPOSE_IMPORT = "import";
+    public static final String PURPOSE_EMBEDDING = "embedding";
 
     private final JdbcTemplate jdbc;
 
@@ -23,6 +24,11 @@ public class AiConfigRepository {
     /** 导入兜底：PDF / Markdown / JSON / 知识点 AI 解析。 */
     public ConfigRow findImport() {
         return find(PURPOSE_IMPORT);
+    }
+
+    /** Embedding：笔记本向量索引（独立于 chat/import 配置）。 */
+    public ConfigRow findEmbedding() {
+        return find(PURPOSE_EMBEDDING);
     }
 
     public ConfigRow find(String purpose) {

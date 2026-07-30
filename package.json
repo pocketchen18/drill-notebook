@@ -20,6 +20,7 @@
     "test:embedding-worker": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/test-embedding-worker.ps1",
     "test:frontend": "npm --workspace frontend run test",
     "test:backend": "mvnw.cmd -f backend/pom.xml test",
+    "test:rag": "npm run test:embedding-worker && npm run test:backend && npm run test:frontend",
     "test": "npm run test:frontend && npm run test:backend",
     "package:portable": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1"
   },

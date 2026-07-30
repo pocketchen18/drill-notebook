@@ -159,6 +159,24 @@ class RetrievalServiceTest {
     }
 
     @Test
+    void oversizedQueriesAreTruncatedByUniformGuard() {
+        long notebookId = notebooks.insert("超长查询");
+        insertChunk(notebookId, 801, 0, "前缀命中", "", "正文包含超长防护关键词");
+
+        String longQuery = "超长防护关键词" + "填".repeat(100_000);
+        List<RetrievalHit> hits = retrieve(longQuery, RetrievalQuery.Scope.ALL, null);
+        assertEquals(801, hits.get(0).sourceId());
+
+        assertNull(RetrievalService.truncateCodepoints(null, 3));
+        assertEquals("abc", RetrievalService.truncateCodepoints("abcdef", 3));
+        // Surrogate pairs are never split.
+        assertEquals("😀😀", RetrievalService.truncateCodepoints("😀😀😀", 2));
+        String surrogates = "😀".repeat(RetrievalService.MAX_QUERY_CODEPOINTS + 100);
+        String truncated = RetrievalService.truncateCodepoints(surrogates, RetrievalService.MAX_QUERY_CODEPOINTS);
+        assertEquals(RetrievalService.MAX_QUERY_CODEPOINTS, truncated.codePointCount(0, truncated.length()));
+    }
+
+    @Test
     void normalizesAndBuildsCanonicalCodepointShingles() {
         assertEquals("abc 中文 test", RetrievalService.normalizeQuery("  ＡＢＣ—中文，TEST  "));
         assertEquals("\"abc\" OR \"bcd\" OR \"cde\"",

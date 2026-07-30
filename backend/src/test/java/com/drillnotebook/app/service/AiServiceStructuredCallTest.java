@@ -12,7 +12,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AiServiceStructuredCallTest {
-    private final AiService service = new AiService(null, null, null, new ObjectMapper());
+    private final AiService service = new AiService(null, null, null, new ObjectMapper(), null);
 
     @Test
     void structuredCallDisablesThinkingForQwenDashScope() {

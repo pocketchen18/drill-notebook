@@ -166,6 +166,7 @@ docs/**
 !docs/knowledge-point-import.md
 !docs/quiz-markdown-flow.md
 !docs/ai-summary.md
+!docs/ai-retrieval.md
 !docs/architecture.md
 !docs/review-srs.md
 # Design specs / implementation plans stay local

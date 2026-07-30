@@ -17,10 +17,13 @@ import java.util.List;
  * @param headingPath Joined heading path ({@code " / "} separator).
  * @param snippet     Deterministic, length-capped body excerpt (≤240
  *                    codepoints including ellipses).
- * @param matchTypes  Immutable list; currently always {@code ["bm25"]}.
- * @param ftsRank     1-based lexical rank (Integer).
- * @param vectorRank   Always {@code null} (vector retrieval is Task 9+).
- * @param rrfScore     Always {@code null} (RRF is Task 9+).
+ * @param matchTypes  Immutable list; {@code ["bm25"]}, {@code ["vector"]} or
+ *                    {@code ["bm25","vector"]} depending on which rankings hit.
+ * @param ftsRank     1-based lexical rank, or {@code null} for vector-only hits.
+ * @param vectorRank   1-based vector rank, or {@code null} when the hit did not
+ *                     appear in the vector top-K (or vector search was skipped).
+ * @param rrfScore     RRF fusion score {@code 1/(60+ftsRank)+1/(60+vectorRank)};
+ *                     {@code null} in BM25-only mode.
  */
 public record Citation(
         String corpusType,

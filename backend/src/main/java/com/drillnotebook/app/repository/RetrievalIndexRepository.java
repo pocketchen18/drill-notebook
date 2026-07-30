@@ -366,4 +366,62 @@ public class RetrievalIndexRepository {
                         null),
                 params.toArray());
     }
+
+    // ── Vector retrieval reads ──────────────────────────────────────────────
+
+    /**
+     * Stream all scannable embeddings for one embedding space. Rows are
+     * filtered in SQL to the exact space/dimensions/corpus and to vectors
+     * whose {@code content_hash} still matches the current chunk hash, so
+     * stale vectors (page edited but not re-embedded) are never scored.
+     * The callback receives {@code chunk_id, source_id, chunk_index,
+     * vector_blob}; blobs of unexpected length must be skipped by callers.
+     */
+    public void scanEmbeddings(
+            String corpusType, Long corpusId, String embeddingSpaceId,
+            int dimensions, org.springframework.jdbc.core.RowCallbackHandler handler) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT e.chunk_id, c.source_id, c.chunk_index, e.vector_blob"
+                        + " FROM retrieval_embedding e"
+                        + " JOIN retrieval_chunk c ON c.id = e.chunk_id"
+                        + " WHERE e.embedding_space_id = ?"
+                        + " AND e.dimensions = ?"
+                        + " AND e.corpus_type = ?"
+                        + " AND c.corpus_type = e.corpus_type"
+                        + " AND e.content_hash = c.content_hash");
+        List<Object> params = new ArrayList<>();
+        params.add(embeddingSpaceId);
+        params.add(dimensions);
+        params.add(corpusType);
+        if (corpusId != null) {
+            sql.append(" AND c.corpus_id = ?");
+            params.add(corpusId);
+        }
+        jdbc.query(sql.toString(), handler, params.toArray());
+    }
+
+    /** Chunk metadata for vector-only hits; keyed lookup after the scan. */
+    public List<LexicalRow> findChunksByIds(List<Long> chunkIds) {
+        if (chunkIds == null || chunkIds.isEmpty()) return List.of();
+        StringBuilder sql = new StringBuilder(
+                "SELECT id, corpus_type, corpus_id, source_id, chunk_index,"
+                        + " title, heading_path, text FROM retrieval_chunk WHERE id IN (");
+        for (int i = 0; i < chunkIds.size(); i++) {
+            if (i > 0) sql.append(",");
+            sql.append("?");
+        }
+        sql.append(")");
+        return jdbc.query(sql.toString(),
+                (rs, row) -> new LexicalRow(
+                        rs.getLong("id"),
+                        rs.getString("corpus_type"),
+                        rs.getLong("corpus_id"),
+                        rs.getLong("source_id"),
+                        rs.getInt("chunk_index"),
+                        rs.getString("title"),
+                        rs.getString("heading_path"),
+                        rs.getString("text"),
+                        null),
+                chunkIds.toArray());
+    }
 }

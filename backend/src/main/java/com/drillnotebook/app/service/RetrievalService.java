@@ -19,6 +19,8 @@ public class RetrievalService {
     static final int TOP_K = 40;
     static final int MAX_SHINGLES = 24;
     static final int MAX_SNIPPET_CODEPOINTS = 240;
+    /** Uniform guard: raw query text is truncated before any normalization work. */
+    static final int MAX_QUERY_CODEPOINTS = 512;
     private static final int SNIPPET_CONTEXT_BEFORE = 80;
     private static final List<String> BM25_MATCH_TYPES = List.of("bm25");
 
@@ -46,7 +48,7 @@ public class RetrievalService {
             corpusId = query.notebookId();
         }
 
-        String normalized = normalizeQuery(query.text());
+        String normalized = normalizeQuery(truncateCodepoints(query.text(), MAX_QUERY_CODEPOINTS));
         if (normalized.isEmpty()) return List.of();
 
         int count = normalized.codePointCount(0, normalized.length());
@@ -69,6 +71,14 @@ public class RetrievalService {
             hits.add(new RetrievalHit(citation, row.text(), row.sourceId(), row.chunkIndex()));
         }
         return List.copyOf(hits);
+    }
+
+    /** Codepoint-safe truncation so oversized queries cannot inflate normalization cost. */
+    static String truncateCodepoints(String raw, int maxCodepoints) {
+        if (raw == null || raw.length() <= maxCodepoints) return raw;
+        int count = raw.codePointCount(0, raw.length());
+        if (count <= maxCodepoints) return raw;
+        return raw.substring(0, raw.offsetByCodePoints(0, maxCodepoints));
     }
 
     static String normalizeQuery(String raw) {
