@@ -133,9 +133,14 @@ ipcMain.handle('export:save', async (event, request: unknown) => {
 ipcMain.handle('dialog:pick-files', async (event, filters: { name: string; extensions: string[] }[]) => {
   if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('File picker request rejected from an untrusted page.');
   if (!mainWindow) return null;
+  // Windows 的 dialog.showOpenDialog 已知行为：filters 首项 extensions 含 '*' 时会被忽略，
+  // 回退到下一个具体扩展项。因此检测到首项是「所有文件」时干脆不传 filters，让对话框显示全部文件。
+  const normalized = filters && filters.length > 0 ? filters : [{ name: '所有文件', extensions: ['*'] }];
+  const allFilesFirst = normalized[0]?.extensions.includes('*');
+  const dialogFilters = allFilesFirst ? undefined : normalized;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
-    filters: filters && filters.length > 0 ? filters : [{ name: '所有文件', extensions: ['*'] }]
+    filters: dialogFilters
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths.map((filePath) => {

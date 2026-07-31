@@ -93,13 +93,13 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       return;
     }
     const picks = await window.api.file.pickFiles([
+      { name: '所有文件', extensions: ['*'] },
       { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] },
       { name: '视频', extensions: ['mp4', 'webm', 'mov'] },
       { name: 'PDF', extensions: ['pdf'] },
       { name: 'Word', extensions: ['docx'] },
       { name: 'PPT', extensions: ['pptx'] },
-      { name: '压缩包', extensions: ['zip', 'rar', '7z'] },
-      { name: '所有文件', extensions: ['*'] }
+      { name: '压缩包', extensions: ['zip', 'rar', '7z'] }
     ]);
     if (!picks || picks.length === 0) return;
     for (const pick of picks) {
