@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 
+import java.sql.Statement;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,9 +46,21 @@ class AttachmentRepositoryTest {
     }
 
     private Long createTestPage() {
-        jdbc.update("INSERT INTO notebook(title) VALUES ('test-nb')");
-        Long nbId = jdbc.queryForObject("SELECT last_insert_rowid()", Long.class);
-        jdbc.update("INSERT INTO note_page(notebook_id, title, content) VALUES (?, 'test-page', '{}')", nbId);
-        return jdbc.queryForObject("SELECT last_insert_rowid()", Long.class);
+        // Use GeneratedKeyHolder so the generated key is read from the same
+        // connection that performed the insert. A standalone
+        // "SELECT last_insert_rowid()" runs on a pooled connection and may
+        // return another connection's rowid, breaking the FK relationship.
+        long nbId = insertReturningKey(
+                "INSERT INTO notebook(title) VALUES ('test-nb')");
+        return insertReturningKey(
+                "INSERT INTO note_page(notebook_id, title, content) VALUES (" + nbId + ", 'test-page', '{}')");
+    }
+
+    private long insertReturningKey(String sql) {
+        GeneratedKeyHolder holder = new GeneratedKeyHolder();
+        jdbc.update(connection -> connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS), holder);
+        Number key = holder.getKey();
+        assertNotNull(key, "expected a generated key for: " + sql);
+        return key.longValue();
     }
 }
