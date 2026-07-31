@@ -146,7 +146,20 @@ if ($buildBackend) {
     if (-not (Test-Path -LiteralPath $mavenWrapper)) {
         throw "Maven wrapper not found: $mavenWrapper"
     }
-    Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', '-DskipTests', 'package') $workspace
+    # Use the workspace-local Maven repo and a writable temp dir so the build
+    # is reproducible regardless of the caller's environment.
+    $toolingTmp = Join-Path $workspace '.tooling\tmp'
+    New-Item -ItemType Directory -Force -Path $toolingTmp | Out-Null
+    $oldTmp = $env:TMP
+    $oldTemp = $env:TEMP
+    $env:TMP = $toolingTmp
+    $env:TEMP = $toolingTmp
+    try {
+        Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', 'clean', 'package', '-DskipTests', '-Dmaven.repo.local=.tooling/m2') $workspace
+    } finally {
+        $env:TMP = $oldTmp
+        $env:TEMP = $oldTemp
+    }
 }
 
 if (-not (Test-Path -LiteralPath $electronExe)) {

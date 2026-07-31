@@ -155,9 +155,25 @@ public class HuggingFaceCatalogService {
      * Returns null if the model lacks required fastembed files.
      */
     private ModelCatalog.CatalogModel buildCatalogEntry(String modelId) throws IOException {
-        // Get latest revision
-        String revision = getLatestRevision(modelId);
-        if (revision == null) return null;
+        // Get model info (includes sha + tags)
+        JsonNode modelInfo = getModelInfo(modelId);
+        if (modelInfo == null || !modelInfo.has("sha")) return null;
+        String revision = modelInfo.get("sha").asText();
+
+        // Extract license from tags (format: "license:apache-2.0")
+        String license = "unknown";
+        if (modelInfo.has("tags") && modelInfo.get("tags").isArray()) {
+            for (JsonNode tag : modelInfo.get("tags")) {
+                String t = tag.asText();
+                if (t.startsWith("license:")) {
+                    license = t.substring("license:".length());
+                    break;
+                }
+            }
+        }
+
+        // Infer languages from model name
+        List<String> languages = inferLanguages(modelId);
 
         // Get file tree
         List<FileInfo> files = getFileTree(modelId, revision);
@@ -211,17 +227,30 @@ public class HuggingFaceCatalogService {
 
         return new ModelCatalog.CatalogModel(
                 catalogId, modelId, revision, displayName,
-                "unknown", List.of("multilingual"), dimensions,
+                license, languages, dimensions,
                 totalSize, baseUrl, catalogFiles);
     }
 
-    private String getLatestRevision(String modelId) throws IOException {
+    private JsonNode getModelInfo(String modelId) throws IOException {
         String url = HF_API_BASE + "/models/" + modelId + "/revision/main";
-        JsonNode node = httpGetJson(url);
-        if (node != null && node.has("sha")) {
-            return node.get("sha").asText();
+        return httpGetJson(url);
+    }
+
+    /** Infer language tags from model name heuristics. */
+    private static List<String> inferLanguages(String modelId) {
+        String lower = modelId.toLowerCase();
+        if (lower.contains("zh") || lower.contains("chinese") || lower.contains("bge-small-zh")) {
+            return List.of("zh");
         }
-        return null;
+        if (lower.contains("multilingual") || lower.contains("multi") || lower.contains("e5")
+                || lower.contains("paraphrase-multilingual")) {
+            return List.of("multilingual");
+        }
+        if (lower.contains("en") || lower.contains("english") || lower.contains("minilm")
+                || lower.contains("mpnet") || lower.contains("gte") || lower.contains("splade")) {
+            return List.of("en");
+        }
+        return List.of("multilingual");
     }
 
     private record FileInfo(String name, long size, String sha256) {}

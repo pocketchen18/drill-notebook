@@ -133,6 +133,8 @@ export interface EmbeddingCatalogModel {
     files?: Record<string, number>;
     [key: string]: unknown;
   } | null;
+  /** 'online' for HuggingFace models, undefined for built-in. */
+  source?: string;
 }
 
 export interface EmbeddingCatalog {

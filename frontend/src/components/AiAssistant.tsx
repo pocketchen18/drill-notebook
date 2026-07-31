@@ -399,8 +399,6 @@ export function AiAssistant(): JSX.Element {
         footer={null}
         unmountOnExit={false}
         className="ai-drawer"
-        // Mount inside app root so CSS variables + theme cascade apply reliably
-        getPopupContainer={() => document.getElementById('root') ?? document.body}
       >
         <div className="ai-drawer-body">
           <div className="ai-session-bar">

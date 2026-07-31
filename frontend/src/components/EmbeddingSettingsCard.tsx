@@ -315,7 +315,7 @@ function ModelCatalogItem({ model, status, busy, downloading, onDownload, onCanc
           <Space wrap size={6}>
             <Typography.Text bold>{model.displayName}</Typography.Text>
             <Tag size="small">{formatModelSize(model.inventorySizeBytes)}</Tag>
-            <Tag size="small" color="arcoblue">推荐</Tag>
+            {!model.source && <Tag size="small" color="arcoblue">推荐</Tag>}
             <Tag size="small">{model.license}</Tag>
             {model.languages.map((lang) => (
               <Tag size="small" key={lang}>{LANGUAGE_LABELS[lang] ?? lang}</Tag>
