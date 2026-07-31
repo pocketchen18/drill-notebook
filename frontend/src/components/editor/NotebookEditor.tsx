@@ -171,7 +171,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
 
   const toolbarElement = (
     <div className={`editor-toolbar${focusMode ? ' is-focus' : ''}`}>
-      <Space size={4}>
+      <Space size={4} wrap>
         <Button type={editor.isActive('bold') ? 'primary' : 'text'} size="small" icon={<Bold size={16} />} onClick={() => editor.chain().focus().toggleBold().run()} aria-label="加粗" title="加粗" />
         <Button type={editor.isActive('italic') ? 'primary' : 'text'} size="small" icon={<Italic size={16} />} onClick={() => editor.chain().focus().toggleItalic().run()} aria-label="斜体" title="斜体" />
         <Button type={editor.isActive('heading', { level: 2 }) ? 'primary' : 'text'} size="small" icon={<Heading2 size={16} />} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} aria-label="二级标题" title="二级标题" />

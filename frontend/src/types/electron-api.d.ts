@@ -21,6 +21,9 @@ interface ElectronApi {
   shell: {
     openExternal: (url: string) => Promise<void>;
   };
+  video: {
+    fetchTitle: (url: string) => Promise<string | null>;
+  };
   window: {
     setFullScreen: (flag: boolean) => Promise<void>;
     isFullScreen: () => Promise<boolean>;

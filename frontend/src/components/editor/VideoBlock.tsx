@@ -21,6 +21,8 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
   const [menuUpward, setMenuUpward] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  // 当前编辑的字段：菜单「编辑标题」可在任意视图下修改标题
+  const [editField, setEditField] = useState<'title' | 'url'>('title');
   const [localSrc, setLocalSrc] = useState('');
   // iframe 加载状态机：loading → loaded / error
   const [iframeState, setIframeState] = useState<'loading' | 'loaded' | 'error'>('loading');
@@ -42,6 +44,21 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
       void attachmentContentUrl(attrs.attachmentId).then(setLocalSrc);
     }
   }, [attrs.videoType, attrs.attachmentId]);
+
+  // 网址视频：未自定义标题（标题为空或与 URL 相同）时自动抓取原始标题
+  useEffect(() => {
+    if (attrs.videoType !== 'url') return;
+    const url = attrs.url;
+    if (!url) return;
+    if (attrs.title && attrs.title !== url) return;
+    const fetchTitle = window.api?.video?.fetchTitle;
+    if (!fetchTitle) return;
+    let cancelled = false;
+    void fetchTitle(url)
+      .then((fetched) => { if (!cancelled && fetched) updateAttributes({ title: fetched }); })
+      .catch(() => { /* 抓取失败时保留 URL 作为标题 */ });
+    return () => { cancelled = true; };
+  }, [attrs.videoType, attrs.url]);
 
   // 点击菜单外部时自动收起
   useEffect(() => {
@@ -103,13 +120,22 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
 
   const handleDoubleClick = (): void => {
     if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
-    setDraft(localView === 'title' ? attrs.title : (attrs.url ?? ''));
+    const field = localView === 'title' ? 'title' : 'url';
+    setEditField(field);
+    setDraft(field === 'title' ? (attrs.title || '') : (attrs.url ?? ''));
+    setEditing(true);
+  };
+
+  const startEditTitle = (): void => {
+    setMenuOpen(false);
+    setEditField('title');
+    setDraft(attrs.title || '');
     setEditing(true);
   };
 
   const commitEdit = (): void => {
     setEditing(false);
-    if (localView === 'title') {
+    if (editField === 'title') {
       updateAttributes({ title: draft });
     } else {
       updateAttributes({ url: draft });
@@ -137,23 +163,22 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
     setMenuOpen(nextOpen);
   };
 
-  const renderLinkOrTitleView = (): JSX.Element => {
-    if (editing) {
-      return (
-        <input
-          className="video-link-input"
-          value={draft}
-          autoFocus
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Enter') { event.preventDefault(); commitEdit(); }
-            if (event.key === 'Escape') { setEditing(false); }
-          }}
-          onBlur={commitEdit}
-        />
-      );
-    }
+  const renderEditInput = (): JSX.Element => (
+    <input
+      className="video-link-input"
+      value={draft}
+      autoFocus
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') { event.preventDefault(); commitEdit(); }
+        if (event.key === 'Escape') { setEditing(false); }
+      }}
+      onBlur={commitEdit}
+    />
+  );
+
+  const renderLinkOrTitleText = (): JSX.Element => {
     const text = localView === 'title' ? (attrs.title || '（无标题）') : (attrs.url || '（无 URL）');
     return (
       <span
@@ -205,6 +230,12 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
       if (!embed.embedUrl) {
         return renderErrorCard(url, embed.platform, '该网址不支持嵌入预览');
       }
+      // YouTube 嵌入在桌面端（file:// origin）会被 YouTube 拦截：缺 Referer 报 153、
+      // 伪造 Referer 报 152，无法稳定预览（与飞书等在线文档表现一致），
+      // 故不再加载 iframe，统一显示友好提示卡片并引导跳转浏览器观看。
+      if (embed.platform === 'youtube') {
+        return renderErrorCard(url, embed.platform, '该网站暂不支持预览');
+      }
       if (iframeState === 'error') {
         return renderErrorCard(url, embed.platform, '当前环境不支持直接嵌入预览');
       }
@@ -225,6 +256,7 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
             allow="fullscreen; encrypted-media; autoplay; picture-in-picture"
             allowFullScreen
             frameBorder="0"
+            referrerPolicy="strict-origin-when-cross-origin"
             onLoad={handleIframeLoad}
           />
         </div>
@@ -275,9 +307,10 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
                 onClick={(event) => { event.stopPropagation(); switchView(view); }}
               >{viewLabel(view)}</button>
             ))}
+            <div className="video-block-menu-sep" />
+            <button type="button" className="video-block-menu-item" onClick={(event) => { event.stopPropagation(); startEditTitle(); }}>编辑标题</button>
             {(attrs.videoType === 'url' || attrs.videoType === 'remote') ? (
               <>
-                <div className="video-block-menu-sep" />
                 <button type="button" className="video-block-menu-item" onClick={(event) => { event.stopPropagation(); void navigator.clipboard?.writeText(attrs.url ?? ''); setMenuOpen(false); }}>复制链接</button>
                 <button type="button" className="video-block-menu-item" onClick={(event) => { event.stopPropagation(); openExternal(); setMenuOpen(false); }}>在浏览器打开</button>
               </>
@@ -286,7 +319,14 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
         ) : null}
       </div>
       <div className={`video-block-body${isPreview ? ' is-preview' : ''}`}>
-        {isPreview ? renderPreviewView() : renderLinkOrTitleView()}
+        {isPreview ? (
+          <>
+            {editing ? renderEditInput() : null}
+            {renderPreviewView()}
+          </>
+        ) : (
+          editing ? renderEditInput() : renderLinkOrTitleText()
+        )}
       </div>
     </NodeViewWrapper>
   );

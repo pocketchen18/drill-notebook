@@ -261,6 +261,8 @@ button, input, textarea { font: inherit; }
 .editor-shell.is-focus { overflow: visible; border: none; border-radius: 0; background: transparent; }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
 .editor-toolbar.is-focus { position: fixed; top: 0; left: 224px; right: 0; z-index: 100; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 0; background: var(--panel-bg); box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+/* 工具栏按钮组：允许收缩并换行，避免窄窗口下按钮被 overflow:hidden 裁掉 */
+.editor-toolbar .arco-space { min-width: 0; flex-wrap: wrap; }
 .editor-content { min-height: 520px; padding: 24px 28px; }
 .editor-content .ProseMirror { min-height: 460px; outline: none; line-height: 1.75; }
 .editor-content .ProseMirror p { margin: 0 0 10px; }
@@ -416,7 +418,8 @@ button, input, textarea { font: inherit; }
 .file-block-info { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-size: 13px; }
 .file-block-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .file-block-size { color: var(--muted); font-size: 12px; flex-shrink: 0; }
-.file-block-body { min-height: 32px; height: 600px; overflow: auto; display: flex; flex-direction: column; }
+.file-block-body { min-height: 32px; overflow: auto; display: flex; flex-direction: column; }
+.file-block-body.is-preview { height: 600px; }
 .file-block-body > .file-image-preview { margin: auto; }
 .file-block-body > .file-docx-preview { flex: 1; min-height: 0; }
 .file-block-body > .file-pdf-preview { flex: 1; min-height: 0; }
