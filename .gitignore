@@ -73,6 +73,8 @@ credentials/
 /logs/
 /runtime/
 /config/
+# Runtime uploaded attachments (images, PDFs, videos, etc.) — backend stores under data/attachments/
+backend/data/attachments/
 runtime-portable/
 runtime-portable*/
 user-data/

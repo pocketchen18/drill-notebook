@@ -90,7 +90,7 @@ export function WrongPage(): JSX.Element {
             最近一次答错且尚未纠正的题目。勾选后点「加入记忆曲线」进入间隔复习；「加入日历计划」仅钉日期。
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
           <Button
             icon={<CalendarPlus size={16} />}

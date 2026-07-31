@@ -86,11 +86,13 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
             {[1, 2, 3, 4, 5, 6].map((level) => <Select.Option key={level} value={level}>{level} 级标题分组</Select.Option>)}
           </Select>
           {bankHasSummary && (
-            <Tooltip content={viewMode === 'summary' ? '把所有已总结卡还原为原文显示' : '把所有已总结卡切回 AI 总结显示'}>
-              <Button size="small" icon={<FileText size={14} />} loading={viewModeLoading} onClick={onToggleViewMode}>
-                {viewMode === 'summary' ? '显示原文' : '显示总结'}
-              </Button>
-            </Tooltip>
+            <span style={{ marginLeft: 'auto' }}>
+              <Tooltip content={viewMode === 'summary' ? '把所有已总结卡还原为原文显示' : '把所有已总结卡切回 AI 总结显示'}>
+                <Button size="small" icon={<FileText size={14} />} loading={viewModeLoading} onClick={onToggleViewMode}>
+                  {viewMode === 'summary' ? '显示原文' : '显示总结'}
+                </Button>
+              </Tooltip>
+            </span>
           )}
         </div>
         <div className="selection-toolbar">
@@ -100,18 +102,18 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
           </Space>
           <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
         </div>
-        {grouped ? (
-          <div className="knowledge-groups">
-            {grouped.map(([groupKey, items]) => (
-              <section className="knowledge-group" key={groupKey}>
-                <header className="knowledge-group-header"><h3>{groupKey}</h3><Typography.Text type="secondary">{items.length} 个</Typography.Text></header>
-                <div className="knowledge-grid">{items.map((point) => <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />)}</div>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <div className="knowledge-grid">{filtered.map((point) => <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />)}</div>
-        )}
+        <div className="knowledge-grid">
+          {(grouped || filtered).map((pointOrEntry) => {
+            if (grouped) {
+              const [groupKey, items] = pointOrEntry as [string, KnowledgePoint[]];
+              return items.map((point) => (
+                <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} groupLabel={groupKey} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />
+              ));
+            }
+            const point = pointOrEntry as KnowledgePoint;
+            return <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />;
+          })}
+        </div>
         {!filtered.length && <Empty description="暂无知识点；可新建或导入 Markdown" />}
         <div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={onStartSession}>开始背知识点（{selectedIds.length}）</Button></div>
       </div>

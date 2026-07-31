@@ -1,4 +1,4 @@
-import { Button, Checkbox, Popconfirm, Space, Tag, Tooltip } from '@arco-design/web-react';
+import { Button, Checkbox, Popconfirm, Space, Tag, Tooltip, Typography } from '@arco-design/web-react';
 import { ArrowDown, ArrowUp, CalendarPlus, Edit3, Trash2 } from 'lucide-react';
 import type { KnowledgePoint } from '../../lib/types';
 import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
@@ -6,6 +6,7 @@ import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
 export interface KnowledgeItemCardProps {
   point: KnowledgePoint;
   selected: boolean;
+  groupLabel?: string;          // 分级标题（按 headingPath 分组时传入）
   onToggleSelect: (checked: boolean) => void;
   onMove: (delta: number) => void;
   onAddToPlan: () => void;
@@ -14,13 +15,14 @@ export interface KnowledgeItemCardProps {
   onClick: () => void;       // 点卡片本体进入全屏
 }
 
-export function KnowledgeItemCard({ point, selected, onToggleSelect, onMove, onAddToPlan, onEdit, onDelete, onClick }: KnowledgeItemCardProps) {
+export function KnowledgeItemCard({ point, selected, groupLabel, onToggleSelect, onMove, onAddToPlan, onEdit, onDelete, onClick }: KnowledgeItemCardProps) {
   const stopAnd = (fn: () => void) => (e: { stopPropagation: () => void }): void => { e.stopPropagation(); fn(); };
   return (
     <article className={`knowledge-item ${selected ? 'selected' : ''}`} onClick={onClick} style={{ cursor: 'pointer' }}>
       <div className="knowledge-item-top">
         <Checkbox checked={selected} onChange={onToggleSelect} />
         <div>
+          {groupLabel && <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 2 }}>{groupLabel}</Typography.Text>}
           <h3>{point.title}</h3>
           <Space wrap>
             {point.category && <Tag color="arcoblue">{point.category}</Tag>}

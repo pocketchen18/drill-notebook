@@ -19,10 +19,11 @@
 pages/          路由页面（题库、刷题、背题、知识点、错题、日历、笔记、设置）
 pages/knowledge/  知识点 v0.5 重构子目录：KnowledgeLibraryView（库总览）/ KnowledgeItemCard（卡片）/ KnowledgeFullCardView（单卡全屏）
 components/     复用 UI（AI 侧栏、导出、高级选题、编辑器、计划弹窗、AiSummaryModal、TodayQueuePanel、DayQueueSessionBar…）
-stores/         Zustand（主题、AI 开关、页面上下文、复习会话等）
-lib/            API 客户端、导入导出、复习/计划算法、dayQueueSession、knowledgeApi、mermaidTheme、planProgress、sessionPrefs、工具
+components/editor/  TipTap 编辑器扩展：MathBlock / MermaidBlock / MarkdownBlock / QuestionBlock / **FileBlock（附件预览）/ VideoBlock（视频嵌入三视图）** + `preview/`（ImagePreview / DocxPreview / PdfPreview / DownloadOnlyPreview）
+stores/         Zustand（主题、AI 开关、页面上下文、复习会话、笔记本专注/全屏模式等）
+lib/            API 客户端、导入导出、复习/计划算法、dayQueueSession、knowledgeApi、mermaidTheme、planProgress、sessionPrefs、**attachments（上传/列表/删除）、videoEmbed（YouTube/Bilibili URL 解析）**、工具
 hooks/          如 useRegisterPageContext（避免 setState 死循环）、useReviewSession
-styles/app.css  设计 token + 组件样式 + 深色模式
+styles/app.css  设计 token + 组件样式 + 深色模式 + video/file-block 样式
 ```
 
 ### 2.1 主题
@@ -47,6 +48,7 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 | 题库 | bank / question / FTS / 导入哈希 |
 | 练习 | quiz session、answer_record、错题查询 |
 | 笔记 | notebook / note_page / 题目快照块 |
+| 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
 | AI | 配置密文、多会话、消息密文、chat/summarize 代理 |

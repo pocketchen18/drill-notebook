@@ -257,3 +257,14 @@ export interface PlanCandidate {
   resourceId: number;
   title: string;
 }
+
+export interface NoteAttachment {
+  id: number;
+  pageId: number;
+  fileName: string;
+  storagePath: string;
+  mimeType: string;
+  fileSize: number;
+  sha256: string | null;
+  createdAt: string;
+}
