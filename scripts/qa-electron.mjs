@@ -123,7 +123,32 @@ const editorCheck = {
 };
 const editorScreenshot = await command('Page.captureScreenshot', { format: 'png' });
 fs.writeFileSync(path.join(evidenceDir, 'task-8-editor.png'), Buffer.from(editorScreenshot.result.data, 'base64'));
-const report = { checks, editorCheck, exceptions, consoleEvents, passed: exceptions.length === 0 && checks.every((item) => item.title === item.label && item.hasLabel && !item.hasError) && Object.values(editorCheck).every(Boolean) };
+
+// ── Task 16: RAG UI checks (soft checks, recorded as evidence) ──
+const ragCheck = {};
+const clickMenu = (label) => evaluate(`(() => {
+  const item = [...document.querySelectorAll('.arco-menu-item, [role="menuitem"]')].find((node) => node.textContent?.replace(/\\s/g, '').includes(${JSON.stringify(label)}));
+  item?.click();
+  return Boolean(item);
+})()`);
+try {
+  ragCheck.settingsOpened = await clickMenu('设置');
+  await delay(800);
+  ragCheck.embeddingCard = await evaluate("Boolean([...document.querySelectorAll('h1,h2,h3,h4,.arco-card,.arco-collapse-item,[class*=card]')].find((node) => /嵌入|embedding|模型目录|向量/i.test(node.textContent || '')))");
+  ragCheck.aiOpened = await clickMenu('AI');
+  await delay(800);
+  ragCheck.retrievalToggle = await evaluate("Boolean([...document.querySelectorAll('button,[role=\"switch\"],.arco-switch,.arco-checkbox')].find((node) => /检索|笔记本|rag/i.test((node.textContent || '') + (node.getAttribute('aria-label') || ''))))");
+  ragCheck.scopeControl = await evaluate("Boolean([...document.querySelectorAll('.arco-radio,.arco-select,button,[role=tab]')].find((node) => /当前笔记本|全部笔记本/.test(node.textContent || '')))");
+} catch (error) {
+  ragCheck.error = String(error);
+}
+const ragDir = path.join(evidenceDir, 'task-16-local-rag');
+fs.mkdirSync(ragDir, { recursive: true });
+const ragScreenshot = await command('Page.captureScreenshot', { format: 'png' });
+fs.writeFileSync(path.join(ragDir, 'rag-ui.png'), Buffer.from(ragScreenshot.result.data, 'base64'));
+fs.writeFileSync(path.join(ragDir, 'rag-ui-checks.json'), JSON.stringify(ragCheck, null, 2) + '\n', 'utf8');
+
+const report = { checks, editorCheck, ragCheck, exceptions, consoleEvents, passed: exceptions.length === 0 && checks.every((item) => item.title === item.label && item.hasLabel && !item.hasError) && Object.values(editorCheck).every(Boolean) };
 fs.writeFileSync(path.join(evidenceDir, 'task-5-nav.txt'), JSON.stringify(report, null, 2) + '\n', 'utf8');
 console.log(JSON.stringify(report, null, 2));
 socket.close();

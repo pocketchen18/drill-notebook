@@ -17,11 +17,13 @@
 
 ```
 pages/          路由页面（题库、刷题、背题、知识点、错题、日历、笔记、设置）
-components/     复用 UI（AI 侧栏、导出、高级选题、编辑器、计划弹窗…）
-stores/         Zustand（主题、AI 开关、页面上下文、复习会话等）
-lib/            API 客户端、导入导出、复习/计划算法、工具
-hooks/          如 useRegisterPageContext（避免 setState 死循环）
-styles/app.css  设计 token + 组件样式 + 深色模式
+pages/knowledge/  知识点 v0.5 重构子目录：KnowledgeLibraryView（库总览）/ KnowledgeItemCard（卡片）/ KnowledgeFullCardView（单卡全屏）
+components/     复用 UI（AI 侧栏、导出、高级选题、编辑器、计划弹窗、AiSummaryModal、TodayQueuePanel、DayQueueSessionBar…）
+components/editor/  TipTap 编辑器扩展：MathBlock / MermaidBlock / MarkdownBlock / QuestionBlock / **FileBlock（附件预览）/ VideoBlock（视频嵌入三视图）** + `preview/`（ImagePreview / DocxPreview / PdfPreview / DownloadOnlyPreview）
+stores/         Zustand（主题、AI 开关、页面上下文、复习会话、笔记本专注/全屏模式等）
+lib/            API 客户端、导入导出、复习/计划算法、dayQueueSession、knowledgeApi、mermaidTheme、planProgress、sessionPrefs、**attachments（上传/列表/删除）、videoEmbed（YouTube/Bilibili URL 解析）**、工具
+hooks/          如 useRegisterPageContext（避免 setState 死循环）、useReviewSession
+styles/app.css  设计 token + 组件样式 + 深色模式 + video/file-block 样式
 ```
 
 ### 2.1 主题
@@ -46,16 +48,20 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 | 题库 | bank / question / FTS / 导入哈希 |
 | 练习 | quiz session、answer_record、错题查询 |
 | 笔记 | notebook / note_page / 题目快照块 |
+| 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
 | AI | 配置密文、多会话、消息密文、chat/summarize 代理 |
+| 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
 Schema 以 `backend/src/main/resources/schema.sql` 为准。
 
 ## 4. 导入 / 导出
 
-- **导入**：Markdown 解析器、PDF 服务（规则 + AI 兜底）、JSON 等，见 `docs/import-formats.md`。  
+- **导入**：Markdown 解析器、PDF 服务（规则 + AI 兜底）、JSON 等，见 `docs/import-formats.md`；知识点 Markdown 导入见 `docs/knowledge-point-import.md`。  
 - **导出**：前端 `lib/export.ts` + 页面 `ExportActions`；题库/笔记/错题/会话等。  
+- **导出格式 round-trip**（v0.1.0+）：题库导出的叙述式 `.md`（`### 颜干` + `**答案：**` + `---` 分隔）可再走「导入 Markdown」入口导回，由 `ExportMarkdownParser` 解析，无需手动改成 frontmatter 格式。详见 `docs/import-formats.md` §3。  
+- **AI 总结知识点**（v0.5）：双角色快照 + 三条总结路径，见 `docs/ai-summary.md`。
 
 ## 5. 便携与打包
 
@@ -65,9 +71,9 @@ Schema 以 `backend/src/main/resources/schema.sql` 为准。
 
 ## 6. 测试
 
-- 前端：Vitest（`frontend` 内 `*.test.ts`）。  
-- 后端：JUnit（`backend/src/test`）。  
-- 脚本：`scripts/smoke-mvp.ps1`、`scripts/portable-audit.ps1`。  
+- 前端：Vitest（`frontend` 内 `*.test.ts` / `*.test.tsx`，如 `AiSummaryModal.test.tsx`、`TodayQueuePanel.urgency.test.ts`、`dayQueueSession.test.ts`、`studyPlan.test.ts`）。
+- 后端：JUnit（`backend/src/test`，含 `KnowledgePointSummaryServiceTest`、`AiServiceSummarizeTest`、`KnowledgePointOriginalRepositoryTest`、`KnowledgePointControllerSummaryTest`、`ReviewRepositorySyncTest`、`ReviewServiceWireTest`、`CompletionSyncServiceTest`、`TodayQueueServiceTest`、`StudyPlanServiceTest` 等）。
+- 脚本：`scripts/smoke-mvp.ps1`、`scripts/portable-audit.ps1`、`scripts/mvp-test.ps1`（v0.5+ 后端核心接口冒烟）、`scripts/seed-test-bank.py`（Python 造题种子）。
 
 ## 7. 版本演进（git 摘要）
 
@@ -76,5 +82,6 @@ Schema 以 `backend/src/main/resources/schema.sql` 为准。
 | MVP / v0.1–0.2 | 壳 + 题库刷题笔记 AI 基础 + 便携 |
 | v0.3 | PDF/导出/高级挑题/知识点导入增强 |
 | v0.4 | SM-2 复习、日历计划、今日队列、AI 多会话 |
+| v0.5 | 背知识点 UI 重构（库/卡片/全屏视图）、AI 总结知识点（双角色快照 + 三条总结路径）、健康端点加固、冒烟与种子脚本 |
 
 更细提交说明用：`git log --oneline`。

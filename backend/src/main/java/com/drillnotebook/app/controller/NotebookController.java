@@ -3,6 +3,7 @@ package com.drillnotebook.app.controller;
 import com.drillnotebook.app.model.QuestionRecord;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.QuestionRepository;
+import com.drillnotebook.app.service.NoteIndexingService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -22,8 +23,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class NotebookController {
     private final NotebookRepository notebooks;
     private final QuestionRepository questions;
+    private final NoteIndexingService indexing;
 
-    public NotebookController(NotebookRepository notebooks, QuestionRepository questions) { this.notebooks = notebooks; this.questions = questions; }
+    public NotebookController(NotebookRepository notebooks, QuestionRepository questions, NoteIndexingService indexing) { this.notebooks = notebooks; this.questions = questions; this.indexing = indexing; }
 
     @GetMapping("/notebooks")
     public List<Map<String, Object>> list() {
@@ -43,23 +45,23 @@ public class NotebookController {
     @PutMapping("/notebooks/{id}")
     public Map<String, Object> update(@PathVariable long id, @RequestBody Map<String, Object> body) { findNotebook(id); notebooks.update(id, required(body, "title")); return notebooks.find(id); }
     @DeleteMapping("/notebooks/{id}")
-    public void delete(@PathVariable long id) { findNotebook(id); notebooks.delete(id); }
+    public void delete(@PathVariable long id) { findNotebook(id); indexing.deleteNotebook(id); }
 
     @GetMapping("/notebooks/{id}/pages")
     public List<Map<String, Object>> pages(@PathVariable long id) { findNotebook(id); return notebooks.findPages(id); }
     @PostMapping("/notebooks/{id}/pages")
-    public Map<String, Object> createPage(@PathVariable long id, @RequestBody Map<String, Object> body) { findNotebook(id); long pageId = notebooks.insertPage(id, required(body, "title"), body.get("content")); return notebooks.findPage(pageId); }
+    public Map<String, Object> createPage(@PathVariable long id, @RequestBody Map<String, Object> body) { findNotebook(id); return indexing.createAndIndexPage(id, required(body, "title"), body.get("content")); }
     @GetMapping("/note-pages/{id}")
     public Map<String, Object> page(@PathVariable long id) { return findPage(id); }
     @PutMapping("/note-pages/{id}")
-    public Map<String, Object> updatePage(@PathVariable long id, @RequestBody Map<String, Object> body) { findPage(id); notebooks.updatePage(id, body.get("title") == null ? null : String.valueOf(body.get("title")), body.get("content")); return findPage(id); }
+    public Map<String, Object> updatePage(@PathVariable long id, @RequestBody Map<String, Object> body) { findPage(id); return indexing.savePageAndIndex(id, body.get("title") == null ? null : String.valueOf(body.get("title")), body.get("content")); }
     @DeleteMapping("/note-pages/{id}")
-    public void deletePage(@PathVariable long id) { findPage(id); notebooks.deletePage(id); }
+    public void deletePage(@PathVariable long id) { findPage(id); indexing.deletePage(id); }
 
     @PostMapping({"/notes/pages/{pageId}/questions/{questionId}", "/notes/{pageId}/questions/{questionId}"})
     public Map<String, Object> addQuestion(@PathVariable long pageId, @PathVariable long questionId) {
         findPage(pageId);
-        try { QuestionRecord question = questions.findById(questionId); return notebooks.addQuestionSnapshot(pageId, question); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); }
+        try { QuestionRecord question = questions.findById(questionId); return indexing.addQuestionSnapshot(pageId, question); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); }
     }
 
     private Map<String, Object> findNotebook(long id) { try { return notebooks.find(id); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "笔记本不存在"); } }

@@ -29,12 +29,18 @@ public class KnowledgePointRepository {
     }
 
     public List<KnowledgePointRecord> findAll(Long bankId) {
-        if (bankId == null) return jdbc.query("SELECT * FROM knowledge_point ORDER BY COALESCE(category, ''), title, id", rowMapper);
-        return jdbc.query("SELECT * FROM knowledge_point WHERE bank_id = ? ORDER BY COALESCE(category, ''), title, id", rowMapper, bankId);
+        String baseSql = "SELECT kp.*, " +
+                "EXISTS(SELECT 1 FROM knowledge_point_original kpo WHERE kpo.point_id = kp.id AND kpo.role = 'original') AS has_original " +
+                "FROM knowledge_point kp ";
+        if (bankId == null) return jdbc.query(baseSql + "ORDER BY COALESCE(kp.category, ''), kp.title, kp.id", rowMapper);
+        return jdbc.query(baseSql + "WHERE kp.bank_id = ? ORDER BY COALESCE(kp.category, ''), kp.title, kp.id", rowMapper, bankId);
     }
 
     public KnowledgePointRecord findById(long id) {
-        return jdbc.queryForObject("SELECT * FROM knowledge_point WHERE id = ?", rowMapper, id);
+        return jdbc.queryForObject(
+                "SELECT kp.*, EXISTS(SELECT 1 FROM knowledge_point_original kpo WHERE kpo.point_id = kp.id AND kpo.role = 'original') AS has_original " +
+                "FROM knowledge_point kp WHERE kp.id = ?",
+                rowMapper, id);
     }
 
     public List<Long> questionIds(long id) {
@@ -72,6 +78,15 @@ public class KnowledgePointRepository {
                 mapper.writeValueAsString(headingPath == null ? List.of() : headingPath),
                 id);
         replaceQuestions(id, validatedQuestionIds);
+    }
+
+    /**
+     * 仅更新 content 字段与 updated_at，不触及 title/tags/heading_path/questions。
+     * 用于 AI 总结覆盖知识点正文。
+     */
+    @Transactional
+    public void updateContentOnly(long id, String content) {
+        jdbc.update("UPDATE knowledge_point SET content = ?, updated_at = datetime('now') WHERE id = ?", content, id);
     }
 
     @Transactional

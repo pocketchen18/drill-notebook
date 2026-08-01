@@ -31,6 +31,10 @@ coverage/
 *.har
 *.trace.zip
 
+# Workspace-local Rust toolchain, cargo caches and build targets
+.tooling/
+embedding-worker/target/
+
 # Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
 /*.png
 /*.jpg
@@ -69,6 +73,8 @@ credentials/
 /logs/
 /runtime/
 /config/
+# Runtime uploaded attachments (images, PDFs, videos, etc.) — backend stores under data/attachments/
+backend/data/attachments/
 runtime-portable/
 runtime-portable*/
 user-data/
@@ -161,6 +167,9 @@ docs/**
 !docs/import-formats.md
 !docs/knowledge-point-import.md
 !docs/quiz-markdown-flow.md
+!docs/ai-summary.md
+!docs/ai-retrieval.md
 !docs/architecture.md
+!docs/review-srs.md
 # Design specs / implementation plans stay local
 docs/superpowers/

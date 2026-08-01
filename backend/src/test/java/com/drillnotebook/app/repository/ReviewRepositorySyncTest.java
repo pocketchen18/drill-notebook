@@ -93,19 +93,20 @@ class ReviewRepositorySyncTest {
                 "UPDATE review_schedule SET next_review = ?, status = 'review' WHERE id = ?",
                 "2099-12-31 00:00:00",
                 dueFuture);
-        // newNoReview keeps next_review NULL, status new — should NOT appear (strict due rule)
         jdbc.update(
                 "UPDATE review_schedule SET next_review = ?, status = 'learning' WHERE id = ?",
                 today + " 12:00:00",
                 knowledgeDue);
-
+        // createSchedule sets next_review = now (not NULL) so new cards are
+        // immediately due and visible in the today-queue. With the OnOrBefore
+        // (<=) semantics a brand-new card due "now" (today) IS included.
         List<ReviewSchedule> due = reviews.findDueOnOrBefore(today, null, null);
         List<Long> ids = due.stream().map(s -> s.id).sorted().toList();
         assertTrue(ids.contains(dueToday));
         assertTrue(ids.contains(duePast));
         assertTrue(ids.contains(knowledgeDue));
         assertFalse(ids.contains(dueFuture));
-        assertFalse(ids.contains(newNoReview));
+        assertTrue(ids.contains(newNoReview), "new card due now should appear under OnOrBefore");
 
         List<ReviewSchedule> questionsOnly = reviews.findDueOnOrBefore(today, "question", null);
         List<Long> qIds = questionsOnly.stream().map(s -> s.id).toList();

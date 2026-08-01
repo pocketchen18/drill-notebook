@@ -5,7 +5,7 @@
 | 平台 | Windows 优先，**绿色便携**（数据默认不写系统目录） |
 | 架构 | Electron 壳 + React/TS 渲染进程 + 内嵌 Spring Boot（Java）+ SQLite |
 | 通信 | 后端仅监听 `127.0.0.1`，前端 HTTP 调用本地 API |
-| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话 |
+| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话；`v0.5` AI 总结知识点 + 背知识点重构 + 笔记本混合检索（BM25 + 可选向量 RAG）；`v0.6`（规划）AI 跨会话记忆 |
 
 ---
 
@@ -57,9 +57,36 @@
 | **日历 SRS 叠加** | 日期格上显示到期/逾期标记（与手动计划独立） |
 | **AI 多会话** | 新建 / 切换 / 重命名 / 删除会话；消息 AES-GCM 加密持久化到 SQLite；可导出会话 |
 
-### 1.4 明确后置（未作为当前目标）
+### 1.4 v0.5
 
-- 知识图谱、完整考试模拟、视频等多模态导入、多人协作  
+| 功能 | 说明 |
+|---|---|
+| **背知识点重构** | 列表/库视图分拆：`KnowledgeLibraryView`（题库选择 + 总览）+ `KnowledgeItemCard`（卡片网格）；点卡片本体进 `KnowledgeFullCardView` 全屏覆盖视图，含总结/还原/重新总结/修改/删除按钮，`Escape` 退出 |
+| **AI 总结知识点** | 三条路径：①总结并导入（选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库）②整库总结（对未总结卡逐条存原文+AI 浓缩+更新 `content`）③重新总结（对已总结卡从原文重跑）。详见 [docs/ai-summary.md](docs/ai-summary.md) |
+| **原文/总结双态切换** | 列表顶部「显示原文 / 显示总结」一键切换；单卡全屏视图内亦可切。`knowledge_point_original` 表存 `role=original`/`summary` 双快照，`knowledge_point.content` 在两态间切换 |
+| **笔记本混合检索（RAG）** | AI 侧栏对话可注入笔记本上下文。**BM25 关键词检索默认启用、无需下载**（FTS5 trigram，笔记保存即索引）；向量检索为 opt-in 增强。两层经 RRF 融合成统一引用列表，点 citation 深链跳回页面。详见 [docs/ai-retrieval.md](docs/ai-retrieval.md) |
+| **检索范围与降级** | 范围 `all` / `current`（当前笔记本）；向量层任何故障静默降级为 BM25-only 并附 `retrievalNotice`，**对话不受影响** |
+| **本地 embedding 模型目录** | 设置页「嵌入 / 模型目录」：内置 `bge-small-zh-v1.5`（512 维，MIT），**默认不下载**；下载校验 size/sha256、断点续传、可取消、可彻底卸载（模型文件 + 向量） |
+| **远程 embedding（OpenAI/Ollama）** | 可选；**必须先勾选「同意发送笔记内容」**，授权绑定 endpoint/model，更换后失效。远程不可达时降级 BM25，对话仍 200 |
+| **离线索引维护** | 启动回填旧页（不阻塞启动）、全库重建（missing/full）、失败重试、模型切换后旧向量异步清理 |
+| **离线 embedding worker** | Rust 子进程经 NDJSON 协议提供本地向量化；schema v8（chunk/FTS/model/space/embedding/job 六表） |
+| **PDF 导入版式参照样本** | `backend/src/test/resources/fixtures/pdf/sample-for-import-test.pdf` 作为版式 Y 的活模板，4 题全走规则路径成功 |
+| **导出格式 round-trip** | 题库导出的叙述式 `.md`（`### 题干` + `**答案：**` + `---` 分隔）可直接用「导入 Markdown」入口再导回，新增 `ExportMarkdownParser` 解析；无需手动改成 frontmatter 格式 |
+| **健康端点加固** | 生产构建移除健康接口敏感路径暴露；AI 日志脱敏；移除 `console` 残留 |
+| **冒烟与种子脚本** | `scripts/mvp-test.ps1`（后端核心接口冒烟）、`scripts/seed-test-bank.py`（Python 造题种子） |
+| **笔记本附件** | 图片/PDF/DOCX/视频/压缩包等文件拖拽或选择上传；内联预览（图片 inline、PDF 嵌入、DOCX 预览），其余提供下载提示；后端 SHA-256 去重，存储于便携数据目录 `data/attachments/` |
+| **视频嵌入** | 支持 YouTube / Bilibili 链接嵌入 + 本地/远程视频文件直接播放；三种视图一键切换：**链接视图**（蓝色高亮可编辑链接，单击浏览器打开、双击编辑）、**标题视图**（显示标题，同链接交互）、**预览视图**（iframe/原生 `<video>` 直接播放，骨架屏加载态与错误兜底）；菜单支持复制链接 / 在浏览器打开 |
+| **笔记本全屏** | 顶栏「全屏」按钮一键切换，`Escape` 退出；全屏模式隐藏侧栏与页面导航，专注编辑与阅读 |
+
+### 1.5 v0.6（规划，尚未实现）
+
+| 功能 | 说明 |
+|---|---|
+| **AI 跨会话记忆** | 侧栏对话跨会话持久记忆（独立 corpus，不改变笔记本数据所有权与向量空间不变量） |
+
+### 1.6 明确后置（未作为当前目标）
+
+- 知识图谱、完整考试模拟、多人协作  
 - SQLCipher 整库加密、自然语言改写日期控件等  
 
 ---
@@ -103,6 +130,23 @@
 4. 学习过程中按界面评分（背题选项/高亮、知识点 0–5 等），系统更新间隔与下次到期。  
 5. 可随时 **加入计划**；结束后同样可走会话结束推荐弹窗。
 
+#### 2.4.1 背知识点（v0.5 重构 UI）
+
+1. **背知识点** → 顶部选择题库 → `KnowledgeLibraryView` 总览。  
+2. 卡片网格 `KnowledgeItemCard`：默认显示 AI 总结态（若有）。  
+3. 点卡片**本体**进入 `KnowledgeFullCardView` 全屏覆盖视图：  
+   - **总结 / 还原**：在原文态 ↔ 总结态之间切换；无总结时点此触发首次 AI 总结。  
+   - **重新总结**：仅「已总结」卡可点，从原文重跑 AI 总结。  
+   - **修改** / **删除**：关全屏进编辑器 / Popconfirm 确认删除。  
+   - `Escape` 退出全屏。  
+4. 列表顶部「显示原文 / 显示总结」一键切换全库已总结卡；并发调 `restore-original` / `restore-summary`，单张失败不阻塞其他。  
+5. 顶部 **AI 总结** 按钮打开 `AiSummaryModal`：  
+   - **总结并导入**：选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库（题库非空时弹 Popconfirm 确认**追加**导入）。  
+   - **总结当前知识库**：遍历该库**未总结**卡逐条存原文 + AI 浓缩 + 更新 `content`。  
+   - **重新总结**：遍历该库**已总结**卡从原文重跑。  
+   - 关掉 Modal 不会中断任务，完成后弹 Toast + 自动刷新。  
+   细节见 [docs/ai-summary.md](docs/ai-summary.md)。
+
 ### 2.5 错题
 
 1. 打开 **错题**。  
@@ -115,7 +159,13 @@
 2. 编辑：正文 + 工具栏插入 **公式 / 图表 / Markdown 块**。  
 3. **默认渲染**；**点击块**进入编辑；完成/失焦或 `Ctrl/⌘+Enter` 结束编辑。  
 4. 自动保存状态显示在标题旁。  
-5. 当前页或勾选多页可 **加入计划**；AI 回复可「插入笔记」。
+5. **附件**：拖入或通过文件选择器上传图片、PDF、DOCX、视频、压缩包等文件；图片/PDF/DOCX 在内联预览区直接显示，其余附件提供下载提示。  
+6. **视频嵌入**（v0.5）：  
+   - 支持 YouTube / Bilibili 链接、远程视频 URL、本地视频文件；  
+   - **三种视图**一键切换（块顶部 ▾ 菜单）：**链接视图**（蓝色高亮可编辑链接，单击浏览器打开，双击编辑）、**标题视图**（显示标题，同链接交互）、**预览视图**（iframe 嵌入 / 原生 `<video>` 控件播放，含骨架屏加载态与播放失败兜底）；  
+   - 菜单支持复制链接、在浏览器打开。  
+7. **全屏展示**（v0.5）：顶栏「全屏」按钮一键切换，`Escape` 退出；全屏模式隐藏侧栏与页面导航，专注编辑与阅读。  
+8. 当前页或勾选多页可 **加入计划**；AI 回复可「插入笔记」。
 
 ### 2.7 日历与今日队列
 
@@ -148,7 +198,8 @@
 3. 在刷题/错题/笔记等页打开时，可自动带上 **当前页面上下文**（可关闭「使用」）。  
 4. 支持多会话：新建 / 切换 / 双击标题重命名 / 删除；消息落库加密。  
 5. 助手消息可 **插入笔记**（选笔记本+页面）。  
-6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。
+6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。  
+7. **笔记本检索（v0.5）**：侧栏内开启「检索」，选范围 `全部笔记本` / `当前笔记本`；回答下方列出引用来源，点击跳回对应页面。向量检索需在设置页启用本地模型或远程 embedding（见 [docs/ai-retrieval.md](docs/ai-retrieval.md)）。
 
 ### 2.11 设置
 
@@ -187,12 +238,12 @@
 
 | 路径 | 职责 |
 |---|---|
-| `electron/` | 主进程、preload、路径与 Java 桥 |
-| `frontend/` | UI、状态、导出、学习/日历/复习交互 |
-| `backend/` | REST、导入解析、SRS、AI 代理、SQLite |
+| `electron/` | 主进程、preload、路径与 Java 桥；新增 `dialog:pick-files` / `file:read-file` / `shell:open-external` / `window:set-full-screen` IPC |
+| `frontend/` | UI、状态、导出、学习/日历/复习交互；TipTap 新增 `FileBlock`（附件预览）、`VideoBlock`（视频嵌入三视图）节点 |
+| `backend/` | REST、导入解析、SRS、AI 代理、SQLite；新增 `note_attachment` 表与附件上传/列表/内容/删除 API |
 | `resources/` | 示例题库等静态资源 |
 | `scripts/` | 启动、smoke、便携审计、辅助脚本 |
-| `docs/` | 专题说明（导入/导出/打包等） |
+| `docs/` | 专题说明（导入/导出/打包/附件等） |
 
 更细的模块说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -204,6 +255,7 @@
 
 - Node.js 20+  
 - JDK 17+（Maven 3.9+ 或仓库内 `mvnw.cmd`）  
+- Rust 工具链（**仅在开发/测试本地 embedding worker 时需要**；普通构建与 BM25/远程 embedding 流程不强制）  
 
 ### 4.2 常用命令
 
@@ -214,8 +266,11 @@ npm run dev                 # Vite + Electron
 npm run build:frontend
 npm run build:electron
 npm test
+npm run test:rag              # 串联 embedding-worker(Rust) + backend + frontend 测试
 pwsh -File scripts/smoke-mvp.ps1
 pwsh -File scripts/portable-audit.ps1
+pwsh -File scripts/mvp-test.ps1   # 后端核心接口冒烟（v0.5+）
+python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 ```
 
 ### 4.3 便携打包
@@ -232,6 +287,10 @@ pwsh -File scripts/portable-audit.ps1
 4. 日历加入计划 → 今日队列可见 → 去学习。  
 5. 背题评分后「仅待复习」列表变化。  
 6. AI 多会话：新建、发消息、重启后消息仍在。  
+7. **背知识点**：导入知识点 → 点 **AI 总结** → 「总结当前知识库」 → 卡片正文被浓缩、列表顶部出现「显示原文 / 显示总结」切换 → 切换有效。  
+8. **单卡全屏视图**：点卡片本体 → 全屏覆盖视图 → 「重新总结」从原文重跑 → `Escape` 退出。  
+9. **导出 round-trip**：题库导出 `.md` → 用「导入 Markdown」入口再导回 → 题目再现（无需改格式）。  
+10. **冒烟脚本**：`pwsh -File scripts/mvp-test.ps1` 跑完后端核心接口回归。
 
 ---
 
@@ -243,7 +302,10 @@ pwsh -File scripts/portable-audit.ps1
 | [docs/import-formats.md](docs/import-formats.md) | PDF / JSON 等导入格式 |
 | [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
+| [docs/review-srs.md](docs/review-srs.md) | 间隔重复复习（SM-2 风格）：数据库、API、今日队列、日历叠加 |
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
+| [docs/ai-summary.md](docs/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
+| [docs/ai-retrieval.md](docs/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
 
 ---
 
@@ -252,6 +314,7 @@ pwsh -File scripts/portable-audit.ps1
 - **便携**：用户数据、日志、缓存应落在应用根目录策略下（开发态见启动脚本使用的便携数据目录）。  
 - **网络**：业务 API 仅本机回环；外发仅为用户配置的 AI Endpoint。  
 - **密钥与会话**：API Key 与 AI 消息加密存储；前端不长期持有明文 Key。  
+- **检索隐私**：BM25 与本地 embedding 不出本机；远程 embedding（OpenAI/Ollama）仅在用户当前授权下发送笔记内容，授权绑定 endpoint/model（见 [docs/ai-retrieval.md](docs/ai-retrieval.md)）。  
 - **健康检查**：生产构建避免在健康接口暴露敏感路径。  
 
 ---

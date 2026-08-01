@@ -2,8 +2,10 @@ package com.drillnotebook.app.controller;
 
 import com.drillnotebook.app.model.KnowledgePointRecord;
 import com.drillnotebook.app.repository.BankRepository;
+import com.drillnotebook.app.repository.KnowledgePointOriginalRepository;
 import com.drillnotebook.app.repository.KnowledgePointRepository;
 import com.drillnotebook.app.service.KnowledgePointImportService;
+import com.drillnotebook.app.service.KnowledgePointSummaryService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -25,11 +27,15 @@ public class KnowledgePointController {
     private final KnowledgePointRepository points;
     private final KnowledgePointImportService importer;
     private final BankRepository banks;
+    private final KnowledgePointSummaryService summarySvc;
+    private final KnowledgePointOriginalRepository originals;
 
-    public KnowledgePointController(KnowledgePointRepository points, KnowledgePointImportService importer, BankRepository banks) {
+    public KnowledgePointController(KnowledgePointRepository points, KnowledgePointImportService importer, BankRepository banks, KnowledgePointSummaryService summarySvc, KnowledgePointOriginalRepository originals) {
         this.points = points;
         this.importer = importer;
         this.banks = banks;
+        this.summarySvc = summarySvc;
+        this.originals = originals;
     }
 
     @GetMapping
@@ -81,6 +87,56 @@ public class KnowledgePointController {
         Long bankId = longValue(body.get("bankId"));
         if (bankId != null) banks.find(bankId);
         return importer.importMarkdown(bankId, required(body, "content"));
+    }
+
+    @PostMapping("/summarize")
+    public Map<String, Object> summarizeBank(@RequestParam long bankId) {
+        return summarySvc.summarizeBank(bankId);
+    }
+
+    @PostMapping("/resummarize")
+    public Map<String, Object> resummarizeBank(@RequestParam long bankId) {
+        return summarySvc.resummarizeBank(bankId);
+    }
+
+    @PostMapping("/summarize-import")
+    public Map<String, Object> summarizeImport(@RequestBody Map<String, Object> body) {
+        long bankId = ((Number) body.get("bankId")).longValue();
+        String content = (String) body.get("content");
+        return summarySvc.summarizeImport(bankId, content);
+    }
+
+    @PostMapping("/{id}/summarize")
+    public Map<String, Object> summarizePoint(@PathVariable long id) {
+        return summarySvc.summarizePoint(id);
+    }
+
+    @PostMapping("/{id}/resummarize")
+    public Map<String, Object> resummarizePoint(@PathVariable long id) {
+        return summarySvc.resummarizePoint(id);
+    }
+
+    @GetMapping("/{id}/original")
+    public Map<String, Object> getOriginal(@PathVariable long id) {
+        KnowledgePointOriginalRepository.OriginalRecord rec = originals.find(id, "original");
+        if (rec == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无原文记录");
+        return Map.of("content", rec.content(), "role", rec.role());
+    }
+
+    @PostMapping("/{id}/restore-original")
+    public Map<String, Object> restoreOriginal(@PathVariable long id) {
+        KnowledgePointOriginalRepository.OriginalRecord rec = originals.find(id, "original");
+        if (rec == null) throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED, "无原文记录");
+        points.updateContentOnly(id, rec.content());
+        return Map.of("content", rec.content());
+    }
+
+    @PostMapping("/{id}/restore-summary")
+    public Map<String, Object> restoreSummary(@PathVariable long id) {
+        KnowledgePointOriginalRepository.OriginalRecord rec = originals.find(id, "summary");
+        if (rec == null) throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED, "无总结记录");
+        points.updateContentOnly(id, rec.content());
+        return Map.of("content", rec.content());
     }
 
     private KnowledgePointRecord find(long id) {

@@ -3,11 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Drawer, Dropdown, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
 import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
-import type { AiChatSession, AiConfig, ChatContentPart, ChatMessage, NotePage, Notebook } from '../lib/types';
+import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalNotice, RetrievalOptions } from '../lib/types';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
+import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
 
@@ -49,6 +51,7 @@ function isTextFile(file: File): boolean {
 
 export function AiAssistant(): JSX.Element {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
   const aiOpen = useUiStore((state) => state.aiOpen);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
@@ -75,6 +78,12 @@ export function AiAssistant(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [usePageContext, setUsePageContext] = useState(true);
+  const [retrieveNotes, setRetrieveNotes] = useState(() => readBoolPref(LS_RETRIEVE_NOTES, false));
+  const [retrievalScope, setRetrievalScope] = useState<'current' | 'all'>(() => {
+    const saved = readStringPref(LS_RETRIEVAL_SCOPE, '');
+    if (saved === 'current' || saved === 'all') return saved;
+    return useUiStore.getState().pageContext.notebookId !== undefined ? 'current' : 'all';
+  });
   const [targetNotebookId, setTargetNotebookId] = useState<number>();
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
@@ -138,10 +147,44 @@ export function AiAssistant(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleAi]);
 
+  // 开启笔记检索且当前上下文本身就是笔记页时，不再重复注入整页 markdown（后端会按需检索）。
+  const suppressPageMarkdown = retrieveNotes && pageContext.kind === 'note';
+
   const contextMarkdown = useMemo(
-    () => (usePageContext && pageContext.markdown.trim() ? pageContext.markdown.trim() : ''),
-    [pageContext.markdown, usePageContext]
+    () => (usePageContext && !suppressPageMarkdown && pageContext.markdown.trim() ? pageContext.markdown.trim() : ''),
+    [pageContext.markdown, suppressPageMarkdown, usePageContext]
   );
+
+  // Task 14：进入无当前 notebook 的页面时，current 自动降级为 all，保证绝不发送缺 notebookId 的 current。
+  useEffect(() => {
+    if (pageContext.notebookId === undefined && retrievalScope === 'current') setRetrievalScope('all');
+  }, [pageContext.notebookId, retrievalScope]);
+
+  const onToggleRetrieveNotes = (checked: boolean): void => {
+    setRetrieveNotes(checked);
+    writeBoolPref(LS_RETRIEVE_NOTES, checked);
+    if (checked) {
+      // 开启时若无显式持久化选择，按当前上下文推断默认范围：note 页→current，其他→all。
+      const saved = readStringPref(LS_RETRIEVAL_SCOPE, '');
+      if (saved !== 'current' && saved !== 'all') {
+        setRetrievalScope(pageContext.notebookId !== undefined ? 'current' : 'all');
+      }
+    }
+  };
+
+  const onChangeRetrievalScope = (value: 'current' | 'all'): void => {
+    setRetrievalScope(value);
+    writeStringPref(LS_RETRIEVAL_SCOPE, value);
+  };
+
+  // Task 8/14：开启时发送 enabled/scope/notebookId；关闭时完全不携带该字段，保持旧请求契约。
+  const retrievalOptions = useMemo<RetrievalOptions | undefined>(() => {
+    if (!retrieveNotes) return undefined;
+    if (retrievalScope === 'current' && pageContext.notebookId !== undefined) {
+      return { enabled: true, scope: 'current', notebookId: pageContext.notebookId };
+    }
+    return { enabled: true, scope: 'all' };
+  }, [pageContext.notebookId, retrievalScope, retrieveNotes]);
 
   const createSessionMutation = useMutation({
     mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
@@ -218,7 +261,7 @@ export function AiAssistant(): JSX.Element {
   });
 
   const chatMutation = useMutation({
-    mutationFn: (request: ChatRequest) => post<{ reply: string; sessionId: number }>('/api/ai/chat', {
+    mutationFn: (request: ChatRequest) => post<{ reply: string; sessionId: number; citations?: ChatCitation[]; retrievalNotice?: RetrievalNotice }>('/api/ai/chat', {
       sessionId,
       messages: [
         ...(contextMarkdown
@@ -226,14 +269,15 @@ export function AiAssistant(): JSX.Element {
           : []),
         ...messages.map(({ role, content }) => ({ role, content })),
         { role: 'user', content: request.content }
-      ]
+      ],
+      ...(retrievalOptions ? { retrievalOptions } : {})
     }),
     onSuccess: (result, request) => {
       if (result.sessionId && result.sessionId !== sessionId) setSessionId(result.sessionId);
       setMessages((current) => [
         ...current,
         { role: 'user', content: request.content, displayContent: request.displayContent },
-        { role: 'assistant', content: result.reply }
+        { role: 'assistant', content: result.reply, citations: result.citations, notice: result.retrievalNotice }
       ]);
       setMessage('');
       setAttachments([]);
@@ -355,8 +399,6 @@ export function AiAssistant(): JSX.Element {
         footer={null}
         unmountOnExit={false}
         className="ai-drawer"
-        // Mount inside app root so CSS variables + theme cascade apply reliably
-        getPopupContainer={() => document.getElementById('root') ?? document.body}
       >
         <div className="ai-drawer-body">
           <div className="ai-session-bar">
@@ -447,12 +489,33 @@ export function AiAssistant(): JSX.Element {
                 <div className="ai-context-kicker">当前上下文</div>
                 <div className="ai-context-title">{pageContext.kind === 'none' ? '未绑定页面（可手动提问）' : pageContext.title}</div>
               </div>
-              <label className="ai-context-toggle">
-                <input type="checkbox" checked={usePageContext} onChange={(event) => setUsePageContext(event.target.checked)} />
-                使用
-              </label>
+              <Space size={8}>
+                <label className="ai-context-toggle" title="发送时检索相关笔记片段并返回引用">
+                  <input type="checkbox" checked={retrieveNotes} onChange={(event) => onToggleRetrieveNotes(event.target.checked)} />
+                  检索笔记
+                </label>
+                <label className="ai-context-toggle">
+                  <input type="checkbox" checked={usePageContext} onChange={(event) => setUsePageContext(event.target.checked)} />
+                  使用
+                </label>
+              </Space>
             </div>
-            {contextMarkdown ? <pre className="ai-context-preview">{contextMarkdown.slice(0, 480)}{contextMarkdown.length > 480 ? '…' : ''}</pre> : <p className="muted">在刷题、错题或笔记页打开助手时，会自动带上当前内容。</p>}
+            {retrieveNotes ? (
+              <div className="ai-retrieval-scope">
+                <Typography.Text type="secondary">检索范围</Typography.Text>
+                <Select
+                  size="small"
+                  value={retrievalScope}
+                  onChange={(value) => onChangeRetrievalScope(value as 'current' | 'all')}
+                  style={{ width: 150 }}
+                  aria-label="检索范围"
+                >
+                  <Select.Option value="current" disabled={pageContext.notebookId === undefined}>当前笔记本</Select.Option>
+                  <Select.Option value="all">全部笔记本</Select.Option>
+                </Select>
+              </div>
+            ) : null}
+            {contextMarkdown ? <pre className="ai-context-preview">{contextMarkdown.slice(0, 480)}{contextMarkdown.length > 480 ? '…' : ''}</pre> : <p className="muted">{suppressPageMarkdown ? '已启用笔记检索：不再整页注入，发送时自动检索相关片段并返回引用。' : '在刷题、错题或笔记页打开助手时，会自动带上当前内容。'}</p>}
           </div>
 
           <div className="ai-quick-prompts">
@@ -473,9 +536,36 @@ export function AiAssistant(): JSX.Element {
                 <div key={`${item.role}-${item.id ?? index}`} className={`chat-message ${item.role}`}>
                   <MarkdownContent value={text} />
                   {isAssistant ? (
-                    <div className="chat-message-actions">
-                      <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
-                    </div>
+                    <>
+                      {item.notice ? (
+                        <div className="ai-retrieval-notice">
+                          {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
+                        </div>
+                      ) : null}
+                      {item.citations?.length ? (
+                        <div className="ai-citations">
+                          <div className="ai-citations-kicker">笔记引用（{item.citations.length}）</div>
+                          <div className="ai-citation-list">
+                            {item.citations.map((citation, citationIndex) => (
+                              <button
+                                key={`${citation.pageId}-${citation.chunkId}`}
+                                type="button"
+                                className="ai-citation-chip"
+                                title={citation.snippet}
+                                onClick={() => navigate(`/notebooks?pageId=${citation.pageId}`)}
+                              >
+                                <span className="ai-citation-index">{citationIndex + 1}</span>
+                                <span className="ai-citation-title">{citation.title}</span>
+                                {citation.headingPath ? <span className="ai-citation-heading">{citation.headingPath}</span> : null}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="chat-message-actions">
+                        <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
+                      </div>
+                    </>
                   ) : null}
                 </div>
               );

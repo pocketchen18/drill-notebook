@@ -38,7 +38,11 @@ class TodayQueueServiceTest {
     private long q5;
     private long q6;
     private long configId;
-    private static final String DAY = "2026-07-21";
+    // Use the real current date as the selected day. Overdue is computed relative
+    // to LocalDate.now(), so a fixed past date would make "due today" cards flip to
+    // overdue over time (time-bomb). Binding DAY to real today keeps the assertions
+    // stable: cards due on DAY are never overdue, while hardcoded past dates always are.
+    private static final String DAY = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
 
     @BeforeEach
     void setUp() throws Exception {

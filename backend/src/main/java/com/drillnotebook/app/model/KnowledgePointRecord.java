@@ -19,6 +19,7 @@ public class KnowledgePointRecord {
     public List<String> headingPath = new ArrayList<>();
     public String createdAt;
     public String updatedAt;
+    public boolean hasOriginal;
 
     public static KnowledgePointRecord from(ResultSet result, ObjectMapper mapper) throws SQLException {
         KnowledgePointRecord point = new KnowledgePointRecord();
@@ -30,6 +31,7 @@ public class KnowledgePointRecord {
         point.category = result.getString("category");
         point.createdAt = result.getString("created_at");
         point.updatedAt = result.getString("updated_at");
+        point.hasOriginal = result.getBoolean("has_original");
         try {
             String pathJson = result.getString("heading_path");
             if (pathJson != null && !pathJson.isBlank()) point.headingPath = mapper.readValue(pathJson, new TypeReference<>() {});
@@ -57,6 +59,7 @@ public class KnowledgePointRecord {
         result.put("questionIds", questionIds);
         result.put("createdAt", createdAt);
         result.put("updatedAt", updatedAt);
+        result.put("hasOriginal", hasOriginal);
         return result;
     }
 }

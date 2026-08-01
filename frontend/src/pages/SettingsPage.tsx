@@ -5,6 +5,7 @@ import { Edit3, FolderOpen, Plus, RefreshCw, Sparkles, Star, Trash2 } from 'luci
 import { get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { AiConfig } from '../lib/types';
+import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { useUiStore } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
@@ -318,6 +319,9 @@ export function SettingsPage(): JSX.Element {
           <Typography.Text type="secondary">两套密钥均经本地 Java 后端 Argon2id + AES-256-GCM 加密存储；未配置导入模型时，PDF/知识 AI 兜底会提示单独配置。</Typography.Text>
         </div>
       </section>
+
+      {/* Embedding（向量索引）设置 */}
+      <EmbeddingSettingsCard />
 
       {/* 复习方案 */}
       <section className="panel">

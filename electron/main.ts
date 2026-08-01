@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -130,17 +130,127 @@ ipcMain.handle('export:save', async (event, request: unknown) => {
   }
 });
 
+ipcMain.handle('dialog:pick-files', async (event, filters: { name: string; extensions: string[] }[]) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('File picker request rejected from an untrusted page.');
+  if (!mainWindow) return null;
+  // Windows 的 dialog.showOpenDialog 已知行为：filters 首项 extensions 含 '*' 时会被忽略，
+  // 回退到下一个具体扩展项。因此检测到首项是「所有文件」时干脆不传 filters，让对话框显示全部文件。
+  const normalized = filters && filters.length > 0 ? filters : [{ name: '所有文件', extensions: ['*'] }];
+  const allFilesFirst = normalized[0]?.extensions.includes('*');
+  const dialogFilters = allFilesFirst ? undefined : normalized;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: dialogFilters
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths.map((filePath) => {
+    const stat = fs.statSync(filePath);
+    return { path: filePath, name: path.basename(filePath), size: stat.size };
+  });
+});
+
+ipcMain.handle('file:read-file', async (event, filePath: string) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('File read request rejected from an untrusted page.');
+  const buffer = fs.readFileSync(filePath);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+});
+
+ipcMain.handle('shell:open-external', async (event, url: string) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Open-external request rejected from an untrusted page.');
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`不允许的协议: ${parsed.protocol}`);
+    }
+    await shell.openExternal(url);
+  } catch (error) {
+    console.error('[shell:open-external] rejected', error);
+  }
+});
+
+ipcMain.handle('window:set-full-screen', (event, flag: boolean) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Full-screen request rejected from an untrusted page.');
+  if (mainWindow) mainWindow.setFullScreen(Boolean(flag));
+});
+
+ipcMain.handle('window:is-full-screen', (event) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Full-screen query rejected from an untrusted page.');
+  return mainWindow?.isFullScreen() ?? false;
+});
+
+// 抓取网址视频的原始标题（YouTube oEmbed / Bilibili view 接口）。
+// 渲染进程直接 fetch 会被 CORS 拦截，故由主进程的网络栈代为请求。
+async function fetchVideoTitle(url: string): Promise<string | null> {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const res = await net.fetch(oembedUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as { title?: string };
+      return typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null;
+    }
+    if (host === 'bilibili.com' || host === 'm.bilibili.com') {
+      const match = parsed.pathname.match(/\/video\/(BV[\w]+|av(\d+))/i);
+      if (!match) return null;
+      const apiUrl = match[1].toUpperCase().startsWith('BV')
+        ? `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(match[1])}`
+        : `https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(match[2] ?? '')}`;
+      const res = await net.fetch(apiUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as { code?: number; data?: { title?: string } };
+      if (data.code === 0 && data.data && typeof data.data.title === 'string' && data.data.title.trim()) {
+        return data.data.title.trim();
+      }
+      return null;
+    }
+    return null;
+  } catch (error) {
+    console.error('[video:fetch-title] failed', error);
+    return null;
+  }
+}
+
+ipcMain.handle('video:fetch-title', async (event, url: string) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Video title request rejected from an untrusted page.');
+  if (typeof url !== 'string' || !url.trim()) return null;
+  return fetchVideoTitle(url.trim());
+});
+
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // 不要覆盖第三方 iframe 内容（B站/YouTube 等）的原始 CSP，
+    // 否则我们的 default-src 会阻止它们的脚本加载
+    if (!details.url.startsWith('http://127.0.0.1:') && !details.url.startsWith('http://localhost:') && !details.url.startsWith('file://')) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+          "default-src 'self' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: http://127.0.0.1:*; media-src 'self' http://127.0.0.1:* https: http:; frame-src 'self' http://127.0.0.1:* https://www.youtube.com https://player.bilibili.com; child-src 'self' http://127.0.0.1:* https://www.youtube.com https://player.bilibili.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
         ]
       }
     });
   });
+
+  // Bilibili 的 view 接口（用于主进程抓取视频标题）对缺失 Referer 的请求可能返回 -412，
+  // 这里为主进程发起的 api.bilibili.com 请求补上格式良好的 Referer。
+  // 注：YouTube 嵌入在 file:// 下无法稳定播放（缺 Referer 报 153、伪造 Referer 报 152），
+  // 前端已改为直接显示「该网站暂不支持预览」提示卡片，故不再注入 YouTube 的 Referer。
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://api.bilibili.com/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders };
+      const hasReferer = Object.keys(headers).some((key) => key.toLowerCase() === 'referer');
+      if (!hasReferer) {
+        headers.Referer = 'https://www.bilibili.com/';
+      }
+      callback({ requestHeaders: headers });
+    }
+  );
 
   try {
     backend = await startBackend(portablePaths);

@@ -4,6 +4,8 @@ import { MathInlineNode, MathNode } from './MathNode';
 import { MermaidNode } from './MermaidNode';
 import { MarkdownBlockNode } from './MarkdownBlock';
 import { QuestionBlock } from './QuestionBlock';
+import { FileBlockNode } from './FileBlock';
+import { VideoBlockNode } from './VideoBlock';
 
 export const MathBlock = Node.create({
   name: 'mathBlock',
@@ -68,4 +70,36 @@ export const QuestionBlockNode = Node.create({
   parseHTML: () => [{ tag: 'div[data-question-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-question-block': '' })],
   addNodeView: () => ReactNodeViewRenderer(QuestionBlock)
+});
+
+export const FileBlock = Node.create({
+  name: 'fileBlock',
+  group: 'block',
+  atom: true,
+  addAttributes: () => ({
+    attachmentId: { default: null },
+    fileName: { default: '' },
+    mimeType: { default: 'application/octet-stream' },
+    fileSize: { default: 0 },
+    view: { default: 'preview' }
+  }),
+  parseHTML: () => [{ tag: 'div[data-file-block]' }],
+  renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-file-block': '' })],
+  addNodeView: () => ReactNodeViewRenderer(FileBlockNode)
+});
+
+export const VideoBlock = Node.create({
+  name: 'videoBlock',
+  group: 'block',
+  atom: true,
+  addAttributes: () => ({
+    videoType: { default: 'url' },
+    url: { default: null },
+    attachmentId: { default: null },
+    title: { default: '' },
+    view: { default: 'link' }
+  }),
+  parseHTML: () => [{ tag: 'div[data-video-block]' }],
+  renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-video-block': '' })],
+  addNodeView: () => ReactNodeViewRenderer(VideoBlockNode)
 });

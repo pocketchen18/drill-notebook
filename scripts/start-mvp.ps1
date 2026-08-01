@@ -116,9 +116,43 @@ if (-not (Test-Path -LiteralPath $electronExe) -or -not (Test-Path -LiteralPath 
     Invoke-Checked 'npm.cmd' @('install', '--no-audit', '--no-fund') $workspace
 }
 
-$buildFrontendAndElectron = $Rebuild -or
-    -not (Test-Path -LiteralPath $frontendEntry) -or
-    -not (Test-Path -LiteralPath $electronEntry)
+function Test-Stale {
+    param(
+        [string[]]$SourcePaths,
+        [string]$OutputFile
+    )
+    if (-not (Test-Path -LiteralPath $OutputFile)) { return $true }
+    $outputTime = (Get-Item -LiteralPath $OutputFile).LastWriteTime
+    foreach ($sourcePath in $SourcePaths) {
+        if (-not (Test-Path -LiteralPath $sourcePath)) { continue }
+        $item = Get-Item -LiteralPath $sourcePath
+        if ($item.PSIsContainer) {
+            $newest = Get-ChildItem -LiteralPath $sourcePath -Recurse -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+            if ($newest -and $newest.LastWriteTime -gt $outputTime) { return $true }
+        } elseif ($item.LastWriteTime -gt $outputTime) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Rebuild when any source is newer than the compiled output, so a merge or an
+# edit under electron/ or frontend/src is always picked up by a plain `npm start`
+# (previously only a missing output triggered a rebuild, letting a stale
+# electron-dist/main.js without new IPC handlers silently keep running).
+$frontendStale = Test-Stale -SourcePaths @(
+    (Join-Path $workspace 'frontend\src'),
+    (Join-Path $workspace 'frontend\index.html'),
+    (Join-Path $workspace 'frontend\vite.config.ts'),
+    (Join-Path $workspace 'frontend\tsconfig.json')
+) -OutputFile $frontendEntry
+$electronStale = Test-Stale -SourcePaths @(
+    (Join-Path $workspace 'electron')
+) -OutputFile $electronEntry
+
+$buildFrontendAndElectron = $Rebuild -or $frontendStale -or $electronStale
 $buildBackend = $Rebuild -or [string]::IsNullOrWhiteSpace($backendJar)
 
 if ($CheckOnly) {
@@ -138,6 +172,30 @@ if ($CheckOnly) {
     exit 0
 }
 
+function Stop-RunningApp {
+    # Release file handles on backend/target and electron-dist before rebuilding.
+    # If this app's java/electron processes are still running, on Windows they hold
+    # locks on build outputs; a locked `clean package` can emit a jar that is missing
+    # classpath resources (e.g. schema.sql) yet still print BUILD SUCCESS, which then
+    # fails at startup with "schema.sql ... does not exist". Only this app's own
+    # processes are stopped (matched by jar name / bundled electron path) — never
+    # unrelated java or electron processes (e.g. the IDE).
+    $electronPrefix = (Join-Path $workspace 'node_modules\electron') + '\'
+    foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
+        $isBackend = $p.CommandLine -and $p.CommandLine -like '*drill-notebook-backend*'
+        $isAppShell = $p.ExecutablePath -and $p.ExecutablePath.StartsWith($electronPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+        if ($isBackend -or $isAppShell) {
+            Write-Host "Stopping running Drill Notebook process (PID $($p.ProcessId)) before rebuild" -ForegroundColor DarkGray
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+if ($buildFrontendAndElectron -or $buildBackend) {
+    Stop-RunningApp
+    Start-Sleep -Seconds 1
+}
+
 if ($buildFrontendAndElectron) {
     Invoke-Checked 'npm.cmd' @('run', 'build') $workspace
 }
@@ -146,7 +204,20 @@ if ($buildBackend) {
     if (-not (Test-Path -LiteralPath $mavenWrapper)) {
         throw "Maven wrapper not found: $mavenWrapper"
     }
-    Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', '-DskipTests', 'package') $workspace
+    # Use the workspace-local Maven repo and a writable temp dir so the build
+    # is reproducible regardless of the caller's environment.
+    $toolingTmp = Join-Path $workspace '.tooling\tmp'
+    New-Item -ItemType Directory -Force -Path $toolingTmp | Out-Null
+    $oldTmp = $env:TMP
+    $oldTemp = $env:TEMP
+    $env:TMP = $toolingTmp
+    $env:TEMP = $toolingTmp
+    try {
+        Invoke-Checked $mavenWrapper @('-f', 'backend/pom.xml', 'clean', 'package', '-DskipTests', '-Dmaven.repo.local=.tooling/m2') $workspace
+    } finally {
+        $env:TMP = $oldTmp
+        $env:TEMP = $oldTemp
+    }
 }
 
 if (-not (Test-Path -LiteralPath $electronExe)) {
@@ -161,8 +232,11 @@ if ([string]::IsNullOrWhiteSpace((Find-BackendJar))) {
 
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $oldAppRoot = $env:APP_ROOT
+$oldWorkerExe = $env:DRILL_EMBEDDING_WORKER_EXE
 $oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $env:APP_ROOT = $root
+# Embedding worker path: workspace-release binary (not compiled automatically).
+$env:DRILL_EMBEDDING_WORKER_EXE = Join-Path $workspace 'embedding-worker\target\x86_64-pc-windows-msvc\release\embedding-worker.exe'
 # Some shells/tools export ELECTRON_RUN_AS_NODE=1, which makes Electron behave as plain Node
 # and breaks require('electron').app. Clear it for the app process only.
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
@@ -177,6 +251,7 @@ try {
     }
 } finally {
     $env:APP_ROOT = $oldAppRoot
+    $env:DRILL_EMBEDDING_WORKER_EXE = $oldWorkerExe
     if ($null -eq $oldElectronRunAsNode) {
         Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
     } else {
