@@ -32,14 +32,16 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   // 无视用户光标位置（这是「点添加文件却插到末尾」的根因）。
   const insertBlockAtCursor = (type: string, attrs: Record<string, unknown>): void => {
     if (!editor) return;
-    const node = editor.state.schema.nodes[type]?.create(attrs);
-    if (!node) return;
     const pos = editor.state.selection.to;
+    // 用 JSON 描述节点（而非 schema.create 出的 Node 实例），
+    // insertContentAt 才能正确解析 atom 块（markdownBlock/fileBlock 等）。
     editor
       .chain()
       .focus()
-      .insertContentAt(pos, [node, { type: 'paragraph' }])
-      .setTextSelection(pos + node.nodeSize + 1)
+      .insertContentAt(pos, [
+        { type, attrs },
+        { type: 'paragraph' }
+      ])
       .run();
   };
 
