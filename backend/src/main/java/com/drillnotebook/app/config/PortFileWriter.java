@@ -19,7 +19,13 @@ public class PortFileWriter {
 
     @EventListener(ApplicationReadyEvent.class)
     public void writePort(ApplicationReadyEvent event) throws IOException {
-        int port = ((WebServerApplicationContext) event.getApplicationContext()).getWebServer().getPort();
+        // A mock web environment (e.g. @SpringBootTest with webEnvironment=MOCK)
+        // does not start a real server, so there is no port to publish. Guard the
+        // cast instead of assuming a servlet web server is always present.
+        if (!(event.getApplicationContext() instanceof WebServerApplicationContext webContext)) {
+            return;
+        }
+        int port = webContext.getWebServer().getPort();
         Files.createDirectories(paths.runtime());
         portFile = paths.runtime().resolve("backend.port");
         Files.writeString(portFile, String.valueOf(port), StandardCharsets.UTF_8);

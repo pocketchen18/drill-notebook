@@ -24,4 +24,16 @@ public class PortablePathResolver {
     public Path data() { return root.resolve("data"); }
     public Path database() { return data().resolve("study.db"); }
     public Path runtime() { return root.resolve("runtime"); }
+    /** Model storage directory (user-downloaded models). */
+    public Path models() { return data().resolve("models"); }
+    /** Embedding model directory under models. */
+    public Path embeddingModels() { return models().resolve("embeddings"); }
+    /** FastEmbed cache directory, mapped to FASTEMBED_CACHE_DIR. */
+    public Path fastembedCache() { return root.resolve("cache").resolve("fastembed"); }
+    /** Worker PID file directory. */
+    public Path pidDir() { return runtime().resolve("pids"); }
+    /** Worker log (stderr) directory. */
+    public Path workerLogs() { return root.resolve("logs").resolve("worker"); }
+    /** Workspace-local temp directory. */
+    public Path tempDir() { return root.resolve("temp"); }
 }

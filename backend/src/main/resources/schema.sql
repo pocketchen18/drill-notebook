@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS note_page (
     title TEXT,
     sort_order INTEGER DEFAULT 0,
     content TEXT,
+    content_hash TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -251,6 +252,108 @@ VALUES ('保守学习', 0,
     2.5, 1.3, 365,
     'reset', 1.0,
     10, 50, 'due_first');
+
+-- ============================================================
+-- v8: Notebook retrieval schema (BM25 + Embedding)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS retrieval_chunk (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    corpus_type TEXT NOT NULL DEFAULT 'NOTEBOOK',
+    corpus_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    title TEXT,
+    heading_path TEXT,
+    text TEXT NOT NULL,
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(corpus_type, source_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_retrieval_chunk_source ON retrieval_chunk(corpus_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_retrieval_chunk_corpus ON retrieval_chunk(corpus_type, corpus_id, source_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_chunk_fts USING fts5(
+    title, heading_path, text,
+    tokenize='trigram'
+);
+
+CREATE TABLE IF NOT EXISTS embedding_model (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    catalog_id TEXT NOT NULL UNIQUE,
+    provider_model_id TEXT NOT NULL,
+    artifact_revision TEXT NOT NULL,
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    installation_state TEXT NOT NULL DEFAULT 'AVAILABLE'
+        CHECK (installation_state IN ('AVAILABLE','DOWNLOADING','VERIFYING','READY','UNINSTALLING','FAILED','PAUSED')),
+    manifest_json TEXT,
+    download_progress_json TEXT,
+    download_error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS embedding_space (
+    embedding_space_id TEXT PRIMARY KEY,
+    canonical_contract_json TEXT NOT NULL,
+    provider_type TEXT NOT NULL,
+    model_identifier TEXT NOT NULL,
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    state TEXT NOT NULL DEFAULT 'DISABLED'
+        CHECK (state IN ('DISABLED','REBUILDING','ACTIVE','ERROR','UNINSTALLING')),
+    coverage REAL NOT NULL DEFAULT 0.0 CHECK (coverage >= 0.0 AND coverage <= 1.0),
+    is_selected INTEGER NOT NULL DEFAULT 0 CHECK (is_selected IN (0, 1)),
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_space_selected
+    ON embedding_space(is_selected) WHERE is_selected = 1;
+
+CREATE TABLE IF NOT EXISTS retrieval_embedding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id INTEGER NOT NULL REFERENCES retrieval_chunk(id) ON DELETE CASCADE,
+    corpus_type TEXT NOT NULL,
+    embedding_space_id TEXT NOT NULL REFERENCES embedding_space(embedding_space_id),
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    content_hash TEXT NOT NULL,
+    vector_blob BLOB NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chunk_id, embedding_space_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_retrieval_embedding_space
+    ON retrieval_embedding(embedding_space_id, corpus_type);
+
+-- Dimension-enforcement trigger is created in DatabaseInitializer.java
+-- as a standalone exec() call to avoid ;-splitting issues.
+
+CREATE TABLE IF NOT EXISTS embedding_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    corpus_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    source_content_hash TEXT NOT NULL,
+    embedding_space_id TEXT NOT NULL REFERENCES embedding_space(embedding_space_id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'QUEUED'
+        CHECK (status IN ('QUEUED','CLAIMED','RETRY','COMPLETED','SUPERSEDED','FAILED')),
+    claim_token TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_run_at TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(corpus_type, source_id, source_content_hash, embedding_space_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_job_status
+    ON embedding_job(status, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_embedding_job_space
+    ON embedding_job(embedding_space_id);
 
 CREATE TABLE IF NOT EXISTS note_attachment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

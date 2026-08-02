@@ -85,15 +85,35 @@ public class KnowledgePointImportService {
     static List<Section> parse(String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
-        // 先扫一遍找出文档里实际出现的最深一级标题（1-6），用它作为知识点边界
-        int headingLevel = 6;
+        // 统计每个标题级别（1-6）的出现次数，据此选择知识点边界级别：
+        // 优先取“出现次数 >= 2 的最深级别”——同级标题重复出现意味着它们是并列的知识点；
+        // 若没有任何级别重复出现（整篇只有一个标题），退化为最浅级别，把整篇作为一张卡片。
+        int[] levelCounts = new int[7];
         boolean found = false;
         for (String line : normalized.split("\n", -1)) {
             int depth = headingDepth(line);
-            if (depth > 0 && depth < headingLevel) headingLevel = depth;
-            if (depth > 0) found = true;
+            if (depth > 0) {
+                levelCounts[depth]++;
+                found = true;
+            }
         }
         if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
+        int headingLevel = -1;
+        for (int level = 6; level >= 1; level--) {
+            if (levelCounts[level] >= 2) {
+                headingLevel = level;
+                break;
+            }
+        }
+        if (headingLevel < 0) {
+            headingLevel = 6;
+            for (int level = 1; level <= 6; level++) {
+                if (levelCounts[level] > 0) {
+                    headingLevel = level;
+                    break;
+                }
+            }
+        }
         String prefix = "#".repeat(headingLevel);
         String headingPattern = "^" + prefix + "\\s+.+";
         String stripPattern = "^" + prefix + "\\s+";

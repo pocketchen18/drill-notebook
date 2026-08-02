@@ -99,6 +99,65 @@ export interface AiModelSlot {
 export interface AiConfig extends AiModelSlot {
   chat?: AiModelSlot;
   import?: AiModelSlot;
+  embedding?: EmbeddingSlot;
+}
+
+/** Embedding 配置 slot（Task 12）：provider 为 disabled/local/openai/ollama。 */
+export interface EmbeddingSlot {
+  provider: string;
+  endpoint: string;
+  model: string;
+  dimensions: number;
+  hasKey: boolean;
+  enabled: boolean;
+  consent: boolean;
+  /** 未授权保存时后端返回 CONSENT_REQUIRED。 */
+  code?: string;
+}
+
+/** 本地模型目录项（Task 10/13）：内置元数据 + 安装状态。 */
+export interface EmbeddingCatalogModel {
+  id: string;
+  providerModelId: string;
+  artifactRevision: string;
+  displayName: string;
+  license: string;
+  languages: string[];
+  dimensions: number;
+  inventorySizeBytes: number;
+  installationState: 'AVAILABLE' | 'DOWNLOADING' | 'VERIFYING' | 'READY' | 'UNINSTALLING' | 'FAILED' | 'PAUSED';
+  downloadError?: string | null;
+  downloadProgress?: {
+    jobId?: string;
+    totalBytes?: number;
+    files?: Record<string, number>;
+    [key: string]: unknown;
+  } | null;
+  /** 'online' for HuggingFace models, undefined for built-in. */
+  source?: string;
+}
+
+export interface EmbeddingCatalog {
+  catalogVersion: number;
+  models: EmbeddingCatalogModel[];
+  onlineStale?: boolean;
+  onlineError?: string | null;
+}
+
+/** 向量索引状态（GET /api/ai/retrieval/status）。 */
+export interface RetrievalStatus {
+  scope: string;
+  notebookId?: number | null;
+  totalPages: number;
+  totalChunks: number;
+  indexedChunks: number;
+  staleChunks: number;
+  queuedJobs: number;
+  failedJobs: number;
+  coverage: number;
+  indexState: string;
+  embeddingSpaceId?: string | null;
+  provider?: string | null;
 }
 
 export interface AiChatSession {
@@ -118,12 +177,42 @@ export interface ChatContentPart {
   image_url?: { url: string };
 }
 
+/** 笔记检索引用（后端只返回 snippet，绝不含 chunk 全文）。 */
+export interface ChatCitation {
+  corpusType: string;
+  notebookId: number;
+  pageId: number;
+  chunkId: number;
+  title: string;
+  headingPath: string;
+  snippet: string;
+  matchTypes: string[];
+  ftsRank?: number | null;
+  vectorRank?: number | null;
+  rrfScore?: number | null;
+}
+
+export interface RetrievalNotice {
+  code: string;
+  message?: string;
+}
+
+/** 发送给 /api/ai/chat 的检索选项；关闭时不发送该字段以保持旧契约。 */
+export interface RetrievalOptions {
+  enabled: boolean;
+  scope: 'current' | 'all';
+  notebookId?: number;
+}
+
 export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant' | 'system';
   content: string | ChatContentPart[];
   displayContent?: string;
   createdAt?: string;
+  citations?: ChatCitation[];
+  /** 检索降级/状态轻量提示（Task 14）；仅随当前会话 response 保留，不持久化。 */
+  notice?: RetrievalNotice;
 }
 
 export type PlanResourceType = 'question' | 'knowledge_point' | 'note_page';

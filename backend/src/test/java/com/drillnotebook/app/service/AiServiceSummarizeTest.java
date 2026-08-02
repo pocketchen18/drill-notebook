@@ -24,7 +24,7 @@ class AiServiceSummarizeTest {
         sessions = mock(AiChatSessionRepository.class);
         encryptor = mock(ApiKeyEncryptor.class);
         mapper = new ObjectMapper();
-        ai = new AiService(configs, sessions, encryptor, mapper);
+        ai = new AiService(configs, sessions, encryptor, mapper, mock(RetrievalService.class));
     }
 
     @Test

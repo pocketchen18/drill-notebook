@@ -305,6 +305,72 @@ try {
     } catch { $deleteDefaultFailed = $true }
     Test-Result '默认方案不可删除' $deleteDefaultFailed 'protected'
 
+    # ═══════════════════════════════════════════════
+    # 8. 笔记本混合检索 (RAG / BM25 / 引用 / 降级 / 维护)
+    # ═══════════════════════════════════════════════
+    Write-Host "`n── 8. 笔记本检索 (RAG) ──"
+
+    # 8.1 两个笔记本 + 已知笔记（共享标记词 + 各自独有词）
+    $ragShared = 'RAGMARKERCOMMON 光合作用是绿色植物利用光能合成养分的过程。'
+    $ragDocA = @{ title = 'RAG Page A'; content = @{ type = 'doc'; content = @(
+        @{ type = 'paragraph'; content = @(@{ type = 'text'; text = "$ragShared 独有词 ALPHAUNIQUE。" }) }
+    ) } } | ConvertTo-Json -Depth 12
+    $ragDocB = @{ title = 'RAG Page B'; content = @{ type = 'doc'; content = @(
+        @{ type = 'paragraph'; content = @(@{ type = 'text'; text = "$ragShared 独有词 BETAUNIQUE。" }) }
+    ) } } | ConvertTo-Json -Depth 12
+
+    $nbA = Invoke-RestMethod -Method Post -Uri "$base/api/notebooks" -ContentType 'application/json' -Body '{"title":"RAG Notebook A"}'
+    $pageA = Invoke-RestMethod -Method Post -Uri "$base/api/notebooks/$($nbA.id)/pages" -ContentType 'application/json' -Body $ragDocA
+    $nbB = Invoke-RestMethod -Method Post -Uri "$base/api/notebooks" -ContentType 'application/json' -Body '{"title":"RAG Notebook B"}'
+    $pageB = Invoke-RestMethod -Method Post -Uri "$base/api/notebooks/$($nbB.id)/pages" -ContentType 'application/json' -Body $ragDocB
+    Test-Result '创建两个RAG笔记本' ($nbA.id -gt 0 -and $nbB.id -gt 0) "A=$($nbA.id) B=$($nbB.id)"
+
+    # 8.2 scope=all 检索：chat 200 + citations 字段完整
+    $ragChatBody = @{ messages = @(@{ role = 'user'; content = 'RAGMARKERCOMMON' }); retrievalOptions = @{ enabled = $true; scope = 'all' } } | ConvertTo-Json -Depth 10
+    $ragChat = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body $ragChatBody
+    Test-Result 'all范围返回引用' ($ragChat.citations.Count -ge 2) "citations=$($ragChat.citations.Count)"
+    $c0 = $ragChat.citations[0]
+    Test-Result '引用含notebookId/pageId/chunkId' ($null -ne $c0.notebookId -and $null -ne $c0.pageId -and $null -ne $c0.chunkId) "nb=$($c0.notebookId) page=$($c0.pageId) chunk=$($c0.chunkId)"
+    $hitNotebooks = ($ragChat.citations | ForEach-Object { $_.notebookId } | Sort-Object -Unique)
+    Test-Result 'all范围覆盖两个笔记本' ($hitNotebooks -contains $nbA.id -and $hitNotebooks -contains $nbB.id) "nbs=$($hitNotebooks -join ',')"
+
+    # 8.3 scope=current：只命中当前笔记本
+    $currentChatBody = @{ messages = @(@{ role = 'user'; content = 'RAGMARKERCOMMON' }); retrievalOptions = @{ enabled = $true; scope = 'current'; notebookId = $nbA.id } } | ConvertTo-Json -Depth 10
+    $currentChat = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body $currentChatBody
+    $foreignHits = @($currentChat.citations | Where-Object { $_.notebookId -ne $nbA.id })
+    Test-Result 'current范围仅当前笔记本' ($currentChat.citations.Count -gt 0 -and $foreignHits.Count -eq 0) "hits=$($currentChat.citations.Count) foreign=$($foreignHits.Count)"
+
+    # 8.4 索引状态端点（all / current）
+    $statusAll = Invoke-RestMethod "$base/api/ai/retrieval/status?scope=all"
+    Test-Result '索引状态(all)' ($null -ne $statusAll.indexState -and $statusAll.totalPages -ge 2) "indexState=$($statusAll.indexState) pages=$($statusAll.totalPages)"
+    $statusCurrent = Invoke-RestMethod "$base/api/ai/retrieval/status?scope=current&notebookId=$($nbA.id)"
+    Test-Result '索引状态(current)' ($statusCurrent.scope -eq 'current' -and $statusCurrent.notebookId -eq $nbA.id)
+
+    # 8.5 维护端点契约：无向量空间时 reindex=409，retry-failed=200/requeued=0
+    $reindexStatus = 0
+    try {
+        Invoke-RestMethod -Method Post -Uri "$base/api/ai/retrieval/reindex" -ContentType 'application/json' -Body '{"scope":"all","mode":"missing"}' | Out-Null
+        $reindexStatus = 200
+    } catch { $reindexStatus = $_.Exception.Response.StatusCode.value__ }
+    Test-Result '无向量空间reindex返回409' ($reindexStatus -eq 409) "status=$reindexStatus"
+    $retry = Invoke-RestMethod -Method Post -Uri "$base/api/ai/retrieval/retry-failed" -ContentType 'application/json' -Body '{"scope":"all"}'
+    Test-Result 'retry-failed返回requeued' ($null -ne $retry.requeued) "requeued=$($retry.requeued)"
+
+    # 8.6 远程 embedding 失败：chat 仍 200 且降级为 BM25 + notice
+    $embBody = @{ purpose = 'embedding'; provider = 'openai'; endpoint = 'http://127.0.0.1:59999'; model = 'text-embedding-3-small'; dimensions = 1536; apiKey = 'unused-key'; remoteContentConsent = $true } | ConvertTo-Json
+    Invoke-RestMethod -Method Put -Uri "$base/api/ai/config" -ContentType 'application/json' -Body $embBody | Out-Null
+    $remoteChat = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body $ragChatBody
+    Test-Result '远程embedding失败chat仍200' ($null -ne $remoteChat.reply -and $remoteChat.reply -ne '')
+    Test-Result '降级BM25且带notice' ($remoteChat.retrievalNotice.code -eq 'vector-index-unavailable' -and $remoteChat.citations.Count -gt 0) "notice=$($remoteChat.retrievalNotice.code) citations=$($remoteChat.citations.Count)"
+
+    # 8.7 删除笔记本：引用与状态计数同步清理
+    Invoke-RestMethod -Method Delete -Uri "$base/api/notebooks/$($nbB.id)" | Out-Null
+    $afterDeleteChat = Invoke-RestMethod -Method Post -Uri "$base/api/ai/chat" -ContentType 'application/json' -Body $ragChatBody
+    $deletedHits = @($afterDeleteChat.citations | Where-Object { $_.notebookId -eq $nbB.id })
+    Test-Result '删除后引用不含该笔记本' ($deletedHits.Count -eq 0) "deletedHits=$($deletedHits.Count)"
+    $statusAfterDelete = Invoke-RestMethod "$base/api/ai/retrieval/status?scope=current&notebookId=$($nbB.id)"
+    Test-Result '删除后状态计数归零' ($statusAfterDelete.totalPages -eq 0 -and $statusAfterDelete.totalChunks -eq 0) "pages=$($statusAfterDelete.totalPages)"
+
 } finally {
     if ($proc -and -not $proc.HasExited) { taskkill /PID $proc.Id /T /F | Out-Null }
 }

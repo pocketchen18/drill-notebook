@@ -192,13 +192,77 @@ button, input, textarea { font: inherit; }
 .knowledge-item.selected { border-color: #8bb8ff; box-shadow: 0 0 0 2px rgba(21,94,239,.06); }
 .knowledge-item-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; margin-bottom: 12px; }
 .knowledge-item h3 { margin: 0 0 7px; }
-.knowledge-study-title { margin: 12px 0 24px; font-size: 28px; }
-.knowledge-study-content { min-height: 300px; padding: 20px; border-radius: 8px; background: var(--subtle-bg); }
+.knowledge-study-title { margin: 12px 0 24px; font-size: 28px; color: var(--text-strong); }
+.knowledge-study-content { min-height: 300px; padding: 20px; border-radius: 8px; background: var(--subtle-bg); color: var(--text); }
 .linked-question-list { display: grid; gap: 7px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+/* 知识点全屏卡片（点击卡片后覆盖整页）— 必须跟主题变量，禁止写死 white */
+.knowledge-full-card {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: auto;
+  padding: 24px;
+  background: var(--page-bg);
+  color: var(--text);
+}
+.knowledge-full-card-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--page-bg);
+}
+.knowledge-full-card-progress {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.knowledge-full-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.knowledge-full-card-body {
+  max-width: 960px;
+  margin: 0 auto;
+}
+.knowledge-full-card-title {
+  margin: 0 0 16px;
+  color: var(--text-strong);
+  font-size: 26px;
+  line-height: 1.35;
+}
+.knowledge-full-card-content {
+  color: var(--text);
+  line-height: 1.75;
+}
+.knowledge-full-card-links {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  display: grid;
+  gap: 6px;
+}
+.knowledge-full-card-links strong {
+  color: var(--text-strong);
+}
 .editor-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
 .editor-shell.is-focus { overflow: visible; border: none; border-radius: 0; background: transparent; }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
 .editor-toolbar.is-focus { position: fixed; top: 0; left: 224px; right: 0; z-index: 100; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 0; background: var(--panel-bg); box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+/* 工具栏按钮组：允许收缩并换行，避免窄窗口下按钮被 overflow:hidden 裁掉 */
+.editor-toolbar .arco-space { min-width: 0; flex-wrap: wrap; }
 .editor-content { min-height: 520px; padding: 24px 28px; }
 .editor-content .ProseMirror { min-height: 460px; outline: none; line-height: 1.75; }
 .editor-content .ProseMirror p { margin: 0 0 10px; }
@@ -354,7 +418,8 @@ button, input, textarea { font: inherit; }
 .file-block-info { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-size: 13px; }
 .file-block-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .file-block-size { color: var(--muted); font-size: 12px; flex-shrink: 0; }
-.file-block-body { min-height: 32px; height: 600px; overflow: auto; display: flex; flex-direction: column; }
+.file-block-body { min-height: 32px; overflow: auto; display: flex; flex-direction: column; }
+.file-block-body.is-preview { height: 600px; }
 .file-block-body > .file-image-preview { margin: auto; }
 .file-block-body > .file-docx-preview { flex: 1; min-height: 0; }
 .file-block-body > .file-pdf-preview { flex: 1; min-height: 0; }
@@ -373,12 +438,19 @@ button, input, textarea { font: inherit; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
 .settings-ai-panel { grid-column: 1 / -1; }
 
+/* Embedding 本地模型目录条目 — 跟主题变量，窄屏自动 wrap */
+.embedding-model-item { padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
+.embedding-model-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.embedding-model-main > div:first-child { min-width: 0; flex: 1 1 240px; }
+
 /* AI floating assistant */
 .ai-fab { position: fixed; right: 28px; bottom: 28px; z-index: 1000; width: 56px; height: 56px; border: 0; border-radius: 50%; color: #fff; background: linear-gradient(145deg, #155eef, #3b82f6); box-shadow: 0 10px 28px rgba(21, 94, 239, 0.35); cursor: pointer; display: grid; place-items: center; transition: transform .15s ease, box-shadow .15s ease; }
 .ai-fab:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 14px 32px rgba(21, 94, 239, 0.42); }
 .ai-fab.is-open { background: #4e5969; box-shadow: 0 8px 20px rgba(0,0,0,.2); }
 .ai-drawer-title { display: inline-flex; align-items: center; gap: 8px; }
-.ai-drawer-body { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 120px); min-height: 420px; }
+.ai-drawer .arco-drawer-scroll { overflow: hidden; }
+.ai-drawer .arco-drawer-content { display: flex; flex-direction: column; overflow: hidden; }
+.ai-drawer-body { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow: hidden; }
 .ai-session-bar { display: flex; align-items: center; gap: 8px; }
 .ai-session-title {
   display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 28px;
@@ -409,13 +481,24 @@ button, input, textarea { font: inherit; }
 .ai-chip { border: 1px solid var(--line); border-radius: 999px; background: var(--panel-bg); color: inherit; font-size: 12px; padding: 5px 12px; cursor: pointer; }
 .ai-chip:hover:not(:disabled) { border-color: var(--accent-border-2); background: var(--accent-soft); }
 .ai-chip:disabled { opacity: .5; cursor: not-allowed; }
-.ai-drawer-chat { flex: 1; min-height: 200px; overflow: auto; display: grid; gap: 12px; align-content: start; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.ai-drawer-chat { flex: 1; min-height: 0; overflow-y: auto; display: grid; gap: 12px; align-content: start; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
 .ai-empty { min-height: 160px; }
 .chat-message { max-width: 92%; padding: 11px 14px; border-radius: 8px; line-height: 1.6; position: relative; }
 .chat-message.user { justify-self: end; color: #fff; background: #155eef; white-space: pre-wrap; }
 .chat-message.assistant { justify-self: start; border: 1px solid var(--line); background: var(--panel-bg); }
 .chat-message .markdown-content p { margin: 0 0 8px; }
 .chat-message-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+/* AI 侧栏检索（Task 14）：scope 选择器、引用 chips、降级 notice — 均跟主题变量 */
+.ai-retrieval-scope { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.ai-retrieval-notice { margin-top: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--subtle-bg); color: var(--muted); font-size: 12px; }
+.ai-citations { margin-top: 8px; }
+.ai-citations-kicker { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.ai-citation-list { display: flex; flex-direction: column; gap: 6px; }
+.ai-citation-chip { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.ai-citation-chip:hover { border-color: var(--accent-border); background: var(--block-edit-bg); }
+.ai-citation-index { flex: 0 0 auto; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--subtle-bg); color: var(--muted); font-size: 11px; }
+.ai-citation-title { flex: 0 1 auto; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-citation-heading { flex: 1 1 auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-insert-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent-border); border-radius: 8px; background: var(--accent-soft); }
 .ai-drawer-compose { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
 .ai-drawer-hint { display: block; margin-top: -4px; }

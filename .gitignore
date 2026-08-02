@@ -31,6 +31,10 @@ coverage/
 *.har
 *.trace.zip
 
+# Workspace-local Rust toolchain, cargo caches and build targets
+.tooling/
+embedding-worker/target/
+
 # Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
 /*.png
 /*.jpg
@@ -164,6 +168,7 @@ docs/**
 !docs/knowledge-point-import.md
 !docs/quiz-markdown-flow.md
 !docs/ai-summary.md
+!docs/ai-retrieval.md
 !docs/architecture.md
 !docs/review-srs.md
 # Design specs / implementation plans stay local

@@ -93,7 +93,7 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
           </div>
         ) : null}
       </div>
-      <div className="file-block-body">
+      <div className={`file-block-body${localView === 'preview' ? ' is-preview' : ''}`}>
         {localView === 'preview' ? previewComponent() : <DownloadOnlyPreview {...attrs} />}
       </div>
     </NodeViewWrapper>

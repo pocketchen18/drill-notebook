@@ -80,11 +80,11 @@ export function KnowledgeFullCardView({ point, total, index, questions, onClose,
   };
 
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: 'white', overflow: 'auto', padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div className="knowledge-full-card" role="dialog" aria-modal="true" aria-label={currentPoint.title}>
+      <div className="knowledge-full-card-toolbar">
         <Button type="text" icon={<ArrowLeft size={18} />} onClick={onClose}>返回</Button>
-        <span style={{ color: '#6b7280' }}>第 {index + 1} / {total} 个知识点</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span className="knowledge-full-card-progress">第 {index + 1} / {total} 个知识点</span>
+        <div className="knowledge-full-card-actions">
           <Button loading={loading} onClick={() => void handleToggle()}>
             {view === 'original' ? '总结' : '还原'}
           </Button>
@@ -97,18 +97,24 @@ export function KnowledgeFullCardView({ point, total, index, questions, onClose,
           <Popconfirm title="删除这个知识点？" onOk={onDeleted}>
             <Button status="danger" icon={<Trash2 size={14} />}>删除</Button>
           </Popconfirm>
-          <Button type="text" icon={<X size={18} />} onClick={onClose} />
+          <Button type="text" icon={<X size={18} />} onClick={onClose} aria-label="关闭" />
         </div>
       </div>
 
-      <h2 style={{ marginBottom: 16 }}>{currentPoint.title}</h2>
-      <MarkdownContent value={currentPoint.content} />
-      {currentPoint.questionIds.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <strong>关联题目</strong>
-          {currentPoint.questionIds.map((id) => <div key={id}>{questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`}</div>)}
+      <div className="knowledge-full-card-body">
+        <h2 className="knowledge-full-card-title">{currentPoint.title}</h2>
+        <div className="knowledge-full-card-content">
+          <MarkdownContent value={currentPoint.content} />
         </div>
-      )}
+        {currentPoint.questionIds.length > 0 && (
+          <div className="knowledge-full-card-links">
+            <strong>关联题目</strong>
+            {currentPoint.questionIds.map((id) => (
+              <div key={id}>{questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`}</div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

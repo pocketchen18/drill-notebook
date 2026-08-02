@@ -411,7 +411,7 @@ public class ReviewRepository {
      */
     public List<ReviewSchedule> findDueOnOrBefore(String ymd, String itemTypeOrNull, Long configIdOrNull) {
         StringBuilder sql = new StringBuilder(
-            "SELECT * FROM review_schedule WHERE next_review IS NOT NULL AND date(next_review) = date(?)");
+            "SELECT * FROM review_schedule WHERE next_review IS NOT NULL AND date(next_review) <= date(?)");
         List<Object> params = new ArrayList<>();
         params.add(ymd);
         if (itemTypeOrNull != null) {

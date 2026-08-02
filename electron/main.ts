@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -178,6 +178,46 @@ ipcMain.handle('window:is-full-screen', (event) => {
   return mainWindow?.isFullScreen() ?? false;
 });
 
+// 抓取网址视频的原始标题（YouTube oEmbed / Bilibili view 接口）。
+// 渲染进程直接 fetch 会被 CORS 拦截，故由主进程的网络栈代为请求。
+async function fetchVideoTitle(url: string): Promise<string | null> {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const res = await net.fetch(oembedUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as { title?: string };
+      return typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null;
+    }
+    if (host === 'bilibili.com' || host === 'm.bilibili.com') {
+      const match = parsed.pathname.match(/\/video\/(BV[\w]+|av(\d+))/i);
+      if (!match) return null;
+      const apiUrl = match[1].toUpperCase().startsWith('BV')
+        ? `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(match[1])}`
+        : `https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(match[2] ?? '')}`;
+      const res = await net.fetch(apiUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as { code?: number; data?: { title?: string } };
+      if (data.code === 0 && data.data && typeof data.data.title === 'string' && data.data.title.trim()) {
+        return data.data.title.trim();
+      }
+      return null;
+    }
+    return null;
+  } catch (error) {
+    console.error('[video:fetch-title] failed', error);
+    return null;
+  }
+}
+
+ipcMain.handle('video:fetch-title', async (event, url: string) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Video title request rejected from an untrusted page.');
+  if (typeof url !== 'string' || !url.trim()) return null;
+  return fetchVideoTitle(url.trim());
+});
+
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     // 不要覆盖第三方 iframe 内容（B站/YouTube 等）的原始 CSP，
@@ -195,6 +235,22 @@ app.whenReady().then(async () => {
       }
     });
   });
+
+  // Bilibili 的 view 接口（用于主进程抓取视频标题）对缺失 Referer 的请求可能返回 -412，
+  // 这里为主进程发起的 api.bilibili.com 请求补上格式良好的 Referer。
+  // 注：YouTube 嵌入在 file:// 下无法稳定播放（缺 Referer 报 153、伪造 Referer 报 152），
+  // 前端已改为直接显示「该网站暂不支持预览」提示卡片，故不再注入 YouTube 的 Referer。
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://api.bilibili.com/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders };
+      const hasReferer = Object.keys(headers).some((key) => key.toLowerCase() === 'referer');
+      if (!hasReferer) {
+        headers.Referer = 'https://www.bilibili.com/';
+      }
+      callback({ requestHeaders: headers });
+    }
+  );
 
   try {
     backend = await startBackend(portablePaths);
