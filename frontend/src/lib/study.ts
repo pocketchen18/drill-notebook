@@ -28,6 +28,42 @@ export function moveId(ids: number[], id: number, direction: -1 | 1): number[] {
   return result;
 }
 
+/** 把 id 移到 targetId 的位置；targetId 等于自身或任一不存在则原样返回。 */
+export function moveIdTo(ids: number[], id: number, targetId: number): number[] {
+  const from = ids.indexOf(id);
+  const to = ids.indexOf(targetId);
+  if (from < 0 || to < 0 || from === to) return ids;
+  const result = [...ids];
+  result.splice(from, 1);
+  const insertAt = result.indexOf(targetId);
+  result.splice(insertAt, 0, id);
+  return result;
+}
+
+/** 把 sourceId 插到 targetId 前面；任一不存在或相等则原样返回。 */
+export function insertIdBefore(ids: number[], sourceId: number, targetId: number): number[] {
+  const from = ids.indexOf(sourceId);
+  const to = ids.indexOf(targetId);
+  if (from < 0 || to < 0 || sourceId === targetId) return ids;
+  const result = [...ids];
+  result.splice(from, 1);
+  const insertAt = result.indexOf(targetId);
+  result.splice(insertAt, 0, sourceId);
+  return result;
+}
+
+/** 把 sourceId 插到 targetId 后面；任一不存在或相等则原样返回。 */
+export function insertIdAfter(ids: number[], sourceId: number, targetId: number): number[] {
+  const from = ids.indexOf(sourceId);
+  const to = ids.indexOf(targetId);
+  if (from < 0 || to < 0 || sourceId === targetId) return ids;
+  const result = [...ids];
+  result.splice(from, 1);
+  const insertAt = result.indexOf(targetId);
+  result.splice(insertAt + 1, 0, sourceId);
+  return result;
+}
+
 export function shuffleIds(ids: number[], random: () => number = Math.random): number[] {
   const result = [...ids];
   for (let index = result.length - 1; index > 0; index -= 1) {

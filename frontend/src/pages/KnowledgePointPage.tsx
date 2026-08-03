@@ -7,7 +7,7 @@ import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, KnowledgePoint, Question } from '../lib/types';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
-import { moveId, shuffleIds } from '../lib/study';
+import { insertIdBefore, insertIdAfter, shuffleIds } from '../lib/study';
 import { restoreOriginal, restoreSummary, summarizeBank, resummarizeBank, summarizeImport } from '../lib/knowledgeApi';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { AiSummaryModal } from '../components/AiSummaryModal';
@@ -297,7 +297,7 @@ export function KnowledgePointPage(): JSX.Element {
         onTagsChange={setTags}
         onGroupLevelChange={setGroupLevel}
         onToggleSelect={(id, checked) => setSelectedIds((ids) => checked ? [...ids, id] : ids.filter((x) => x !== id))}
-        onMove={(id, delta) => setSelectedIds(moveId(selectedIds, id, delta as -1 | 1))}
+        onDrop={(sourceId, targetId, position) => setSelectedIds(position === 'before' ? insertIdBefore(selectedIds, sourceId, targetId) : insertIdAfter(selectedIds, sourceId, targetId))}
         onShuffle={() => setSelectedIds(shuffleIds(selectedIds))}
         onSelectAllFiltered={() => setSelectedIds([...selectedIds.filter((id) => !matchingPointIds.has(id)), ...matchingPointIds])}
         onAddToPlan={openPlanForPoints}
