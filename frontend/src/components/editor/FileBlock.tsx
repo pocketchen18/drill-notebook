@@ -4,6 +4,7 @@ import { Eye, EyeOff, Download, File as FileIcon } from 'lucide-react';
 import { ImagePreview } from './preview/ImagePreview';
 import { DocxPreview } from './preview/DocxPreview';
 import { PdfPreview } from './preview/PdfPreview';
+import { PptxPreview } from './preview/PptxPreview';
 import { ArchiveBrowser } from './preview/ArchiveBrowser';
 import { typeIcons, fileCategory, formatBytes } from './preview/FileInfoPreview';
 import { attachmentContentUrl } from '../../lib/attachments';
@@ -33,7 +34,8 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
   const isZip = attrs.fileName.toLowerCase().endsWith('.zip');
   const inlinePreviewable = attrs.mimeType.startsWith('image/')
     || attrs.mimeType === 'application/pdf'
-    || attrs.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    || attrs.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    || attrs.mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
   const togglePreview = (): void => {
     if (isZip) { setBrowserOpen(true); return; }
@@ -46,6 +48,7 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
     const { mimeType } = attrs;
     if (mimeType.startsWith('image/')) return <ImagePreview {...attrs} />;
     if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return <DocxPreview {...attrs} />;
+    if (mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') return <PptxPreview {...attrs} />;
     if (mimeType === 'application/pdf') return <PdfPreview {...attrs} />;
     return <div className="file-preview-unavailable">暂不支持预览</div>;
   };
