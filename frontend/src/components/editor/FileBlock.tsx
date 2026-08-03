@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
+import { Eye, EyeOff, Download, File as FileIcon } from 'lucide-react';
 import { ImagePreview } from './preview/ImagePreview';
 import { DocxPreview } from './preview/DocxPreview';
 import { PdfPreview } from './preview/PdfPreview';
-import { FileInfoPreview } from './preview/FileInfoPreview';
-import { DownloadOnlyPreview } from './preview/DownloadOnlyPreview';
+import { ArchiveBrowser } from './preview/ArchiveBrowser';
+import { typeIcons, fileCategory, formatBytes } from './preview/FileInfoPreview';
+import { attachmentContentUrl } from '../../lib/attachments';
 
 type View = 'preview' | 'download';
 
@@ -18,51 +20,34 @@ interface FileAttrs {
 
 export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
   const attrs = node.attrs as FileAttrs;
-  // 本地 state 同步 view，避免 tip tap ReactNodeViewRenderer 不重渲染的问题
-  const [localView, setLocalView] = useState<View>(attrs.view);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [menuUpward, setMenuUpward] = useState(false);
-  const handleRef = useRef<HTMLDivElement>(null);
+  const inlineOpen = attrs.view === 'preview';
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [href, setHref] = useState('');
 
   useEffect(() => {
-    setLocalView(attrs.view);
-    setMenuOpen(false);
-  }, [attrs.view]);
+    void attachmentContentUrl(attrs.attachmentId).then(setHref);
+  }, [attrs.attachmentId]);
 
-  // 点击菜单外部时自动收起
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onMouseDown = (event: MouseEvent): void => {
-      if (handleRef.current && !handleRef.current.contains(event.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [menuOpen]);
+  const category = fileCategory(attrs.mimeType, attrs.fileName);
+  const Icon = typeIcons[category] ?? FileIcon;
+  const isZip = attrs.fileName.toLowerCase().endsWith('.zip');
+  const inlinePreviewable = attrs.mimeType.startsWith('image/')
+    || attrs.mimeType === 'application/pdf'
+    || attrs.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-  const switchView = (view: View): void => {
-    setLocalView(view);
-    updateAttributes({ view });
-    setMenuOpen(false);
+  const togglePreview = (): void => {
+    if (isZip) { setBrowserOpen(true); return; }
+    updateAttributes({ view: inlineOpen ? 'download' : 'preview' });
   };
 
-  const toggleMenu = (event: React.MouseEvent): void => {
-    event.stopPropagation();
-    const nextOpen = !menuOpen;
-    if (nextOpen && handleRef.current) {
-      const rect = handleRef.current.getBoundingClientRect();
-      setMenuUpward(rect.bottom + 120 > window.innerHeight);
-    }
-    setMenuOpen(nextOpen);
-  };
+  const previewOpen = isZip ? browserOpen : inlineOpen;
 
-  const previewComponent = (): JSX.Element => {
+  const renderBody = (): JSX.Element => {
     const { mimeType } = attrs;
     if (mimeType.startsWith('image/')) return <ImagePreview {...attrs} />;
     if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return <DocxPreview {...attrs} />;
     if (mimeType === 'application/pdf') return <PdfPreview {...attrs} />;
-    return <FileInfoPreview {...attrs} />;
+    return <div className="file-preview-unavailable">暂不支持预览</div>;
   };
 
   return (
@@ -71,31 +56,35 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
       contentEditable={false}
       data-file-block="true"
     >
-      <div className="file-block-handle" ref={handleRef}>
-        <button
-          type="button"
-          className="file-block-handle-btn"
-          contentEditable={false}
-          onClick={toggleMenu}
-          title="切换视图"
-        >▾</button>
-        {menuOpen ? (
-          <div className={`file-block-menu${menuUpward ? ' is-upward' : ''}`} contentEditable={false}>
-            <div className="file-block-menu-label">视图</div>
-            {(['preview', 'download'] as View[]).map((view) => (
-              <button
-                key={view}
-                type="button"
-                className={`file-block-menu-item${localView === view ? ' is-active' : ''}`}
-                onClick={(event) => { event.stopPropagation(); switchView(view); }}
-              >{view === 'preview' ? '预览视图' : '下载视图'}</button>
-            ))}
-          </div>
-        ) : null}
+      <div className="file-block-card">
+        <div className="file-block-icon"><Icon size={26} strokeWidth={1.6} /></div>
+        <div className="file-block-meta">
+          <span className="file-block-name">{attrs.fileName}</span>
+          <span className="file-block-size">{formatBytes(attrs.fileSize)}</span>
+        </div>
+        <div className="file-block-actions">
+          <button
+            type="button"
+            className={`file-block-action${previewOpen ? ' is-active' : ''}`}
+            title={previewOpen ? '收起预览' : '预览'}
+            onClick={togglePreview}
+          >{previewOpen ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+          <a className="file-block-action" title="下载" href={href} download={attrs.fileName}>
+            <Download size={17} />
+          </a>
+        </div>
       </div>
-      <div className={`file-block-body${localView === 'preview' ? ' is-preview' : ''}`}>
-        {localView === 'preview' ? previewComponent() : <DownloadOnlyPreview {...attrs} />}
-      </div>
+      {!isZip && inlineOpen ? (
+        <div className={`file-block-body${inlinePreviewable ? ' is-preview' : ''}`}>{renderBody()}</div>
+      ) : null}
+      {isZip && browserOpen ? (
+        <ArchiveBrowser
+          attachmentId={attrs.attachmentId}
+          fileName={attrs.fileName}
+          fileSize={attrs.fileSize}
+          onClose={() => setBrowserOpen(false)}
+        />
+      ) : null}
     </NodeViewWrapper>
   );
 }

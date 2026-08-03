@@ -1,6 +1,12 @@
 import { get, del } from './api';
 import type { NoteAttachment } from './types';
 
+export interface ArchiveEntry {
+  name: string;
+  size: number;
+  dir: boolean;
+}
+
 async function baseUrl(): Promise<string> {
   return window.api?.backend.getBaseUrl().catch(() => 'http://127.0.0.1:18080') ?? 'http://127.0.0.1:18080';
 }
@@ -27,4 +33,8 @@ export async function deleteAttachment(id: number): Promise<void> {
 
 export async function attachmentContentUrl(id: number): Promise<string> {
   return `${await baseUrl()}/api/attachments/${id}/content`;
+}
+
+export async function listArchiveEntries(id: number): Promise<ArchiveEntry[]> {
+  return get<ArchiveEntry[]>(`/api/attachments/${id}/entries`);
 }

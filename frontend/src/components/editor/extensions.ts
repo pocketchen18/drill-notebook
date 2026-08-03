@@ -81,7 +81,7 @@ export const FileBlock = Node.create({
     fileName: { default: '' },
     mimeType: { default: 'application/octet-stream' },
     fileSize: { default: 0 },
-    view: { default: 'preview' }
+    view: { default: 'download' }
   }),
   parseHTML: () => [{ tag: 'div[data-file-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-file-block': '' })],

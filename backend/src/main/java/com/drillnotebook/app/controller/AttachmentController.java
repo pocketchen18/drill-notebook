@@ -69,6 +69,20 @@ public class AttachmentController {
         return found;
     }
 
+    @GetMapping("/attachments/{id}/entries")
+    public List<Map<String, Object>> getEntries(@PathVariable long id) throws IOException {
+        var found = attachments.findById(id);
+        if (found == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "附件不存在");
+        String fileName = String.valueOf(found.get("fileName"));
+        if (!fileName.toLowerCase().endsWith(".zip")) return List.of();
+        String storagePath = (String) found.get("storagePath");
+        try {
+            return storage.listZipEntries(storagePath);
+        } catch (IOException error) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "无法读取压缩包内容");
+        }
+    }
+
     @GetMapping("/attachments/{id}/content")
     public ResponseEntity<InputStreamResource> getContent(@PathVariable long id) throws IOException {
         var found = attachments.findById(id);
