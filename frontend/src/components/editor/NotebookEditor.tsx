@@ -27,29 +27,38 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   const [videoModalTitle, setVideoModalTitle] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 在当前光标位置插入一个块节点，并在其后留一个空段落方便继续输入。
+  // 不再使用 setContent 重写全文 —— 否则新块永远被追加到文档末尾，
+  // 无视用户光标位置（这是「点添加文件却插到末尾」的根因）。
+  const insertBlockAtCursor = (type: string, attrs: Record<string, unknown>): void => {
+    if (!editor) return;
+    const pos = editor.state.selection.to;
+    // 用 JSON 描述节点（而非 schema.create 出的 Node 实例），
+    // insertContentAt 才能正确解析 atom 块（markdownBlock/fileBlock 等）。
+    editor
+      .chain()
+      .focus()
+      .insertContentAt(pos, [
+        { type, attrs },
+        { type: 'paragraph' }
+      ])
+      .run();
+  };
+
   const insertFileBlock = (attachment: NoteAttachment): void => {
     if (!editor) return;
-    // 与 appendBlock / insertVideoBlock 保持一致：setContent 在末尾追加节点
-    const current = editor.getJSON() as { type: 'doc'; content?: Array<Record<string, unknown>> };
-    const nodes = current.content ?? [{ type: 'paragraph' }];
-    editor.commands.setContent({
-      type: 'doc',
-      content: [...nodes, { type: 'fileBlock', attrs: { attachmentId: attachment.id, fileName: attachment.fileName, mimeType: attachment.mimeType, fileSize: attachment.fileSize } }, { type: 'paragraph' }]
+    insertBlockAtCursor('fileBlock', {
+      attachmentId: attachment.id,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      fileSize: attachment.fileSize
     });
-    editor.commands.focus('end');
     Message.success(`已添加文件：${attachment.fileName}`);
   };
 
   const insertVideoBlock = (blockAttrs: Record<string, unknown>): void => {
     if (!editor) return;
-    // 与 appendBlock(公式/图表/Markdown) 保持一致：重设全文在末尾追加
-    const current = editor.getJSON() as { type: 'doc'; content?: Array<Record<string, unknown>> };
-    const nodes = current.content ?? [{ type: 'paragraph' }];
-    editor.commands.setContent({
-      type: 'doc',
-      content: [...nodes, { type: 'videoBlock', attrs: blockAttrs }, { type: 'paragraph' }]
-    });
-    editor.commands.focus('end');
+    insertBlockAtCursor('videoBlock', blockAttrs);
   };
 
   const handleFileObjects = async (files: File[]): Promise<void> => {
@@ -159,14 +168,10 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
 
   if (!editor) return <div className="editor-shell"><div className="empty-state">正在加载编辑器…</div></div>;
 
+  // 工具栏插入公式 / 图表 / Markdown 块时，也走 insertBlockAtCursor，
+  // 保证插入到当前光标位置而不是文档末尾。
   const appendBlock = (type: 'mathBlock' | 'mermaidBlock' | 'markdownBlock', attrs: Record<string, string>): void => {
-    const current = editor.getJSON() as { type: 'doc'; content?: Array<Record<string, unknown>> };
-    const nodes = current.content ?? [{ type: 'paragraph' }];
-    editor.commands.setContent({
-      type: 'doc',
-      content: [...nodes, { type, attrs }, { type: 'paragraph' }]
-    });
-    editor.commands.focus('end');
+    insertBlockAtCursor(type, attrs);
   };
 
   const toolbarElement = (
