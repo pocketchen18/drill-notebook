@@ -146,7 +146,7 @@ function Shell(): JSX.Element {
               onClick={() => setCollapsed((value) => !value)}
               aria-label={collapsed ? '展开导航栏' : '折叠导航栏'}
             >
-              {collapsed ? <ChevronsRight size={18} /> : <><ChevronsLeft size={18} /><span>折叠</span></>}
+              {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
             </button>
           </Tooltip>
           <Tooltip content="设置" position="right" disabled={!collapsed}>
