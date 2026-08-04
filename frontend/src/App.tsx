@@ -182,10 +182,10 @@ function Shell(): JSX.Element {
             {!collapsed && <span className="sider-settings-text">设置</span>}
           </button>
         </div>
-        {collapsed && hoverTip && (
-          <div className="sider-hover-tip" style={{ top: hoverTip.top }}>{hoverTip.label}</div>
-        )}
       </Sider>
+      {collapsed && hoverTip && (
+        <div className="sider-hover-tip" style={{ top: hoverTip.top }}>{hoverTip.label}</div>
+      )}
       <Layout>
         {useUiStore((state) => state.notebookFocusMode) ? null : (
           <Header className="topbar">
