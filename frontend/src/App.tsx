@@ -16,13 +16,13 @@ import { CalendarPage } from './pages/CalendarPage';
 const { Sider, Header, Content } = Layout;
 
 const navItems = [
+  { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
   { key: '/banks', label: '题库', icon: <BookOpenText size={17} /> },
+  { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
+  { key: '/knowledge', label: '背知识点', icon: <Layers3 size={17} /> },
   { key: '/quiz', label: '刷题', icon: <Target size={17} /> },
   { key: '/memorize', label: '背题', icon: <BookOpenCheck size={17} /> },
-  { key: '/knowledge', label: '背知识点', icon: <Layers3 size={17} /> },
-  { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
   { key: '/calendar', label: '日历', icon: <Calendar size={17} /> },
-  { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
   { key: '/settings', label: '设置', icon: <Settings size={17} /> }
 ];
 
@@ -73,13 +73,25 @@ function Shell(): JSX.Element {
           <div className="brand-mark"><BrainCircuit size={18} /></div>
           <span className="brand-name">Drill Notebook</span>
         </div>
-        <Menu selectedKeys={[activeKey]} onClickMenuItem={(key) => navigate(key)} style={{ border: 0, padding: '12px 10px' }}>
-          {navItems.map((item) => (
-            <Menu.Item key={item.key}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span>
-            </Menu.Item>
-          ))}
-        </Menu>
+        <div className="sider-body">
+          <Menu selectedKeys={[activeKey]} onClickMenuItem={(key) => navigate(key)} style={{ border: 0, padding: '12px 10px' }}>
+            {navItems.filter((item) => item.key !== '/settings').map((item) => (
+              <Menu.Item key={item.key}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span>
+              </Menu.Item>
+            ))}
+          </Menu>
+          <button
+            type="button"
+            className={`sider-settings ${activeKey === '/settings' ? 'active' : ''}`}
+            onClick={() => navigate('/settings')}
+            title="设置"
+            aria-label="设置"
+          >
+            <Settings size={18} />
+            <span className="sider-settings-text">设置</span>
+          </button>
+        </div>
       </Sider>
       <Layout>
         {useUiStore((state) => state.notebookFocusMode) ? null : (
