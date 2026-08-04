@@ -16,6 +16,12 @@ import {
   readBoolPref,
   writeBoolPref
 } from '../lib/sessionPrefs';
+import {
+  normalizeSessionCurveConfig,
+  readSessionCurveConfig,
+  writeSessionCurveConfig
+} from '../lib/sessionCurve';
+import type { SessionCurveConfig } from '../lib/sessionCurve';
 
 interface Health { status: string; }
 
@@ -73,6 +79,14 @@ export function SettingsPage(): JSX.Element {
   const [enrollDefault, setEnrollDefault] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
   const [planDefault, setPlanDefault] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
   const [forceAdvance, setForceAdvance] = useState(() => readBoolPref(LS_FORCE_ADVANCE, false));
+
+  // 会话内记忆曲线（答错延迟重现）
+  const [curveConfig, setCurveConfig] = useState<SessionCurveConfig>(() => readSessionCurveConfig());
+  const updateCurveConfig = (partial: Partial<SessionCurveConfig>): void => {
+    const next = normalizeSessionCurveConfig({ ...curveConfig, ...partial });
+    setCurveConfig(next);
+    writeSessionCurveConfig(next);
+  };
 
   const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
 
@@ -270,6 +284,77 @@ export function SettingsPage(): JSX.Element {
                 setForceAdvance(checked);
                 writeBoolPref(LS_FORCE_ADVANCE, checked);
               }}
+            />
+          </div>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-header"><h2>会话内记忆曲线</h2></div>
+        <div className="panel-body form-stack">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>启用会话内错题重现</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">刷题 / 背题 / 背知识点中答错（不会）的条目会在当前会话内延迟重现，直到记住。</Typography.Text>
+            </div>
+            <Switch checked={curveConfig.enabled} onChange={(checked) => updateCurveConfig({ enabled: checked })} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>重现间隔</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">答错后隔多少个条目再次出现（推荐 3）；剩余条目不足时排到队尾。</Typography.Text>
+            </div>
+            <InputNumber
+              value={curveConfig.gap}
+              onChange={(value) => value != null && updateCurveConfig({ gap: value })}
+              min={1}
+              max={50}
+              disabled={!curveConfig.enabled}
+              style={{ width: 120 }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>不限制重复次数（直到会为止）</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">开启后错题持续重现直至答对过关；关闭则按下方最大重复次数封顶。</Typography.Text>
+            </div>
+            <Switch
+              checked={curveConfig.maxRepeats === 0}
+              disabled={!curveConfig.enabled}
+              onChange={(checked) => updateCurveConfig({ maxRepeats: checked ? 0 : 3 })}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>最大重复次数</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">达到上限仍未记住则标记「本轮未记住」继续往下走（推荐 3）。</Typography.Text>
+            </div>
+            <InputNumber
+              value={curveConfig.maxRepeats === 0 ? undefined : curveConfig.maxRepeats}
+              onChange={(value) => value != null && updateCurveConfig({ maxRepeats: value })}
+              min={1}
+              max={99}
+              placeholder="不限"
+              disabled={!curveConfig.enabled || curveConfig.maxRepeats === 0}
+              style={{ width: 120 }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>过关条件（连续答对次数）</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">重现的条目需连续答对（会）多少次才算过关（推荐 1）。</Typography.Text>
+            </div>
+            <InputNumber
+              value={curveConfig.passStreak}
+              onChange={(value) => value != null && updateCurveConfig({ passStreak: value })}
+              min={1}
+              max={10}
+              disabled={!curveConfig.enabled}
+              style={{ width: 120 }}
             />
           </div>
         </div>

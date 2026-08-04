@@ -20,6 +20,8 @@ import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendMod
 import { planScopeFromSearch } from '../lib/planProgress';
 import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
+import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../lib/sessionCurve';
+import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
 
 const { Text } = Typography;
 
@@ -106,6 +108,10 @@ export function QuizPage(): JSX.Element {
   }>({});
   const recommendShownRef = useRef(false);
   const autoStartedRef = useRef(false);
+  // 会话内记忆曲线：答错题延迟重现
+  const [curveQueue, setCurveQueue] = useState<CurveEntry[]>([]);
+  const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
+  const curveConfigRef = useRef(readSessionCurveConfig());
 
   useEffect(() => {
     if (!bankId && banksQuery.data?.length) setBankId(banksQuery.data[0].id);
@@ -115,7 +121,9 @@ export function QuizPage(): JSX.Element {
     else if (questionsQuery.data) setSelectedQuestionIds(questionsQuery.data.map((item) => item.id));
   }, [bankId, questionIds, questionsQuery.data]);
 
-  const question = session?.questions[index];
+  const questionBySessionId = useMemo(() => new Map((session?.questions ?? []).map((item) => [item.id, item])), [session?.questions]);
+  const currentEntry = curveQueue[index];
+  const question = currentEntry ? questionBySessionId.get(currentEntry.resourceId) : undefined;
 
   const pageContext = useMemo(() => {
     if (!question) {
@@ -140,7 +148,7 @@ export function QuizPage(): JSX.Element {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (!session || (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(event.target.tagName))) return;
-      const option = session.questions[index]?.options[Number(event.key) - 1];
+      const option = question?.options[Number(event.key) - 1];
       if (option && !result) {
         event.preventDefault();
         choose(option.key);
@@ -177,6 +185,9 @@ export function QuizPage(): JSX.Element {
       const newSession = await post<QuizSession>('/api/quiz/sessions', { bankId, questionIds: plannedIds, shuffle: false, limit: plannedIds.length });
       setSession(newSession);
       setSessionId(newSession.sessionId);
+      curveConfigRef.current = readSessionCurveConfig();
+      setCurveQueue(buildCurveQueue(newSession.questions.map((item) => item.id)));
+      setCurveStates({});
       setIndex(0);
       setSelected([]);
       setTextAnswer('');
@@ -217,6 +228,20 @@ export function QuizPage(): JSX.Element {
       setResult(submission);
       setAnswerStates((states) => ({ ...states, [question.id]: { selected: [...selected], textAnswer, result: submission } }));
       setAnsweredIds((ids) => [...new Set([...ids, question.id])]);
+      // 会话内记忆曲线：答错延迟重现；无法判定对错（如 essay 未评分）不触发重现。
+      const curveCorrect = submission.isCorrect !== false;
+      const curve = applyCurveAnswer(curveQueue, index, curveCorrect, curveStates, curveConfigRef.current);
+      setCurveQueue(curve.entries);
+      setCurveStates(curve.states);
+      if (curve.requeued) {
+        // 重现时清除作答快照，让该题以全新状态再次作答。
+        setAnswerStates((states) => {
+          const next = { ...states };
+          delete next[question.id];
+          return next;
+        });
+        setAnsweredIds((ids) => ids.filter((id) => id !== question.id));
+      }
       // Right/wrong → mastery for memory curve when enrolled.
       // fromQueue: forceAdvance + planDate so backend clears 提前/到期 after a pass.
       const viewDay = planDate || new Date().toISOString().slice(0, 10);
@@ -263,9 +288,9 @@ export function QuizPage(): JSX.Element {
 
   const showQuestion = (nextIndex: number): void => {
     if (!session) return;
-    const nextQuestion = session.questions[nextIndex];
-    if (!nextQuestion) return;
-    const saved = answerStates[nextQuestion.id];
+    const nextEntry = curveQueue[nextIndex];
+    if (!nextEntry) return;
+    const saved = answerStates[nextEntry.resourceId];
     setIndex(nextIndex);
     setSelected(saved?.selected ?? []);
     setTextAnswer(saved?.textAnswer ?? '');
@@ -288,7 +313,7 @@ export function QuizPage(): JSX.Element {
 
   const next = (): void => {
     if (!session) return;
-    if (index >= session.questions.length - 1) {
+    if (index >= curveQueue.length - 1) {
       if (dayQueueMode && finishDayQueueStep(navigate)) {
         return;
       }
@@ -360,7 +385,7 @@ export function QuizPage(): JSX.Element {
           </Button>
         ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>问 AI</Button>
-        <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); recommendShownRef.current = false; setRecommendVisible(false); }}>重新选择</Button>
+        <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); setCurveQueue([]); setCurveStates({}); recommendShownRef.current = false; setRecommendVisible(false); }}>重新选择</Button>
         {!autoStart || !session ? (
           <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
         ) : null}
@@ -379,9 +404,9 @@ export function QuizPage(): JSX.Element {
         </Space>
       </div>
     </section> : question ? <div className="study-session-layout">
-      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{session.questions.map((item, itemIndex) => <button type="button" key={item.id} className={`palette-item ${itemIndex === index ? 'current' : ''} ${answeredIds.includes(item.id) ? 'answered' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Text type="secondary">蓝色：当前 · 绿色：已作答</Text></div></aside>
+      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{curveQueue.map((entry, itemIndex) => <button type="button" key={entry.entryId} title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : undefined} className={`palette-item ${itemIndex === index ? 'current' : ''} ${answeredIds.includes(entry.resourceId) ? 'answered' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Text type="secondary">蓝色：当前 · 绿色：已作答 · 橙色描边：重现题</Text></div></aside>
       <div className="quiz-layout"><div className="quiz-card">
-        <div className="quiz-progress"><span>第 {index + 1} / {session.questions.length} 题</span><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div>
+        <div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div>
         <div className="quiz-stem"><MarkdownContent value={question.stem} /></div>
         {(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">
           {question.options.map((option) => {
@@ -407,7 +432,7 @@ export function QuizPage(): JSX.Element {
           <Button icon={<FilePlus2 size={16} />} onClick={() => { setNoteQuestion(question); setNoteVisible(true); }}>添加到笔记</Button>
           <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForQuestions([question])}>加入计划</Button>
           <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 讲解</Button>
-          {!result ? <Button type="primary" loading={submitting} onClick={() => void submit()}>{question.type === 'essay' ? '提交并请求 AI 辅助判题' : '提交答案'}</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === session.questions.length - 1 ? '完成' : '下一题'}</Button>}
+          {!result ? <Button type="primary" loading={submitting} onClick={() => void submit()}>{question.type === 'essay' ? '提交并请求 AI 辅助判题' : '提交答案'}</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === curveQueue.length - 1 ? '完成' : '下一题'}</Button>}
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">数字 1-4 选择，Enter 提交，←/→ 或 P/N 切题 · Ctrl+J AI</Text></div>

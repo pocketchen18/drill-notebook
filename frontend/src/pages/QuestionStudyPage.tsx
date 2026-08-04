@@ -15,6 +15,8 @@ import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendMod
 import { planScopeFromSearch } from '../lib/planProgress';
 import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
+import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../lib/sessionCurve';
+import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
 
 export function QuestionStudyPage(): JSX.Element {
   const navigate = useNavigate();
@@ -32,6 +34,9 @@ export function QuestionStudyPage(): JSX.Element {
   const questionsQuery = useQuery({ queryKey: ['study-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined });
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sessionIds, setSessionIds] = useState<number[]>();
+  const [curveQueue, setCurveQueue] = useState<CurveEntry[]>([]);
+  const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
+  const curveConfigRef = useRef(readSessionCurveConfig());
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -46,6 +51,21 @@ export function QuestionStudyPage(): JSX.Element {
   const selectionBank = useRef<number>();
   const selectionInitialized = useRef(false);
   const deepLinkStarted = useRef(false);
+
+  /** 开始一轮背题会话：按当前会话曲线配置构建出场队列。 */
+  const startSession = (ids: number[]): void => {
+    curveConfigRef.current = readSessionCurveConfig();
+    setSessionIds(ids);
+    setCurveQueue(buildCurveQueue(ids));
+    setCurveStates({});
+    setIndex(0);
+    setRevealed(false);
+    setSelectedOption(null);
+    setRemembered([]);
+    setReviewAgain([]);
+    setSubmittedReviewIds(new Set());
+    recommendShownRef.current = false;
+  };
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
   useEffect(() => {
@@ -66,19 +86,12 @@ export function QuestionStudyPage(): JSX.Element {
     if (!queryQuestionIds.length || deepLinkStarted.current) return;
     deepLinkStarted.current = true;
     setSelectedIds(queryQuestionIds);
-    setSessionIds(queryQuestionIds);
-    setIndex(0);
-    setRevealed(false);
-    setSelectedOption(null);
-    setRemembered([]);
-    setReviewAgain([]);
-    setSubmittedReviewIds(new Set());
-    recommendShownRef.current = false;
+    startSession(queryQuestionIds);
   }, [queryQuestionIds]);
 
   const byId = useMemo(() => new Map((questionsQuery.data ?? []).map((question) => [question.id, question])), [questionsQuery.data]);
-  const sessionQuestions = (sessionIds ?? []).map((id) => byId.get(id)).filter((question): question is Question => Boolean(question));
-  const question = sessionQuestions[index];
+  const currentEntry = curveQueue[index];
+  const question = currentEntry ? byId.get(currentEntry.resourceId) : undefined;
 
   const jump = (nextIndex: number): void => { setIndex(nextIndex); setRevealed(false); setSelectedOption(null); };
 
@@ -131,7 +144,12 @@ export function QuestionStudyPage(): JSX.Element {
         });
     }
 
-    if (index < sessionQuestions.length - 1) {
+    // 会话内记忆曲线：答错（不会）延迟重现，答对（会）推进。
+    const curve = applyCurveAnswer(curveQueue, index, known, curveStates, curveConfigRef.current);
+    setCurveQueue(curve.entries);
+    setCurveStates(curve.states);
+
+    if (index < curve.entries.length - 1) {
       jump(index + 1);
     } else if (dayQueueMode && finishDayQueueStep(navigate)) {
       return;
@@ -141,8 +159,8 @@ export function QuestionStudyPage(): JSX.Element {
     }
   };
 
-  /** Quick binary rating (legacy buttons). */
-  const mark = (known: boolean): void => {
+  /** 二元评分：会 → quality 4；不会 → quality 0。 */
+  const rateBinary = (known: boolean): void => {
     rateQuality(known ? 4 : 0);
   };
 
@@ -166,10 +184,10 @@ export function QuestionStudyPage(): JSX.Element {
 
     {!sessionIds ? <section className="panel study-setup-panel"><div className="panel-header"><h2>选择并编排要背的题目</h2></div><div className="panel-body">
       <Select value={bankId} placeholder="选择题库" onChange={(value) => { setBankId(Number(value)); setSessionIds(undefined); }} style={{ width: 320, marginBottom: 16 }}>{banksQuery.data?.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}（{bank.questionCount ?? 0} 道）</Select.Option>)}</Select>
-      {questionsQuery.data?.length ? <><AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => { setSessionIds([...selectedIds]); setIndex(0); setRevealed(false); setSelectedOption(null); setRemembered([]); setReviewAgain([]); setSubmittedReviewIds(new Set()); }}>开始背题（{selectedIds.length}）</Button></div></> : <Empty description="该题库暂无题目" />}
+      {questionsQuery.data?.length ? <><AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => startSession([...selectedIds])}>开始背题（{selectedIds.length}）</Button></div></> : <Empty description="该题库暂无题目" />}
     </div></section> : question ? <div className="study-session-layout">
-      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{sessionQuestions.map((item, itemIndex) => <button type="button" key={item.id} className={`palette-item ${itemIndex === index ? 'current' : ''} ${remembered.includes(item.id) ? 'known' : ''} ${reviewAgain.includes(item.id) ? 'review' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Typography.Text type="secondary">绿色：已记住 · 橙色：需复习</Typography.Text></div></aside>
-      <section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {sessionQuestions.length} 题</span><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div><div className="quiz-stem"><MarkdownContent value={question.stem} /></div>{(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">{question.options.map((option) => {
+      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{curveQueue.map((entry, itemIndex) => <button type="button" key={entry.entryId} title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : undefined} className={`palette-item ${itemIndex === index ? 'current' : ''} ${remembered.includes(entry.resourceId) ? 'known' : ''} ${reviewAgain.includes(entry.resourceId) ? 'review' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Typography.Text type="secondary">绿色：已记住 · 橙色：需复习 · 橙色描边：重现题</Typography.Text></div></aside>
+      <section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div><div className="quiz-stem"><MarkdownContent value={question.stem} /></div>{(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">{question.options.map((option) => {
         const isSelected = selectedOption === option.key;
         const isCorrectAnswer = question.answer?.split(',').includes(option.key);
         let className = 'quiz-option';
@@ -201,40 +219,28 @@ export function QuestionStudyPage(): JSX.Element {
           ) : (
             <div className="memory-rating-block">
               <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                掌握程度（写入记忆曲线）
+                记住了吗？（不会将在本轮稍后重现，评分写入记忆曲线）
               </Typography.Text>
               <div className="quality-buttons">
-                {[
-                  { q: 0, label: '不会' },
-                  { q: 2, label: '困难' },
-                  { q: 3, label: '一般' },
-                  { q: 4, label: '熟悉' },
-                  { q: 5, label: '掌握' }
-                ].map((opt) => (
-                  <button
-                    key={opt.q}
-                    type="button"
-                    className={`quality-btn quality-${opt.q}`}
-                    disabled={submittedReviewIds.has(question.id)}
-                    onClick={() => rateQuality(opt.q)}
-                  >
-                    <span className="quality-score">{opt.q}</span>
-                    <span className="quality-label">{opt.label}</span>
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  className="quality-btn quality-0"
+                  onClick={() => rateBinary(false)}
+                >
+                  <span className="quality-label">不会</span>
+                </button>
+                <button
+                  type="button"
+                  className="quality-btn quality-4"
+                  onClick={() => rateBinary(true)}
+                >
+                  <span className="quality-label">会</span>
+                </button>
               </div>
-              <Space style={{ marginTop: 10 }}>
-                <Button size="small" status="warning" onClick={() => mark(false)}>
-                  再看一次
-                </Button>
-                <Button size="small" type="primary" onClick={() => mark(true)}>
-                  记住了
-                </Button>
-              </Space>
             </div>
           )}
           <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForQuestions([question])}>加入计划</Button>
-          <Button icon={<ChevronRight size={16} />} disabled={index === sessionQuestions.length - 1} onClick={() => jump(index + 1)}>下一题</Button>
+          <Button icon={<ChevronRight size={16} />} disabled={index === curveQueue.length - 1} onClick={() => jump(index + 1)}>下一题</Button>
         </div>
       </section>
     </div> : <Empty description="没有可背诵的题目" />}
