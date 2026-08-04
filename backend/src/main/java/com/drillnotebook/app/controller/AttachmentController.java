@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -67,6 +68,60 @@ public class AttachmentController {
         var found = attachments.findById(id);
         if (found == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "附件不存在");
         return found;
+    }
+
+    @GetMapping("/attachments/{id}/slides")
+    public List<Map<String, Object>> getSlides(@PathVariable long id) throws IOException {
+        var found = attachments.findById(id);
+        if (found == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "附件不存在");
+        String fileName = String.valueOf(found.get("fileName"));
+        if (!fileName.toLowerCase().endsWith(".pptx")) return List.of();
+        String storagePath = (String) found.get("storagePath");
+        try {
+            return storage.listPptxSlides(storagePath);
+        } catch (IOException error) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "无法读取演示文稿内容");
+        }
+    }
+
+    @GetMapping("/attachments/{id}/entries")
+    public List<Map<String, Object>> getEntries(@PathVariable long id) throws IOException {
+        var found = attachments.findById(id);
+        if (found == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "附件不存在");
+        String fileName = String.valueOf(found.get("fileName"));
+        if (!fileName.toLowerCase().endsWith(".zip")) return List.of();
+        String storagePath = (String) found.get("storagePath");
+        try {
+            return storage.listZipEntries(storagePath);
+        } catch (IOException error) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "无法读取压缩包内容");
+        }
+    }
+
+    @GetMapping("/attachments/{id}/media")
+    public ResponseEntity<byte[]> getMedia(@PathVariable long id, @RequestParam String path) throws IOException {
+        var found = attachments.findById(id);
+        if (found == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "附件不存在");
+        if (path == null || path.contains("..") || !path.startsWith("ppt/media/")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "非法媒体路径");
+        }
+        String storagePath = (String) found.get("storagePath");
+        try {
+            byte[] bytes = storage.readMediaBytes(storagePath, path);
+            return ResponseEntity.ok().contentType(MediaType.parseMediaType(guessMediaContentType(path))).body(bytes);
+        } catch (IOException error) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "媒体不存在");
+        }
+    }
+
+    private static String guessMediaContentType(String path) {
+        String lower = path.toLowerCase();
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".gif")) return "image/gif";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".svg")) return "image/svg+xml";
+        return "application/octet-stream";
     }
 
     @GetMapping("/attachments/{id}/content")

@@ -3,14 +3,26 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.config.PortablePathResolver;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.zip.ZipFile;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamConstants;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -49,6 +61,174 @@ public class AttachmentStorageService {
 
     public void deleteFile(String storagePath) throws IOException {
         Files.deleteIfExists(resolveAbsolutePath(storagePath));
+    }
+
+    /**
+     * 列出 zip 压缩包内部文件条目（名称 + 解压后大小），仅用于预览展示，
+     * 不读取文件内容。最多返回 500 条，目录条目被跳过。
+     * 中文 Windows 打包的 zip 常用 GBK 编码文件名，UTF-8 解码会抛
+     * ZipException，故先试 UTF-8 失败后回退 GBK。
+     */
+    public List<Map<String, Object>> listZipEntries(String storagePath) throws IOException {
+        Path abs = resolveAbsolutePath(storagePath);
+        IOException last = null;
+        for (Charset charset : new Charset[] { StandardCharsets.UTF_8, Charset.forName("GBK") }) {
+            try {
+                return readZipEntries(abs, charset);
+            } catch (IOException error) {
+                last = error;
+            }
+        }
+        throw last != null ? last : new IOException("无法读取压缩包");
+    }
+
+    private List<Map<String, Object>> readZipEntries(Path abs, Charset charset) throws IOException {
+        var result = new ArrayList<Map<String, Object>>();
+        try (ZipFile zip = new ZipFile(abs.toFile(), charset)) {
+            var entries = zip.entries();
+            while (entries.hasMoreElements() && result.size() < 2000) {
+                var entry = entries.nextElement();
+                var item = new LinkedHashMap<String, Object>();
+                item.put("name", entry.getName());
+                item.put("size", Math.max(entry.getSize(), 0L));
+                item.put("dir", entry.isDirectory());
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 解析 pptx 每一页幻灯片的文本段落（按页序返回），仅用于预览展示。
+     * pptx 本质是 zip，直接读取 ppt/slides/slideN.xml 抽取 <a:p>/<a:t> 文本，
+     * 不引入 POI。解析失败时抛出 IOException。
+     */
+    public List<Map<String, Object>> listPptxSlides(String storagePath) throws IOException {
+        Path abs = resolveAbsolutePath(storagePath);
+        try (ZipFile zip = new ZipFile(abs.toFile(), StandardCharsets.UTF_8)) {
+            List<String> slideNames = new ArrayList<>();
+            var entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                var entry = entries.nextElement();
+                String name = entry.getName();
+                if (!entry.isDirectory() && name.startsWith("ppt/slides/slide") && name.endsWith(".xml")) {
+                    slideNames.add(name);
+                }
+            }
+            slideNames.sort(Comparator.comparingInt(AttachmentStorageService::slideNumber));
+            var result = new ArrayList<Map<String, Object>>();
+            for (String slideName : slideNames) {
+                var entry = zip.getEntry(slideName);
+                if (entry == null) continue;
+                Map<String, String> rels = readSlideRels(zip, slideName);
+                SlideParse parsed;
+                try (InputStream input = zip.getInputStream(entry)) {
+                    parsed = parseSlide(input);
+                }
+                var images = new ArrayList<String>();
+                for (String embedId : parsed.embedIds) {
+                    String target = rels.get(embedId);
+                    if (target != null && target.startsWith("ppt/media/")) images.add(target);
+                }
+                var item = new LinkedHashMap<String, Object>();
+                item.put("paragraphs", parsed.paragraphs);
+                item.put("images", images);
+                result.add(item);
+            }
+            return result;
+        }
+    }
+
+    /** 读取 pptx 内部媒体文件（ppt/media/...）字节，用于幻灯片图片预览。 */
+    public byte[] readMediaBytes(String storagePath, String mediaPath) throws IOException {
+        Path abs = resolveAbsolutePath(storagePath);
+        try (ZipFile zip = new ZipFile(abs.toFile(), StandardCharsets.UTF_8)) {
+            var entry = zip.getEntry(mediaPath);
+            if (entry == null || entry.isDirectory()) throw new IOException("媒体不存在");
+            try (InputStream input = zip.getInputStream(entry)) {
+                return input.readAllBytes();
+            }
+        }
+    }
+
+    private static final class SlideParse {
+        final List<String> paragraphs = new ArrayList<>();
+        final List<String> embedIds = new ArrayList<>();
+    }
+
+    private static int slideNumber(String name) {
+        String base = name.substring(name.lastIndexOf('/') + 1);
+        String digits = base.replaceAll("\\D", "");
+        try { return Integer.parseInt(digits); } catch (NumberFormatException error) { return Integer.MAX_VALUE; }
+    }
+
+    private static XMLInputFactory newXmlFactory() {
+        XMLInputFactory factory = XMLInputFactory.newInstance();
+        factory.setProperty(XMLInputFactory.SUPPORT_DTD, Boolean.FALSE);
+        factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, Boolean.FALSE);
+        return factory;
+    }
+
+    private static Map<String, String> readSlideRels(ZipFile zip, String slideName) throws IOException {
+        String relsName = slideName.replaceFirst("ppt/slides/", "ppt/slides/_rels/") + ".rels";
+        var map = new LinkedHashMap<String, String>();
+        var entry = zip.getEntry(relsName);
+        if (entry == null) return map;
+        try (InputStream input = zip.getInputStream(entry)) {
+            XMLStreamReader reader = newXmlFactory().createXMLStreamReader(input);
+            while (reader.hasNext()) {
+                if (reader.next() == XMLStreamConstants.START_ELEMENT && "Relationship".equals(reader.getLocalName())) {
+                    String id = reader.getAttributeValue(null, "Id");
+                    String target = reader.getAttributeValue(null, "Target");
+                    if (id != null && target != null) {
+                        map.put(id, target.startsWith("../") ? "ppt/" + target.substring(3) : target);
+                    }
+                }
+            }
+            reader.close();
+        } catch (XMLStreamException error) {
+            throw new IOException(error);
+        }
+        return map;
+    }
+
+    private SlideParse parseSlide(InputStream input) throws IOException {
+        var parse = new SlideParse();
+        try {
+            XMLStreamReader reader = newXmlFactory().createXMLStreamReader(input);
+            StringBuilder current = null;
+            boolean inText = false;
+            while (reader.hasNext()) {
+                int event = reader.next();
+                if (event == XMLStreamConstants.START_ELEMENT) {
+                    String local = reader.getLocalName();
+                    if ("p".equals(local)) current = new StringBuilder();
+                    else if ("t".equals(local)) inText = true;
+                    else if ("br".equals(local) && current != null) current.append('\n');
+                    else if ("tab".equals(local) && current != null) current.append('\t');
+                    else if ("blip".equals(local)) {
+                        String embed = reader.getAttributeValue("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
+                        if (embed != null) parse.embedIds.add(embed);
+                    }
+                } else if (event == XMLStreamConstants.END_ELEMENT) {
+                    String local = reader.getLocalName();
+                    if ("t".equals(local)) inText = false;
+                    else if ("p".equals(local)) {
+                        if (current != null) {
+                            String text = current.toString().trim();
+                            if (!text.isEmpty()) parse.paragraphs.add(text);
+                        }
+                        current = null;
+                    }
+                } else if (event == XMLStreamConstants.CHARACTERS) {
+                    if (inText && current != null) current.append(reader.getText());
+                }
+            }
+            reader.close();
+        } catch (XMLStreamException error) {
+            throw new IOException(error);
+        }
+        return parse;
     }
 
     public Path resolveAbsolutePath(String storagePath) {
