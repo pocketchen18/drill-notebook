@@ -75,12 +75,36 @@ button, input, textarea { font: inherit; }
 .app-shell { height: 100vh; overflow: hidden; background: var(--page-bg); color: var(--text); }
 .app-shell .arco-layout-content { flex: 1; min-height: 0; overflow-y: auto; }
 .app-sider { border-right: 1px solid var(--line); background: var(--panel-bg); }
+/* 折叠后自动隐藏：宽度过渡到 0，内容不溢出、不留边框线 */
+.app-sider-hidden { width: 0 !important; min-width: 0 !important; flex: 0 0 0 !important; overflow: hidden; border-right: 0; transition: width 0.25s ease; }
+.app-sider-hidden .arco-layout-sider-children { visibility: hidden; }
+/* 折叠功能由自定义按钮实现，彻底隐藏 Arco 自带的默认触发条 */
+.app-sider .arco-layout-sider-trigger { display: none; }
 .app-sider .arco-layout-sider-children { display: flex; flex-direction: column; height: 100%; }
 .sider-body { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.sider-body > .arco-menu { flex: 1; overflow-y: auto; }
+.sider-menu-wrap { flex: 1; min-height: 0; overflow-y: auto; }
 .sider-settings { display: flex; align-items: center; gap: 10px; margin: 8px 10px 16px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
 .sider-settings:hover { background: var(--hover-bg); color: var(--text-strong); }
 .sider-settings.active { color: #155eef; }
+.sider-collapse-btn { display: flex; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
+.sider-collapse-btn:hover { background: var(--hover-bg); color: var(--text-strong); }
+.arco-layout-sider-collapsed .sider-collapse-btn { justify-content: center; padding: 10px 0; margin-inline: 8px; }
+/* 折叠态：Arco 折叠菜单默认宽 48px，撑满 56px 侧栏并让图标居中，避免偏移/裁剪 */
+.arco-layout-sider-collapsed .arco-menu.arco-menu-collapse { width: 100%; }
+.arco-layout-sider-collapsed .arco-menu.arco-menu-collapse .arco-menu-inner { padding: 4px 4px; }
+.arco-layout-sider-collapsed .arco-menu.arco-menu-collapse .arco-menu-item { width: 100%; display: flex; justify-content: center; margin-bottom: 8px; }
+.arco-layout-sider-collapsed .brand { justify-content: center; padding: 0; }
+.menu-icon-only { display: inline-flex; align-items: center; justify-content: center; }
+/* 折叠态悬停名称提示（固定定位，避免被侧栏 overflow 裁剪） */
+.sider-hover-tip { position: fixed; left: 62px; z-index: 1000; padding: 5px 10px; border-radius: 6px; background: var(--text-strong); color: var(--panel-bg); font-size: 12px; line-height: 1.4; white-space: nowrap; transform: translateY(-50%); pointer-events: none; box-shadow: 0 4px 12px rgb(0 0 0 / 12%); }
+/* 折叠菜单悬停时 Arco 会给每项自带一个 Tooltip（内容是该项图标），与自定义文字提示重叠遮挡，隐藏掉 */
+.arco-menu-item-tooltip, .arco-menu-item-tooltip ~ .arco-trigger-arrow-container { display: none !important; }
+.arco-trigger.arco-menu-item-tooltip { display: none !important; }
+/* 折叠态图标放大，避免 56px 窄栏里显得过小 */
+.arco-layout-sider-collapsed .menu-icon-only svg { width: 20px; height: 20px; }
+.arco-layout-sider-collapsed .sider-collapse-btn svg,
+.arco-layout-sider-collapsed .sider-settings svg { width: 20px; height: 20px; }
+.arco-layout-sider-collapsed .brand-mark svg { width: 20px; height: 20px; }
 .arco-layout-sider-collapsed .sider-settings { justify-content: center; padding: 10px 0; margin-inline: 8px; }
 .arco-layout-sider-collapsed .sider-settings-text { display: none; }
 .brand { display: flex; align-items: center; gap: 10px; height: 72px; padding: 0 22px; border-bottom: 1px solid var(--line); }
@@ -502,6 +526,10 @@ button, input, textarea { font: inherit; }
 .editor-hint { color: var(--muted); font-size: 12px; }
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
 .topbar-hint { font-size: 12px; }
+
+/* 练习页：刷题/背题 Tab 合并入口，内容区由内层 .page 自行留白 */
+.practice-tabs .arco-tabs-header { padding: 12px 30px 0; }
+.practice-tabs .arco-tabs-content { padding: 0; }
 .settings-grid { columns: 2 420px; column-gap: 20px; }
 .settings-grid > .panel { break-inside: avoid; margin-bottom: 20px; }
 .settings-ai-panel { column-span: all; }
