@@ -82,6 +82,15 @@ public class KnowledgePointController {
     @DeleteMapping("/{id}")
     public void delete(@PathVariable long id) { find(id); points.delete(id); }
 
+    /** 批量删除：body { ids: [1,2,3] }，单事务内级联删除，返回实际删除数。 */
+    @PostMapping("/batch-delete")
+    public Map<String, Object> deleteBatch(@RequestBody Map<String, Object> body) {
+        List<Long> ids = longs(body.get("ids"));
+        if (ids.isEmpty()) throw new IllegalArgumentException("缺少 ids");
+        int deleted = points.deleteBatch(ids);
+        return Map.of("deleted", deleted);
+    }
+
     @PostMapping("/import/markdown")
     public Map<String, Object> importMarkdown(@RequestBody Map<String, Object> body) {
         Long bankId = longValue(body.get("bankId"));

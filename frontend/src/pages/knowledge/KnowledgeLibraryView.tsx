@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
-import { Button, Empty, Select, Space, Tooltip, Typography } from '@arco-design/web-react';
-import { BookOpenCheck, FileText, Shuffle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Empty, Popconfirm, Select, Space, Tooltip, Typography } from '@arco-design/web-react';
+import { BookOpenCheck, FileText, Shuffle, Trash2 } from 'lucide-react';
 import type { Bank, KnowledgePoint } from '../../lib/types';
 import { KnowledgeItemCard } from './KnowledgeItemCard';
 
@@ -17,9 +17,12 @@ export interface KnowledgeLibraryViewProps {
   onTagsChange: (values: string[]) => void;
   onGroupLevelChange: (level: number) => void;
   onToggleSelect: (id: number, checked: boolean) => void;
-  onMove: (id: number, delta: number) => void;
+  onDrop: (sourceId: number, targetId: number, position: 'before' | 'after') => void;  // 拖拽插入：position 表示插到 targetId 的前面还是后面
   onShuffle: () => void;
   onSelectAllFiltered: () => void;
+  allFilteredSelected: boolean;                         // 筛选结果是否已全部选中，决定全选按钮是勾选还是取消勾选
+  onDeleteSelected: () => void;                         // 一键删除所有已选知识卡
+  deletingSelected: boolean;                            // 批量删除请求进行中
   onAddToPlan: (points: KnowledgePoint[]) => void;
   onEdit: (point?: KnowledgePoint) => void;
   onDelete: (id: number) => void;
@@ -31,11 +34,46 @@ export interface KnowledgeLibraryViewProps {
   viewModeLoading: boolean;                              // 切换中（批量请求未完成）
 }
 
+const MASONRY_COLUMNS = 2;
+const MASONRY_GAP = 12;
+
+/**
+ * 瀑布流分列：按卡片数组顺序（S 形"先左右后上下"）逐张分配到当前累积高度更矮的那一列。
+ * 用 ResizeObserver 监听卡片高度变化，触发重排。
+ * 返回每张卡应归属的列索引（0 = 左，1 = 右）。
+ */
+function useMasonry<T>(items: T[], refs: React.MutableRefObject<Array<HTMLElement | null>>): number[] {
+  const [columns, setColumns] = useState<number[]>(() => items.map((_, i) => i % MASONRY_COLUMNS));
+
+  useEffect(() => {
+    if (!items.length) return;
+    const measure = (): void => {
+      const colHeights = new Array<number>(MASONRY_COLUMNS).fill(0);
+      const next: number[] = [];
+      // 第一张放左列，后续按"当前更矮的列"分配，保留 S 形填充顺序
+      for (let i = 0; i < items.length; i += 1) {
+        const targetCol = i === 0 ? 0 : (colHeights[0] <= colHeights[1] ? 0 : 1);
+        next.push(targetCol);
+        const h = refs.current[i]?.offsetHeight ?? 0;
+        colHeights[targetCol] += h + MASONRY_GAP;
+      }
+      setColumns((prev) => (prev.length === next.length && prev.every((c, idx) => c === next[idx]) ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    refs.current.forEach((el) => { if (el) ro.observe(el); });
+    return () => ro.disconnect();
+  }, [items, refs]);
+
+  return columns;
+}
+
 export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
   const {
     banks, bankId, onBankChange, points, selectedIds, categories, tags, groupLevel,
     onCategoriesChange, onTagsChange, onGroupLevelChange,
-    onToggleSelect, onMove, onShuffle, onSelectAllFiltered, onAddToPlan,
+    onToggleSelect, onDrop, onShuffle, onSelectAllFiltered, allFilteredSelected,
+    onDeleteSelected, deletingSelected, onAddToPlan,
     onEdit, onDelete, onClickCard,
     onStartSession,
     bankHasSummary, viewMode, onToggleViewMode, viewModeLoading,
@@ -65,6 +103,108 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
     return entries;
   }, [filtered, groupLevel]);
 
+  // 瀑布流分列（仅不分组模式下用 flat 列表）
+  const flatList = grouped ? [] : filtered;
+  const refs = useRef<Array<HTMLElement | null>>([]);
+  const columns = useMasonry(flatList, refs);
+
+  const renderCard = (point: KnowledgePoint, groupLabel: string | undefined, groupIds: number[] | undefined, index: number): React.ReactNode => {
+    const handleDrop = groupIds
+      ? (sourceId: number, targetId: number, position: 'before' | 'after'): void => {
+          if (groupIds.includes(sourceId) && groupIds.includes(targetId)) onDrop(sourceId, targetId, position);
+        }
+      : onDrop;
+    return (
+      <KnowledgeItemCard
+        key={point.id}
+        point={point}
+        selected={selectedIds.includes(point.id)}
+        groupLabel={groupLabel}
+        onToggleSelect={(c) => onToggleSelect(point.id, c)}
+        onDrop={handleDrop}
+        onAddToPlan={() => onAddToPlan([point])}
+        onEdit={() => onEdit(point)}
+        onDelete={() => onDelete(point.id)}
+        onClick={() => onClickCard(point)}
+      />
+    );
+  };
+
+  // 不分组：用 columns 把卡片分到两列容器，两列独立流动
+  if (!grouped) {
+    const left = filtered.filter((_, i) => columns[i] === 0);
+    const right = filtered.filter((_, i) => columns[i] === 1);
+    // 但 columns 是按"分到哪列"算的，filtered 顺序对应 columns 顺序
+    const leftCards = filtered.map((p, i) => columns[i] === 0 ? p : null).filter(Boolean) as KnowledgePoint[];
+    const rightCards = filtered.map((p, i) => columns[i] === 1 ? p : null).filter(Boolean) as KnowledgePoint[];
+    void left; void right;
+    // 需要保留原始 index 用于 ref 测量
+    const leftIdx = filtered.map((_, i) => i).filter((i) => columns[i] === 0);
+    const rightIdx = filtered.map((_, i) => i).filter((i) => columns[i] === 1);
+    return (
+      <section className="panel">
+        <div className="panel-header">
+          <h2>知识卡编排</h2>
+          <Select value={bankId} onChange={(v) => onBankChange(Number(v))} placeholder="选择题库" style={{ width: 280 }}>
+            {banks.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}</Select.Option>)}
+          </Select>
+        </div>
+        <div className="panel-body">
+          <div className="advanced-filters advanced-filters-compact">
+            <Select mode="multiple" allowClear placeholder="分类" value={categories} onChange={(v) => onCategoriesChange(v.map(String))} style={{ width: 120 }}>
+              {categoryOptions.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+            </Select>
+            <Select mode="multiple" allowClear placeholder="标签" value={tags} onChange={(v) => onTagsChange(v.map(String))} style={{ width: 140 }}>
+              {tagOptions.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+            </Select>
+            <Select value={groupLevel} onChange={(v) => onGroupLevelChange(Number(v))} style={{ width: 180 }} aria-label="按级分组查看">
+              <Select.Option key={0} value={0}>不分组</Select.Option>
+              {[1, 2, 3, 4, 5, 6].map((level) => <Select.Option key={level} value={level}>{level} 级标题分组</Select.Option>)}
+            </Select>
+            {bankHasSummary && (
+              <span style={{ marginLeft: 'auto' }}>
+                <Tooltip content={viewMode === 'summary' ? '把所有已总结卡还原为原文显示' : '把所有已总结卡切回 AI 总结显示'}>
+                  <Button size="small" icon={<FileText size={14} />} loading={viewModeLoading} onClick={onToggleViewMode}>
+                    {viewMode === 'summary' ? '显示原文' : '显示总结'}
+                  </Button>
+                </Tooltip>
+              </span>
+            )}
+          </div>
+          <div className="selection-toolbar">
+            <Space>
+              <Button size="small" onClick={onSelectAllFiltered}>{allFilteredSelected ? `取消全选筛选结果（${filtered.length}）` : `全选筛选结果（${filtered.length}）`}</Button>
+              <Button size="small" icon={<Shuffle size={14} />} onClick={onShuffle}>随机重排</Button>
+              <Popconfirm title={`删除选中的 ${selectedIds.length} 个知识点？`} content="删除后不可恢复，关联的复习计划与记忆曲线记录会一并清除。" disabled={!selectedIds.length} onOk={onDeleteSelected}>
+                <Button size="small" status="danger" icon={<Trash2 size={14} />} disabled={!selectedIds.length} loading={deletingSelected}>删除已选（{selectedIds.length}）</Button>
+              </Popconfirm>
+            </Space>
+            <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
+          </div>
+          <div className="knowledge-masonry">
+            <div className="knowledge-grid-col">
+              {leftCards.map((point, k) => (
+                <div key={point.id} ref={(el) => { refs.current[leftIdx[k]] = el; }}>
+                  {renderCard(point, undefined, undefined, leftIdx[k])}
+                </div>
+              ))}
+            </div>
+            <div className="knowledge-grid-col">
+              {rightCards.map((point, k) => (
+                <div key={point.id} ref={(el) => { refs.current[rightIdx[k]] = el; }}>
+                  {renderCard(point, undefined, undefined, rightIdx[k])}
+                </div>
+              ))}
+            </div>
+          </div>
+          {!filtered.length && <Empty description="暂无知识点；可新建或导入 Markdown" />}
+          <div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={onStartSession}>开始背知识点（{selectedIds.length}）</Button></div>
+        </div>
+      </section>
+    );
+  }
+
+  // 分组模式：每个分组内部同样做瀑布流
   return (
     <section className="panel">
       <div className="panel-header">
@@ -97,23 +237,25 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
         </div>
         <div className="selection-toolbar">
           <Space>
-            <Button size="small" onClick={onSelectAllFiltered}>全选筛选结果（{filtered.length}）</Button>
+            <Button size="small" onClick={onSelectAllFiltered}>{allFilteredSelected ? `取消全选筛选结果（${filtered.length}）` : `全选筛选结果（${filtered.length}）`}</Button>
             <Button size="small" icon={<Shuffle size={14} />} onClick={onShuffle}>随机重排</Button>
+            <Popconfirm title={`删除选中的 ${selectedIds.length} 个知识点？`} content="删除后不可恢复，关联的复习计划与记忆曲线记录会一并清除。" disabled={!selectedIds.length} onOk={onDeleteSelected}>
+              <Button size="small" status="danger" icon={<Trash2 size={14} />} disabled={!selectedIds.length} loading={deletingSelected}>删除已选（{selectedIds.length}）</Button>
+            </Popconfirm>
           </Space>
           <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
         </div>
-        <div className="knowledge-grid">
-          {(grouped || filtered).map((pointOrEntry) => {
-            if (grouped) {
-              const [groupKey, items] = pointOrEntry as [string, KnowledgePoint[]];
-              return items.map((point) => (
-                <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} groupLabel={groupKey} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />
-              ));
-            }
-            const point = pointOrEntry as KnowledgePoint;
-            return <KnowledgeItemCard key={point.id} point={point} selected={selectedIds.includes(point.id)} onToggleSelect={(c) => onToggleSelect(point.id, c)} onMove={(d) => onMove(point.id, d)} onAddToPlan={() => onAddToPlan([point])} onEdit={() => onEdit(point)} onDelete={() => onDelete(point.id)} onClick={() => onClickCard(point)} />;
-          })}
-        </div>
+        {grouped.map(([groupKey, items]) => {
+          const groupIds = items.map((p) => p.id);
+          return (
+            <div key={groupKey} className="knowledge-group">
+              <h3 className="knowledge-group-title">{groupKey}</h3>
+              <div className="knowledge-grid">
+                {items.map((point) => renderCard(point, groupKey, groupIds, 0))}
+              </div>
+            </div>
+          );
+        })}
         {!filtered.length && <Empty description="暂无知识点；可新建或导入 Markdown" />}
         <div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={onStartSession}>开始背知识点（{selectedIds.length}）</Button></div>
       </div>

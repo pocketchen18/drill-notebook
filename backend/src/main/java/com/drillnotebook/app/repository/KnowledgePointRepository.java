@@ -112,6 +112,21 @@ public class KnowledgePointRepository {
         jdbc.update("DELETE FROM knowledge_point WHERE id = ?", id);
     }
 
+    /**
+     * 批量删除知识点：单个事务内逐个执行与单删一致的级联清理，任一失败整体回滚。
+     */
+    @Transactional
+    public int deleteBatch(List<Long> ids) {
+        Set<Long> unique = new LinkedHashSet<>();
+        for (Long id : ids == null ? Collections.<Long>emptyList() : ids) {
+            if (id != null) unique.add(id);
+        }
+        for (Long id : unique) {
+            delete(id);
+        }
+        return unique.size();
+    }
+
     private void replaceQuestions(long id, List<Long> questionIds) {
         jdbc.update("DELETE FROM knowledge_point_question WHERE knowledge_point_id = ?", id);
         for (Long questionId : questionIds == null ? Collections.<Long>emptyList() : questionIds) {
