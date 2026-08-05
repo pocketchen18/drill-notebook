@@ -370,7 +370,6 @@ button, input, textarea { font: inherit; }
 .memory-card { min-height: 520px; }
 .memory-cover { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 150px; margin-top: 22px; border: 1px dashed #b8c7df; border-radius: 8px; color: var(--muted); background: var(--subtle-bg); }
 .form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.knowledge-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; gap: 12px; margin-top: 14px; align-items: start; }
 .knowledge-masonry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; align-items: start; }
 .knowledge-grid-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .knowledge-group { margin-top: 18px; }

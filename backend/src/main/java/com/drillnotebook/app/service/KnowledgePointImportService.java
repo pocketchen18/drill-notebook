@@ -3,9 +3,11 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.repository.KnowledgePointRepository;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -21,7 +23,8 @@ public class KnowledgePointImportService {
     /**
      * 知识点 Markdown 导入：先走规则解析，规则失败时由 AI 兜底。
      * 自动按文档里实际出现的最深一级标题作为知识点边界（1-6），
-     * 更浅级别的标题行并入正文作 inheritedCategory，更深的并入正文并记入 headingPath。
+     * 更浅级别的标题行并入正文作 inheritedCategory，更深的并入正文；
+     * headingPath 记录完整标题链：浅层祖先章节在前、深层小节在后，供前端按级分组。
      * AI 兜底把原文喂给模型，模型返回 [{title,content,category,tags}] JSON，再统一入库。
      * AI 不可用时透传错误。
      */
@@ -85,24 +88,46 @@ public class KnowledgePointImportService {
     static List<Section> parse(String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
-        // 统计每个标题级别（1-6）的出现次数，据此选择知识点边界级别：
-        // 优先取“出现次数 >= 2 的最深级别”——同级标题重复出现意味着它们是并列的知识点；
+        // 统计每个标题级别（1-6）的出现次数及其所属父章节（最近的更浅标题），据此选择知识点边界级别：
+        // 优先取“出现次数 >= 2 且分布在 >= 2 个不同父章节下的最深级别”——跨章节并列重复才说明它们是知识点边界；
+        // 仅在某一个父章节下重复的深层标题（如个别章节里的 ### 子小节）不足以当边界，应退回更浅级别；
+        // 若没有级别满足该条件，退回“出现次数 >= 2 的最深级别”；
         // 若没有任何级别重复出现（整篇只有一个标题），退化为最浅级别，把整篇作为一张卡片。
         int[] levelCounts = new int[7];
+        @SuppressWarnings("unchecked")
+        Set<String>[] parentSets = new Set[7];
+        for (int level = 1; level <= 6; level++) parentSets[level] = new HashSet<>();
+        String[] lastHeading = new String[7];
         boolean found = false;
         for (String line : normalized.split("\n", -1)) {
             int depth = headingDepth(line);
-            if (depth > 0) {
-                levelCounts[depth]++;
-                found = true;
+            if (depth <= 0) continue;
+            levelCounts[depth]++;
+            found = true;
+            String parent = null;
+            for (int shallower = depth - 1; shallower >= 1; shallower--) {
+                if (lastHeading[shallower] != null) {
+                    parent = lastHeading[shallower];
+                    break;
+                }
             }
+            parentSets[depth].add(parent == null ? "\u0000root" : parent);
+            lastHeading[depth] = line.replaceFirst("^#+\\s+", "").trim();
         }
         if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
         int headingLevel = -1;
         for (int level = 6; level >= 1; level--) {
-            if (levelCounts[level] >= 2) {
+            if (levelCounts[level] >= 2 && parentSets[level].size() >= 2) {
                 headingLevel = level;
                 break;
+            }
+        }
+        if (headingLevel < 0) {
+            for (int level = 6; level >= 1; level--) {
+                if (levelCounts[level] >= 2) {
+                    headingLevel = level;
+                    break;
+                }
             }
         }
         if (headingLevel < 0) {
@@ -121,6 +146,9 @@ public class KnowledgePointImportService {
         String title = null;
         String inheritedCategory = null;
         List<String> headingPath = new ArrayList<>();
+        // 浅层标题栈（标题文本 + 级别）：维护当前所在章节链，边界出现时快照进 headingPath 前缀
+        List<String> ancestorTitles = new ArrayList<>();
+        List<Integer> ancestorLevels = new ArrayList<>();
         List<String> body = new ArrayList<>();
         List<String> preamble = new ArrayList<>();
         for (String line : normalized.split("\n", -1)) {
@@ -128,13 +156,27 @@ public class KnowledgePointImportService {
             if (line.matches(headingPattern)) {
                 if (title != null) result.add(section(title, body, inheritedCategory, headingPath));
                 title = line.replaceFirst(stripPattern, "").trim();
-                headingPath = new ArrayList<>();
+                headingPath = new ArrayList<>(ancestorTitles);
                 body = new ArrayList<>(preamble);
                 preamble.clear();
             } else if (headingDepth > 0 && headingDepth < headingLevel) {
-                inheritedCategory = line.replaceFirst("^#+\\s+", "").trim();
-                if (title != null) body.add(line);
-                else preamble.add(line);
+                // 新章节开始：先用旧分类收尾当前知识点，避免它继承下一章的分类；
+                // 章节标题行转入 preamble，作为下一节正文的上下文。
+                if (title != null) {
+                    result.add(section(title, body, inheritedCategory, headingPath));
+                    title = null;
+                    body = new ArrayList<>();
+                }
+                String shallowerTitle = line.replaceFirst("^#+\\s+", "").trim();
+                inheritedCategory = shallowerTitle;
+                // 弹掉同级或更深的旧祖先，再压入当前章节，保持栈严格由浅到深
+                while (!ancestorLevels.isEmpty() && ancestorLevels.get(ancestorLevels.size() - 1) >= headingDepth) {
+                    ancestorLevels.remove(ancestorLevels.size() - 1);
+                    ancestorTitles.remove(ancestorTitles.size() - 1);
+                }
+                ancestorLevels.add(headingDepth);
+                ancestorTitles.add(shallowerTitle);
+                preamble.add(line);
             } else if (headingDepth >= headingLevel && title != null) {
                 String deeperTitle = line.replaceFirst("^#+\\s+", "").trim();
                 headingPath.add(deeperTitle);

@@ -37,12 +37,25 @@ export interface KnowledgeLibraryViewProps {
 const MASONRY_COLUMNS = 2;
 const MASONRY_GAP = 12;
 
+/** 把瀑布流分配结果转成"每列的卡片列表 + 每列的原始下标列表" */
+function splitByColumn<T>(items: T[], columns: number[]): { colCards: T[][]; colIdx: number[][] } {
+  const colCards: T[][] = Array.from({ length: MASONRY_COLUMNS }, () => []);
+  const colIdx: number[][] = Array.from({ length: MASONRY_COLUMNS }, () => []);
+  items.forEach((item, i) => {
+    const col = columns[i] ?? i % MASONRY_COLUMNS;
+    colCards[col].push(item);
+    colIdx[col].push(i);
+  });
+  return { colCards, colIdx };
+}
+
 /**
  * 瀑布流分列：按卡片数组顺序（S 形"先左右后上下"）逐张分配到当前累积高度更矮的那一列。
  * 用 ResizeObserver 监听卡片高度变化，触发重排。
+ * items 带 key 字段：key 变化（跨分组边界）时重置两列高度，保证每个分组内部独立平衡。
  * 返回每张卡应归属的列索引（0 = 左，1 = 右）。
  */
-function useMasonry<T>(items: T[], refs: React.MutableRefObject<Array<HTMLElement | null>>): number[] {
+function useMasonry<T extends { key: string }>(items: T[], refs: React.MutableRefObject<Array<HTMLElement | null>>): number[] {
   const [columns, setColumns] = useState<number[]>(() => items.map((_, i) => i % MASONRY_COLUMNS));
 
   useEffect(() => {
@@ -52,7 +65,10 @@ function useMasonry<T>(items: T[], refs: React.MutableRefObject<Array<HTMLElemen
       const next: number[] = [];
       // 第一张放左列，后续按"当前更矮的列"分配，保留 S 形填充顺序
       for (let i = 0; i < items.length; i += 1) {
-        const targetCol = i === 0 ? 0 : (colHeights[0] <= colHeights[1] ? 0 : 1);
+        if (i > 0 && items[i].key !== items[i - 1].key) colHeights.fill(0); // 进入新分组，两列高度清零
+        const targetCol = i === 0 || colHeights[0] === 0 && colHeights[1] === 0
+          ? 0
+          : (colHeights[0] <= colHeights[1] ? 0 : 1);
         next.push(targetCol);
         const h = refs.current[i]?.offsetHeight ?? 0;
         colHeights[targetCol] += h + MASONRY_GAP;
@@ -103,10 +119,14 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
     return entries;
   }, [filtered, groupLevel]);
 
-  // 瀑布流分列（仅不分组模式下用 flat 列表）
-  const flatList = grouped ? [] : filtered;
+  // 瀑布流分列：不分组用 flat 列表；分组模式按"组键+卡片"拍平，组内独立流动，组间互不影响
+  const masonryItems = useMemo(
+    () => (grouped ? grouped.flatMap(([key, items]) => items.map((point) => ({ key, point }))) : filtered.map((point) => ({ key: '', point }))),
+    [grouped, filtered]
+  );
   const refs = useRef<Array<HTMLElement | null>>([]);
-  const columns = useMasonry(flatList, refs);
+  const columns = useMasonry(masonryItems, refs);
+  const { colCards, colIdx } = splitByColumn(masonryItems, columns);
 
   const renderCard = (point: KnowledgePoint, groupLabel: string | undefined, groupIds: number[] | undefined, index: number): React.ReactNode => {
     const handleDrop = groupIds
@@ -132,15 +152,6 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
 
   // 不分组：用 columns 把卡片分到两列容器，两列独立流动
   if (!grouped) {
-    const left = filtered.filter((_, i) => columns[i] === 0);
-    const right = filtered.filter((_, i) => columns[i] === 1);
-    // 但 columns 是按"分到哪列"算的，filtered 顺序对应 columns 顺序
-    const leftCards = filtered.map((p, i) => columns[i] === 0 ? p : null).filter(Boolean) as KnowledgePoint[];
-    const rightCards = filtered.map((p, i) => columns[i] === 1 ? p : null).filter(Boolean) as KnowledgePoint[];
-    void left; void right;
-    // 需要保留原始 index 用于 ref 测量
-    const leftIdx = filtered.map((_, i) => i).filter((i) => columns[i] === 0);
-    const rightIdx = filtered.map((_, i) => i).filter((i) => columns[i] === 1);
     return (
       <section className="panel">
         <div className="panel-header">
@@ -182,20 +193,15 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
             <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
           </div>
           <div className="knowledge-masonry">
-            <div className="knowledge-grid-col">
-              {leftCards.map((point, k) => (
-                <div key={point.id} ref={(el) => { refs.current[leftIdx[k]] = el; }}>
-                  {renderCard(point, undefined, undefined, leftIdx[k])}
-                </div>
-              ))}
-            </div>
-            <div className="knowledge-grid-col">
-              {rightCards.map((point, k) => (
-                <div key={point.id} ref={(el) => { refs.current[rightIdx[k]] = el; }}>
-                  {renderCard(point, undefined, undefined, rightIdx[k])}
-                </div>
-              ))}
-            </div>
+            {colCards.map((cards, col) => (
+              <div key={col} className="knowledge-grid-col">
+                {cards.map((item, k) => (
+                  <div key={item.point.id} ref={(el) => { refs.current[colIdx[col][k]] = el; }}>
+                    {renderCard(item.point, undefined, undefined, colIdx[col][k])}
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
           {!filtered.length && <Empty description="暂无知识点；可新建或导入 Markdown" />}
           <div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={onStartSession}>开始背知识点（{selectedIds.length}）</Button></div>
@@ -245,13 +251,28 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
           </Space>
           <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
         </div>
-        {grouped.map(([groupKey, items]) => {
-          const groupIds = items.map((p) => p.id);
+        {grouped.map(([groupKey]) => {
+          const groupItems = masonryItems.filter((item) => item.key === groupKey);
+          const groupIds = groupItems.map((item) => item.point.id);
           return (
             <div key={groupKey} className="knowledge-group">
               <h3 className="knowledge-group-title">{groupKey}</h3>
-              <div className="knowledge-grid">
-                {items.map((point) => renderCard(point, groupKey, groupIds, 0))}
+              <div className="knowledge-masonry">
+                {colCards.map((cards, col) => {
+                  const inGroup = cards
+                    .map((item, k) => ({ item, flatIdx: colIdx[col][k] }))
+                    .filter(({ flatIdx }) => masonryItems[flatIdx]?.key === groupKey);
+                  if (!inGroup.length) return null;
+                  return (
+                    <div key={col} className="knowledge-grid-col">
+                      {inGroup.map(({ item, flatIdx }) => (
+                        <div key={item.point.id} ref={(el) => { refs.current[flatIdx] = el; }}>
+                          {renderCard(item.point, groupKey, groupIds, flatIdx)}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );

@@ -8,6 +8,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.drillnotebook.app.repository.KnowledgePointRepository;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -49,8 +52,8 @@ class KnowledgePointImportServiceTest {
         assertEquals("内存结构", sections.get(0).title());
         assertEquals("垃圾回收", sections.get(1).title());
         assertTrue(sections.get(0).content().contains("# 第一章 JVM"));
-        // 按 level=2 分块时没有更深标题，headingPath 为空
-        assertEquals(List.of(), sections.get(0).headingPath());
+        // 按 level=2 分块时没有更深标题，headingPath 只含浅层祖先章节
+        assertEquals(List.of("第一章 JVM"), sections.get(0).headingPath());
     }
 
     @Test
@@ -95,6 +98,25 @@ class KnowledgePointImportServiceTest {
         assertEquals("第一章：操作系统基础概念", sections.get(0).category());
         assertEquals("2. 并行与并发区别", sections.get(1).title());
         assertEquals("第一章：操作系统基础概念", sections.get(1).category());
+    }
+
+    @Test
+    void deepHeadingRepeatedInSingleSectionDoesNotHijackBoundary() throws Exception {
+        // 回归：fixture 里 ### 仅在第六章一个 ## 下出现两次，不应被选为边界；应按 ## 切分
+        String source = Files.readString(Path.of("src/test/resources/fixtures/操作系统知识点2.md"), StandardCharsets.UTF_8);
+        List<KnowledgePointImportService.Section> sections = KnowledgePointImportService.parse(source);
+        assertEquals(20, sections.size());
+        assertEquals("1. 分时操作系统", sections.get(0).title());
+        assertEquals("第一章：操作系统基础概念", sections.get(0).category());
+        // headingPath 含浅层祖先章节，前端“1 级标题分组”可按章节分组全部卡片
+        assertEquals(List.of("第一章：操作系统基础概念"), sections.get(0).headingPath());
+        assertEquals("4. 磁盘调度算法", sections.get(16).title());
+        assertEquals("第五章：设备管理", sections.get(16).category());
+        assertEquals(List.of("第五章：设备管理"), sections.get(16).headingPath());
+        // 最后一个知识点：浅层章节在前，### 子小节在后
+        KnowledgePointImportService.Section last = sections.get(19);
+        assertEquals("三、逻辑文件与文件结构", last.title());
+        assertEquals(List.of("第六章：文件管理", "（一）逻辑文件分类", "（二）逻辑与物理结构关联"), last.headingPath());
     }
 
     @Test
