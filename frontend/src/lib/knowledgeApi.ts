@@ -42,3 +42,8 @@ export async function restoreOriginal(pointId: number): Promise<{ content: strin
 export async function restoreSummary(pointId: number): Promise<{ content: string }> {
   return post<{ content: string }>(`/api/knowledge-points/${pointId}/restore-summary`, {});
 }
+
+// 批量删除知识点：后端单事务级联删除，返回实际删除数
+export async function deleteKnowledgePoints(ids: number[]): Promise<{ deleted: number }> {
+  return post<{ deleted: number }>('/api/knowledge-points/batch-delete', { ids });
+}
