@@ -219,10 +219,12 @@ ipcMain.handle('video:fetch-title', async (event, url: string) => {
 });
 
 app.whenReady().then(async () => {
+  // 开发模式（加载 vite dev server）下不注入 CSP：@vitejs/plugin-react 的 preamble 内联脚本会被拦截导致白屏
+  const devMode = /^https?:\/\//.test(rendererEntry());
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     // 不要覆盖第三方 iframe 内容（B站/YouTube 等）的原始 CSP，
     // 否则我们的 default-src 会阻止它们的脚本加载
-    if (!details.url.startsWith('http://127.0.0.1:') && !details.url.startsWith('http://localhost:') && !details.url.startsWith('file://')) {
+    if (devMode || !details.url.startsWith('http://127.0.0.1:') && !details.url.startsWith('http://localhost:') && !details.url.startsWith('file://')) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }

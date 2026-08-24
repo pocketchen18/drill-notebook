@@ -17,6 +17,7 @@ public class KnowledgePointRecord {
     public String category;
     public List<String> tags = new ArrayList<>();
     public List<String> headingPath = new ArrayList<>();
+    public Integer sortIndex;
     public String createdAt;
     public String updatedAt;
     public boolean hasOriginal;
@@ -29,6 +30,8 @@ public class KnowledgePointRecord {
         point.title = result.getString("title");
         point.content = result.getString("content");
         point.category = result.getString("category");
+        Object sort = result.getObject("sort_index");
+        point.sortIndex = sort == null ? null : ((Number) sort).intValue();
         point.createdAt = result.getString("created_at");
         point.updatedAt = result.getString("updated_at");
         point.hasOriginal = result.getBoolean("has_original");
@@ -56,6 +59,7 @@ public class KnowledgePointRecord {
         result.put("category", category);
         result.put("tags", tags);
         result.put("headingPath", headingPath);
+        result.put("sortIndex", sortIndex);
         result.put("questionIds", questionIds);
         result.put("createdAt", createdAt);
         result.put("updatedAt", updatedAt);

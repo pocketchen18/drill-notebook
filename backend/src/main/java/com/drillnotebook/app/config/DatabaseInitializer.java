@@ -61,11 +61,14 @@ public class DatabaseInitializer {
             ensureColumn(connection, "ai_chat_message", "content_cipher", "TEXT");
             ensureColumn(connection, "ai_chat_message", "content_meta", "TEXT");
             ensureColumn(connection, "knowledge_point", "heading_path", "TEXT");
+            ensureColumn(connection, "knowledge_point", "sort_index", "INTEGER");
             ensureColumn(connection, "note_page", "content_hash", "TEXT");
             migrateAiChatSessions(connection);
             migrateAiConfigPurposes(connection);
             exec(connection, "CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");
             exec(connection, "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_session ON ai_chat_message(session_id, id)");
+            // 手动排序索引依赖 sort_index 列，须在 ensureColumn 补齐该列之后再创建（老库升级场景）
+            exec(connection, "CREATE INDEX IF NOT EXISTS idx_knowledge_point_sort ON knowledge_point(bank_id, sort_index, id)");
             Integer current = null;
             try (var stmt = connection.createStatement(); var result = stmt.executeQuery("SELECT version FROM schema_version LIMIT 1")) {
                 if (result.next()) current = result.getInt(1);

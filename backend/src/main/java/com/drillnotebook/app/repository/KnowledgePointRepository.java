@@ -4,12 +4,15 @@ import com.drillnotebook.app.model.KnowledgePointRecord;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -32,8 +35,8 @@ public class KnowledgePointRepository {
         String baseSql = "SELECT kp.*, " +
                 "EXISTS(SELECT 1 FROM knowledge_point_original kpo WHERE kpo.point_id = kp.id AND kpo.role = 'original') AS has_original " +
                 "FROM knowledge_point kp ";
-        if (bankId == null) return jdbc.query(baseSql + "ORDER BY COALESCE(kp.category, ''), kp.title, kp.id", rowMapper);
-        return jdbc.query(baseSql + "WHERE kp.bank_id = ? ORDER BY COALESCE(kp.category, ''), kp.title, kp.id", rowMapper, bankId);
+        if (bankId == null) return jdbc.query(baseSql + "ORDER BY (kp.sort_index IS NULL), kp.sort_index, COALESCE(kp.category, ''), kp.title, kp.id", rowMapper);
+        return jdbc.query(baseSql + "WHERE kp.bank_id = ? ORDER BY (kp.sort_index IS NULL), kp.sort_index, COALESCE(kp.category, ''), kp.title, kp.id", rowMapper, bankId);
     }
 
     public KnowledgePointRecord findById(long id) {
@@ -87,6 +90,41 @@ public class KnowledgePointRepository {
     @Transactional
     public void updateContentOnly(long id, String content) {
         jdbc.update("UPDATE knowledge_point SET content = ?, updated_at = datetime('now') WHERE id = ?", content, id);
+    }
+
+    /**
+     * 全量重排某题库下全部知识点的顺序：按传入 id 列表的顺序，从 0 开始递增写入 sort_index。
+     * 校验：sortedIds 必须恰好覆盖该题库全部知识点，且无重复。整个批次在事务内执行。
+     */
+    @Transactional
+    public void reorderAll(long bankId, List<Long> sortedIds) {
+        if (sortedIds == null || sortedIds.isEmpty()) {
+            throw new IllegalArgumentException("排序列表不能为空");
+        }
+        Set<Long> unique = new HashSet<>(sortedIds);
+        if (unique.size() != sortedIds.size()) {
+            throw new IllegalArgumentException("排序列表包含重复 id");
+        }
+        List<Long> existing = jdbc.query(
+                "SELECT id FROM knowledge_point WHERE bank_id = ? ORDER BY id",
+                (result, row) -> result.getLong(1), bankId);
+        if (!new HashSet<>(existing).equals(unique)) {
+            throw new IllegalArgumentException("排序列表必须包含该题库的全部知识点");
+        }
+        jdbc.batchUpdate(
+                "UPDATE knowledge_point SET sort_index = ?, updated_at = datetime('now') WHERE id = ?",
+                new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement statement, int index) throws SQLException {
+                        statement.setInt(1, index);
+                        statement.setLong(2, sortedIds.get(index));
+                    }
+
+                    @Override
+                    public int getBatchSize() {
+                        return sortedIds.size();
+                    }
+                });
     }
 
     @Transactional

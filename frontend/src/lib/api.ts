@@ -1,4 +1,4 @@
-const FALLBACK_BASE_URL = 'http://127.0.0.1:18080';
+const FALLBACK_BASE_URL = 'http://127.0.0.1:18081';
 
 let baseUrlPromise: Promise<string> | undefined;
 
