@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Empty, Select, Space, Tooltip, Typography } from '@arco-design/web-react';
-import { BookOpenCheck, FileText, Shuffle } from 'lucide-react';
+import { Button, Empty, Popconfirm, Select, Space, Tooltip, Typography } from '@arco-design/web-react';
+import { BookOpenCheck, FileText, Shuffle, Trash2 } from 'lucide-react';
 import type { Bank, KnowledgePoint } from '../../lib/types';
 import { KnowledgeItemCard } from './KnowledgeItemCard';
 
@@ -20,6 +20,9 @@ export interface KnowledgeLibraryViewProps {
   onDrop: (sourceId: number, targetId: number, position: 'before' | 'after') => void;  // 拖拽插入：position 表示插到 targetId 的前面还是后面
   onShuffle: () => void;
   onSelectAllFiltered: () => void;
+  allFilteredSelected: boolean;                         // 筛选结果是否已全部选中，决定全选按钮是勾选还是取消勾选
+  onDeleteSelected: () => void;                         // 一键删除所有已选知识卡
+  deletingSelected: boolean;                            // 批量删除请求进行中
   onAddToPlan: (points: KnowledgePoint[]) => void;
   onEdit: (point?: KnowledgePoint) => void;
   onDelete: (id: number) => void;
@@ -85,7 +88,8 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
   const {
     banks, bankId, onBankChange, points, selectedIds, categories, tags, groupLevel,
     onCategoriesChange, onTagsChange, onGroupLevelChange,
-    onToggleSelect, onDrop, onShuffle, onSelectAllFiltered, onAddToPlan,
+    onToggleSelect, onDrop, onShuffle, onSelectAllFiltered, allFilteredSelected,
+    onDeleteSelected, deletingSelected, onAddToPlan,
     onEdit, onDelete, onClickCard,
     onStartSession,
     bankHasSummary, viewMode, onToggleViewMode, viewModeLoading,
@@ -180,8 +184,11 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
           </div>
           <div className="selection-toolbar">
             <Space>
-              <Button size="small" onClick={onSelectAllFiltered}>全选筛选结果（{filtered.length}）</Button>
+              <Button size="small" onClick={onSelectAllFiltered}>{allFilteredSelected ? `取消全选筛选结果（${filtered.length}）` : `全选筛选结果（${filtered.length}）`}</Button>
               <Button size="small" icon={<Shuffle size={14} />} onClick={onShuffle}>随机重排</Button>
+              <Popconfirm title={`删除选中的 ${selectedIds.length} 个知识点？`} content="删除后不可恢复，关联的复习计划与记忆曲线记录会一并清除。" disabled={!selectedIds.length} onOk={onDeleteSelected}>
+                <Button size="small" status="danger" icon={<Trash2 size={14} />} disabled={!selectedIds.length} loading={deletingSelected}>删除已选（{selectedIds.length}）</Button>
+              </Popconfirm>
             </Space>
             <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
           </div>
@@ -236,8 +243,11 @@ export function KnowledgeLibraryView(props: KnowledgeLibraryViewProps) {
         </div>
         <div className="selection-toolbar">
           <Space>
-            <Button size="small" onClick={onSelectAllFiltered}>全选筛选结果（{filtered.length}）</Button>
+            <Button size="small" onClick={onSelectAllFiltered}>{allFilteredSelected ? `取消全选筛选结果（${filtered.length}）` : `全选筛选结果（${filtered.length}）`}</Button>
             <Button size="small" icon={<Shuffle size={14} />} onClick={onShuffle}>随机重排</Button>
+            <Popconfirm title={`删除选中的 ${selectedIds.length} 个知识点？`} content="删除后不可恢复，关联的复习计划与记忆曲线记录会一并清除。" disabled={!selectedIds.length} onOk={onDeleteSelected}>
+              <Button size="small" status="danger" icon={<Trash2 size={14} />} disabled={!selectedIds.length} loading={deletingSelected}>删除已选（{selectedIds.length}）</Button>
+            </Popconfirm>
           </Space>
           <Typography.Text type="secondary">已选 {selectedIds.length}</Typography.Text>
         </div>

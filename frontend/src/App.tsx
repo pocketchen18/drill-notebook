@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Layout, Menu, Switch, Tooltip, Typography } from '@arco-design/web-react';
+import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
 import { BookOpenText, BrainCircuit, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore } from './stores/uiStore';
@@ -36,8 +36,7 @@ function Shell(): JSX.Element {
   // 折叠后自动隐藏：折叠态停留 3 秒自动收起侧栏；鼠标靠近左边缘唤回（保持折叠态）。
   const [siderHidden, setSiderHidden] = useState(false);
   const [siderHover, setSiderHover] = useState(false);
-  // 折叠态悬停提示：Arco 折叠菜单内部结构会拦截 Tooltip 触发，
-  // 改为在菜单容器上用 mouseover 委托 + 固定定位弹层手动实现。
+  // 折叠态悬停提示：在每个图标上直接绑定 hover/focus 事件，使用 getBoundingClientRect 定位。
   const [hoverTip, setHoverTip] = useState<{ label: string; top: number } | null>(null);
   // 深链 /quiz、/memorize 仍在使用，导航高亮统一归到「练习」。
   const normalizedPath = location.pathname.startsWith('/quiz') || location.pathname.startsWith('/memorize') ? '/practice' : location.pathname;
@@ -80,6 +79,11 @@ function Shell(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [collapsed, siderHidden, siderHover]);
 
+  // 展开或隐藏时清除悬停提示
+  useEffect(() => {
+    if (!collapsed || siderHidden) setHoverTip(null);
+  }, [collapsed, siderHidden]);
+
   // Arco Sider 不接收鼠标事件属性，用窗口级指针坐标判断是否悬停在侧栏区域；
   // 隐藏后鼠标靠近左边缘（≤ 12px）即唤回，仍保持折叠态。
   useEffect(() => {
@@ -108,20 +112,7 @@ function Shell(): JSX.Element {
           {!collapsed && <span className="brand-name">Drill Notebook</span>}
         </div>
         <div className="sider-body">
-          <div
-            className="sider-menu-wrap"
-            onMouseOver={(event) => {
-              if (!collapsed) return;
-              const itemEl = (event.target as HTMLElement).closest('.arco-menu-item');
-              if (!itemEl) { setHoverTip(null); return; }
-              const key = itemEl.querySelector('[data-menukey]')?.getAttribute('data-menukey') ?? null;
-              const item = navItems.find((navItem) => navItem.key === key);
-              if (!item) return;
-              const rect = itemEl.getBoundingClientRect();
-              setHoverTip({ label: item.label, top: rect.top + rect.height / 2 });
-            }}
-            onMouseLeave={() => setHoverTip(null)}
-          >
+          <div className="sider-menu-wrap">
             <Menu
               selectedKeys={[activeKey]}
               onClickMenuItem={(key) => navigate(key)}
@@ -131,7 +122,25 @@ function Shell(): JSX.Element {
               {navItems.filter((item) => item.key !== '/settings').map((item) => (
                 <Menu.Item key={item.key}>
                   {collapsed ? (
-                    <span className="menu-icon-only" data-menukey={item.key}>{item.icon}</span>
+                    <button
+                      type="button"
+                      className="menu-icon-only"
+                      data-menukey={item.key}
+                      aria-label={item.label}
+                      onMouseEnter={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setHoverTip({ label: item.label, top: rect.top + rect.height / 2 });
+                      }}
+                      onMouseLeave={() => setHoverTip(null)}
+                      onFocus={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setHoverTip({ label: item.label, top: rect.top + rect.height / 2 });
+                      }}
+                      onBlur={() => setHoverTip(null)}
+                      onClick={() => setHoverTip(null)}
+                    >
+                      {item.icon}
+                    </button>
                   ) : (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span>
                   )}
@@ -139,33 +148,44 @@ function Shell(): JSX.Element {
               ))}
             </Menu>
           </div>
-          <Tooltip content={collapsed ? '展开导航栏' : '折叠导航栏'} position="right" disabled={!collapsed}>
-            <button
-              type="button"
-              className="sider-collapse-btn"
-              onClick={() => setCollapsed((value) => !value)}
-              aria-label={collapsed ? '展开导航栏' : '折叠导航栏'}
-            >
-              {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-            </button>
-          </Tooltip>
-          <Tooltip content="设置" position="right" disabled={!collapsed}>
-            <button
-              type="button"
-              className={`sider-settings ${activeKey === '/settings' ? 'active' : ''}`}
-              onClick={() => navigate('/settings')}
-              title="设置"
-              aria-label="设置"
-            >
-              <Settings size={18} />
-              {!collapsed && <span className="sider-settings-text">设置</span>}
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            className="sider-collapse-btn"
+            onClick={() => setCollapsed((value) => !value)}
+            aria-label={collapsed ? '展开导航栏' : '折叠导航栏'}
+            data-tooltip={collapsed ? '展开导航栏' : '折叠导航栏'}
+          >
+            {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+          </button>
+          <button
+            type="button"
+            className={`sider-settings ${activeKey === '/settings' ? 'active' : ''}`}
+            onClick={() => { setHoverTip(null); navigate('/settings'); }}
+            title="设置"
+            aria-label="设置"
+            onMouseEnter={(event) => {
+              if (collapsed) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setHoverTip({ label: '设置', top: rect.top + rect.height / 2 });
+              }
+            }}
+            onMouseLeave={() => setHoverTip(null)}
+            onFocus={(event) => {
+              if (collapsed) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setHoverTip({ label: '设置', top: rect.top + rect.height / 2 });
+              }
+            }}
+            onBlur={() => setHoverTip(null)}
+          >
+            <Settings size={18} />
+            {!collapsed && <span className="sider-settings-text">设置</span>}
+          </button>
         </div>
-        {collapsed && hoverTip && (
-          <div className="sider-hover-tip" style={{ top: hoverTip.top }}>{hoverTip.label}</div>
-        )}
       </Sider>
+      {collapsed && hoverTip && (
+        <div className="sider-hover-tip" style={{ top: hoverTip.top }}>{hoverTip.label}</div>
+      )}
       <Layout>
         {useUiStore((state) => state.notebookFocusMode) ? null : (
           <Header className="topbar">

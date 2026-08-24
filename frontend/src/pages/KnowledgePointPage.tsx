@@ -8,7 +8,7 @@ import { friendlyMessage } from '../lib/errors';
 import type { Bank, KnowledgePoint, Question } from '../lib/types';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { insertIdBefore, insertIdAfter, shuffleIds } from '../lib/study';
-import { restoreOriginal, restoreSummary, summarizeBank, resummarizeBank, summarizeImport } from '../lib/knowledgeApi';
+import { restoreOriginal, restoreSummary, summarizeBank, resummarizeBank, summarizeImport, deleteKnowledgePoints } from '../lib/knowledgeApi';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { AiSummaryModal } from '../components/AiSummaryModal';
 import { CompletePlanButton } from '../components/CompletePlanButton';
@@ -119,6 +119,8 @@ export function KnowledgePointPage(): JSX.Element {
   const refresh = (): void => { void queryClient.invalidateQueries({ queryKey: ['knowledge-points', bankId] }); };
   const saveMutation = useMutation({ mutationFn: () => editing ? put(`/api/knowledge-points/${editing.id}`, { title, content, category: category || null, tags: tagText.split(/[,，]/).map((item) => item.trim()).filter(Boolean), questionIds: linkedQuestionIds }) : post('/api/knowledge-points', { bankId, title, content, category: category || null, tags: tagText.split(/[,，]/).map((item) => item.trim()).filter(Boolean), questionIds: linkedQuestionIds }), onSuccess: () => { refresh(); setEditorVisible(false); Message.success(editing ? '知识点已更新' : '知识点已创建'); }, onError: (error) => Message.error(friendlyMessage(error, '知识点保存失败，请稍后重试')) });
   const deleteMutation = useMutation({ mutationFn: (id: number) => del(`/api/knowledge-points/${id}`), onSuccess: () => { refresh(); Message.success('知识点已删除'); }, onError: (error) => Message.error(friendlyMessage(error, '知识点删除失败，请稍后重试')) });
+  // 一键删除所有已选知识卡：后端单事务级联删除，成功后清空选中态
+  const batchDeleteMutation = useMutation({ mutationFn: (ids: number[]) => deleteKnowledgePoints(ids), onSuccess: (result) => { refresh(); setSelectedIds([]); Message.success(`已删除 ${result.deleted} 个知识点`); }, onError: (error) => Message.error(friendlyMessage(error, '批量删除失败，请稍后重试')) });
   const importMutation = useMutation({ mutationFn: (payload: { markdown: string }) => post<{ imported: number; failed: number; errors: string[]; strategy?: string }>('/api/knowledge-points/import/markdown', { bankId, content: payload.markdown }), onSuccess: (result) => { refresh(); const usedAi = result.strategy === 'ai-fallback'; Message.success(`已导入 ${result.imported} 个知识点${usedAi ? '（AI 兜底）' : ''}`); if (result.errors.length) Message.warning(result.errors.slice(0, 2).join('；')); }, onError: (error) => Message.error(friendlyMessage(error, '知识点导入失败，请稍后重试')) });
   const openEditor = (point?: KnowledgePoint): void => { setEditing(point); setTitle(point?.title ?? ''); setContent(point?.content ?? ''); setCategory(point?.category ?? ''); setTagText((point?.tags ?? []).join(', ')); setLinkedQuestionIds(point?.questionIds ?? []); setEditorVisible(true); };
   const startImport = async (): Promise<void> => { if (window.api) { const result = await window.api.dialog.openTextFile(); if (!result.canceled && result.content !== undefined) importMutation.mutate({ markdown: result.content }); } else fallbackFile.current?.click(); };
@@ -287,6 +289,8 @@ export function KnowledgePointPage(): JSX.Element {
       .filter((point) => (!categories.length || (point.category && categories.includes(point.category))) && (!tags.length || point.tags.some((tag) => tags.includes(tag))))
       .map((point) => point.id)
   );
+  // 筛选结果是否已全部选中：全选按钮据此在「全选/取消全选」之间切换
+  const allFilteredSelected = matchingPointIds.size > 0 && [...matchingPointIds].every((id) => selectedIds.includes(id));
 
   return <main className="page"><input hidden ref={fallbackFile} type="file" accept=".md,.markdown,.txt" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then((value) => importMutation.mutate({ markdown: value })); event.target.value = ''; }} />
     {dayQueueMode ? <DayQueueSessionBar /> : null}
@@ -307,7 +311,10 @@ export function KnowledgePointPage(): JSX.Element {
         onToggleSelect={(id, checked) => setSelectedIds((ids) => checked ? [...ids, id] : ids.filter((x) => x !== id))}
         onDrop={(sourceId, targetId, position) => setSelectedIds(position === 'before' ? insertIdBefore(selectedIds, sourceId, targetId) : insertIdAfter(selectedIds, sourceId, targetId))}
         onShuffle={() => setSelectedIds(shuffleIds(selectedIds))}
-        onSelectAllFiltered={() => setSelectedIds([...selectedIds.filter((id) => !matchingPointIds.has(id)), ...matchingPointIds])}
+        onSelectAllFiltered={() => setSelectedIds((ids) => allFilteredSelected ? ids.filter((id) => !matchingPointIds.has(id)) : [...ids.filter((id) => !matchingPointIds.has(id)), ...matchingPointIds])}
+        allFilteredSelected={allFilteredSelected}
+        onDeleteSelected={() => { if (selectedIds.length) batchDeleteMutation.mutate([...selectedIds]); }}
+        deletingSelected={batchDeleteMutation.isPending}
         onAddToPlan={openPlanForPoints}
         onEdit={openEditor}
         onDelete={(id) => deleteMutation.mutate(id)}
