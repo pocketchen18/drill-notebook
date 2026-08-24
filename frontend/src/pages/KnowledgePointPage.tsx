@@ -7,8 +7,9 @@ import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, KnowledgePoint, Question } from '../lib/types';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
-import { insertIdBefore, insertIdAfter, shuffleIds } from '../lib/study';
-import { restoreOriginal, restoreSummary, summarizeBank, resummarizeBank, summarizeImport, deleteKnowledgePoints } from '../lib/knowledgeApi';
+import { shuffleIds } from '../lib/study';
+import { restoreOriginal, restoreSummary, sortKnowledgePoints, summarizeBank, resummarizeBank, summarizeImport, deleteKnowledgePoints } from '../lib/knowledgeApi';
+import { useKnowledgeSortStore } from '../stores/knowledgeSortStore';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { AiSummaryModal } from '../components/AiSummaryModal';
 import { CompletePlanButton } from '../components/CompletePlanButton';
@@ -33,6 +34,7 @@ export function KnowledgePointPage(): JSX.Element {
   const dayQueueMode = searchParams.get('dayQueue') === '1';
   const planResourceId = pointIdsFromQuery.length === 1 ? pointIdsFromQuery[0] : undefined;
   const queryClient = useQueryClient();
+  const setOrderedIds = useKnowledgeSortStore((state) => state.setOrderedIds);
   const fallbackFile = useRef<HTMLInputElement>(null);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   // When deep-linking with pointIds, load all points (no bank filter) so the id is found across banks.
@@ -58,7 +60,6 @@ export function KnowledgePointPage(): JSX.Element {
   const [curveQueue, setCurveQueue] = useState<CurveEntry[]>([]);
   const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
   const curveConfigRef = useRef(readSessionCurveConfig());
-  const [groupLevel, setGroupLevel] = useState<number>(0); // 0 = 不分组；1-6 = 按 headingPath[level-1] 分组
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const [recommendVisible, setRecommendVisible] = useState(false);
@@ -76,6 +77,8 @@ export function KnowledgePointPage(): JSX.Element {
   const [kpSubmittedIds, setKpSubmittedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
+  // 切换题库时清空本地排序覆盖，让列表回到该题库的后端默认顺序
+  useEffect(() => { setOrderedIds([]); }, [bankId, setOrderedIds]);
   useEffect(() => {
     if (!pointsQuery.data) return;
     const available = pointsQuery.data.map((point) => point.id);
@@ -122,6 +125,36 @@ export function KnowledgePointPage(): JSX.Element {
   // 一键删除所有已选知识卡：后端单事务级联删除，成功后清空选中态
   const batchDeleteMutation = useMutation({ mutationFn: (ids: number[]) => deleteKnowledgePoints(ids), onSuccess: (result) => { refresh(); setSelectedIds([]); Message.success(`已删除 ${result.deleted} 个知识点`); }, onError: (error) => Message.error(friendlyMessage(error, '批量删除失败，请稍后重试')) });
   const importMutation = useMutation({ mutationFn: (payload: { markdown: string }) => post<{ imported: number; failed: number; errors: string[]; strategy?: string }>('/api/knowledge-points/import/markdown', { bankId, content: payload.markdown }), onSuccess: (result) => { refresh(); const usedAi = result.strategy === 'ai-fallback'; Message.success(`已导入 ${result.imported} 个知识点${usedAi ? '（AI 兜底）' : ''}`); if (result.errors.length) Message.warning(result.errors.slice(0, 2).join('；')); }, onError: (error) => Message.error(friendlyMessage(error, '知识点导入失败，请稍后重试')) });
+
+  // 全量更新排序：松手后把「按新顺序的完整 id 数组」发给后端，乐观更新本地缓存，失败回滚
+  const sortAllMutation = useMutation({
+    mutationFn: (sortedIds: number[]) => sortKnowledgePoints(bankId as number, sortedIds),
+    onMutate: async (sortedIds) => {
+      const queryKey = ['knowledge-points', bankId];
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<KnowledgePoint[]>(queryKey);
+      const byId = new Map((pointsQuery.data ?? []).map((point) => [point.id, point]));
+      const reordered = sortedIds
+        .map((id) => byId.get(id))
+        .filter((point): point is KnowledgePoint => Boolean(point))
+        .map((point, index) => ({ ...point, sortIndex: index }));
+      queryClient.setQueryData(queryKey, reordered);
+      return { previous };
+    },
+    onError: (error, _sortedIds, context) => {
+      if (context?.previous) queryClient.setQueryData(['knowledge-points', bankId], context.previous);
+      Message.error(friendlyMessage(error, '排序保存失败，请稍后重试'));
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['knowledge-points', bankId] });
+    }
+  });
+
+  const handleReorder = (sortedIds: number[]): void => {
+    if (bankId === undefined) return;
+    sortAllMutation.mutate(sortedIds);
+  };
+
   const openEditor = (point?: KnowledgePoint): void => { setEditing(point); setTitle(point?.title ?? ''); setContent(point?.content ?? ''); setCategory(point?.category ?? ''); setTagText((point?.tags ?? []).join(', ')); setLinkedQuestionIds(point?.questionIds ?? []); setEditorVisible(true); };
   const startImport = async (): Promise<void> => { if (window.api) { const result = await window.api.dialog.openTextFile(); if (!result.canceled && result.content !== undefined) importMutation.mutate({ markdown: result.content }); } else fallbackFile.current?.click(); };
   const startAiSummary = (): void => { setAiSummaryVisible(true); };
@@ -304,12 +337,9 @@ export function KnowledgePointPage(): JSX.Element {
         selectedIds={selectedIds}
         categories={categories}
         tags={tags}
-        groupLevel={groupLevel}
         onCategoriesChange={setCategories}
         onTagsChange={setTags}
-        onGroupLevelChange={setGroupLevel}
         onToggleSelect={(id, checked) => setSelectedIds((ids) => checked ? [...ids, id] : ids.filter((x) => x !== id))}
-        onDrop={(sourceId, targetId, position) => setSelectedIds(position === 'before' ? insertIdBefore(selectedIds, sourceId, targetId) : insertIdAfter(selectedIds, sourceId, targetId))}
         onShuffle={() => setSelectedIds(shuffleIds(selectedIds))}
         onSelectAllFiltered={() => setSelectedIds((ids) => allFilteredSelected ? ids.filter((id) => !matchingPointIds.has(id)) : [...ids.filter((id) => !matchingPointIds.has(id)), ...matchingPointIds])}
         allFilteredSelected={allFilteredSelected}
@@ -320,6 +350,7 @@ export function KnowledgePointPage(): JSX.Element {
         onDelete={(id) => deleteMutation.mutate(id)}
         onClickCard={setFullCardPoint}
         onStartSession={startSession}
+        onReorder={handleReorder}
         bankHasSummary={(pointsQuery.data ?? []).some((point) => point.hasOriginal)}
         viewMode={viewMode}
         onToggleViewMode={() => void handleToggleViewMode()}

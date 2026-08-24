@@ -28,6 +28,7 @@ export interface KnowledgePoint {
   category?: string;
   tags: string[];
   headingPath?: string[];
+  sortIndex?: number;    // 手动排序后的顺序（越小越靠前；未排序时由后端按 category/title 字母序）
   questionIds: number[];
   hasOriginal?: boolean;  // 是否已存原文（即「已总结」标记）
   createdAt?: string;

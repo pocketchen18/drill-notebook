@@ -1,4 +1,4 @@
-import { post } from './api';
+import { post, put } from './api';
 
 export interface SummaryResult {
   summarized: number;
@@ -46,4 +46,12 @@ export async function restoreSummary(pointId: number): Promise<{ content: string
 // 批量删除知识点：后端单事务级联删除，返回实际删除数
 export async function deleteKnowledgePoints(ids: number[]): Promise<{ deleted: number }> {
   return post<{ deleted: number }>('/api/knowledge-points/batch-delete', { ids });
+}
+
+/**
+ * 全量更新某题库知识点的顺序：sortedIds 按新顺序包含该题库全部知识点 id。
+ * 后端从 0 开始递增写入 sort_index。
+ */
+export async function sortKnowledgePoints(bankId: number, sortedIds: number[]): Promise<void> {
+  return put<void>('/api/knowledge-points/sort-all', { bankId, sortedIds });
 }
