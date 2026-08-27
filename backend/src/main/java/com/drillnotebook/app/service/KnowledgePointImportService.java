@@ -3,11 +3,9 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.repository.KnowledgePointRepository;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -22,10 +20,10 @@ public class KnowledgePointImportService {
 
     /**
      * 知识点 Markdown 导入：先走规则解析，规则失败时由 AI 兜底。
-     * 自动按文档里实际出现的最深一级标题作为知识点边界（1-6），
-     * 更浅级别的标题行并入正文作 inheritedCategory，更深的并入正文；
-     * headingPath 记录完整标题链：浅层祖先章节在前、深层小节在后，供前端按级分组。
-     * AI 兜底把原文喂给模型，模型返回 [{title,content,category,tags}] JSON，再统一入库。
+     * 规则解析按"每个标题一张增量卡片"拆分：每个 Markdown 标题（1-6 级）生成一张 Section，
+     * content 为该标题下、到下一个任意标题前的直接内容（可为空串），
+     * headingPath 为不含自身的祖先标题链，level 为该标题的标题级别。
+     * AI 兜底把原文喂给模型，模型返回 [{title,content,category,tags,level}] JSON，再统一入库。
      * AI 不可用时透传错误。
      */
     public Map<String, Object> importMarkdown(Long bankId, String source) {
@@ -35,9 +33,9 @@ public class KnowledgePointImportService {
             List<Section> sections = parse(source);
             outcome = new ParseOutcome(sections, "rules");
         } catch (IllegalArgumentException ruleError) {
-            List<Section> aiSections = aiService.parseKnowledgePointsFromText(source).stream()
+            List<Section> aiSections = rebuildPaths(aiService.parseKnowledgePointsFromText(source).stream()
                     .map(KnowledgePointImportService::toSection)
-                    .toList();
+                    .toList());
             if (aiSections.isEmpty()) {
                 throw new IllegalArgumentException(
                         "规则解析失败且 AI 兜底不可用："
@@ -74,7 +72,10 @@ public class KnowledgePointImportService {
         List<String> tags = item.get("tags") instanceof List<?> list
                 ? list.stream().map(String::valueOf).map(String::trim).filter(s -> !s.isBlank()).toList()
                 : List.of();
-        return new Section(title.trim(), content.trim(), category, tags, List.of());
+        int level = 1;
+        Object levelValue = item.get("level");
+        if (levelValue instanceof Number number) level = Math.max(1, Math.min(6, number.intValue()));
+        return new Section(title.trim(), content.trim(), category, tags, List.of(), level);
     }
 
     private static String stringOr(Object value, String fallback) {
@@ -83,109 +84,83 @@ public class KnowledgePointImportService {
         return text.isBlank() ? fallback : text;
     }
 
+    /**
+     * 按 level 重建 AI 兜底结果的 headingPath（不含自身的祖先标题链）。
+     * 输入是带 level 的扁平 Section 列表；用栈模拟文档标题层级，
+     * 遇到同级或更浅标题时弹出栈顶，新节点的 headingPath = 弹出后的栈内容。
+     */
+    static List<Section> rebuildPaths(List<Section> sections) {
+        List<String> stackTitles = new ArrayList<>();
+        List<Integer> stackLevels = new ArrayList<>();
+        List<Section> result = new ArrayList<>();
+        for (Section section : sections) {
+            int level = Math.max(1, Math.min(6, section.level()));
+            while (!stackLevels.isEmpty() && stackLevels.get(stackLevels.size() - 1) >= level) {
+                stackLevels.remove(stackLevels.size() - 1);
+                stackTitles.remove(stackTitles.size() - 1);
+            }
+            result.add(new Section(section.title(), section.content(), section.category(), section.tags(), new ArrayList<>(stackTitles), level));
+            stackLevels.add(level);
+            stackTitles.add(section.title());
+        }
+        return result;
+    }
+
     private record ParseOutcome(List<Section> sections, String strategy) {}
 
     static List<Section> parse(String source) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("Markdown 内容为空");
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
-        // 统计每个标题级别（1-6）的出现次数及其所属父章节（最近的更浅标题），据此选择知识点边界级别：
-        // 优先取“出现次数 >= 2 且分布在 >= 2 个不同父章节下的最深级别”——跨章节并列重复才说明它们是知识点边界；
-        // 仅在某一个父章节下重复的深层标题（如个别章节里的 ### 子小节）不足以当边界，应退回更浅级别；
-        // 若没有级别满足该条件，退回“出现次数 >= 2 的最深级别”；
-        // 若没有任何级别重复出现（整篇只有一个标题），退化为最浅级别，把整篇作为一张卡片。
-        int[] levelCounts = new int[7];
-        @SuppressWarnings("unchecked")
-        Set<String>[] parentSets = new Set[7];
-        for (int level = 1; level <= 6; level++) parentSets[level] = new HashSet<>();
-        String[] lastHeading = new String[7];
-        boolean found = false;
-        for (String line : normalized.split("\n", -1)) {
-            int depth = headingDepth(line);
-            if (depth <= 0) continue;
-            levelCounts[depth]++;
-            found = true;
-            String parent = null;
-            for (int shallower = depth - 1; shallower >= 1; shallower--) {
-                if (lastHeading[shallower] != null) {
-                    parent = lastHeading[shallower];
-                    break;
-                }
-            }
-            parentSets[depth].add(parent == null ? "\u0000root" : parent);
-            lastHeading[depth] = line.replaceFirst("^#+\\s+", "").trim();
-        }
-        if (!found) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
-        int headingLevel = -1;
-        for (int level = 6; level >= 1; level--) {
-            if (levelCounts[level] >= 2 && parentSets[level].size() >= 2) {
-                headingLevel = level;
-                break;
-            }
-        }
-        if (headingLevel < 0) {
-            for (int level = 6; level >= 1; level--) {
-                if (levelCounts[level] >= 2) {
-                    headingLevel = level;
-                    break;
-                }
-            }
-        }
-        if (headingLevel < 0) {
-            headingLevel = 6;
-            for (int level = 1; level <= 6; level++) {
-                if (levelCounts[level] > 0) {
-                    headingLevel = level;
-                    break;
-                }
-            }
-        }
-        String prefix = "#".repeat(headingLevel);
-        String headingPattern = "^" + prefix + "\\s+.+";
-        String stripPattern = "^" + prefix + "\\s+";
         List<Section> result = new ArrayList<>();
-        String title = null;
-        String inheritedCategory = null;
-        List<String> headingPath = new ArrayList<>();
-        // 浅层标题栈（标题文本 + 级别）：维护当前所在章节链，边界出现时快照进 headingPath 前缀
-        List<String> ancestorTitles = new ArrayList<>();
-        List<Integer> ancestorLevels = new ArrayList<>();
+        List<String> stackTitles = new ArrayList<>();
+        List<Integer> stackLevels = new ArrayList<>();
         List<String> body = new ArrayList<>();
         List<String> preamble = new ArrayList<>();
+        String title = null;
+        String sectionCategory = null;
+        int sectionLevel = 0;
         for (String line : normalized.split("\n", -1)) {
-            int headingDepth = headingDepth(line);
-            if (line.matches(headingPattern)) {
-                if (title != null) result.add(section(title, body, inheritedCategory, headingPath));
-                title = line.replaceFirst(stripPattern, "").trim();
-                headingPath = new ArrayList<>(ancestorTitles);
-                body = new ArrayList<>(preamble);
-                preamble.clear();
-            } else if (headingDepth > 0 && headingDepth < headingLevel) {
-                // 新章节开始：先用旧分类收尾当前知识点，避免它继承下一章的分类；
-                // 章节标题行转入 preamble，作为下一节正文的上下文。
+            int depth = headingDepth(line);
+            if (depth > 0) {
+                // 关闭上一个标题：headingPath = 栈中除自己外的祖先链
                 if (title != null) {
-                    result.add(section(title, body, inheritedCategory, headingPath));
-                    title = null;
-                    body = new ArrayList<>();
+                    List<String> path = stackTitles.size() > 1
+                            ? stackTitles.subList(0, stackTitles.size() - 1)
+                            : List.of();
+                    result.add(section(title, body, sectionCategory, new ArrayList<>(path), sectionLevel));
                 }
-                String shallowerTitle = line.replaceFirst("^#+\\s+", "").trim();
-                inheritedCategory = shallowerTitle;
-                // 弹掉同级或更深的旧祖先，再压入当前章节，保持栈严格由浅到深
-                while (!ancestorLevels.isEmpty() && ancestorLevels.get(ancestorLevels.size() - 1) >= headingDepth) {
-                    ancestorLevels.remove(ancestorLevels.size() - 1);
-                    ancestorTitles.remove(ancestorTitles.size() - 1);
+                // 弹出 >= 当前深度的祖先（结束它们的章节）
+                while (!stackLevels.isEmpty() && stackLevels.get(stackLevels.size() - 1) >= depth) {
+                    stackLevels.remove(stackLevels.size() - 1);
+                    stackTitles.remove(stackTitles.size() - 1);
                 }
-                ancestorLevels.add(headingDepth);
-                ancestorTitles.add(shallowerTitle);
-                preamble.add(line);
-            } else if (headingDepth >= headingLevel && title != null) {
-                String deeperTitle = line.replaceFirst("^#+\\s+", "").trim();
-                headingPath.add(deeperTitle);
+                // 新章节的继承分类 = 最近的祖先标题
+                sectionCategory = stackTitles.isEmpty() ? null : stackTitles.get(stackTitles.size() - 1);
+                sectionLevel = depth;
+                title = line.replaceFirst("^#+\\s+", "").trim();
+                body = new ArrayList<>();
+                // 文档前言归入第一个标题
+                if (result.isEmpty() && !preamble.isEmpty()) {
+                    body.addAll(preamble);
+                    preamble.clear();
+                }
+                stackLevels.add(depth);
+                stackTitles.add(title);
+            } else if (title != null) {
                 body.add(line);
-            } else if (title != null) body.add(line);
-            else preamble.add(line);
+            } else {
+                preamble.add(line);
+            }
         }
-        if (title != null) result.add(section(title, body, inheritedCategory, headingPath));
-        if (result.isEmpty()) throw new IllegalArgumentException("未找到 " + headingLevel + " 级标题，请检查标题级别或改用其他级别");
+        if (title != null) {
+            List<String> path = stackTitles.size() > 1
+                    ? stackTitles.subList(0, stackTitles.size() - 1)
+                    : List.of();
+            result.add(section(title, body, sectionCategory, new ArrayList<>(path), sectionLevel));
+        }
+        if (result.isEmpty()) throw new IllegalArgumentException("未找到任何 Markdown 标题，请检查格式");
+        boolean anyContent = result.stream().anyMatch(section -> !section.content().isBlank());
+        if (!anyContent) throw new IllegalArgumentException("知识点内容不能为空：未找到任何正文");
         return result;
     }
 
@@ -197,7 +172,7 @@ public class KnowledgePointImportService {
         return depth;
     }
 
-    private static Section section(String title, List<String> lines, String inheritedCategory, List<String> headingPath) {
+    private static Section section(String title, List<String> lines, String inheritedCategory, List<String> headingPath, int level) {
         String category = null;
         List<String> tags = List.of();
         List<String> content = new ArrayList<>();
@@ -211,13 +186,12 @@ public class KnowledgePointImportService {
         }
         if (category == null) category = inheritedCategory;
         String markdown = String.join("\n", content).trim();
-        if (markdown.isBlank()) throw new IllegalArgumentException("知识点内容不能为空：" + title);
-        return new Section(title, markdown, category, tags, List.copyOf(headingPath));
+        return new Section(title, markdown, category, tags, List.copyOf(headingPath), level);
     }
 
     private static List<String> splitTags(String value) {
         return Arrays.stream(value.split("[,，]")).map(String::trim).filter(item -> !item.isBlank()).toList();
     }
 
-    record Section(String title, String content, String category, List<String> tags, List<String> headingPath) {}
+    record Section(String title, String content, String category, List<String> tags, List<String> headingPath, int level) {}
 }
