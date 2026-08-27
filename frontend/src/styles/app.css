@@ -370,7 +370,6 @@ button, input, textarea { font: inherit; }
 .memory-card { min-height: 520px; }
 .memory-cover { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 150px; margin-top: 22px; border: 1px dashed #b8c7df; border-radius: 8px; color: var(--muted); background: var(--subtle-bg); }
 .form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.knowledge-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; gap: 12px; margin-top: 14px; align-items: start; }
 .knowledge-masonry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; align-items: start; }
 .knowledge-grid-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .knowledge-group { margin-top: 18px; }
@@ -390,6 +389,33 @@ button, input, textarea { font: inherit; }
 .knowledge-study-content { min-height: 300px; padding: 20px; border-radius: 8px; background: var(--subtle-bg); color: var(--text); }
 .linked-question-list { display: grid; gap: 7px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 
+/* 知识点树状阅读 */
+.knowledge-tree-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 18px; align-items: start; }
+.kp-tree-panel { position: sticky; top: 90px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); max-height: calc(100vh - 120px); overflow: auto; }
+.kp-tree-panel-header { padding: 10px 14px; font-weight: 600; color: var(--text-strong); border-bottom: 1px solid var(--line); }
+.kp-tree-panel-body { padding: 8px; }
+.kp-tree-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 6px; color: var(--text); }
+.kp-tree-row:hover { background: var(--subtle-bg); }
+.kp-tree-row.active { background: var(--subtle-bg); color: var(--text-strong); }
+.kp-tree-row.dimmed { opacity: .35; }
+.kp-tree-toggle { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0; display: inline-flex; align-items: center; flex: 0 0 auto; }
+.kp-tree-title { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; text-align: left; font-size: 14px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-card-workspace { display: flex; flex-direction: column; gap: 12px; }
+.kp-card-empty { padding: 60px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; }
+.kp-card-breadcrumb { display: flex; align-items: center; gap: 8px; }
+.kp-card-breadcrumb-path { color: var(--muted); font-size: 12px; cursor: default; }
+.kp-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); padding: 20px 24px; }
+.kp-card-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.kp-card-title { margin: 0; font-size: 24px; color: var(--text-strong); line-height: 1.35; }
+.kp-card-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.kp-card-content { color: var(--text); line-height: 1.75; }
+.kp-card-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.kp-card-tag { cursor: pointer; }
+.kp-card-questions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; display: grid; gap: 6px; }
+.kp-card-questions strong { color: var(--text-strong); }
+.kp-card-pager { display: flex; align-items: center; justify-content: space-between; }
+.kp-card-pager-count { color: var(--muted); font-size: 13px; }
+
 /* 知识点全屏卡片（点击卡片后覆盖整页）— 必须跟主题变量，禁止写死 white */
 .knowledge-full-card {
   position: fixed;
@@ -399,6 +425,8 @@ button, input, textarea { font: inherit; }
   padding: 24px;
   background: var(--page-bg);
   color: var(--text);
+  display: flex;
+  flex-direction: column;
 }
 .knowledge-full-card-toolbar {
   display: flex;
@@ -410,7 +438,7 @@ button, input, textarea { font: inherit; }
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 10;
   background: var(--page-bg);
 }
 .knowledge-full-card-progress {
@@ -425,9 +453,35 @@ button, input, textarea { font: inherit; }
   align-items: center;
   justify-content: flex-end;
 }
+.knowledge-full-card-main {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  max-width: 1320px;
+  width: 100%;
+  margin: 0 auto;
+}
+.knowledge-full-card-sidebar {
+  width: 280px;
+  flex: 0 0 280px;
+  position: sticky;
+  top: 70px;
+  max-height: calc(100vh - 100px);
+}
+.knowledge-full-card-sidebar .kp-tree-panel {
+  top: 0;
+  max-height: calc(100vh - 100px);
+}
 .knowledge-full-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 960px;
   margin: 0 auto;
+  width: 100%;
+}
+.knowledge-full-card-main.without-sidebar .knowledge-full-card-body {
+  max-width: 960px;
 }
 .knowledge-full-card-title {
   margin: 0 0 16px;

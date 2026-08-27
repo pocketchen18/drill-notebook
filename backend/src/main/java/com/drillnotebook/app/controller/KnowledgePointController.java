@@ -91,6 +91,18 @@ public class KnowledgePointController {
         return Map.of("deleted", deleted);
     }
 
+    @PutMapping("/sort-all")
+    public void sortAll(@RequestBody Map<String, Object> body) {
+        Long bankId = longValue(body.get("bankId"));
+        if (bankId == null) throw new IllegalArgumentException("缺少 bankId");
+        try {
+            banks.find(bankId);
+        } catch (EmptyResultDataAccessException error) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题库不存在");
+        }
+        points.reorderAll(bankId, longs(body.get("sortedIds")));
+    }
+
     @PostMapping("/import/markdown")
     public Map<String, Object> importMarkdown(@RequestBody Map<String, Object> body) {
         Long bankId = longValue(body.get("bankId"));

@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -92,5 +95,29 @@ class AiServiceStructuredCallTest {
                 IllegalArgumentException.class,
                 () -> service.writePlanNote(Map.of("sessionType", "quiz")));
         assertEquals("候选标题不能为空", missing.getMessage());
+    }
+
+    @Test
+    void parseKnowledgePointsFromTextForwardsLevelFromJsonReply() throws Exception {
+        AiConfigRepository configs = mock(AiConfigRepository.class);
+        ApiKeyEncryptor encryptor = mock(ApiKeyEncryptor.class);
+        AiService ai = new AiService(configs, null, encryptor, new ObjectMapper(), mock(RetrievalService.class));
+        when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(new AiConfigRepository.ConfigRow(
+                "custom",
+                "mock://local",
+                "mock-model",
+                "fake-encrypted-key",
+                "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
+                "{}"));
+        when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");
+        when(encryptor.fingerprintMaterial()).thenReturn("fake-fingerprint");
+
+        List<Map<String, Object>> points = ai.parseKnowledgePointsFromText("# 父章节\n正文\n## 子章节\n正文");
+
+        assertEquals(2, points.size());
+        // 回复含 "level":2 时必须原样透传
+        assertEquals(2, points.get(0).get("level"));
+        // 缺省 level 时安全回退为 1
+        assertEquals(1, points.get(1).get("level"));
     }
 }
