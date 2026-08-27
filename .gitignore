@@ -137,6 +137,7 @@ temp/
 *.swp
 *.swo
 *.orig
+backend/testroot/
 
 # Private planning material, model prompts and agent state
 .omo/
@@ -171,5 +172,7 @@ docs/**
 !docs/ai-retrieval.md
 !docs/architecture.md
 !docs/review-srs.md
+!docs/testing/
+!docs/testing/**
 # Design specs / implementation plans stay local
 docs/superpowers/
