@@ -1,5 +1,5 @@
 import { Breadcrumb, Button, Popconfirm, Tag, Tooltip, Message } from '@arco-design/web-react';
-import { ArrowLeft, ArrowRight, Edit3, Maximize2, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Edit3, Maximize2, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
 import { buildFullMarkdown, ROOT_ID } from '../../lib/knowledgeTree';
@@ -15,13 +15,14 @@ export interface KnowledgeCardWorkspaceProps {
   bankId?: number;
   onNavigate: (id: number) => void;
   onEdit: (point: KnowledgePoint) => void;
+  onAddChild?: (parentPoint: KnowledgePoint) => void;
   onDelete: (id: number) => void;
   onTagClick: (tag: string) => void;
   onFullscreen: () => void;
   onModified?: () => void;
 }
 
-export function KnowledgeCardWorkspace({ tree, node, questions, bankId, onNavigate, onEdit, onDelete, onTagClick, onFullscreen, onModified }: KnowledgeCardWorkspaceProps): JSX.Element {
+export function KnowledgeCardWorkspace({ tree, node, questions, bankId, onNavigate, onEdit, onAddChild, onDelete, onTagClick, onFullscreen, onModified }: KnowledgeCardWorkspaceProps): JSX.Element {
   const isRoot = node.id === ROOT_ID;
   const rootHasSummary = tree.flatList.some((n) => n.hasOriginal);
   const index = tree.flatList.findIndex((n) => n.id === node.id);
@@ -164,6 +165,9 @@ export function KnowledgeCardWorkspace({ tree, node, questions, bankId, onNaviga
         <div className="kp-card-toolbar">
           <h2 className="kp-card-title">{node.title}</h2>
           <div className="kp-card-actions">
+            <Button size="small" icon={<Plus size={14} />} onClick={() => onAddChild?.(nodeAsPoint(node))}>
+              {isRoot ? '新建根知识点' : '添加子知识点'}
+            </Button>
             {!isRoot && (
               <>
                 <Button size="small" icon={<Edit3 size={14} />} onClick={() => onEdit(nodeAsPoint(node))}>编辑</Button>

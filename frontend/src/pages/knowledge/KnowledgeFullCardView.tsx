@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Message, Popconfirm, Tooltip } from '@arco-design/web-react';
-import { ArrowLeft, Edit3, PanelLeftClose, PanelLeftOpen, RotateCcw, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Edit3, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
 import { buildFullMarkdown, ROOT_ID } from '../../lib/knowledgeTree';
 import type { KnowledgeTree, KnowledgeTreeNode } from '../../lib/knowledgeTree';
@@ -28,6 +28,7 @@ export interface KnowledgeFullCardViewProps {
   onDeleted: () => void;
   onModified: () => void;
   onEdit: (point: KnowledgePoint) => void;
+  onAddChild?: (parentPoint: KnowledgePoint) => void;
 }
 
 const MIN_SIDEBAR_WIDTH = 180;
@@ -35,7 +36,7 @@ const DEFAULT_SIDEBAR_WIDTH = 280;
 const MAX_SIDEBAR_WIDTH = 600;
 const COLLAPSE_THRESHOLD = 120; // 拖拽宽度小于 120px 时直接折叠大纲（类似 VSCode 体验）
 
-export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigate, onClose, onDeleted, onModified, onEdit }: KnowledgeFullCardViewProps): JSX.Element {
+export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigate, onClose, onDeleted, onModified, onEdit, onAddChild }: KnowledgeFullCardViewProps): JSX.Element {
   const isRoot = node.id === ROOT_ID;
   const rootHasSummary = tree.flatList.some((n) => n.hasOriginal);
 
@@ -320,6 +321,9 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
               </Button>
             </Tooltip>
           </>
+          <Button icon={<Plus size={14} />} onClick={() => onAddChild?.(nodeAsPoint(current))}>
+            {isRoot ? '新建根知识点' : '添加子知识点'}
+          </Button>
           {!isRoot && (
             <>
               <Button icon={<Edit3 size={14} />} onClick={() => onEdit(nodeAsPoint(current))}>修改</Button>
