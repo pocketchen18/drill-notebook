@@ -90,8 +90,118 @@ describe('KnowledgeFullCardView', () => {
     expect(screen.getByText('操作系统概论正文。')).toBeInTheDocument();
     expect(screen.getByText('进程模型正文。')).toBeInTheDocument();
 
+    // 根节点展示总结全文按钮
+    expect(screen.getByRole('button', { name: '总结全文' })).toBeInTheDocument();
+
     // 根节点隐藏单卡删除与修改按钮
     expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '修改' })).not.toBeInTheDocument();
+  });
+
+  it('supports resizing outline width and collapses when dragged below threshold', () => {
+    const node = tree.byId.get(2)!;
+
+    render(
+      <KnowledgeFullCardView
+        tree={tree}
+        node={node}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    const resizer = screen.getByRole('separator', { name: '拖拽调节大纲宽度' });
+    expect(resizer).toBeInTheDocument();
+
+    // 模拟拖拽调整宽度
+    fireEvent.mouseDown(resizer, { clientX: 280 });
+    fireEvent.mouseMove(window, { clientX: 350 });
+    fireEvent.mouseUp(window);
+
+    // 仍在展开状态
+    expect(screen.getByRole('button', { name: '折叠大纲' })).toBeInTheDocument();
+
+    // 再次从新位置拖拽小于阈值（350 + (100 - 350) = 100px < 120px），自动折叠
+    fireEvent.mouseDown(resizer, { clientX: 350 });
+    fireEvent.mouseMove(window, { clientX: 100 });
+    fireEvent.mouseUp(window);
+
+    // 验证大纲已被折叠
+    expect(screen.getByRole('button', { name: '展开大纲' })).toBeInTheDocument();
+    expect(screen.queryByRole('separator', { name: '拖拽调节大纲宽度' })).not.toBeInTheDocument();
+  });
+
+  it('updates toggle button text correctly between summarized and unsummarized nodes', () => {
+    const p1: KnowledgePoint = { id: 10, title: '卡片已总结', content: '总结正文', headingPath: [], tags: [], questionIds: [], hasOriginal: true };
+    const p2: KnowledgePoint = { id: 11, title: '卡片未总结', content: '未总结原文', headingPath: [], tags: [], questionIds: [], hasOriginal: false };
+    const testTree = buildKnowledgeTree([p1, p2], '测试库');
+
+    const node1 = testTree.byId.get(10)!;
+    const node2 = testTree.byId.get(11)!;
+
+    const { rerender } = render(
+      <KnowledgeFullCardView
+        tree={testTree}
+        node={node1}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    // node1 已总结，初始显示「还原」与可用「重新总结」
+    expect(screen.getByRole('button', { name: '还原' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新总结' })).not.toBeDisabled();
+
+    // 切换到 node2（未总结）
+    rerender(
+      <KnowledgeFullCardView
+        tree={testTree}
+        node={node2}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    // node2 未总结，应显示「总结」且「重新总结」禁用
+    expect(screen.getByRole('button', { name: '总结' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新总结' })).toBeDisabled();
+  });
+
+  it('renders summary buttons on intermediate section branch nodes', () => {
+    const p1: KnowledgePoint = { id: 20, title: '第一章 架构设计', content: '第一章概述', headingPath: [], tags: [], questionIds: [], hasOriginal: false };
+    const p2: KnowledgePoint = { id: 21, title: '1.1 模块划分', content: '模块划分正文', headingPath: ['第一章 架构设计'], tags: [], questionIds: [], hasOriginal: false };
+    const testTree = buildKnowledgeTree([p1, p2], '系统库');
+
+    // 目录/父节点（有子节点）
+    const sectionNode = testTree.byId.get(20)!;
+
+    render(
+      <KnowledgeFullCardView
+        tree={testTree}
+        node={sectionNode}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    // 中间章节目录节点应展示总结按钮与重新总结按钮（未总结时为总结）
+    expect(screen.getByRole('button', { name: '总结' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新总结' })).toBeInTheDocument();
   });
 });

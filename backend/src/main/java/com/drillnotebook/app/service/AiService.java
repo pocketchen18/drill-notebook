@@ -800,7 +800,18 @@ public class AiService {
     }
 
     private AiConfigRepository.ConfigRow requireImportConfig() {
-        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「导入兜底」AI API Key", "请先在设置中配置「导入兜底」Endpoint");
+        AiConfigRepository.ConfigRow importConfig = configs.find(AiConfigRepository.PURPOSE_IMPORT);
+        if (importConfig != null && importConfig.encryptedKey() != null && !importConfig.encryptedKey().isBlank()
+                && importConfig.endpoint() != null && !importConfig.endpoint().isBlank()) {
+            return importConfig;
+        }
+        // 如果导入兜底模型未单独配置，自动回退使用主模型配置
+        AiConfigRepository.ConfigRow chatConfig = configs.find(AiConfigRepository.PURPOSE_CHAT);
+        if (chatConfig != null && chatConfig.encryptedKey() != null && !chatConfig.encryptedKey().isBlank()
+                && chatConfig.endpoint() != null && !chatConfig.endpoint().isBlank()) {
+            return chatConfig;
+        }
+        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Endpoint");
     }
 
     private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {

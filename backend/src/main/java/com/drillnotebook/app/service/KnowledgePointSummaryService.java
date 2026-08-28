@@ -8,11 +8,15 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class KnowledgePointSummaryService {
+
+    private static final Logger log = LoggerFactory.getLogger(KnowledgePointSummaryService.class);
 
     private final KnowledgePointRepository points;
     private final KnowledgePointOriginalRepository originals;
@@ -48,6 +52,7 @@ public class KnowledgePointSummaryService {
             points.updateContentOnly(pointId, summary);
             result.put("summarized", 1);
         } catch (RuntimeException ex) {
+            log.error("总结知识点 #{} 失败: {}", pointId, ex.getMessage(), ex);
             errors.add(ex.getMessage());
             result.put("summarized", 0);
         }
@@ -70,6 +75,7 @@ public class KnowledgePointSummaryService {
             points.updateContentOnly(pointId, summary);
             result.put("summarized", 1);
         } catch (RuntimeException ex) {
+            log.error("重新总结知识点 #{} 失败: {}", pointId, ex.getMessage(), ex);
             errors.add(ex.getMessage());
             result.put("summarized", 0);
         }
@@ -87,6 +93,38 @@ public class KnowledgePointSummaryService {
         return processBank(bankId, true);
     }
 
+    @Transactional
+    public Map<String, Object> restoreOriginalBank(long bankId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        int restored = 0;
+        List<KnowledgePointRecord> cards = points.findAll(bankId);
+        for (KnowledgePointRecord card : cards) {
+            OriginalRecord orig = originals.find(card.id, "original");
+            if (orig != null && orig.content() != null) {
+                points.updateContentOnly(card.id, orig.content());
+                restored++;
+            }
+        }
+        result.put("restored", restored);
+        return result;
+    }
+
+    @Transactional
+    public Map<String, Object> restoreSummaryBank(long bankId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        int restored = 0;
+        List<KnowledgePointRecord> cards = points.findAll(bankId);
+        for (KnowledgePointRecord card : cards) {
+            OriginalRecord summ = originals.find(card.id, "summary");
+            if (summ != null && summ.content() != null) {
+                points.updateContentOnly(card.id, summ.content());
+                restored++;
+            }
+        }
+        result.put("restored", restored);
+        return result;
+    }
+
     private Map<String, Object> processBank(long bankId, boolean resummarizeMode) {
         Map<String, Object> result = new LinkedHashMap<>();
         List<String> errors = new ArrayList<>();
@@ -99,11 +137,13 @@ public class KnowledgePointSummaryService {
                 if (resummarizeMode) {
                     if (!hasOriginal) continue;
                     OriginalRecord orig = originals.find(card.id, "original");
+                    if (orig == null || orig.content() == null || orig.content().isBlank()) continue;
                     String summary = ai.summarizeKnowledgePoint(orig.content());
                     originals.upsert(card.id, "summary", summary);
                     points.updateContentOnly(card.id, summary);
                 } else {
                     if (hasOriginal) continue;
+                    if (card.content == null || card.content.isBlank()) continue;
                     originals.upsert(card.id, "original", card.content);
                     String summary = ai.summarizeKnowledgePoint(card.content);
                     originals.upsert(card.id, "summary", summary);
@@ -112,6 +152,7 @@ public class KnowledgePointSummaryService {
                 summarized++;
             } catch (RuntimeException ex) {
                 failed++;
+                log.error("知识库 #{} 批量总结知识点 #{} 失败: {}", bankId, card.id, ex.getMessage(), ex);
                 errors.add("知识点 #" + card.id + "：" + ex.getMessage());
             }
         }

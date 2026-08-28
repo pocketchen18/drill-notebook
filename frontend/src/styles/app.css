@@ -77,7 +77,8 @@ button, input, textarea { font: inherit; }
 .app-sider {
   position: relative;
   flex-shrink: 0;
-  overflow: visible;
+  overflow: hidden;
+  overflow-x: hidden;
   border-right: 1px solid var(--line);
   background: var(--panel-bg);
   transition:
@@ -100,6 +101,7 @@ button, input, textarea { font: inherit; }
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow-x: hidden;
 }
 
 .app-sider.arco-layout-sider-collapsed .arco-layout-sider-children {
@@ -165,50 +167,6 @@ button, input, textarea { font: inherit; }
   content: '';
   pointer-events: none;
   transition: border-color 160ms ease;
-}
-
-.sider-collapse-btn::after {
-  position: absolute;
-  left: calc(100% + 10px);
-  top: 50%;
-  z-index: 20;
-  padding: 6px 9px;
-  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
-  border-radius: 8px;
-  background: var(--text-strong);
-  color: var(--panel-bg);
-  box-shadow: 0 8px 20px rgb(15 23 42 / 16%);
-  content: attr(data-tooltip);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.3;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(0, -50%) translateX(-4px);
-  visibility: hidden;
-  white-space: nowrap;
-  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
-}
-
-.sider-collapse-btn:hover,
-.sider-collapse-btn:focus-visible {
-  border-color: color-mix(in srgb, #155eef 38%, var(--line));
-  background: color-mix(in srgb, #155eef 9%, var(--panel-bg));
-  color: #155eef;
-  box-shadow: 0 6px 16px rgb(21 94 239 / 14%);
-  transform: translateY(-1px);
-}
-
-.sider-collapse-btn:hover::before,
-.sider-collapse-btn:focus-visible::before {
-  border-color: color-mix(in srgb, #155eef 20%, transparent);
-}
-
-.sider-collapse-btn:hover::after,
-.sider-collapse-btn:focus-visible::after {
-  opacity: 1;
-  transform: translate(0, -50%) translateX(0);
-  visibility: visible;
 }
 
 .sider-collapse-btn:active { transform: translateY(0) scale(.97); }
@@ -422,7 +380,7 @@ button, input, textarea { font: inherit; }
   inset: 0;
   z-index: 1000;
   overflow: auto;
-  padding: 24px;
+  padding: 0 24px 24px;
   background: var(--page-bg);
   color: var(--text);
   display: flex;
@@ -434,7 +392,7 @@ button, input, textarea { font: inherit; }
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
-  padding-bottom: 12px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
@@ -453,25 +411,59 @@ button, input, textarea { font: inherit; }
   align-items: center;
   justify-content: flex-end;
 }
+.knowledge-full-card.is-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
 .knowledge-full-card-main {
   display: flex;
-  gap: 24px;
+  gap: 16px;
   align-items: flex-start;
   flex: 1 1 auto;
-  max-width: 1320px;
+  max-width: 1400px;
   width: 100%;
   margin: 0 auto;
 }
-.knowledge-full-card-sidebar {
-  width: 280px;
-  flex: 0 0 280px;
+.knowledge-full-card-sidebar-wrapper {
   position: sticky;
   top: 70px;
-  max-height: calc(100vh - 100px);
+  display: flex;
+  height: calc(100vh - 100px);
+  box-sizing: border-box;
+}
+.knowledge-full-card-sidebar {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  max-height: 100%;
 }
 .knowledge-full-card-sidebar .kp-tree-panel {
   top: 0;
-  max-height: calc(100vh - 100px);
+  height: 100%;
+  max-height: 100%;
+}
+.knowledge-full-card-resizer {
+  width: 8px;
+  flex: 0 0 8px;
+  cursor: col-resize;
+  position: relative;
+  margin-left: 4px;
+  margin-right: -4px;
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+.knowledge-full-card-resizer::after {
+  content: '';
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+  border-radius: 1px;
+}
+.knowledge-full-card-resizer:hover::after,
+.knowledge-full-card.is-resizing .knowledge-full-card-resizer::after {
+  background: var(--accent, #155eef);
 }
 .knowledge-full-card-body {
   flex: 1 1 auto;

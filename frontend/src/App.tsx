@@ -37,7 +37,7 @@ function Shell(): JSX.Element {
   const [siderHidden, setSiderHidden] = useState(false);
   const [siderHover, setSiderHover] = useState(false);
   // 折叠态悬停提示：在每个图标上直接绑定 hover/focus 事件，使用 getBoundingClientRect 定位。
-  const [hoverTip, setHoverTip] = useState<{ label: string; top: number } | null>(null);
+  const [hoverTip, setHoverTip] = useState<{ label: string; left: number; top: number } | null>(null);
   // 深链 /quiz、/memorize 仍在使用，导航高亮统一归到「练习」。
   const normalizedPath = location.pathname.startsWith('/quiz') || location.pathname.startsWith('/memorize') ? '/practice' : location.pathname;
   const activeKey = navItems.some((item) => normalizedPath.startsWith(item.key))
@@ -129,12 +129,12 @@ function Shell(): JSX.Element {
                       aria-label={item.label}
                       onMouseEnter={(event) => {
                         const rect = event.currentTarget.getBoundingClientRect();
-                        setHoverTip({ label: item.label, top: rect.top + rect.height / 2 });
+                        setHoverTip({ label: item.label, left: rect.right + 10, top: rect.top + rect.height / 2 });
                       }}
                       onMouseLeave={() => setHoverTip(null)}
                       onFocus={(event) => {
                         const rect = event.currentTarget.getBoundingClientRect();
-                        setHoverTip({ label: item.label, top: rect.top + rect.height / 2 });
+                        setHoverTip({ label: item.label, left: rect.right + 10, top: rect.top + rect.height / 2 });
                       }}
                       onBlur={() => setHoverTip(null)}
                       onClick={() => setHoverTip(null)}
@@ -151,9 +151,29 @@ function Shell(): JSX.Element {
           <button
             type="button"
             className="sider-collapse-btn"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={() => {
+              setHoverTip(null);
+              setCollapsed((value) => !value);
+            }}
             aria-label={collapsed ? '展开导航栏' : '折叠导航栏'}
-            data-tooltip={collapsed ? '展开导航栏' : '折叠导航栏'}
+            onMouseEnter={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setHoverTip({
+                label: collapsed ? '展开导航栏' : '折叠导航栏',
+                left: rect.right + 10,
+                top: rect.top + rect.height / 2,
+              });
+            }}
+            onMouseLeave={() => setHoverTip(null)}
+            onFocus={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setHoverTip({
+                label: collapsed ? '展开导航栏' : '折叠导航栏',
+                left: rect.right + 10,
+                top: rect.top + rect.height / 2,
+              });
+            }}
+            onBlur={() => setHoverTip(null)}
           >
             {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
           </button>
@@ -166,14 +186,14 @@ function Shell(): JSX.Element {
             onMouseEnter={(event) => {
               if (collapsed) {
                 const rect = event.currentTarget.getBoundingClientRect();
-                setHoverTip({ label: '设置', top: rect.top + rect.height / 2 });
+                setHoverTip({ label: '设置', left: rect.right + 10, top: rect.top + rect.height / 2 });
               }
             }}
             onMouseLeave={() => setHoverTip(null)}
             onFocus={(event) => {
               if (collapsed) {
                 const rect = event.currentTarget.getBoundingClientRect();
-                setHoverTip({ label: '设置', top: rect.top + rect.height / 2 });
+                setHoverTip({ label: '设置', left: rect.right + 10, top: rect.top + rect.height / 2 });
               }
             }}
             onBlur={() => setHoverTip(null)}
@@ -183,8 +203,10 @@ function Shell(): JSX.Element {
           </button>
         </div>
       </Sider>
-      {collapsed && hoverTip && (
-        <div className="sider-hover-tip" style={{ top: hoverTip.top }}>{hoverTip.label}</div>
+      {hoverTip && (
+        <div className="sider-hover-tip" style={{ left: hoverTip.left, top: hoverTip.top }}>
+          {hoverTip.label}
+        </div>
       )}
       <Layout>
         {useUiStore((state) => state.notebookFocusMode) ? null : (

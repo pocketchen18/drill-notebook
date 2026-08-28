@@ -107,12 +107,15 @@ KnowledgePointImportService.importMarkdown(bankId, source)
 | 数组元素不是对象 | 抛 `AI 解析知识点返回格式无效：数组元素必须是对象` |
 | 解析后列表为空 | `importMarkdown` 抛 `规则解析失败且 AI 兜底不可用：…` |
 
-### 3.4 AI 不可用时的错误链
+### 3.4 AI 不可用时的错误链与配置回退
+
+- **配置回退机制**：如果用户未单独配置「导入兜底」AI 模型，系统会自动回退使用「主模型」的 API Key 和 Endpoint，避免重复配置。
+- **错误链**：
 
 | 情况 | 抛错 |
 |---|---|
-| 未配置 AI API Key | `请先配置 AI API Key`（由 `AiService.requireConfig` 抛出） |
-| 未配置 Endpoint | `请先配置 AI Endpoint` |
+| 主模型与导入兜底均未配置 Key | `请先在设置中配置「主模型」或「导入兜底」AI API Key`（由 `AiService.requireConfig` 抛出） |
+| 主模型与导入兜底均未配置 Endpoint | `请先在设置中配置「主模型」或「导入兜底」Endpoint` |
 | AI 调用 HTTP 非 2xx | `AI 服务请求失败（HTTP N）` |
 | AI 返回空内容 | `AI 服务返回内容为空` |
 | 规则失败 + AI 兜底也返回空列表 | `规则解析失败且 AI 兜底不可用：…` |
