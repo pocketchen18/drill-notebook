@@ -139,7 +139,12 @@ export function KnowledgePointPage(): JSX.Element {
     try {
       const result = await summarizeBank(bankId);
       refresh();
-      Message.success(`已总结 ${result.summarized} 个知识点${result.failed ? `（${result.failed} 张失败）` : ''}`);
+      if (result.summarized === 0 && result.failed > 0) {
+        const detail = result.errors?.[0] ? `：${result.errors[0]}` : '';
+        Message.error(`总结失败（${result.failed} 张失败）${detail}`);
+      } else {
+        Message.success(`已总结 ${result.summarized} 个知识点${result.failed ? `（${result.failed} 张失败）` : ''}`);
+      }
     } catch (error) {
       Message.error(friendlyMessage(error, '总结当前知识库失败'));
     } finally {
@@ -152,7 +157,12 @@ export function KnowledgePointPage(): JSX.Element {
     try {
       const result = await resummarizeBank(bankId);
       refresh();
-      Message.success(`已重新总结 ${result.summarized} 个知识点${result.failed ? `（${result.failed} 张失败）` : ''}`);
+      if (result.summarized === 0 && result.failed > 0) {
+        const detail = result.errors?.[0] ? `：${result.errors[0]}` : '';
+        Message.error(`重新总结失败（${result.failed} 张失败）${detail}`);
+      } else {
+        Message.success(`已重新总结 ${result.summarized} 个知识点${result.failed ? `（${result.failed} 张失败）` : ''}`);
+      }
     } catch (error) {
       Message.error(friendlyMessage(error, '重新总结失败'));
     } finally {
@@ -274,11 +284,13 @@ export function KnowledgePointPage(): JSX.Element {
             tree={tree}
             node={currentNode}
             questions={questionsQuery.data ?? []}
+            bankId={bankId}
             onNavigate={setActiveId}
             onEdit={(p) => openEditor(p)}
             onDelete={(id) => deleteMutation.mutate(id)}
             onTagClick={(tag) => setActiveTag((cur) => (cur === tag ? null : tag))}
             onFullscreen={() => setFullCardPoint(currentNode.id === 0 ? (tree.rootNode as unknown as KnowledgePoint) : pointsQuery.data?.find((p) => p.id === currentNode.id))}
+            onModified={() => refresh()}
           />
         ) : (
           <div className="kp-card-empty">在左侧选择一个知识点开始阅读</div>
@@ -300,6 +312,7 @@ export function KnowledgePointPage(): JSX.Element {
         tree={tree}
         node={currentNode}
         questions={questionsQuery.data ?? []}
+        bankId={bankId}
         onNavigate={(id) => { setActiveId(id); setFullCardPoint(id === 0 ? (tree.rootNode as unknown as KnowledgePoint) : pointsQuery.data?.find((p) => p.id === id)); }}
         onClose={() => setFullCardPoint(undefined)}
         onDeleted={() => { deleteMutation.mutate(fullCardPoint.id); setFullCardPoint(undefined); }}

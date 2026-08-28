@@ -22,6 +22,14 @@ export async function resummarizeBank(bankId: number): Promise<SummaryResult> {
   return post<SummaryResult>(`/api/knowledge-points/resummarize?bankId=${bankId}`, {});
 }
 
+export async function restoreOriginalBank(bankId: number): Promise<{ restored: number }> {
+  return post<{ restored: number }>(`/api/knowledge-points/restore-original?bankId=${bankId}`, {});
+}
+
+export async function restoreSummaryBank(bankId: number): Promise<{ restored: number }> {
+  return post<{ restored: number }>(`/api/knowledge-points/restore-summary?bankId=${bankId}`, {});
+}
+
 // 后端 @RequestBody → 走 body
 export async function summarizeImport(bankId: number, content: string): Promise<SummarizeImportResult> {
   return post<SummarizeImportResult>('/api/knowledge-points/summarize-import', { bankId, content });
