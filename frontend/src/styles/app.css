@@ -416,6 +416,60 @@ button, input, textarea { font: inherit; }
   align-items: center;
   justify-content: flex-end;
 }
+.knowledge-full-card-searchbar {
+  position: sticky;
+  top: 60px;
+  z-index: 25;
+  margin: -6px 0 16px auto;
+  padding: 6px 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--accent, #155eef);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  max-width: 440px;
+  width: 100%;
+  animation: slideDownFade 0.15s ease-out;
+}
+@keyframes slideDownFade {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.knowledge-full-card-searchbar .searchbar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.knowledge-full-card-searchbar .searchbar-inner .arco-input-inner-wrapper {
+  border-radius: 4px;
+  height: 28px;
+}
+.knowledge-full-card-searchbar .searchbar-info {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 68px;
+  text-align: center;
+}
+.knowledge-full-card-searchbar .searchbar-no-match {
+  color: var(--danger, #f53f3f);
+}
+.knowledge-full-card-searchbar .searchbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+mark.kp-search-highlight {
+  background-color: rgba(255, 222, 0, 0.4);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+mark.kp-search-highlight.kp-search-highlight-active {
+  background-color: #ff9800;
+  color: #fff;
+  font-weight: bold;
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.4);
+}
 .knowledge-full-card.is-resizing {
   user-select: none;
   cursor: col-resize;
