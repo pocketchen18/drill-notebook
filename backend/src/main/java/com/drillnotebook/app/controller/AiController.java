@@ -68,6 +68,66 @@ public class AiController {
         return ai.chat(body);
     }
 
+    /** 流式聊天（SSE）：event=text|reasoning|done|error，data 为 JSON。 */
+    @PostMapping(value = "/chat/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter chatStream(@RequestBody Map<String, Object> body) {
+        var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(300_000L);
+        new Thread(() -> {
+            try {
+                AiService.ChatResult result = ai.chatStream(body, (type, text) -> {
+                    try {
+                        emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                                .name(type)
+                                .data(mapperValueToJson(Map.of("text", text))));
+                        return true;
+                    } catch (Exception sendError) {
+                        return false; // 下游断开，中止上游读取
+                    }
+                });
+                ai.persistChatResult(body, result);
+                java.util.Map<String, Object> donePayload = new java.util.LinkedHashMap<>();
+                donePayload.put("reply", result.text());
+                if (result.reasoning() != null && !result.reasoning().isBlank()) {
+                    donePayload.put("reasoning", result.reasoning());
+                }
+                emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                        .name("done")
+                        .data(mapperValueToJson(donePayload)));
+                emitter.complete();
+            } catch (Exception error) {
+                try {
+                    emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                            .name("error")
+                            .data(mapperValueToJson(Map.of("message", error.getMessage() == null ? "AI 服务暂时不可用" : error.getMessage()))));
+                } catch (Exception ignored) {
+                    // 下游已断开
+                }
+                emitter.completeWithError(error);
+            }
+        }, "ai-chat-stream").start();
+        return emitter;
+    }
+
+    private String mapperValueToJson(Map<String, Object> value) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(value);
+        } catch (Exception error) {
+            return "{}";
+        }
+    }
+
+    /** 一键拉取可用模型列表。body: purpose?。 */
+    @PostMapping("/models")
+    public Map<String, Object> models(@RequestBody(required = false) Map<String, Object> body) {
+        return Map.of("models", ai.listModels(body == null ? Map.of() : body));
+    }
+
+    /** 模型测活。body: prompt? baseUrl? model? apiKey? apiFormat? purpose? masterPassword?。 */
+    @PostMapping("/models/test")
+    public Map<String, Object> testModel(@RequestBody Map<String, Object> body) {
+        return ai.testModel(body);
+    }
+
     @PostMapping("/summarize")
     public Map<String, Object> summarize(@RequestBody Map<String, Object> body) {
         return ai.summarize(body);

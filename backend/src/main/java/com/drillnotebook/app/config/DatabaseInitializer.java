@@ -60,6 +60,9 @@ public class DatabaseInitializer {
             ensureColumn(connection, "ai_chat_message", "session_id", "INTEGER");
             ensureColumn(connection, "ai_chat_message", "content_cipher", "TEXT");
             ensureColumn(connection, "ai_chat_message", "content_meta", "TEXT");
+            // AI 思考链（CoT）持久化：加密存储，随消息接口返回
+            ensureColumn(connection, "ai_chat_message", "reasoning_cipher", "TEXT");
+            ensureColumn(connection, "ai_chat_message", "reasoning_meta", "TEXT");
             ensureColumn(connection, "knowledge_point", "heading_path", "TEXT");
             ensureColumn(connection, "knowledge_point", "sort_index", "INTEGER");
             ensureColumn(connection, "note_page", "content_hash", "TEXT");

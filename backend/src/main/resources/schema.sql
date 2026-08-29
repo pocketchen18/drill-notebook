@@ -132,6 +132,8 @@ CREATE TABLE IF NOT EXISTS ai_chat_message (
     content TEXT NOT NULL DEFAULT '',
     content_cipher TEXT,
     content_meta TEXT,
+    reasoning_cipher TEXT,
+    reasoning_meta TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 

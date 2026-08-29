@@ -741,7 +741,33 @@ button, input, textarea { font: inherit; }
 .ai-fab.is-open { background: #4e5969; box-shadow: 0 8px 20px rgba(0,0,0,.2); }
 .ai-drawer-title { display: inline-flex; align-items: center; gap: 8px; }
 .ai-drawer .arco-drawer-scroll { overflow: hidden; }
-.ai-drawer .arco-drawer-content { display: flex; flex-direction: column; overflow: hidden; }
+.ai-drawer .arco-drawer-content { display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.ai-drawer-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.ai-drawer-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.ai-drawer-resize-handle:hover::after,
+.ai-drawer-resize-handle:focus-visible::after,
+.ai-drawer-resize-handle:active::after { opacity: .65; }
+.ai-drawer-resize-handle:focus-visible { outline: none; }
 .ai-drawer-body { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow: hidden; }
 .ai-session-bar { display: flex; align-items: center; gap: 8px; }
 .ai-session-title {
@@ -792,6 +818,46 @@ button, input, textarea { font: inherit; }
 .ai-citation-title { flex: 0 1 auto; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-citation-heading { flex: 1 1 auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-insert-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent-border); border-radius: 8px; background: var(--accent-soft); }
+
+/* AI 模型槽位卡片（API 格式 / Base URL / 模型拉取 / 测活） */
+.ai-slot-card { display: flex; flex-direction: column; gap: 12px; }
+.ai-slot-form { display: flex; flex-direction: column; gap: 10px; }
+.ai-slot-field { display: flex; flex-direction: column; gap: 4px; }
+.ai-slot-field > span { color: var(--label); font-size: 12px; font-weight: 600; }
+.ai-slot-field-inline { flex-direction: row; align-items: center; gap: 8px; }
+.ai-slot-field-inline > span { margin: 0; }
+.ai-slot-model-row { display: flex; gap: 8px; align-items: center; }
+.ai-slot-model-row > .arco-select, .ai-slot-model-row > .arco-input-wrapper { flex: 1; min-width: 0; }
+.ai-slot-models { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.ai-slot-models-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ai-slot-model-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.ai-slot-model-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; background: var(--panel-bg); border: 1px solid transparent; }
+.ai-slot-model-item:hover { border-color: var(--line); }
+.ai-slot-model-item.selected { border-color: var(--accent-border); background: var(--accent-soft-2); }
+.ai-slot-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; padding: 0; }
+.ai-slot-model-name:hover { color: var(--accent); }
+.ai-slot-model-reply { flex: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+
+/* 「获取模型」弹窗：搜索 + 列表 + 行内测活。 */
+.ai-model-modal .ai-model-modal-body { display: flex; flex-direction: column; gap: 10px; }
+.ai-model-modal-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ai-model-modal-toolbar > .arco-input-wrapper { width: 240px; }
+.ai-model-modal-count { color: var(--muted); font-size: 12px; padding: 0 2px; }
+.ai-modal-model-list { max-height: 420px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
+.ai-modal-model-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.ai-modal-model-row:last-child { border-bottom: 0; }
+.ai-modal-model-row:hover { background: var(--subtle-bg); }
+.ai-modal-model-row.selected { background: var(--accent-soft-2); }
+.ai-modal-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; border: 0; padding: 4px 6px; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.ai-modal-model-name:hover { color: var(--accent); }
+/* 流式思考链（可折叠） */
+.chat-reasoning { margin: 0 0 8px; border: 1px dashed var(--line); border-radius: 6px; background: var(--subtle-bg); }
+.chat-reasoning summary { cursor: pointer; padding: 5px 10px; color: var(--muted); font-size: 12px; user-select: none; }
+.chat-reasoning[open] summary { border-bottom: 1px dashed var(--line); }
+.chat-reasoning-body { padding: 8px 10px; color: var(--muted); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+/* 流式输出光标 */
+.chat-stream-cursor { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: var(--accent); border-radius: 1px; animation: chat-cursor-blink 900ms step-end infinite; }
+@keyframes chat-cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .ai-drawer-compose { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
 .ai-drawer-hint { display: block; margin-top: -4px; }
 
