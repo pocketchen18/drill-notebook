@@ -16,7 +16,7 @@ export interface StreamCallbacks {
 }
 
 /**
- * 发起流式聊天。返回一个 abort 函数；调用后中止 fetch 并触发 onError('已中止')。
+ * 发起流式聊天。返回一个 abort 函数；调用后会中止 fetch（正在进行的读取抛 AbortError，但不会触发 onError 回调）。
  * 事件帧格式：event:<name>\ndata:<json>\n\n
  */
 export async function streamChat(path: string, body: unknown, callbacks: StreamCallbacks): Promise<() => void> {

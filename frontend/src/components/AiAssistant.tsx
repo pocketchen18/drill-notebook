@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Drawer, Dropdown, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
+import { Button, Drawer, Dropdown, Input, Message, Modal, Select, Space, Tag, Typography } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
-import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -309,6 +309,13 @@ export function AiAssistant(): JSX.Element {
   const createSessionMutation = useMutation({
     mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
     onSuccess: (session) => {
+      // 乐观写入缓存：让新会话立即出现在列表中，避免 refetch 完成前旧列表触发
+      // 会话 effect 把选中会话切回旧值（表现为「第一次点新建不跳转」）。
+      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
+        const list = old ?? [];
+        if (list.some((item) => item.id === session.id)) return list;
+        return [{ ...session, messageCount: session.messageCount ?? 0 }, ...list];
+      });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = session.id;
       setSessionId(session.id);
@@ -394,6 +401,11 @@ export function AiAssistant(): JSX.Element {
     },
     onError: (error) => Message.error(error.message)
   });
+
+  // 删除确认使用 Arco Modal 而非 window.confirm：
+  // Electron 渲染进程的原生同步对话框关闭后 webContents 键盘焦点可能不恢复（鼠标正常、键盘失效，
+  // 窗口失焦/复焦后才自愈）——这正是「删除会话后输入框无法输入、切软件切回又好了」的偶发根因。
+  const [deleteConfirmSession, setDeleteConfirmSession] = useState<AiChatSession | null>(null);
 
   const chatMutation = useMutation({
     mutationFn: (request: ChatRequest) => post<{ reply: string; sessionId: number; citations?: ChatCitation[]; retrievalNotice?: RetrievalNotice }>('/api/ai/chat', {
@@ -482,9 +494,26 @@ export function AiAssistant(): JSX.Element {
     if (streaming || chatMutation.isPending) return;
     const userKey = nextMessageKey();
     const assistantKey = nextMessageKey();
+    // 会话快照：流式回调一律校验会话未变，防止流式期间切换会话后增量写进新会话的消息。
+    const streamingSessionId = sessionId;
+    const patchSessionMessage = (updater: (prev: ChatMessage) => ChatMessage | null): void => {
+      setMessages((current) => {
+        if (sessionId !== streamingSessionId) return current;
+        const next = [...current];
+        const last = next[next.length - 1];
+        if (last && last.role === 'assistant') {
+          const resolved = updater(last);
+          if (resolved) next[next.length - 1] = resolved;
+        }
+        return next;
+      });
+    };
     const userMessage: ChatMessage = { role: 'user', content: request.content, displayContent: request.displayContent, _key: userKey };
     const placeholder: ChatMessage = { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey };
-    setMessages((current) => [...current, userMessage, placeholder]);
+    setMessages((current) => {
+      if (sessionId !== streamingSessionId) return current;
+      return [...current, userMessage, placeholder];
+    });
     setMessage('');
     setAttachments([]);
     setStreaming(true);
@@ -499,53 +528,58 @@ export function AiAssistant(): JSX.Element {
       ],
       ...(retrievalOptions ? { retrievalOptions } : {})
     };
-    const patchLast = (patch: Partial<ChatMessage> | ((prev: ChatMessage) => Partial<ChatMessage>)): void => {
-      setMessages((current) => {
-        const next = [...current];
-        const last = next[next.length - 1];
-        if (last && last.role === 'assistant') {
-          const resolved = typeof patch === 'function' ? patch(last) : patch;
-          next[next.length - 1] = { ...last, ...resolved };
-        }
-        return next;
-      });
-    };
     let aborted = false;
     const finishStream = (): void => {
       // 任何出口都要：清状态 + 清 abort 句柄，避免 onError/重复 done 再次进入分支造成重复占位。
       setStreaming(false);
       chatAbortRef.current = null;
     };
+    // 手动中断：中止 fetch；后端 emitter.send 失败 → 停止读上游。
+    // 已有部分正文 → 定稿占位（后端照常落库部分内容）；零正文（思考阶段）→ 回滚占位与 user 消息。
+    const stopStreaming = (): void => {
+      if (!streaming) return;
+      aborted = true;
+      chatAbortRef.current?.();
+      chatAbortRef.current = null;
+      setStreaming(false);
+      if (sessionId !== streamingSessionId) return;
+      setMessages((current) => {
+        const next = [...current];
+        const last = next[next.length - 1];
+        if (!(last && last.role === 'assistant' && last.streaming)) return next;
+        const text = typeof last.content === 'string' ? last.content : '';
+        if (text.trim()) {
+          next[next.length - 1] = { ...last, content: text, reasoning: last.reasoning || undefined, streaming: false };
+        } else {
+          next.pop();
+          const prev = next[next.length - 1];
+          if (prev && prev.role === 'user' && prev._key === userKey) next.pop();
+        }
+        return next;
+      });
+    };
+    chatAbortRef.current = stopStreaming;
     void streamChat('/api/ai/chat/stream', payload, {
       onText: (delta) => {
-        setMessages((current) => {
-          const next = [...current];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant') next[next.length - 1] = { ...last, content: String(last.content) + delta };
-          return next;
-        });
+        patchSessionMessage((prev: ChatMessage) => ({ ...prev, content: String(prev.content) + delta }));
       },
       onReasoning: (delta) => {
-        setMessages((current) => {
-          const next = [...current];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant') next[next.length - 1] = { ...last, reasoning: (last.reasoning ?? '') + delta };
-          return next;
-        });
+        patchSessionMessage((prev: ChatMessage) => ({ ...prev, reasoning: (prev.reasoning ?? '') + delta }));
       },
       onDone: ({ reply }) => {
         if (aborted) return;
         aborted = true;
         // 本地已通过 onReasoning 增量累积 reasoning，done 事件携带的 reasoning 与之等价；保留本地版本即可。
-        patchLast((prev: ChatMessage) => ({
+        patchSessionMessage((prev: ChatMessage) => ({
           ...prev,
-          content: reply || undefined,
+          // reply 为空时保留已流式累积的内容，避免 content 变成 undefined 触发渲染崩溃。
+          content: reply || (typeof prev.content === 'string' ? prev.content : ''),
           reasoning: prev.reasoning || undefined,
           streaming: false
         }));
         finishStream();
         void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-        void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', sessionId] });
+        void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', streamingSessionId] });
       },
       onError: (streamError) => {
         if (aborted) return;
@@ -553,12 +587,14 @@ export function AiAssistant(): JSX.Element {
         finishStream();
         // 流式失败（未配置/后端不支持等）：移除占位与刚插入的 user 消息，回退非流式重发一次。
         setMessages((current) => {
+          if (sessionId !== streamingSessionId) return current;
           const next = [...current];
           const last = next[next.length - 1];
           if (last && last.role === 'assistant' && last.streaming) next.pop();
           return next;
         });
         setMessages((current) => {
+          if (sessionId !== streamingSessionId) return current;
           // 移除刚插入的 user 消息（由 chatMutation.onSuccess 重新追加）
           const next = [...current];
           if (next.length && next[next.length - 1].role === 'user' && next[next.length - 1]._key === userKey) next.pop();
@@ -568,14 +604,13 @@ export function AiAssistant(): JSX.Element {
         pendingFallbackUserKeyRef.current = userKey;
         chatMutation.mutate(request);
       }
-    }).then((abort) => {
-      chatAbortRef.current = aborted ? null : abort;
     });
   };
 
   const send = (): void => {
-    if (!message.trim() && !attachments.length) return;
+    // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
     if (streaming || chatMutation.isPending) return;
+    if (!message.trim() && !attachments.length) return;
     if (!configQuery.data?.hasKey) {
       Message.warning('请先在设置中配置 API Key');
       return;
@@ -774,8 +809,8 @@ export function AiAssistant(): JSX.Element {
                     disabled={deleteSessionMutation.isPending || !sessionId || (sessionsQuery.data?.length ?? 0) <= 1}
                     onClick={() => {
                       if (sessionId === undefined) return;
-                      if (!window.confirm(`删除会话「${currentSession?.title ?? ''}」？消息将一并删除。`)) return;
-                      deleteSessionMutation.mutate(sessionId);
+                      const target = sessionsQuery.data?.find((session) => session.id === sessionId) ?? null;
+                      setDeleteConfirmSession(target);
                     }}
                   >
                     <Trash2 size={13} /> 删除会话
@@ -949,11 +984,43 @@ export function AiAssistant(): JSX.Element {
               }}
             />
             <Button type="secondary" icon={<Paperclip size={16} />} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
-            <Button type="primary" icon={<Send size={16} />} loading={chatMutation.isPending || streaming} disabled={!configQuery.data?.hasKey || sessionId === undefined} onClick={send} aria-label="发送" />
+            <Button
+              type="primary"
+              icon={streaming || chatMutation.isPending ? <Square size={14} /> : <Send size={16} />}
+              loading={chatMutation.isPending && !streaming}
+              disabled={!streaming && (!configQuery.data?.hasKey || sessionId === undefined)}
+              onClick={() => {
+                if (streaming) {
+                  chatAbortRef.current?.();
+                  return;
+                }
+                send();
+              }}
+              aria-label={streaming ? '中断生成' : '发送'}
+              title={streaming ? '中断生成' : '发送'}
+            />
           </div>
           {!configQuery.data?.hasKey ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置」中配置 Endpoint 与 API Key 后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
         </div>
+        <Modal
+          title="删除会话"
+          visible={deleteConfirmSession !== null}
+          onCancel={() => setDeleteConfirmSession(null)}
+          onOk={() => {
+            if (deleteConfirmSession) deleteSessionMutation.mutate(deleteConfirmSession.id);
+            setDeleteConfirmSession(null);
+          }}
+          okText="删除"
+          okButtonProps={{ status: 'danger' }}
+          cancelText="取消"
+          confirmLoading={deleteSessionMutation.isPending}
+          autoFocus={false}
+          focusLock
+          unmountOnExit
+        >
+          <Typography.Text>删除会话「{deleteConfirmSession?.title ?? ''}」？消息将一并删除，且不可恢复。</Typography.Text>
+        </Modal>
       </Drawer>
     </>
   );

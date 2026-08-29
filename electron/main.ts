@@ -168,16 +168,6 @@ ipcMain.handle('shell:open-external', async (event, url: string) => {
   }
 });
 
-ipcMain.handle('window:set-full-screen', (event, flag: boolean) => {
-  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Full-screen request rejected from an untrusted page.');
-  if (mainWindow) mainWindow.setFullScreen(Boolean(flag));
-});
-
-ipcMain.handle('window:is-full-screen', (event) => {
-  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Full-screen query rejected from an untrusted page.');
-  return mainWindow?.isFullScreen() ?? false;
-});
-
 // 抓取网址视频的原始标题（YouTube oEmbed / Bilibili view 接口）。
 // 渲染进程直接 fetch 会被 CORS 拦截，故由主进程的网络栈代为请求。
 async function fetchVideoTitle(url: string): Promise<string | null> {

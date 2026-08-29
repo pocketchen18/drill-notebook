@@ -343,16 +343,27 @@ public class AiService {
         maybeAutoTitle(sessionId, lastUser.get("content"));
     }
 
-    /** 拉取主模型（或 purpose 指定槽位）的可用模型列表。 */
+    /**
+     * 拉取可用模型列表：purpose 指定槽位；baseUrl/apiKey/apiFormat 可覆盖槽位配置
+     * （保存前用表单当前值拉取），缺省字段回退已保存槽位——与 testModel 行为一致。
+     */
     public List<String> listModels(Map<String, Object> body) {
         String purpose = string(body, "purpose", AiConfigRepository.PURPOSE_CHAT);
-        AiConfigRepository.ConfigRow config = AiConfigRepository.PURPOSE_IMPORT.equals(purpose) ? requireImportConfig() : requireChatConfig();
-        if (config.endpoint().equalsIgnoreCase("mock://local")) {
+        String baseUrl = string(body, "baseUrl", "").trim();
+        String apiKey = string(body, "apiKey", "");
+        String apiFormatRaw = string(body, "apiFormat", "").trim();
+        String apiFormat = apiFormatRaw.isBlank() ? null : normalizeApiFormat(apiFormatRaw);
+        if (baseUrl.isBlank() || apiKey.isBlank() || apiFormat == null) {
+            AiConfigRepository.ConfigRow config = AiConfigRepository.PURPOSE_IMPORT.equals(purpose) ? requireImportConfig() : requireChatConfig();
+            if (baseUrl.isBlank()) baseUrl = config.endpoint();
+            if (apiKey.isBlank()) apiKey = decryptApiKey(config, string(body, "masterPassword", ""));
+            if (apiFormat == null) apiFormat = apiFormatOf(config);
+        }
+        if (baseUrl.equalsIgnoreCase("mock://local")) {
             return List.of("mock-echo", "mock-flash", "mock-pro");
         }
-        String apiKey = decryptApiKey(config, string(body, "masterPassword", ""));
         AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
-                config.endpoint(), apiKey, config.model(), apiFormatOf(config), 0, false);
+                baseUrl, apiKey, "", apiFormat, 0, false);
         return upstream().listModels(upstream);
     }
 
