@@ -325,7 +325,8 @@ public class AiService {
                 upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
                 DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
         AiUpstreamClient.Result result = upstream().call(target, modelMessages, true, listener, DEFAULT_CALL.timeoutSeconds());
-        if (result.text() == null || result.text().isBlank()) {
+        // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也是有效结果，照常落库。
+        if ((result.text() == null || result.text().isBlank()) && (result.reasoning() == null || result.reasoning().isBlank())) {
             throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
         }
         return new ChatResult(result.text(), result.reasoning());

@@ -534,12 +534,18 @@ export function AiAssistant(): JSX.Element {
       setStreaming(false);
       chatAbortRef.current = null;
     };
-    // 手动中断：中止 fetch；后端 emitter.send 失败 → 停止读上游。
+    // 手动中断：中止 fetch（后端 emitter.send 失败 → 停止读上游）。
     // 已有部分正文 → 定稿占位（后端照常落库部分内容）；零正文（思考阶段）→ 回滚占位与 user 消息。
+    // 两个历史缺陷（勿回退）：
+    // ① 不能用 streaming state 做重入守卫——此函数在 setStreaming(true) 同一渲染周期内创建，
+    //    闭包捕获的 streaming 恒为 false，会让中断按钮永远空转（死按钮根因之一）。aborted 标志已足够防重入。
+    // ② streamChat 返回的 fetch abort 函数是异步到达的，必须经 abortFetch 捕获并在中断时调用，
+    //    否则只停了前端渲染、SSE 连接与后端上游生成照旧（死按钮根因之二）。
+    let abortFetch: (() => void) | null = null;
     const stopStreaming = (): void => {
-      if (!streaming) return;
+      if (aborted) return;
       aborted = true;
-      chatAbortRef.current?.();
+      abortFetch?.();
       chatAbortRef.current = null;
       setStreaming(false);
       if (sessionId !== streamingSessionId) return;
@@ -548,9 +554,12 @@ export function AiAssistant(): JSX.Element {
         const last = next[next.length - 1];
         if (!(last && last.role === 'assistant' && last.streaming)) return next;
         const text = typeof last.content === 'string' ? last.content : '';
-        if (text.trim()) {
-          next[next.length - 1] = { ...last, content: text, reasoning: last.reasoning || undefined, streaming: false };
+        const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
+        if (text.trim() || reasoning.trim()) {
+          // 思考链也算已生成内容：正文或思考链任一非空都定稿保留，绝不静默丢弃。
+          next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
         } else {
+          // 真正零生成（刚开始连接）：回滚占位与 user 消息，方便立即重发。
           next.pop();
           const prev = next[next.length - 1];
           if (prev && prev.role === 'user' && prev._key === userKey) next.pop();
@@ -561,9 +570,11 @@ export function AiAssistant(): JSX.Element {
     chatAbortRef.current = stopStreaming;
     void streamChat('/api/ai/chat/stream', payload, {
       onText: (delta) => {
+        if (aborted) return;
         patchSessionMessage((prev: ChatMessage) => ({ ...prev, content: String(prev.content) + delta }));
       },
       onReasoning: (delta) => {
+        if (aborted) return;
         patchSessionMessage((prev: ChatMessage) => ({ ...prev, reasoning: (prev.reasoning ?? '') + delta }));
       },
       onDone: ({ reply }) => {
@@ -604,6 +615,10 @@ export function AiAssistant(): JSX.Element {
         pendingFallbackUserKeyRef.current = userKey;
         chatMutation.mutate(request);
       }
+    }).then((abort) => {
+      // streamChat 的返回值（fetch abort）异步到达；中断时调用它真正掐断 SSE 连接。
+      if (aborted) abort();
+      else abortFetch = abort;
     });
   };
 
@@ -991,7 +1006,10 @@ export function AiAssistant(): JSX.Element {
               disabled={!streaming && (!configQuery.data?.hasKey || sessionId === undefined)}
               onClick={() => {
                 if (streaming) {
-                  chatAbortRef.current?.();
+                  if (chatAbortRef.current) chatAbortRef.current();
+                  else if (chatMutation.isPending) {
+                    // 非流式请求挂起中：无 abort 句柄可调用，交给后端超时；按钮态会自行恢复。
+                  }
                   return;
                 }
                 send();
