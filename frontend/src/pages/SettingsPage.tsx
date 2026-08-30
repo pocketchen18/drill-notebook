@@ -4,6 +4,7 @@ import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfi
 import { Edit3, Plus, Sparkles, Star, Trash2 } from 'lucide-react';
 import { AiModelSlotCard } from '../components/AiModelSlotCard';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
+import { DataManagementPanel } from '../components/DataManagementPanel';
 import { useUiStore } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
@@ -40,14 +41,15 @@ const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
 };
 
 // 设置页顶部横向 Tab（pill 分区，按本软件实际设置内容划分）：
-// 常规=外观与全局行为；AI 连接=生成模型接入；嵌入与检索=知识库索引基础设施；学习与复习=学习行为与 SRS。
-type SettingsTab = 'general' | 'ai' | 'embedding' | 'study';
+// 常规=外观与全局行为；AI 连接=生成模型接入；嵌入与检索=知识库索引基础设施；学习与复习=学习行为与 SRS；数据管理=备份/导出/导入。
+type SettingsTab = 'general' | 'ai' | 'embedding' | 'study' | 'data';
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'general', label: '常规' },
   { key: 'ai', label: 'AI 连接' },
   { key: 'embedding', label: '嵌入与检索' },
-  { key: 'study', label: '学习与复习' }
+  { key: 'study', label: '学习与复习' },
+  { key: 'data', label: '数据管理' }
 ];
 
 function readTabFromUrl(): SettingsTab {
@@ -350,6 +352,13 @@ export function SettingsPage(): JSX.Element {
       {activeTab === 'embedding' && (
       <div className="settings-tab-panel" role="tabpanel">
       <EmbeddingSettingsCard />
+      </div>
+    )}
+
+      {/* 数据管理 Tab：备份配置、备份列表、导出与导入 */}
+      {activeTab === 'data' && (
+      <div className="settings-tab-panel" role="tabpanel">
+      <DataManagementPanel />
       </div>
     )}
 
