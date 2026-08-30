@@ -120,6 +120,16 @@ public class KnowledgePointController {
         return summarySvc.resummarizeBank(bankId);
     }
 
+    @PostMapping("/restore-original")
+    public Map<String, Object> restoreOriginalBank(@RequestParam long bankId) {
+        return summarySvc.restoreOriginalBank(bankId);
+    }
+
+    @PostMapping("/restore-summary")
+    public Map<String, Object> restoreSummaryBank(@RequestParam long bankId) {
+        return summarySvc.restoreSummaryBank(bankId);
+    }
+
     @PostMapping("/summarize-import")
     public Map<String, Object> summarizeImport(@RequestBody Map<String, Object> body) {
         long bankId = ((Number) body.get("bankId")).longValue();

@@ -91,6 +91,10 @@ export interface AiModelSlot {
   endpoint: string;
   model: string;
   hasKey: boolean;
+  /** API 格式：chat_completions（默认）| anthropic。 */
+  apiFormat?: 'chat_completions' | 'anthropic';
+  /** 是否流式传输（默认开）。 */
+  streaming?: boolean;
 }
 
 /**
@@ -214,6 +218,12 @@ export interface ChatMessage {
   citations?: ChatCitation[];
   /** 检索降级/状态轻量提示（Task 14）；仅随当前会话 response 保留，不持久化。 */
   notice?: RetrievalNotice;
+  /** 思考链（CoT）：仅流式当前消息展示，不持久化。 */
+  reasoning?: string;
+  /** 流式进行中标记。 */
+  streaming?: boolean;
+  /** 前端稳定 key：消息首次创建时分配，后续 refetch/合并复用，避免列表 remount 造成滚动抖动。 */
+  _key?: string;
 }
 
 export type PlanResourceType = 'question' | 'knowledge_point' | 'note_page';

@@ -90,6 +90,8 @@ FROM knowledge_point kp
 |---|---|---|---|---|
 | `/summarize` | POST | `?bankId=X` | `{ summarized, failed, errors[] }` | 整库总结：遍历该 bank 全部知识点，对**未总结**的逐条存原文、AI 浓缩、更新 `content`。已总结的跳过。 |
 | `/resummarize` | POST | `?bankId=X` | `{ summarized, failed, errors[] }` | 整库重新总结：遍历该 bank 全部**已总结**的卡，取 `role=original` → AI 重新总结 → 更新 `content` 与 `role=summary`。未总结的跳过。 |
+| `/restore-original` | POST | `?bankId=X` | `{ restored: N }` | 整库还原原文：遍历该 bank 全部有 `role=original` 快照的卡，恢复 `content` 为原文。 |
+| `/restore-summary` | POST | `?bankId=X` | `{ restored: N }` | 整库恢复总结：遍历该 bank 全部有 `role=summary` 快照的卡，恢复 `content` 为总结。 |
 | `/summarize-import` | POST | `{ bankId, content }` body | `{ imported, failed, errors[], strategy: "ai-summary" }` | AI 总结并导入：调 `AiService.summarizeMarkdown(content)` 输出符合标准导入格式的 Markdown → 调 `KnowledgePointImportService.importMarkdown` 入库。 |
 | `/{id}/summarize` | POST | — | `{ summarized: 1, errors: [] }` | 单卡总结：存原文 → AI 浓缩 → 更新 `content`、写 `role=summary`。 |
 | `/{id}/resummarize` | POST | — | 同上 | 单卡重新总结：取 `role=original` → AI 浓缩 → 更新 `content` 与 `role=summary`。无原文 → 412 `当前知识卡片还未总结，请先点击"总结"`。 |
@@ -133,27 +135,21 @@ summarizePoint(id):
 
 ### 4.2 单卡全屏视图：`KnowledgeFullCardView`
 
-点列表里的卡片本体（不是按钮区）进入全屏覆盖视图：
+点击工作区右上角「全屏」按钮进入全屏覆盖视图：
 
-| 按钮 | 行为 |
+| 功能 / 按钮 | 行为 |
 |---|---|
-| 总结 / 还原 | `view === 'original'` 时切到总结态；`view === 'summary'` 时切回原文态。无总结时调 `summarizePoint` 触发首次总结。 |
-| 重新总结 | 仅 `hasOriginal` 时可点；调 `resummarizePoint` 从原文重跑 AI 总结。 |
-| 修改 | 关全屏，打开编辑器。 |
-| 删除 | Popconfirm 确认后调 `deleteMutation`。 |
+| 大纲拖拽调宽 | 鼠标拖拽左侧大纲右边界可在 `[180px, 600px]` 范围内实时调整宽度；向左拖动宽度 `< 120px` 时自动平滑折叠大纲。 |
+| 总结 / 还原 | 支持单卡、中间章节目录（批量子节点）或根节点（整库）：`view === 'original'` 时总结并展示总结态；`view === 'summary'` 时还原原文态。无总结时自动发起 AI 总结。 |
+| 重新总结 | 仅已总结（`hasOriginal`）时可用；从原文重跑 AI 总结并刷新总结态快照。根节点时支持「重新总结全文」。 |
+| 修改 | 关全屏，打开知识点编辑器（仅单卡可用）。 |
+| 删除 | Popconfirm 确认后调用删除并清空残留（仅单卡可用）。 |
+| 键盘操作 | `Escape` 退出全屏；`T` 键折叠/展开大纲；`←` / `→` 键快速切换上一个/下一个知识点。 |
 
-`Escape` 键退出全屏。
+### 4.3 工作区原文/总结切换与整库批量恢复
 
-### 4.3 列表原文/总结一键切换：`handleToggleViewMode`
-
-列表视图顶部「显示原文 / 显示总结」按钮的行为：
-
-1. 取当前 bank 所有 `hasOriginal` 为 `true` 的卡（即已总结卡）
-2. 并发调 `restoreOriginal` 或 `restoreSummary`（按目标态决定）
-3. 单张失败不阻塞其他张
-4. 把成功的结果直接 `queryClient.setQueryData` 写回 react-query 缓存，避免整列重拉
-
-`viewMode` 状态在父组件持有：`'summary'`（默认）= 显示 AI 总结；`'original'` = 显示原文。
+1. **工作区单卡切换**：卡片标题下方的标签栏右侧提供「显示原文 / 显示总结」切换按钮，支持在阅读时即时切换当前卡片或当前章节的展示形态。
+2. **整库批量恢复**：前端调用 `/api/knowledge-points/restore-original` 或 `/api/knowledge-points/restore-summary`，由后端事务在数据库层批量更新 `content` 字段，避免前端逐张并发调用的网络开销。
 
 ## 5. AI 总结的输出格式约束
 
@@ -196,8 +192,9 @@ System prompt（`KNOWLEDGE_SUMMARIZE_IMPORT_V1`）：
 
 | 场景 | 行为 |
 |---|---|
-| AI 未配置（无 Key / Endpoint） | 后端 `AiService.requireConfig` 抛 `请先配置 AI API Key`，前端 `Message.error` |
-| 单卡总结失败 | 计入 `errors`，不中断其他卡片，已成功的总结不回滚 |
+| 导入兜底模型未配置 | 自动无缝降级回退使用「主模型」配置（API Key + Endpoint），无需用户重复配置两套相同的模型 Key。 |
+| AI 未配置（主模型与兜底均无 Key / Endpoint） | 后端 `AiService.requireConfig` 抛 `请先在设置中配置「主模型」或「导入兜底」AI API Key`，前端 `Message.error` |
+| 单卡总结失败 | 计入 `errors`，记录服务端 error log，不中断其他卡片，已成功的总结不回滚 |
 | 「重新总结」时无原文 | 后端 412 `当前知识卡片还未总结，请先点击"总结"`，前端 tooltip 提示 |
 | `restore-original` 时无原文记录 | 后端 412 `无原文记录` |
 | `restore-summary` 时无总结记录 | 后端 412 `无总结记录` |

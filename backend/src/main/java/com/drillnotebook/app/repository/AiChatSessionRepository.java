@@ -93,7 +93,7 @@ public class AiChatSessionRepository {
 
     public List<MessageRow> messages(long sessionId) {
         return jdbc.query("""
-                SELECT id, session_id, role, content, content_cipher, content_meta, created_at
+                SELECT id, session_id, role, content, content_cipher, content_meta, reasoning_cipher, reasoning_meta, created_at
                 FROM ai_chat_message WHERE session_id = ? ORDER BY id
                 """, (result, row) -> new MessageRow(
                 result.getLong("id"),
@@ -102,15 +102,22 @@ public class AiChatSessionRepository {
                 result.getString("content"),
                 result.getString("content_cipher"),
                 result.getString("content_meta"),
+                result.getString("reasoning_cipher"),
+                result.getString("reasoning_meta"),
                 result.getString("created_at")
         ), sessionId);
     }
 
     public void insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta) {
+        insertMessage(sessionId, role, content, contentCipher, contentMeta, null, null);
+    }
+
+    public void insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta,
+                              String reasoningCipher, String reasoningMeta) {
         jdbc.update("""
-                INSERT INTO ai_chat_message(session_id, role, content, content_cipher, content_meta)
-                VALUES (?, ?, ?, ?, ?)
-                """, sessionId, role, content == null ? "" : content, contentCipher, contentMeta);
+                INSERT INTO ai_chat_message(session_id, role, content, content_cipher, content_meta, reasoning_cipher, reasoning_meta)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, sessionId, role, content == null ? "" : content, contentCipher, contentMeta, reasoningCipher, reasoningMeta);
         touch(sessionId);
     }
 
@@ -129,5 +136,6 @@ public class AiChatSessionRepository {
         return create("默认会话", null);
     }
 
-    public record MessageRow(long id, Long sessionId, String role, String content, String contentCipher, String contentMeta, String createdAt) {}
+    public record MessageRow(long id, Long sessionId, String role, String content, String contentCipher, String contentMeta,
+                             String reasoningCipher, String reasoningMeta, String createdAt) {}
 }

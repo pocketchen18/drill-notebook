@@ -45,6 +45,35 @@ public class AiService {
     private volatile EmbeddingConfigService embeddingConfig;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
 
+    /** 上游调用客户端（CC/Anthropic 双格式 + SSE）；懒初始化（mapper 由构造器注入）。 */
+    private volatile AiUpstreamClient upstreamClient;
+
+    private AiUpstreamClient upstream() {
+        AiUpstreamClient client = upstreamClient;
+        if (client == null) {
+            synchronized (this) {
+                if (upstreamClient == null) upstreamClient = new AiUpstreamClient(http, mapper);
+                client = upstreamClient;
+            }
+        }
+        return client;
+    }
+
+    /** 一次解密后的模型配置：密钥仅在调用瞬间存在于内存。 */
+    private record UpstreamConfig(String apiFormat, String baseUrl, String apiKey, String model, String params) {
+        /** streaming 缺省视为开（与前端默认一致）；解析失败也按开处理。 */
+        boolean streaming() {
+            if (params == null || params.isBlank()) return true;
+            try {
+                Map<String, Object> parsed = new ObjectMapper().readValue(params, new TypeReference<Map<String, Object>>() {});
+                Object value = parsed.get("streaming");
+                return value == null || Boolean.parseBoolean(String.valueOf(value));
+            } catch (Exception error) {
+                return true;
+            }
+        }
+    }
+
     public AiService(AiConfigRepository configs, AiChatSessionRepository sessions, ApiKeyEncryptor encryptor, ObjectMapper mapper, RetrievalService retrieval) {
         this.configs = configs;
         this.sessions = sessions;
@@ -84,6 +113,20 @@ public class AiService {
         result.put("endpoint", row == null || row.endpoint() == null ? "" : row.endpoint());
         result.put("model", row == null || row.model() == null ? "" : row.model());
         result.put("hasKey", row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank());
+        // API 格式与流式开关（params JSON）；存量配置无 params 时回退默认值
+        String apiFormat = AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        boolean streaming = true;
+        if (row != null && row.params() != null && !row.params().isBlank()) {
+            try {
+                Map<String, Object> parsed = mapper.readValue(row.params(), new TypeReference<Map<String, Object>>() {});
+                if (parsed.get("apiFormat") != null) apiFormat = String.valueOf(parsed.get("apiFormat"));
+                if (parsed.get("streaming") != null) streaming = Boolean.parseBoolean(String.valueOf(parsed.get("streaming")));
+            } catch (Exception ignored) {
+                // params 损坏时保持默认
+            }
+        }
+        result.put("apiFormat", apiFormat);
+        result.put("streaming", streaming);
         return result;
     }
 
@@ -106,6 +149,18 @@ public class AiService {
         String model = string(body, "model", "");
         String apiKey = string(body, "apiKey", "");
         String masterPassword = string(body, "masterPassword", "");
+        // API 格式：chat_completions（默认）| anthropic；流式开关：默认开
+        String apiFormat = normalizeApiFormat(string(body, "apiFormat", ""));
+        boolean streaming = body.get("streaming") == null || Boolean.parseBoolean(String.valueOf(body.get("streaming")));
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("apiFormat", apiFormat);
+        params.put("streaming", streaming);
+        String paramsJson;
+        try {
+            paramsJson = mapper.writeValueAsString(params);
+        } catch (Exception error) {
+            throw new IllegalArgumentException("配置序列化失败");
+        }
         String encrypted = null;
         String metadata = null;
         if (!apiKey.isBlank()) {
@@ -117,8 +172,22 @@ public class AiService {
                 metadata = mapper.writeValueAsString(Map.of("salt", value.salt(), "iv", value.iv(), "kdf", "Argon2id", "algorithm", "AES-256-GCM", "mode", value.mode()));
             } catch (Exception error) { throw new IllegalArgumentException("API Key 加密失败"); }
         }
-        configs.upsert(purpose, provider, endpoint, model, encrypted, metadata, "{}");
+        configs.upsert(purpose, provider, endpoint, model, encrypted, metadata, paramsJson);
         return redactedConfig();
+    }
+
+    /** 归一 API 格式：chat_completions（默认）| anthropic；未识别值直接报错。 */
+    static String normalizeApiFormat(String raw) {
+        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if (value.isBlank() || "chat_completions".equals(value) || "chat-completions".equals(value) || "chatcompletions".equals(value)
+                || "openai".equals(value) || "cc".equals(value)) {
+            return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        }
+        if (AiUpstreamClient.FORMAT_ANTHROPIC.equals(value) || "anthropic_messages".equals(value) || "messages".equals(value)
+                || "claude".equals(value)) {
+            return AiUpstreamClient.FORMAT_ANTHROPIC;
+        }
+        throw new IllegalArgumentException("API 格式必须是 chat_completions 或 anthropic");
     }
 
     public List<Map<String, Object>> listSessions(boolean includeArchived) {
@@ -161,6 +230,7 @@ public class AiService {
             item.put("id", row.id());
             item.put("role", row.role());
             item.put("content", decryptMessage(row, masterPassword));
+            item.put("reasoning", decryptReasoning(row, masterPassword));
             item.put("createdAt", row.createdAt());
             result.add(item);
         }
@@ -224,6 +294,118 @@ public class AiService {
         result.put("citations", outcome.citations());
         if (outcome.notice() != null) result.put("retrievalNotice", outcome.notice());
         return result;
+    }
+
+    /** 流式聊天结果：完整正文 + 思考链（可为 null）。 */
+    public record ChatResult(String text, String reasoning) {}
+
+    /**
+     * 流式聊天：每收到一个增量（text|reasoning）回调 listener，返回完整正文。
+     * 本方法不落库——controller 在 SSE 结束前调用 persistChatResult。
+     */
+    public ChatResult chatStream(Map<String, Object> body, AiUpstreamClient.StreamListener listener) {
+        List<Map<String, Object>> messages = messages(body.get("messages"));
+        if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
+        UpstreamConfig upstream = decryptedChatUpstream(string(body, "masterPassword", ""));
+        if (upstream == null) {
+            // mock://local：一次性吐出整段正文，模拟流式
+            String reply = mockReply(messages);
+            if (listener != null) listener.onDelta("text", reply);
+            return new ChatResult(reply, null);
+        }
+        RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), messages);
+        List<Map<String, Object>> modelMessages = messages;
+        if (outcome.contextMessage() != null) {
+            List<Map<String, Object>> withContext = new ArrayList<>(messages.size() + 1);
+            withContext.add(outcome.contextMessage());
+            withContext.addAll(messages);
+            modelMessages = withContext;
+        }
+        AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
+                upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
+                DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
+        AiUpstreamClient.Result result = upstream().call(target, modelMessages, true, listener, DEFAULT_CALL.timeoutSeconds());
+        // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也是有效结果，照常落库。
+        if ((result.text() == null || result.text().isBlank()) && (result.reasoning() == null || result.reasoning().isBlank())) {
+            throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
+        }
+        return new ChatResult(result.text(), result.reasoning());
+    }
+
+    /** 流式完成后落库与自动标题；由 controller 在 SSE 结束前调用。 */
+    public void persistChatResult(Map<String, Object> body, ChatResult result) {
+        List<Map<String, Object>> messages = messages(body.get("messages"));
+        if (messages.isEmpty()) return;
+        long sessionId = resolveSessionId(body);
+        String masterPassword = string(body, "masterPassword", "");
+        Map<String, Object> lastUser = messages.get(messages.size() - 1);
+        persistEncrypted(sessionId, String.valueOf(lastUser.get("role")), contentText(lastUser.get("content")), masterPassword);
+        persistEncrypted(sessionId, "assistant", result.text(), masterPassword, result.reasoning());
+        maybeAutoTitle(sessionId, lastUser.get("content"));
+    }
+
+    /**
+     * 拉取可用模型列表：purpose 指定槽位；baseUrl/apiKey/apiFormat 可覆盖槽位配置
+     * （保存前用表单当前值拉取），缺省字段回退已保存槽位——与 testModel 行为一致。
+     */
+    public List<String> listModels(Map<String, Object> body) {
+        String purpose = string(body, "purpose", AiConfigRepository.PURPOSE_CHAT);
+        String baseUrl = string(body, "baseUrl", "").trim();
+        String apiKey = string(body, "apiKey", "");
+        String apiFormatRaw = string(body, "apiFormat", "").trim();
+        String apiFormat = apiFormatRaw.isBlank() ? null : normalizeApiFormat(apiFormatRaw);
+        if (baseUrl.isBlank() || apiKey.isBlank() || apiFormat == null) {
+            AiConfigRepository.ConfigRow config = AiConfigRepository.PURPOSE_IMPORT.equals(purpose) ? requireImportConfig() : requireChatConfig();
+            if (baseUrl.isBlank()) baseUrl = config.endpoint();
+            if (apiKey.isBlank()) apiKey = decryptApiKey(config, string(body, "masterPassword", ""));
+            if (apiFormat == null) apiFormat = apiFormatOf(config);
+        }
+        if (baseUrl.equalsIgnoreCase("mock://local")) {
+            return List.of("mock-echo", "mock-flash", "mock-pro");
+        }
+        AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
+                baseUrl, apiKey, "", apiFormat, 0, false);
+        return upstream().listModels(upstream);
+    }
+
+    /**
+     * 模型测活：发送一条可自定义的探活提示词（默认中文冒烟句），返回是否存活、回复摘要与延迟。
+     * baseUrl/model/apiKey/apiFormat 可整体覆盖槽位配置（保存前验证）；缺省时用已保存槽位。
+     */
+    public Map<String, Object> testModel(Map<String, Object> body) {
+        String prompt = string(body, "prompt", "你好，请回复 pong。");
+        if (prompt.length() > 2000) prompt = prompt.substring(0, 2000);
+        String baseUrl = string(body, "baseUrl", "").trim();
+        String model = string(body, "model", "").trim();
+        String apiKey = string(body, "apiKey", "");
+        String apiFormatRaw = string(body, "apiFormat", "").trim();
+        String apiFormat = apiFormatRaw.isBlank() ? null : normalizeApiFormat(apiFormatRaw);
+        if (baseUrl.isBlank() || model.isBlank() || apiKey.isBlank() || apiFormat == null) {
+            // 任一字段缺省时用已保存槽位补齐
+            String purpose = string(body, "purpose", AiConfigRepository.PURPOSE_CHAT);
+            AiConfigRepository.ConfigRow config = AiConfigRepository.PURPOSE_IMPORT.equals(purpose) ? requireImportConfig() : requireChatConfig();
+            if (baseUrl.isBlank()) baseUrl = config.endpoint();
+            if (model.isBlank()) model = config.model();
+            if (apiKey.isBlank()) apiKey = decryptApiKey(config, string(body, "masterPassword", ""));
+            if (apiFormat == null) apiFormat = apiFormatOf(config);
+        }
+        if (baseUrl.equalsIgnoreCase("mock://local")) {
+            return Map.of("ok", true, "reply", "pong", "latencyMs", 0);
+        }
+        if (baseUrl.isBlank()) throw new IllegalArgumentException("Base URL 不能为空");
+        if (model.isBlank()) throw new IllegalArgumentException("模型名不能为空");
+        if (apiKey.isBlank()) throw new IllegalArgumentException("API Key 不能为空");
+        AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(baseUrl, apiKey, model, apiFormat, 256, false);
+        long start = System.currentTimeMillis();
+        AiUpstreamClient.Result result = upstream().call(upstream,
+                List.of(Map.of("role", "user", "content", prompt)), false, null, 30);
+        long latency = System.currentTimeMillis() - start;
+        String reply = result.text() == null ? "" : result.text().trim();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("ok", !reply.isBlank());
+        output.put("reply", reply.length() > 200 ? reply.substring(0, 200) + "…" : reply);
+        output.put("latencyMs", latency);
+        return output;
     }
 
     /** 检索结果只暴露 Citation 派生数据；任何失败都降级为 notice，绝不打断聊天。 */
@@ -736,10 +918,15 @@ public class AiService {
     }
 
     private void persistEncrypted(long sessionId, String role, String content, String masterPassword) {
+        persistEncrypted(sessionId, role, content, masterPassword, null);
+    }
+
+    private void persistEncrypted(long sessionId, String role, String content, String masterPassword, String reasoning) {
         if (role == null || content == null) return;
         try {
             String material = contentMaterial(masterPassword);
-            ApiKeyEncryptor.EncryptedValue encrypted = encryptor.encrypt(content, material, masterPassword == null || masterPassword.isBlank() ? "fingerprint" : "password");
+            String mode = masterPassword == null || masterPassword.isBlank() ? "fingerprint" : "password";
+            ApiKeyEncryptor.EncryptedValue encrypted = encryptor.encrypt(content, material, mode);
             String meta = mapper.writeValueAsString(Map.of(
                     "salt", encrypted.salt(),
                     "iv", encrypted.iv(),
@@ -748,7 +935,21 @@ public class AiService {
                     "mode", encrypted.mode(),
                     "version", 1
             ));
-            sessions.insertMessage(sessionId, role, "", encrypted.encrypted(), meta);
+            String reasoningCipher = null;
+            String reasoningMeta = null;
+            if (reasoning != null && !reasoning.isBlank()) {
+                ApiKeyEncryptor.EncryptedValue encReasoning = encryptor.encrypt(reasoning, material, mode);
+                reasoningMeta = mapper.writeValueAsString(Map.of(
+                        "salt", encReasoning.salt(),
+                        "iv", encReasoning.iv(),
+                        "kdf", "Argon2id",
+                        "algorithm", "AES-256-GCM",
+                        "mode", encReasoning.mode(),
+                        "version", 1
+                ));
+                reasoningCipher = encReasoning.encrypted();
+            }
+            sessions.insertMessage(sessionId, role, "", encrypted.encrypted(), meta, reasoningCipher, reasoningMeta);
             pruneSession(sessionId);
         } catch (Exception error) {
             // Fall back to plaintext only if encryption fails unexpectedly so chat still works.
@@ -776,18 +977,28 @@ public class AiService {
     }
 
     private String decryptMessage(AiChatSessionRepository.MessageRow row, String masterPassword) {
-        if (row.contentCipher() != null && !row.contentCipher().isBlank() && row.contentMeta() != null && !row.contentMeta().isBlank()) {
+        return decryptCipher(row.content(), row.contentCipher(), row.contentMeta(), masterPassword);
+    }
+
+    /** 解密思考链；空或不可解密时返回 null（前端隐藏 CoT 区块）。 */
+    private String decryptReasoning(AiChatSessionRepository.MessageRow row, String masterPassword) {
+        String value = decryptCipher(null, row.reasoningCipher(), row.reasoningMeta(), masterPassword);
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private String decryptCipher(String plaintext, String cipher, String metaJson, String masterPassword) {
+        if (cipher != null && !cipher.isBlank() && metaJson != null && !metaJson.isBlank()) {
             try {
-                Map<String, Object> meta = mapper.readValue(row.contentMeta(), new TypeReference<>() {});
+                Map<String, Object> meta = mapper.readValue(metaJson, new TypeReference<>() {});
                 String mode = String.valueOf(meta.getOrDefault("mode", "fingerprint"));
                 String material = "password".equals(mode) ? masterPassword : encryptor.fingerprintMaterial();
                 if (material == null || material.isBlank()) return "[加密消息：需要主密码]";
-                return encryptor.decrypt(row.contentCipher(), String.valueOf(meta.get("salt")), String.valueOf(meta.get("iv")), material);
+                return encryptor.decrypt(cipher, String.valueOf(meta.get("salt")), String.valueOf(meta.get("iv")), material);
             } catch (Exception error) {
                 return "[加密消息：无法解密]";
             }
         }
-        return row.content() == null ? "" : row.content();
+        return plaintext == null ? "" : plaintext;
     }
 
     private String contentMaterial(String masterPassword) {
@@ -800,7 +1011,18 @@ public class AiService {
     }
 
     private AiConfigRepository.ConfigRow requireImportConfig() {
-        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「导入兜底」AI API Key", "请先在设置中配置「导入兜底」Endpoint");
+        AiConfigRepository.ConfigRow importConfig = configs.find(AiConfigRepository.PURPOSE_IMPORT);
+        if (importConfig != null && importConfig.encryptedKey() != null && !importConfig.encryptedKey().isBlank()
+                && importConfig.endpoint() != null && !importConfig.endpoint().isBlank()) {
+            return importConfig;
+        }
+        // 如果导入兜底模型未单独配置，自动回退使用主模型配置
+        AiConfigRepository.ConfigRow chatConfig = configs.find(AiConfigRepository.PURPOSE_CHAT);
+        if (chatConfig != null && chatConfig.encryptedKey() != null && !chatConfig.encryptedKey().isBlank()
+                && chatConfig.endpoint() != null && !chatConfig.endpoint().isBlank()) {
+            return chatConfig;
+        }
+        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Endpoint");
     }
 
     private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {
@@ -824,43 +1046,23 @@ public class AiService {
             String apiKey = encryptor.decrypt(config.encryptedKey(), String.valueOf(metadata.get("salt")), String.valueOf(metadata.get("iv")), material);
             try {
                 if (config.endpoint().equalsIgnoreCase("mock://local")) return mockReply(messages);
-                String endpoint = config.endpoint().replaceAll("/+$", "");
-                String target = endpoint.endsWith("/chat/completions") ? endpoint : endpoint + "/chat/completions";
-                Map<String, Object> request = buildChatCompletionRequest(config, messages, opts);
-                log.info("AI 请求：model={} target={} timeout={}s max_tokens={} disableThinking={}",
-                        config.model(), target, opts.timeoutSeconds(), opts.maxTokens(), opts.disableThinking());
-                HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(target))
-                        .timeout(Duration.ofSeconds(opts.timeoutSeconds()))
-                        .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer " + apiKey)
-                        .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(request)))
-                        .build();
+                AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
+                        config.endpoint(), apiKey, config.model(), apiFormatOf(config),
+                        opts.maxTokens(), opts.disableThinking());
                 long start = System.currentTimeMillis();
-                HttpResponse<String> response;
-                try {
-                    response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-                } catch (HttpTimeoutException timeout) {
-                    long elapsed = System.currentTimeMillis() - start;
-                    log.warn("AI 请求超时：耗时 {}ms model={}", elapsed, config.model());
-                    throw new IllegalArgumentException("AI 请求超时（" + opts.timeoutSeconds()
-                            + " 秒）。PDF 解析已关闭模型思考模式；若仍超时请换更快模型或缩短 PDF 页数。");
-                } catch (Exception sendError) {
-                    long elapsed = System.currentTimeMillis() - start;
-                    log.warn("AI 请求失败：耗时 {}ms，错误：{}", elapsed, sendError.getMessage());
-                    throw sendError;
-                }
-                long elapsed = System.currentTimeMillis() - start;
-                log.info("AI 响应：HTTP {} 耗时 {}ms bodyLen={}", response.statusCode(), elapsed, response.body() == null ? 0 : response.body().length());
-                if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                    throw new IllegalArgumentException(httpErrorMessage(response.statusCode(), response.body()));
-                }
-                JsonNode root = mapper.readTree(response.body());
-                String finishReason = root.path("choices").path(0).path("finish_reason").asText("");
-                String reply = extractMessageContent(root.path("choices").path(0).path("message"));
+                log.info("AI 请求：model={} format={} target={} timeout={}s max_tokens={} disableThinking={}",
+                        config.model(), upstream.apiFormat(), config.endpoint(), opts.timeoutSeconds(), opts.maxTokens(), opts.disableThinking());
+                AiUpstreamClient.Result result = upstream().call(upstream, messages, false, null, opts.timeoutSeconds());
+                log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={}",
+                        System.currentTimeMillis() - start,
+                        result.text() == null ? 0 : result.text().length(),
+                        result.reasoning() == null ? 0 : result.reasoning().length(),
+                        result.finishReason());
+                String reply = result.text();
                 if (reply == null || reply.isBlank()) {
                     throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
                 }
-                if ("length".equals(finishReason)) {
+                if ("length".equals(result.finishReason())) {
                     log.warn("AI 响应被 max_tokens 截断（finish_reason=length），replyLen={}", reply.length());
                     // 结构化任务允许把截断标记带回调用方，由解析层尝试抢救完整题目
                     if (opts.disableThinking()) {
@@ -876,6 +1078,44 @@ public class AiService {
             log.error("AI 调用失败", error);
             throw new IllegalArgumentException("AI 服务暂时不可用，请稍后重试");
         }
+    }
+
+    /** 读 params.apiFormat；缺省/损坏时回退 chat_completions。 */
+    static String apiFormatOf(AiConfigRepository.ConfigRow config) {
+        if (config.params() == null || config.params().isBlank()) return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        try {
+            Map<String, Object> parsed = new ObjectMapper().readValue(config.params(), new TypeReference<Map<String, Object>>() {});
+            Object value = parsed.get("apiFormat");
+            return value == null || String.valueOf(value).isBlank()
+                    ? AiUpstreamClient.FORMAT_CHAT_COMPLETIONS
+                    : normalizeApiFormat(String.valueOf(value));
+        } catch (Exception error) {
+            return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        }
+    }
+
+    /** 解密 API Key（模型列表/测活共用）。 */
+    private String decryptApiKey(AiConfigRepository.ConfigRow config, String masterPassword) {
+        try {
+            Map<String, Object> metadata = mapper.readValue(config.keyMeta(), new TypeReference<>() {});
+            String mode = String.valueOf(metadata.getOrDefault("mode", "fingerprint"));
+            String material = mode.equals("password") ? masterPassword : encryptor.fingerprintMaterial();
+            if (material.isBlank()) throw new IllegalArgumentException("该 AI 配置需要主密码");
+            return encryptor.decrypt(config.encryptedKey(), String.valueOf(metadata.get("salt")), String.valueOf(metadata.get("iv")), material);
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("API Key 解密失败", error);
+            throw new IllegalArgumentException("API Key 解密失败，请重新保存");
+        }
+    }
+
+    /** 解密主模型配置为一次性上游入参；mock://local 返回 null（由调用方短路）。 */
+    private UpstreamConfig decryptedChatUpstream(String masterPassword) {
+        AiConfigRepository.ConfigRow config = requireChatConfig();
+        if (config.endpoint().equalsIgnoreCase("mock://local")) return null;
+        String apiKey = decryptApiKey(config, masterPassword);
+        return new UpstreamConfig(apiFormatOf(config), config.endpoint(), apiKey, config.model(), config.params());
     }
 
     /**
