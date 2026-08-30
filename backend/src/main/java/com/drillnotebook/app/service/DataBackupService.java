@@ -384,7 +384,9 @@ public class DataBackupService {
                 while (entries.hasMoreElements()) {
                     ZipEntry entry = entries.nextElement();
                     if (entry.isDirectory()) continue;
-                    lite = consumeEntry(entry.getName(), zipFile.getInputStream(entry), pendingDb, pendingAttachments, lite);
+                    try (InputStream entryInput = zipFile.getInputStream(entry)) {
+                        lite = consumeEntry(entry.getName(), entryInput, pendingDb, pendingAttachments, lite);
+                    }
                     sawDb = sawDb || entry.getName().equals(DB_ZIP_ENTRY);
                 }
             } else if (source instanceof ZipInputStream zipStream) {
