@@ -785,9 +785,14 @@ mark.kp-search-highlight.kp-search-highlight-active {
 /* 练习页：刷题/背题 Tab 合并入口，内容区由内层 .page 自行留白 */
 .practice-tabs .arco-tabs-header { padding: 12px 30px 0; }
 .practice-tabs .arco-tabs-content { padding: 0; }
-.settings-grid { columns: 2 420px; column-gap: 20px; }
-.settings-grid > .panel { break-inside: avoid; margin-bottom: 20px; }
-.settings-ai-panel { column-span: all; }
+/* 设置页：顶部横向 Tab 分区（pill 风格，active 反色高亮，参照 AxonHub/LobeChat 设置导航） */
+.settings-tab-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 0; margin-bottom: 20px; background: var(--page-bg); border-bottom: 1px solid var(--line); }
+.settings-tab { border: 0; border-radius: 999px; padding: 7px 18px; background: transparent; color: var(--text); font-size: 14px; line-height: 1.5; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.settings-tab:hover { background: var(--hover-bg); }
+.settings-tab.active { background: var(--text-strong); color: var(--panel-bg); font-weight: 600; }
+.settings-tab:focus-visible { outline: 3px solid rgb(21 94 239 / 22%); outline-offset: 2px; }
+.settings-tab-panel { max-width: 980px; }
+.settings-tab-stack { display: grid; max-width: 980px; gap: 20px; }
 
 /* Embedding 本地模型目录条目 — 跟主题变量，窄屏自动 wrap */
 .embedding-model-item { padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
@@ -925,10 +930,6 @@ mark.kp-search-highlight.kp-search-highlight-active {
 [data-theme='dark'] .ai-context-card.has-context, [data-theme='dark'] .ai-insert-bar { background: #182c4b; border-color: #4078d8; }
 [data-theme='dark'] .ai-chip:hover:not(:disabled) { background: #182c4b; }
 
-@media (max-width: 1180px) {
-  .settings-grid { grid-template-columns: 1fr; }
-}
-
 .note-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px; align-items: start; }
 .note-layout.is-focus { grid-template-columns: 1fr; }
 .note-layout.is-focus .panel { display: none; }
@@ -1012,7 +1013,7 @@ mark.kp-search-highlight.kp-search-highlight-active {
 @media (max-width: 1180px) {
   body { min-width: 0; }
   .page-heading { flex-direction: column; }
-  .content-grid, .settings-grid, .calendar-layout { grid-template-columns: 1fr; }
+  .content-grid, .calendar-layout { grid-template-columns: 1fr; }
   .note-layout { grid-template-columns: 210px minmax(0, 1fr); }
   .advanced-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .advanced-selector-grid { grid-template-columns: 1fr; }
@@ -1222,18 +1223,6 @@ html[data-theme='dark'] .arco-card-header,
 html[data-theme='dark'] .arco-card-body {
   background: var(--panel-bg) !important;
   color: var(--text) !important;
-  border-color: var(--line) !important;
-}
-
-html[data-theme='dark'] .arco-descriptions-item-label {
-  color: var(--muted) !important;
-  background: var(--subtle-bg) !important;
-  border-color: var(--line) !important;
-}
-
-html[data-theme='dark'] .arco-descriptions-item-value {
-  color: var(--text) !important;
-  background: var(--panel-bg) !important;
   border-color: var(--line) !important;
 }
 
