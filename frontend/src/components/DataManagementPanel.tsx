@@ -119,6 +119,7 @@ export function DataManagementPanel(): JSX.Element {
         const baseDir = directoryPicked.replace(/[\\/]+$/, '');
         const sep = baseDir.includes('\\') ? '\\' : '/';
         return post<BackupEntry>('/api/data/backups/export', { targetPath: `${baseDir}${sep}drill-backup-${stamp}.zip` });
+      }
       // 浏览器环境无目录选择器：备份到默认备份目录
       const entry = await post<BackupEntry>('/api/data/backups', {});
       return { entry, fallback: true } as const;
