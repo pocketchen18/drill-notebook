@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Button, Message, Popconfirm, Tooltip } from '@arco-design/web-react';
-import { ArrowLeft, Edit3, PanelLeftClose, PanelLeftOpen, RotateCcw, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Button, Input, Message, Popconfirm, Tooltip } from '@arco-design/web-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Edit3, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
 import { buildFullMarkdown, ROOT_ID } from '../../lib/knowledgeTree';
 import type { KnowledgeTree, KnowledgeTreeNode } from '../../lib/knowledgeTree';
@@ -28,6 +28,7 @@ export interface KnowledgeFullCardViewProps {
   onDeleted: () => void;
   onModified: () => void;
   onEdit: (point: KnowledgePoint) => void;
+  onAddChild?: (parentPoint: KnowledgePoint) => void;
 }
 
 const MIN_SIDEBAR_WIDTH = 180;
@@ -35,7 +36,7 @@ const DEFAULT_SIDEBAR_WIDTH = 280;
 const MAX_SIDEBAR_WIDTH = 600;
 const COLLAPSE_THRESHOLD = 120; // 拖拽宽度小于 120px 时直接折叠大纲（类似 VSCode 体验）
 
-export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigate, onClose, onDeleted, onModified, onEdit }: KnowledgeFullCardViewProps): JSX.Element {
+export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigate, onClose, onDeleted, onModified, onEdit, onAddChild }: KnowledgeFullCardViewProps): JSX.Element {
   const isRoot = node.id === ROOT_ID;
   const rootHasSummary = tree.flatList.some((n) => n.hasOriginal);
 
@@ -55,6 +56,13 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
   const [isResizing, setIsResizing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [current, setCurrent] = useState<KnowledgeTreeNode>(node);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [matchCount, setMatchCount] = useState(0);
+
+  const searchInputRef = useRef<any>(null);
+  const bodyContentRef = useRef<HTMLDivElement>(null);
 
   const subPoints = collectSubtreePoints(current);
   const nodeHasSummary = isRoot
@@ -133,16 +141,156 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
     }
   }, [node, tree]);
 
+  // 高亮正文中的关键字并定位
+  const highlightMatches = useCallback(() => {
+    if (!bodyContentRef.current) {
+      setMatchCount(0);
+      setCurrentMatchIndex(0);
+      return;
+    }
+    const container = bodyContentRef.current;
+
+    // 清理旧的高亮
+    const oldMarks = container.querySelectorAll('mark.kp-search-highlight');
+    oldMarks.forEach((mark) => {
+      const parent = mark.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(mark.textContent ?? ''), mark);
+        parent.normalize();
+      }
+    });
+
+    const query = searchQuery.trim();
+    if (!query) {
+      setMatchCount(0);
+      setCurrentMatchIndex(0);
+      return;
+    }
+
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    const textNodes: Text[] = [];
+    let textNode: Text | null;
+    while ((textNode = walker.nextNode() as Text | null)) {
+      if (textNode.nodeValue && textNode.nodeValue.toLowerCase().includes(query.toLowerCase())) {
+        // 避开 script/style 等
+        const parent = textNode.parentElement;
+        if (parent && !['SCRIPT', 'STYLE', 'BUTTON', 'INPUT'].includes(parent.tagName)) {
+          textNodes.push(textNode);
+        }
+      }
+    }
+
+    const createdMarks: HTMLElement[] = [];
+    const lowerQuery = query.toLowerCase();
+    textNodes.forEach((node) => {
+      let currentTextNode: Text | null = node;
+      while (currentTextNode) {
+        const val = currentTextNode.nodeValue ?? '';
+        const idx = val.toLowerCase().indexOf(lowerQuery);
+        if (idx === -1) break;
+
+        const matchNode = currentTextNode.splitText(idx);
+        const remainderNode = matchNode.splitText(query.length);
+        const mark = document.createElement('mark');
+        mark.className = 'kp-search-highlight';
+        mark.textContent = matchNode.nodeValue;
+        matchNode.parentNode?.replaceChild(mark, matchNode);
+        createdMarks.push(mark);
+
+        currentTextNode = remainderNode;
+      }
+    });
+
+    setMatchCount(createdMarks.length);
+    if (createdMarks.length > 0) {
+      const targetIdx = Math.min(Math.max(currentMatchIndex, 0), createdMarks.length - 1);
+      setCurrentMatchIndex(targetIdx);
+      createdMarks[targetIdx].classList.add('kp-search-highlight-active');
+      createdMarks[targetIdx].scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    } else {
+      setCurrentMatchIndex(0);
+    }
+  }, [searchQuery, currentMatchIndex]);
+
+  useEffect(() => {
+    highlightMatches();
+  }, [searchQuery, full, highlightMatches]);
+
+  const jumpToMatch = (newIdx: number) => {
+    if (!bodyContentRef.current || matchCount === 0) return;
+    const marks = bodyContentRef.current.querySelectorAll('mark.kp-search-highlight');
+    if (!marks.length) return;
+
+    let targetIdx = newIdx;
+    if (targetIdx < 0) targetIdx = marks.length - 1;
+    if (targetIdx >= marks.length) targetIdx = 0;
+
+    marks.forEach((m, idx) => {
+      if (idx === targetIdx) {
+        m.classList.add('kp-search-highlight-active');
+        m.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      } else {
+        m.classList.remove('kp-search-highlight-active');
+      }
+    });
+    setCurrentMatchIndex(targetIdx);
+  };
+
+  const openSearch = useCallback(() => {
+    setSearchVisible(true);
+    setSidebarOpen(true);
+    setTimeout(() => {
+      searchInputRef.current?.focus?.();
+    }, 50);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false);
+    setSearchQuery('');
+    setMatchCount(0);
+    setCurrentMatchIndex(0);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') { onClose(); }
-      else if (e.key === 'ArrowLeft') { const p = tree.flatList[index - 1]; if (p) onNavigate(p.id); }
-      else if (e.key === 'ArrowRight') { const n = tree.flatList[index + 1]; if (n) onNavigate(n.id); }
-      else if (e.key === 't' || e.key === 'T') setSidebarOpen((v) => !v);
+      // Ctrl+F / Cmd+F 开启搜索
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        e.stopPropagation();
+        openSearch();
+        return;
+      }
+
+      // 如果搜索框打开且按下 Enter，支持正文匹配跳转
+      if (searchVisible && e.key === 'Enter') {
+        const isFocusedInSearch = document.activeElement?.tagName === 'INPUT' && document.activeElement.getAttribute('aria-label') === '搜索大纲与正文';
+        if (isFocusedInSearch || matchCount > 0) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            jumpToMatch(currentMatchIndex - 1);
+          } else {
+            jumpToMatch(currentMatchIndex + 1);
+          }
+          return;
+        }
+      }
+
+      if (e.key === 'Escape') {
+        if (searchVisible) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeSearch();
+        } else {
+          onClose();
+        }
+      }
+      else if (!searchVisible && e.key === 'ArrowLeft') { const p = tree.flatList[index - 1]; if (p) onNavigate(p.id); }
+      else if (!searchVisible && e.key === 'ArrowRight') { const n = tree.flatList[index + 1]; if (n) onNavigate(n.id); }
+      else if (!searchVisible && (e.key === 't' || e.key === 'T')) setSidebarOpen((v) => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, tree, index]);
+  }, [onClose, onNavigate, tree, index, openSearch, closeSearch, searchVisible, matchCount, currentMatchIndex]);
 
   const nodeAsPoint = (n: KnowledgeTreeNode): KnowledgePoint => ({
     id: n.id, title: n.title, content: n.content, category: n.category,
@@ -310,6 +458,22 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
           {isRoot ? '总览全文' : `第 ${index + 1} / ${total} 个知识点`}
         </span>
         <div className="knowledge-full-card-actions">
+          <Tooltip content="搜索大纲与正文 (Ctrl+F)">
+            <Button
+              type={searchVisible ? 'primary' : 'default'}
+              icon={<Search size={14} />}
+              onClick={() => {
+                if (searchVisible) {
+                  closeSearch();
+                } else {
+                  openSearch();
+                }
+              }}
+              aria-label="搜索"
+            >
+              查找
+            </Button>
+          </Tooltip>
           <>
             <Button loading={loading} onClick={() => void handleToggle()}>
               {isRoot ? (view === 'original' ? '总结全文' : '还原全文') : (view === 'original' ? '总结' : '还原')}
@@ -320,6 +484,9 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
               </Button>
             </Tooltip>
           </>
+          <Button icon={<Plus size={14} />} onClick={() => onAddChild?.(nodeAsPoint(current))}>
+            {isRoot ? '新建根知识点' : '添加子知识点'}
+          </Button>
           {!isRoot && (
             <>
               <Button icon={<Edit3 size={14} />} onClick={() => onEdit(nodeAsPoint(current))}>修改</Button>
@@ -332,6 +499,59 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
         </div>
       </div>
 
+      {searchVisible && (
+        <div className="knowledge-full-card-searchbar">
+          <div className="searchbar-inner">
+            <Input
+              ref={searchInputRef}
+              prefix={<Search size={14} />}
+              placeholder="搜索大纲与正文 (Enter 下一个，Shift+Enter 上一个，Esc 退出)..."
+              value={searchQuery}
+              onChange={(val) => {
+                setSearchQuery(val);
+                setCurrentMatchIndex(0);
+              }}
+              allowClear
+              aria-label="搜索大纲与正文"
+            />
+            <div className="searchbar-info">
+              {searchQuery ? (
+                matchCount > 0 ? (
+                  <span>正文 {currentMatchIndex + 1} / {matchCount}</span>
+                ) : (
+                  <span className="searchbar-no-match">正文无匹配</span>
+                )
+              ) : null}
+            </div>
+            <div className="searchbar-nav">
+              <Button
+                size="mini"
+                type="text"
+                icon={<ChevronUp size={14} />}
+                disabled={matchCount === 0}
+                onClick={() => jumpToMatch(currentMatchIndex - 1)}
+                aria-label="上一个匹配"
+              />
+              <Button
+                size="mini"
+                type="text"
+                icon={<ChevronDown size={14} />}
+                disabled={matchCount === 0}
+                onClick={() => jumpToMatch(currentMatchIndex + 1)}
+                aria-label="下一个匹配"
+              />
+              <Button
+                size="mini"
+                type="text"
+                icon={<X size={14} />}
+                onClick={closeSearch}
+                aria-label="关闭搜索"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={`knowledge-full-card-main ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
         {sidebarOpen && (
           <div
@@ -342,7 +562,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
               <KnowledgeTreeNav
                 tree={tree}
                 activeId={current.id}
-                search=""
+                search={searchQuery}
                 activeTag={null}
                 onSelect={(id) => onNavigate(id)}
               />
@@ -356,7 +576,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
             />
           </div>
         )}
-        <div className="knowledge-full-card-body">
+        <div className="knowledge-full-card-body" ref={bodyContentRef}>
           <h2 className="knowledge-full-card-title">{current.title}</h2>
           <div className="knowledge-full-card-content">
             <MarkdownContent value={full} />

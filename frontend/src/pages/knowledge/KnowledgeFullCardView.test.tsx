@@ -204,4 +204,41 @@ describe('KnowledgeFullCardView', () => {
     expect(screen.getByRole('button', { name: '总结' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重新总结' })).toBeInTheDocument();
   });
+
+  it('triggers Ctrl+F shortcut to show search bar and filters outline & content', () => {
+    const node = tree.byId.get(2)!;
+
+    render(
+      <KnowledgeFullCardView
+        tree={tree}
+        node={node}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    // 初始状态没有搜索栏
+    expect(screen.queryByPlaceholderText(/搜索大纲与正文/)).not.toBeInTheDocument();
+
+    // 模拟触发 Ctrl+F 快捷键
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+
+    // 搜索栏应该弹出
+    const searchInput = screen.getByPlaceholderText(/搜索大纲与正文/);
+    expect(searchInput).toBeInTheDocument();
+
+    // 输入搜索词“模型”进行搜索（匹配正文中的“进程模型正文。”）
+    fireEvent.change(searchInput, { target: { value: '模型' } });
+
+    // 验证匹配结果统计
+    expect(screen.getByText('正文 1 / 1')).toBeInTheDocument();
+
+    // 按 Escape 键关闭搜索栏
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByPlaceholderText(/搜索大纲与正文/)).not.toBeInTheDocument();
+  });
 });

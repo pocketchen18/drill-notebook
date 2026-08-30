@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Tooltip } from '@arco-design/web-react';
 import { BookOpen, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { ROOT_ID } from '../../lib/knowledgeTree';
 import type { KnowledgeTree, KnowledgeTreeNode } from '../../lib/knowledgeTree';
@@ -35,8 +36,12 @@ function TreeNodeView({ node, depth, activeId, search, activeTag, collapsed, onT
   const dimmed = activeTag ? !node.tags.includes(activeTag) : false;
 
   return (
-    <div className="kp-tree-node" style={{ paddingLeft: depth * 14 }}>
-      <div className={`kp-tree-row${activeId === node.id ? ' active' : ''}${dimmed ? ' dimmed' : ''}`} data-node-id={node.id}>
+    <div className="kp-tree-node">
+      <div
+        className={`kp-tree-row${activeId === node.id ? ' active' : ''}${dimmed ? ' dimmed' : ''}`}
+        style={{ paddingLeft: depth * INDENT_PER_LEVEL }}
+        data-node-id={node.id}
+      >
         <button
           type="button"
           className="kp-tree-toggle"
@@ -45,9 +50,11 @@ function TreeNodeView({ node, depth, activeId, search, activeTag, collapsed, onT
         >
           {hasChildren ? (isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />) : <FileText size={14} />}
         </button>
-        <button type="button" className="kp-tree-title" onClick={() => onSelect(node.id)}>
-          {node.title}
-        </button>
+        <Tooltip content={node.title} position="tl">
+          <button type="button" className="kp-tree-title" onClick={() => onSelect(node.id)}>
+            {node.title}
+          </button>
+        </Tooltip>
       </div>
       {hasChildren && (!isCollapsed || !!search) && (
         <div className="kp-tree-children">
@@ -59,6 +66,8 @@ function TreeNodeView({ node, depth, activeId, search, activeTag, collapsed, onT
     </div>
   );
 }
+
+const INDENT_PER_LEVEL = 14;
 
 export function KnowledgeTreeNav({ tree, activeId, search, activeTag, onSelect }: KnowledgeTreeNavProps): JSX.Element {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -118,10 +127,12 @@ export function KnowledgeTreeNav({ tree, activeId, search, activeTag, onSelect }
               >
                 {isRootCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
               </button>
-              <button type="button" className="kp-tree-title kp-tree-root-title" onClick={() => onSelect(ROOT_ID)}>
-                <BookOpen size={14} style={{ marginRight: 4, verticalAlign: -2 }} />
-                {rootNode.title}
-              </button>
+              <Tooltip content={rootNode.title} position="tl">
+                <button type="button" className="kp-tree-title kp-tree-root-title" onClick={() => onSelect(ROOT_ID)}>
+                  <BookOpen size={14} style={{ marginRight: 4, verticalAlign: -2 }} />
+                  {rootNode.title}
+                </button>
+              </Tooltip>
             </div>
             {(!isRootCollapsed || !!search) && (
               <div className="kp-tree-children">

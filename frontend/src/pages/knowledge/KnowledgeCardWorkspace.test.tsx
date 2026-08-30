@@ -39,6 +39,7 @@ describe('KnowledgeCardWorkspace', () => {
     expect(screen.getByRole('heading', { name: '1.1 进程管理' })).toBeInTheDocument();
     expect(screen.getByText('进程是资源分配单位。')).toBeInTheDocument();
     expect(screen.getByText('核心概念')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '添加子知识点' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '全屏' })).toBeInTheDocument();
@@ -70,7 +71,8 @@ describe('KnowledgeCardWorkspace', () => {
     expect(screen.getByText('操作系统是系统软件。')).toBeInTheDocument();
     expect(screen.getByText('进程是资源分配单位。')).toBeInTheDocument();
 
-    // 根节点不应显示单卡专用的编辑/删除按钮
+    // 根节点显示新建根知识点，不应显示单卡专用的编辑/删除按钮
+    expect(screen.getByRole('button', { name: '新建根知识点' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '全屏' })).toBeInTheDocument();
