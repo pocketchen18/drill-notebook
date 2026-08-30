@@ -100,11 +100,18 @@ public class DataBackupService {
         if (config.autoIntervalHours() > 24 * 30) throw new IllegalArgumentException("自动备份间隔过长");
         if (config.maxCount() < 1 || config.maxCount() > 100) throw new IllegalArgumentException("最大备份数需在 1–100 之间");
         try {
+            String directory = config.directory() == null ? "" : config.directory().trim();
+            Path resolvedDir = null;
+            if (!directory.isBlank()) {
+                Path candidate = Path.of(directory);
+                resolvedDir = (candidate.isAbsolute() ? candidate : paths.root().resolve(candidate)).normalize();
+                Files.createDirectories(resolvedDir);
+            }
+            BackupConfig normalized = new BackupConfig(resolvedDir == null ? "" : resolvedDir.toString(), config.autoIntervalHours(), config.maxCount(), config.lite());
             Files.createDirectories(paths.data());
             Path file = paths.data().resolve("backup-config.json");
-            mapper.writeValue(file.toFile(), config);
-            if (!config.directory().isBlank()) Files.createDirectories(Path.of(config.directory()));
-            return config;
+            mapper.writeValue(file.toFile(), normalized);
+            return normalized;
         } catch (IOException error) {
             throw new IllegalStateException("保存备份配置失败：" + error.getMessage(), error);
         }
