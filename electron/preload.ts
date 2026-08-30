@@ -25,9 +25,5 @@ contextBridge.exposeInMainWorld('api', {
   },
   video: {
     fetchTitle: (url: string): Promise<string | null> => ipcRenderer.invoke('video:fetch-title', url)
-  },
-  window: {
-    setFullScreen: (flag: boolean): Promise<void> => ipcRenderer.invoke('window:set-full-screen', flag),
-    isFullScreen: (): Promise<boolean> => ipcRenderer.invoke('window:is-full-screen')
   }
 });

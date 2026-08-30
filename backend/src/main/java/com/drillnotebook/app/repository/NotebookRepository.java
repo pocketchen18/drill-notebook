@@ -59,7 +59,6 @@ public class NotebookRepository {
     }
 
     public void update(long id, String title) { jdbc.update("UPDATE notebook SET title = ?, updated_at = datetime('now') WHERE id = ?", title, id); }
-    public void delete(long id) { jdbc.update("DELETE FROM notebook WHERE id = ?", id); }
 
     public List<Map<String, Object>> findPages(long notebookId) {
         return jdbc.query("SELECT id, notebook_id, parent_id, title, sort_order, updated_at FROM note_page WHERE notebook_id = ? ORDER BY sort_order, id", (result, row) -> {

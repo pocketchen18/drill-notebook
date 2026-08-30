@@ -73,3 +73,20 @@ export const get = <T>(path: string) => apiRequest<T>(path);
 export const post = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'POST', body: JSON.stringify(body) });
 export const put = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 export const del = <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' });
+
+/**
+ * 兜底冲刷：在 beforeunload / 页面隐藏时把未保存内容尽力送达。
+ * keepalive 让请求脱离页面生命周期交给网络栈，窗口关闭后仍有机会完成（尽力而为，非可靠传输）。
+ */
+export function flushRequest(path: string, body: unknown): void {
+  void baseUrl()
+    .then((base) => {
+      void fetch(`${base}${path}`, {
+        method: 'PUT',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        keepalive: true
+      }).catch(() => undefined);
+    })
+    .catch(() => undefined);
+}
