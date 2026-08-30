@@ -1,10 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
-import { Edit3, FolderOpen, Plus, RefreshCw, Sparkles, Star, Trash2 } from 'lucide-react';
-import { get, put } from '../lib/api';
-import { friendlyMessage } from '../lib/errors';
-import type { AiConfig } from '../lib/types';
+import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
+import { Edit3, Plus, Sparkles, Star, Trash2 } from 'lucide-react';
 import { AiModelSlotCard } from '../components/AiModelSlotCard';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { useUiStore } from '../stores/uiStore';
@@ -24,8 +21,6 @@ import {
 } from '../lib/sessionCurve';
 import type { SessionCurveConfig } from '../lib/sessionCurve';
 
-interface Health { status: string; }
-
 const WRONG_STRATEGY_OPTIONS = [
   { value: 'reduce_half', label: '间隔减半（推荐）' },
   { value: 'reset', label: '重置到 1 天' },
@@ -44,14 +39,30 @@ const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
   '1': 1, '2': 6, '3': 16, '4': 36, '5': 70,
 };
 
+// 设置页顶部横向 Tab（pill 分区，按本软件实际设置内容划分）：
+// 常规=外观与全局行为；AI 连接=生成模型接入；嵌入与检索=知识库索引基础设施；学习与复习=学习行为与 SRS。
+type SettingsTab = 'general' | 'ai' | 'embedding' | 'study';
+
+const TABS: Array<{ key: SettingsTab; label: string }> = [
+  { key: 'general', label: '常规' },
+  { key: 'ai', label: 'AI 连接' },
+  { key: 'embedding', label: '嵌入与检索' },
+  { key: 'study', label: '学习与复习' }
+];
+
+function readTabFromUrl(): SettingsTab {
+  // HashRouter：查询参数在 hash 段内（#/settings?tab=ai），window.location.search 恒为空
+  const hashQuery = window.location.hash.split('?')[1] ?? '';
+  const tab = new URLSearchParams(hashQuery).get('tab');
+  return TABS.some((item) => item.key === tab) ? (tab as SettingsTab) : 'general';
+}
+
 export function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient();
   const theme = useUiStore((state) => state.theme);
   const toggleTheme = useUiStore((state) => state.toggleTheme);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
-  const [portable, setPortable] = useState<{ root: string; database: string; portable: boolean }>();
-  const [health, setHealth] = useState<Health>();
-  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(readTabFromUrl);
 
   // 复习方案编辑器 state
   const [reviewEditorVisible, setReviewEditorVisible] = useState(false);
@@ -81,25 +92,21 @@ export function SettingsPage(): JSX.Element {
     writeSessionCurveConfig(next);
   };
 
-  const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: () => get<AiConfig>('/api/ai/config') });
-
-  const load = async (): Promise<void> => {
-    setLoading(true);
-    try {
-      const [info, status] = await Promise.all([
-        window.api?.backend.getPortableInfo() ?? Promise.resolve({ root: '浏览器开发模式', database: '由后端决定', portable: true }),
-        get<Health>('/api/health')
-      ]);
-      setPortable(info);
-      setHealth(status);
-    } catch (error) {
-      Message.error(friendlyMessage(error, '后端不可用'));
-    } finally {
-      setLoading(false);
-    }
+  const switchTab = (key: SettingsTab): void => {
+    setActiveTab(key);
+    const basePath = window.location.hash.split('?')[0] || '#/settings';
+    window.history.replaceState(null, '', `${basePath}?tab=${key}`);
   };
 
-  useEffect(() => { void load(); }, []);
+  const onTabBarKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const index = TABS.findIndex((tab) => tab.key === activeTab);
+    const delta = event.key === 'ArrowRight' ? 1 : -1;
+    const next = TABS[(index + delta + TABS.length) % TABS.length];
+    switchTab(next.key);
+    document.querySelector<HTMLButtonElement>(`.settings-tab-bar .settings-tab[data-tab='${next.key}']`)?.focus();
+  };
 
   // ---- 复习方案 ----
 
@@ -161,22 +168,25 @@ export function SettingsPage(): JSX.Element {
 
   return <main className="page">
     <div className="page-heading">
-      <div><h1>设置</h1><p>便携运行状态、主题与 AI 连接。日常对话请用右下角 AI 悬浮球或 Ctrl+J。</p></div>
-      <Button type="text" icon={<RefreshCw size={16} />} onClick={() => void load()} aria-label="刷新状态" />
+      <div><h1>设置</h1><p>主题、AI 连接、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球或 Ctrl+J。</p></div>
     </div>
-    {loading ? <Spin /> : <div className="settings-grid">
-      <section className="panel">
-        <div className="panel-header"><h2>便携运行</h2></div>
-        <div className="panel-body">
-          <Descriptions column={1} border data={[
-            { label: '模式', value: portable?.portable ? '绿色便携' : '标准模式' },
-            { label: '应用根目录', value: <code className="path-code">{portable?.root}</code> },
-            { label: '数据库', value: <code className="path-code">{portable?.database}</code> },
-            { label: '后端状态', value: health?.status === 'UP' ? '运行中' : health?.status || '未知' }
-          ]} />
-          <div className="muted" style={{ marginTop: 14 }}><FolderOpen size={16} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} />所有应用数据均保存在应用根目录下。</div>
-        </div>
-      </section>
+    <div className="settings-tab-bar" role="tablist" aria-label="设置分区" onKeyDown={onTabBarKeyDown}>
+      {TABS.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          data-tab={tab.key}
+          aria-selected={activeTab === tab.key}
+          className={`settings-tab${activeTab === tab.key ? ' active' : ''}`}
+          onClick={() => switchTab(tab.key)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+    {activeTab === 'general' && (
+      <div className="settings-tab-panel" role="tabpanel">
       <section className="panel">
         <div className="panel-header"><h2>界面</h2></div>
         <div className="panel-body form-stack">
@@ -187,6 +197,10 @@ export function SettingsPage(): JSX.Element {
           <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
         </div>
       </section>
+      </div>
+    )}
+    {activeTab === 'study' && (
+      <div className="settings-tab-stack" role="tabpanel">
       <section className="panel">
         <div className="panel-header"><h2>学习偏好</h2></div>
         <div className="panel-body form-stack">
@@ -307,7 +321,11 @@ export function SettingsPage(): JSX.Element {
           </div>
         </div>
       </section>
-      <section className="panel settings-ai-panel">
+      </div>
+    )}
+    {activeTab === 'ai' && (
+      <div className="settings-tab-panel" role="tabpanel">
+      <section className="panel">
         <div className="panel-header"><h2>AI 连接</h2></div>
         <div className="panel-body form-stack">
           <AiModelSlotCard
@@ -325,11 +343,19 @@ export function SettingsPage(): JSX.Element {
           <Typography.Text type="secondary">两套密钥均经本地 Java 后端 Argon2id + AES-256-GCM 加密存储。</Typography.Text>
         </div>
       </section>
+      </div>
+    )}
 
-      {/* Embedding（向量索引）设置 */}
+      {/* 嵌入与检索 Tab：向量索引基础设施（与生成模型接入分开，参照 LobeChat / Cherry Studio 分组惯例） */}
+      {activeTab === 'embedding' && (
+      <div className="settings-tab-panel" role="tabpanel">
       <EmbeddingSettingsCard />
+      </div>
+    )}
 
-      {/* 复习方案 */}
+      {/* 学习与复习 Tab：复习方案（SM-2） */}
+      {activeTab === 'study' && (
+      <div className="settings-tab-stack" role="tabpanel">
       <section className="panel">
         <div className="panel-header">
           <h2>复习方案</h2>
@@ -374,7 +400,8 @@ export function SettingsPage(): JSX.Element {
           )}
         </div>
       </section>
-    </div>}
+      </div>
+    )}
     <Modal
       title={reviewEditing ? '编辑复习方案' : '新建复习方案'}
       visible={reviewEditorVisible}
