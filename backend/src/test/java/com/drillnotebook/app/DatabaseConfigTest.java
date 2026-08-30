@@ -20,6 +20,7 @@ class DatabaseConfigTest {
         Files.createDirectories(root.resolve("data"));
         PortablePathResolver paths = mock(PortablePathResolver.class);
         when(paths.database()).thenReturn(root.resolve("data/study.db"));
+        when(paths.data()).thenReturn(root.resolve("data"));
         DataSource dataSource = new DatabaseConfig().dataSource(paths);
 
         assertForeignKeysEnabled(dataSource);

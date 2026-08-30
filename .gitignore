@@ -75,6 +75,13 @@ credentials/
 /config/
 # Runtime uploaded attachments (images, PDFs, videos, etc.) — backend stores under data/attachments/
 backend/data/attachments/
+# Runtime artifacts when the backend runs/tests with backend/ as the working directory
+backend/data/
+backend/backups/
+backend/logs/
+backend/runtime/
+backend/temp/
+backend/cache/
 runtime-portable/
 runtime-portable*/
 user-data/

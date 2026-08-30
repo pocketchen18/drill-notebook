@@ -10,6 +10,7 @@ interface ElectronApi {
   };
   dialog: {
     openTextFile: (extensions?: string[]) => Promise<{ canceled: boolean; path?: string; content?: string }>;
+    pickDirectory: () => Promise<string | null>;
   };
   exportFile: {
     save: (request: { format: 'md' | 'html' | 'pdf'; suggestedName: string; content: string; html: string }) => Promise<{ canceled: boolean; path?: string }>;
@@ -20,6 +21,7 @@ interface ElectronApi {
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
+    openPath: (targetPath: string) => Promise<void>;
   };
   video: {
     fetchTitle: (url: string) => Promise<string | null>;
