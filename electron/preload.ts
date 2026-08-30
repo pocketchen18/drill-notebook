@@ -11,7 +11,8 @@ contextBridge.exposeInMainWorld('api', {
     set: (config: { theme: 'light' | 'dark' }): Promise<void> => ipcRenderer.invoke('app:set-config', config)
   },
   dialog: {
-    openTextFile: (extensions?: string[]): Promise<{ canceled: boolean; path?: string; content?: string }> => ipcRenderer.invoke('dialog:open-text-file', extensions)
+    openTextFile: (extensions?: string[]): Promise<{ canceled: boolean; path?: string; content?: string }> => ipcRenderer.invoke('dialog:open-text-file', extensions),
+    pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pick-directory')
   },
   exportFile: {
     save: (request: { format: 'md' | 'html' | 'pdf'; suggestedName: string; content: string; html: string }): Promise<{ canceled: boolean; path?: string }> => ipcRenderer.invoke('export:save', request)
@@ -21,7 +22,8 @@ contextBridge.exposeInMainWorld('api', {
     readFile: (filePath: string): Promise<ArrayBuffer> => ipcRenderer.invoke('file:read-file', filePath)
   },
   shell: {
-    openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url)
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
+    openPath: (targetPath: string): Promise<void> => ipcRenderer.invoke('shell:open-path', targetPath)
   },
   video: {
     fetchTitle: (url: string): Promise<string | null> => ipcRenderer.invoke('video:fetch-title', url)

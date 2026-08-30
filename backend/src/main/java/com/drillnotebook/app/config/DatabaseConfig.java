@@ -12,6 +12,9 @@ import org.sqlite.SQLiteDataSource;
 public class DatabaseConfig {
     @Bean
     public DataSource dataSource(PortablePathResolver paths) {
+        // 若存在待恢复的备份包（上一会话通过设置页发起），在任何数据库连接建立
+        // 之前原子换入，避免运行中替换 SQLite 文件导致损坏。
+        PendingRestoreApplier.applyIfPending(paths.data());
         // SQLite refuses to create the database file when the parent directory
         // is missing. Ensure the data directory exists so a fresh checkout (or
         // an @SpringBootTest context) can open the database without a manual

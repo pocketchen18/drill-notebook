@@ -794,6 +794,25 @@ mark.kp-search-highlight.kp-search-highlight-active {
 .settings-tab-panel { max-width: 980px; }
 .settings-tab-stack { display: grid; max-width: 980px; gap: 20px; }
 
+/* 数据管理面板（备份/导出/导入）— 全部跟主题变量 */
+.data-manage { display: grid; gap: 20px; }
+.data-manage .panel-header { align-items: flex-start; gap: 16px; }
+.data-manage-desc { margin: 6px 0 0; font-size: 12px; }
+.data-manage-error { margin: 6px 0 0; font-size: 12px; color: var(--danger); }
+.data-manage-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.data-manage-body { padding: 0 18px 14px; }
+.data-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
+.data-row + .data-row { border-top: 1px solid var(--line); }
+.data-row-main { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.data-row-title { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.data-row-desc { font-size: 12px; }
+.data-dir-input { max-width: 380px; }
+.data-backup-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.data-backup-item + .data-backup-item { border-top: 1px solid var(--line); }
+.data-backup-info { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.data-backup-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--text); }
+.data-backup-meta { flex-shrink: 0; font-size: 12px; white-space: nowrap; }
+
 /* Embedding 本地模型目录条目 — 跟主题变量，窄屏自动 wrap */
 .embedding-model-item { padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-bg); }
 .embedding-model-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }

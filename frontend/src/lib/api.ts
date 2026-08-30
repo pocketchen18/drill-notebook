@@ -44,11 +44,13 @@ function extractMessage(payload: unknown, status: number): string {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // FormData 交给浏览器自动设置 Content-Type（含 multipart boundary），不能手动覆盖
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
   const response = await fetch(`${await baseUrl()}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers
     }
   });
@@ -73,6 +75,11 @@ export const get = <T>(path: string) => apiRequest<T>(path);
 export const post = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'POST', body: JSON.stringify(body) });
 export const put = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 export const del = <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' });
+
+/** multipart 上传（如备份导入）；Content-Type 由浏览器按 FormData 自动设置。 */
+export function postForm<T>(path: string, form: FormData): Promise<T> {
+  return apiRequest<T>(path, { method: 'POST', body: form });
+}
 
 /**
  * 兜底冲刷：在 beforeunload / 页面隐藏时把未保存内容尽力送达。

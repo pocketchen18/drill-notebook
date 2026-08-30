@@ -279,3 +279,36 @@ export interface NoteAttachment {
   sha256: string | null;
   createdAt: string;
 }
+
+// ---------------- 数据管理（备份） ----------------
+
+export interface BackupConfig {
+  /** 备份目录；空串表示使用默认目录（APP_ROOT/backups）。 */
+  directory: string;
+  /** 自动备份间隔（小时）；0 = 关闭自动备份。 */
+  autoIntervalHours: number;
+  /** 最大备份数，超出时删除最旧备份。 */
+  maxCount: number;
+  /** 精简备份：仅备份数据库，不含附件。 */
+  lite: boolean;
+}
+
+export interface BackupEntry {
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+  lite: boolean;
+}
+
+export interface BackupStatus {
+  directory: string;
+  autoEnabled: boolean;
+  autoIntervalHours: number;
+  maxCount: number;
+  lite: boolean;
+  running: boolean;
+  lastBackupAt: string | null;
+  nextBackupAt: string | null;
+  lastError: string | null;
+  backupCount: number;
+}

@@ -149,10 +149,28 @@ ipcMain.handle('dialog:pick-files', async (event, filters: { name: string; exten
   });
 });
 
+ipcMain.handle('dialog:pick-directory', async (event) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Directory picker request rejected from an untrusted page.');
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle('file:read-file', async (event, filePath: string) => {
   if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('File read request rejected from an untrusted page.');
   const buffer = fs.readFileSync(filePath);
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+});
+
+// 在系统文件管理器中打开本地路径（备份目录/备份文件）。仅允许绝对路径，不做协议校验。
+ipcMain.handle('shell:open-path', async (event, targetPath: string) => {
+  if (!event.senderFrame || !isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Open-path request rejected from an untrusted page.');
+  if (!targetPath || !path.isAbsolute(targetPath)) throw new Error('仅允许打开绝对路径');
+  const errorMessage = await shell.openPath(targetPath);
+  if (errorMessage) throw new Error(errorMessage);
 });
 
 ipcMain.handle('shell:open-external', async (event, url: string) => {
