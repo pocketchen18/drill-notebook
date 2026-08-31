@@ -159,7 +159,7 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
   describe('Heading + notebook + page selector (NBK-01, NBK-04)', () => {
     beforeEach(() => primeNotebookApi());
 
-    it('NBK-01: h1 笔记本 + tagline visible (without plan deep link)', async () => {
+    it('NBK-01: h1 笔记本 + tagline remain available (without plan deep link)', async () => {
       renderNotebookPage();
       await waitFor(() => expect(screen.getByRole('heading', { name: '笔记本', level: 1 })).toBeInTheDocument());
       expect(screen.getByText(/所见即所得/)).toBeInTheDocument();
