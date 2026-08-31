@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
@@ -19,14 +20,15 @@ const { Text } = Typography;
 /** Which UI surface is editing the bank name — list (left) vs header (right). Never both. */
 type BankRenameSurface = 'list' | 'header';
 
-function PageHeading({ onCreate, onImportMarkdown, onImportJson, importingMarkdown, importingJson, pdfImport }: { onCreate: () => void; onImportMarkdown: () => void; onImportJson: () => void; importingMarkdown: boolean; importingJson: boolean; pdfImport: React.ReactNode }): JSX.Element {
+function PageHeading({ onCreate, onImportMarkdown, onImportJson, importingMarkdown, importingJson, pdfImport }: { onCreate: () => void; onImportMarkdown: () => void; onImportJson: () => void; importingMarkdown: boolean; importingJson: boolean; pdfImport: ReactNode }): JSX.Element {
   return (
-    <div className="page-heading">
-      <div>
-        <h1>题库</h1>
-        <p>导入 Markdown、JSON 或 PDF 题库，管理题目并进入练习。</p>
+    <div className="route-command-row">
+      <div className="route-command-row__context">
+        <h1 className="route-workspace__sr-only">题库</h1>
+        <p className="route-workspace__sr-only">导入、整理并进入练习</p>
+        <p className="route-workspace__sr-only">导入 Markdown、JSON 或 PDF 题库，管理题目并进入练习。</p>
       </div>
-      <Space>
+      <Space className="route-command-row__actions">
         {pdfImport}
         <Button icon={<FileUp size={16} />} loading={importingMarkdown} onClick={onImportMarkdown}>导入 Markdown</Button>
         <Button icon={<Braces size={16} />} loading={importingJson} onClick={onImportJson}>导入 JSON</Button>
@@ -229,7 +231,7 @@ export function BankPage(): JSX.Element {
   const allSelected = questions.length > 0 && selectedQuestionIds.length === questions.length;
 
   return (
-    <main className="page">
+    <main className="page route-workspace route-workspace--bank">
       <PageHeading
         onCreate={() => setCreateVisible(true)}
         onImportMarkdown={() => void openImportMarkdown()}
@@ -240,13 +242,13 @@ export function BankPage(): JSX.Element {
       />
       <input ref={fileInput} type="file" accept=".md,.markdown,.txt" hidden onChange={onFallbackMarkdown} />
       <input ref={jsonFileInput} type="file" accept=".json,application/json" hidden onChange={onFallbackJson} />
-      <div className="content-grid">
-        <section className="panel">
-          <div className="panel-header">
+      <div className="route-workspace__body bank-workspace">
+        <aside className="local-explorer local-explorer--bank">
+          <div className="local-explorer__header">
             <h2>我的题库</h2>
             <Button type="text" icon={<RefreshCw size={15} />} onClick={() => void banksQuery.refetch()} aria-label="刷新题库" />
           </div>
-          <div className="panel-body">
+          <div className="local-explorer__list">
             {banksQuery.isLoading ? <Spin /> : banksQuery.data?.length ? (
               <div className="bank-list">
                 {banksQuery.data.map((bank) => {
@@ -310,10 +312,10 @@ export function BankPage(): JSX.Element {
               </div>
             ) : <Empty description="还没有题库" />}
           </div>
-        </section>
-        <section className="panel">
-          <div className="panel-header">
-            <div style={{ minWidth: 0, flex: 1 }}>
+        </aside>
+        <section className="route-workspace__content bank-content">
+          <div className="content-context-header">
+            <div className="content-context-header__identity">
               {selectedBank && renamingId === selectedBank.id && renameSurface === 'header' ? (
                 <Input
                   ref={headerRenameInputRef}
@@ -346,22 +348,22 @@ export function BankPage(): JSX.Element {
                   {selectedBank?.name ?? '选择题库'}
                 </h2>
               )}
-              {selectedBank && <Text type="secondary">支持单选、多选、填空、判断和解答题，重复导入会自动跳过。双击标题可改名。</Text>}
+              {selectedBank && <Text type="secondary" className="content-context-header__hint route-workspace__sr-only">支持单选、多选、填空、判断和解答题，重复导入会自动跳过。双击标题可改名。</Text>}
             </div>
-            {selectedBank && <Space>
+            {selectedBank && <Space className="content-context-header__actions">
               <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
               <Button icon={<Plus size={15} />} onClick={() => { setEditingQuestion(undefined); setQuestionEditorVisible(true); }}>新建题目</Button>
               <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
             </Space>}
           </div>
-          <div className="panel-body">
+          <div className="bank-question-body">
             {questionsQuery.isLoading ? <Spin /> : questions.length ? (
               <div className="question-list">
                 <div className="selection-toolbar">
                   <Checkbox checked={allSelected} indeterminate={selectedQuestionIds.length > 0 && !allSelected} onChange={(checked) => setSelectedQuestionIds(checked ? questions.map((question) => question.id) : [])}>全选当前题库</Checkbox>
                 </div>
                 {questions.map((question) => (
-                  <div className={`question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
+                  <div className={`dense-content-row question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
                     <div className="question-row-top">
                       <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} /><MarkdownContent className="question-stem" value={question.stem} /></div>
                       <Space><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag><Button type="text" size="mini" icon={<Edit3 size={14} />} onClick={() => { setEditingQuestion(question); setQuestionEditorVisible(true); }} aria-label="编辑题目" /><Popconfirm title="删除这道题？" onOk={() => deleteQuestionMutation.mutate(question.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} aria-label="删除题目" /></Popconfirm></Space>
