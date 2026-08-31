@@ -317,7 +317,18 @@ function withinDialog(dialog: HTMLElement): {
   getByRole: (role: string, options?: { name?: string | RegExp }) => HTMLElement;
 } {
   return {
-    getByRole: (role, options) => screen.getByRole(role as never, { ...(options ?? {}), container: dialog } as never)
+    getByRole: (role, options) => {
+      const selector = role === 'button' ? 'button,[role="button"]' : `[role="${role}"]`;
+      const matcher = options?.name;
+      const nodes = Array.from(dialog.querySelectorAll(selector));
+      const match = nodes.find((node) => {
+        if (!matcher) return true;
+        const label = (node.getAttribute('aria-label') || node.textContent || '').trim();
+        return typeof matcher === 'string' ? label === matcher : matcher.test(label);
+      }) as HTMLElement | undefined;
+      if (!match) throw new Error(`No ${role} found in dialog`);
+      return match;
+    }
   };
 }
 
