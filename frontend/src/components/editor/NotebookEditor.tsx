@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -19,6 +20,12 @@ export interface NotebookEditorProps {
 
 const emptyDocument = { type: 'doc', content: [{ type: 'paragraph' }] };
 const markdownPastePattern = /\$[^$\n]+\$|^\s*#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|```/m;
+
+// 工作台几何契约（DESIGN.md）：编辑器画布 padding 与工具栏最小高度以内联
+// 承载（jsdom 契约测试可读），其余视觉层由 app.css 的 .editor-canvas 提供。
+const canvasPadding: CSSProperties = { paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 24 };
+const focusCanvasPadding: CSSProperties = { padding: 0 };
+const toolbarMinHeight: CSSProperties = { minHeight: 44 };
 
 export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusModeChange }: NotebookEditorProps): JSX.Element {
   const [videoModalVisible, setVideoModalVisible] = useState(false);
@@ -175,7 +182,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   };
 
   const toolbarElement = (
-    <div className={`editor-toolbar${focusMode ? ' is-focus' : ''}`}>
+    <div className={`editor-toolbar${focusMode ? ' is-focus' : ''}`} style={toolbarMinHeight}>
       <Space size={4} wrap>
         <Button type={editor.isActive('bold') ? 'primary' : 'text'} size="small" icon={<Bold size={16} />} onClick={() => editor.chain().focus().toggleBold().run()} aria-label="加粗" title="加粗" />
         <Button type={editor.isActive('italic') ? 'primary' : 'text'} size="small" icon={<Italic size={16} />} onClick={() => editor.chain().focus().toggleItalic().run()} aria-label="斜体" title="斜体" />
@@ -205,7 +212,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   );
 
   return (
-    <>
+    <div className={`editor-canvas${focusMode ? ' editor-canvas--focus' : ''}`} style={focusMode ? focusCanvasPadding : canvasPadding}>
     {focusMode ? toolbarElement : null}
     <div className={`editor-shell${focusMode ? ' is-focus' : ''}`}>
       {focusMode ? null : toolbarElement}
@@ -238,6 +245,6 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       </div>
     </Modal>
     <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleBrowserFilePick} />
-    </>
+    </div>
   );
 }
