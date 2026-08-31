@@ -1333,3 +1333,140 @@ html[data-theme='dark'] .arco-btn-outline {
 html[data-theme='dark'] .arco-tag {
   border-color: var(--line);
 }
+
+/* =====================================================================
+   Route workspace — 笔记本 / 题库紧凑工作台（改版）
+   契约见 DESIGN.md：route padding 16/20/24、命令行 min-height 44、
+   ≥760px 左侧 232px explorer + 右侧内容画布；<760px 上下堆叠（列表上限 240px）。
+   几何值由 CSS 统一承载，避免页面组件和窄屏布局出现两套事实。
+   ===================================================================== */
+.route-workspace {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 16px 20px 24px;
+}
+@media (min-width: 1440px) {
+  .route-workspace { padding: 20px 24px 24px; }
+}
+.route-command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  min-height: 44px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+.route-command-row__context { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; flex-wrap: wrap; }
+.route-command-row__label { font-size: 16px; font-weight: 700; color: var(--text-strong); }
+.route-command-row__hint { margin: 0; color: var(--muted); font-size: 13px; }
+.route-command-row__actions { margin-left: auto; }
+.route-command-row__context .arco-select { width: 220px; flex: none; }
+.route-workspace__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.route-workspace__body { display: grid; gap: 16px; align-items: stretch; min-height: min(680px, calc(100vh - 156px)); grid-template-columns: 232px minmax(0, 1fr); }
+.route-workspace__body.is-focus { grid-template-columns: minmax(0, 1fr); }
+.local-explorer {
+  display: flex;
+  flex-direction: column;
+  width: min(232px, 100%);
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--subtle-bg) 72%, var(--page-bg));
+}
+@media (min-width: 760px) {
+  .route-workspace__body .local-explorer { position: sticky; top: 12px; }
+  .route-workspace__body .local-explorer__list { overflow-y: auto; max-height: calc(100vh - 220px); }
+}
+.local-explorer__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent); }
+.local-explorer__header h2 { margin: 0; font-size: 13px; color: var(--text-strong); }
+.local-explorer__list { flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; padding: 8px; max-height: 240px; overflow-y: auto; }
+@media (min-width: 760px) {
+  .local-explorer__list { max-height: calc(100vh - 220px); }
+}
+.route-workspace__content { min-width: 0; }
+.editor-canvas__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.editor-canvas__title { max-width: 460px; }
+.editor-canvas__title:hover { background: var(--hover-bg); }
+.editor-canvas__title:focus-within { border-color: var(--accent-border-2); background: var(--panel-bg); }
+.content-context-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding: 10px 0 14px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.content-context-header__identity { min-width: 0; flex: 1 1 240px; padding-top: 2px; }
+.content-context-header h2 { margin: 0; color: var(--text-strong); font-size: 24px; line-height: 1.25; letter-spacing: 0; }
+.content-context-header__hint { display: block; margin-top: 4px; }
+.content-context-header__actions { flex: 0 0 auto; align-self: center; flex-wrap: wrap; justify-content: flex-end; }
+.bank-question-body { min-width: 0; padding-top: 4px; }
+.bank-content { padding: 0 18px 18px; border: 0; border-radius: 0; background: transparent; }
+.bank-content .content-context-header { margin-inline: 0; padding-inline: 0; }
+/* 专注模式：隐藏 explorer（原 .note-layout.is-focus .panel 规则随结构变更失效） */
+.note-layout.is-focus .local-explorer,
+.route-workspace__body.is-focus .local-explorer { display: none; }
+/* 密集内容行：压缩卡片留白，信息密度优先 */
+.route-workspace .question-list { gap: 0; }
+.route-workspace .question-row { padding: 14px 10px 14px 14px; border: 0; border-left: 3px solid transparent; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.route-workspace .question-row:last-child { border-bottom: 0; }
+.route-workspace .question-row.is-export-selected { padding: 14px 10px 14px 14px; border: 0; border-left: 3px solid var(--accent); border-bottom: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--accent-soft) 42%, transparent); }
+.route-workspace .question-row:not(.is-export-selected):hover { border-radius: 6px; background: color-mix(in srgb, var(--hover-bg) 72%, transparent); }
+.route-workspace .question-row-top { align-items: flex-start; }
+.route-workspace .question-stem { color: var(--text-strong); }
+.route-workspace .question-options { margin-top: 8px; gap: 5px; }
+.route-workspace .question-row .selection-line > .arco-checkbox { flex: 0 0 auto; margin-top: 2px; }
+.route-workspace .note-list { gap: 3px; }
+.route-workspace .note-page-item,
+.route-workspace .bank-item {
+  position: relative;
+  min-height: 38px;
+  margin: 2px 0;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.route-workspace .note-page-item:hover,
+.route-workspace .bank-item:hover { background: var(--hover-bg); }
+.route-workspace .note-page-item.selected,
+.route-workspace .bank-item.selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.route-workspace .note-page-item .selection-line { flex: 1; min-width: 0; }
+.route-workspace .bank-item-meta { font-size: 11px; }
+.route-workspace .selection-toolbar { padding: 4px 6px; margin-bottom: 6px; }
+.local-explorer .empty-state { min-height: 120px; }
+.route-workspace .editor-shell { border-color: color-mix(in srgb, var(--line) 84%, transparent); box-shadow: 0 1px 2px rgb(15 23 42 / 4%); }
+.route-workspace .editor-toolbar { padding: 8px 10px; row-gap: 6px; background: var(--panel-bg); }
+.route-workspace .editor-content { padding: 20px 28px 28px; }
+
+/* 专注模式工具栏随全局侧栏状态移动，避免折叠/隐藏后悬空在错误位置。 */
+.app-shell:has(.app-sider.arco-layout-sider-collapsed) .editor-toolbar.is-focus { left: 56px; }
+.app-shell:has(.app-sider-hidden) .editor-toolbar.is-focus { left: 0; }
+/* 中窄屏：先复位 legacy 210px 规则，再在 <760px 上下堆叠（顺序即优先级） */
+@media (max-width: 1180px) {
+  .route-workspace__body { grid-template-columns: 232px minmax(0, 1fr); }
+}
+@media (max-width: 759px) {
+  .route-workspace__body { grid-template-columns: minmax(0, 1fr); }
+  .route-command-row__context .arco-select { width: 100%; }
+  .local-explorer { width: 100%; max-width: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
+  .local-explorer__list { width: 100%; max-width: 240px; max-height: 240px; }
+  .bank-content { padding-inline: 12px; }
+  .bank-content .content-context-header { margin-inline: -12px; padding-inline: 12px; }
+  .bank-content .content-context-header { gap: 12px; }
+  .content-context-header__actions { width: 100%; justify-content: flex-start; }
+  .editor-canvas__header { flex-wrap: wrap; }
+  .editor-canvas__title { width: 100%; max-width: none; }
+}

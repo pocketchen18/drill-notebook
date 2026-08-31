@@ -196,11 +196,17 @@ export function NotebookPage(): JSX.Element {
     finishDayQueueStep(navigate);
   };
 
-  return <main className="page">
+  return <main className="page route-workspace route-workspace--notebook">
     {dayQueueMode ? <DayQueueSessionBar /> : null}
-    {focusMode ? null : <div className="page-heading">
-      <div><h1>笔记本</h1><p>所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p></div>
-      <Space>
+    {focusMode ? null : <div className="route-command-row">
+      <div className="route-command-row__context">
+        <h1 className="route-workspace__sr-only">笔记本</h1>
+        <p className="route-workspace__sr-only">所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p>
+        <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
+          {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
+        </Select>
+      </div>
+      <Space className="route-command-row__actions">
         <CompletePlanButton
           planItemId={planItemId}
           resourceType={pageIdFromQuery ? 'note_page' : pageId ? 'note_page' : undefined}
@@ -212,14 +218,11 @@ export function NotebookPage(): JSX.Element {
           </Button>
         ) : null}
         <ExportActions count={validSelectedPageIds.length} document={exportPages} />
-        <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
-          {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
-        </Select>
       </Space>
     </div>}
-    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className={`note-layout${focusMode ? ' is-focus' : ''}`}>
-      <section className="panel">
-        <div className="panel-header">
+    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className={`route-workspace__body note-layout${focusMode ? ' is-focus' : ''}`}>
+      <aside className="local-explorer local-explorer--notebook">
+        <div className="local-explorer__header">
           <h2>页面</h2>
           <Space size={4}>
             <Button
@@ -239,17 +242,17 @@ export function NotebookPage(): JSX.Element {
             <Button type="text" icon={<FilePlus2 size={16} />} onClick={() => setNewPageVisible(true)} aria-label="新建页面" />
           </Space>
         </div>
-        <div className="panel-body">
+        <div className="local-explorer__list">
           {pagesQuery.isLoading ? <Spin /> : pagesQuery.data?.length ? <div className="note-list">
             <div className="selection-toolbar"><Checkbox checked={validSelectedPageIds.length === pagesQuery.data.length} indeterminate={validSelectedPageIds.length > 0 && validSelectedPageIds.length < pagesQuery.data.length} onChange={(checked) => setSelectedPageIds(checked ? pagesQuery.data.map((page) => page.id) : [])}>全选页面</Checkbox></div>
-            {pagesQuery.data.map((page) => <div key={page.id} className={`note-page-item ${pageId === page.id ? 'selected' : ''} ${validSelectedPageIds.includes(page.id) ? 'is-export-selected' : ''}`} onClick={() => setPageId(page.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setPageId(page.id); }}><span className="selection-line"><Checkbox aria-label={`选择页面：${page.title}`} checked={validSelectedPageIds.includes(page.id)} onClick={(event) => event.stopPropagation()} onChange={(checked) => setSelectedPageIds((ids) => checked ? [...ids, page.id] : ids.filter((id) => id !== page.id))} />{page.title}</span><Popconfirm title="删除这个页面" content="页面内容和 AI 引用将一并删除，且不可恢复。" onOk={() => deletePage.mutate(page.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${page.title}`} /></Popconfirm></div>)}
+            {pagesQuery.data.map((page) => <div key={page.id} className={`dense-content-row note-page-item ${pageId === page.id ? 'selected' : ''} ${validSelectedPageIds.includes(page.id) ? 'is-export-selected' : ''}`} onClick={() => setPageId(page.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setPageId(page.id); }}><span className="selection-line"><Checkbox aria-label={`选择页面：${page.title}`} checked={validSelectedPageIds.includes(page.id)} onClick={(event) => event.stopPropagation()} onChange={(checked) => setSelectedPageIds((ids) => checked ? [...ids, page.id] : ids.filter((id) => id !== page.id))} />{page.title}</span><Popconfirm title="删除这个页面" content="页面内容和 AI 引用将一并删除，且不可恢复。" onOk={() => deletePage.mutate(page.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${page.title}`} /></Popconfirm></div>)}
           </div> : <div className="empty-state"><div><p>还没有页面</p><Button type="text" onClick={() => setNewPageVisible(true)}>创建第一页</Button></div></div>}
         </div>
-      </section>
-      <section>
+      </aside>
+      <section className="route-workspace__content">
         {currentPage ? <>
-          {focusMode ? null : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-            <Input value={currentPage.title} onChange={(title) => { void put(`/api/note-pages/${currentPage.id}`, { title }); void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] }); }} style={{ maxWidth: 460 }} />
+          {focusMode ? null : <div className="editor-canvas__header">
+            <Input value={currentPage.title} onChange={(title) => { void put(`/api/note-pages/${currentPage.id}`, { title }); void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] }); }} className="editor-canvas__title" />
             <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForPages([currentPage])}>加入计划</Button>
           </div>}
           <NotebookEditor content={pendingContent ?? currentPage.content} onChange={setPendingContent} pageId={pageId} focusMode={focusMode} onFocusModeChange={setFocusMode} />
