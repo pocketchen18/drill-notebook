@@ -1,27 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Divider, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, TreeSelect, Typography } from '@arco-design/web-react';
-import { ChevronLeft, ChevronRight, Eye, FileUp, Plus, Sparkles, Trash2 } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Button, Form, Input, Message, Modal, Popconfirm, Select, Space, TreeSelect } from '@arco-design/web-react';
+import { FileUp, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, KnowledgePoint, Question } from '../lib/types';
-import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { summarizeBank, resummarizeBank, summarizeImport, deleteKnowledgePoints } from '../lib/knowledgeApi';
 import { AiSummaryModal } from '../components/AiSummaryModal';
-import { DayQueueSessionBar, finishDayQueueStep } from '../components/DayQueueSessionBar';
-import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendModal';
+import { DayQueueSessionBar } from '../components/DayQueueSessionBar';
 import { KnowledgeFullCardView } from './knowledge/KnowledgeFullCardView';
+import { KnowledgeMemorizeSession } from './knowledge/KnowledgeMemorizeSession';
 import { planScopeFromSearch } from '../lib/planProgress';
-import { completeStudy } from '../lib/study';
-import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../lib/sessionCurve';
-import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
 import { buildKnowledgeTree } from '../lib/knowledgeTree';
 import { KnowledgeTreeNav } from './knowledge/KnowledgeTreeNav';
 import { KnowledgeCardWorkspace } from './knowledge/KnowledgeCardWorkspace';
 
 export function KnowledgePointPage(): JSX.Element {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { planItemId, planDate } = planScopeFromSearch(searchParams);
   const pointIdsFromQuery = useMemo(
@@ -47,14 +42,8 @@ export function KnowledgePointPage(): JSX.Element {
   const [parentPointId, setParentPointId] = useState<number | undefined>();
   const deepLinkStarted = useRef(false);
   const [title, setTitle] = useState(''); const [content, setContent] = useState(''); const [category, setCategory] = useState(''); const [tagText, setTagText] = useState(''); const [linkedQuestionIds, setLinkedQuestionIds] = useState<number[]>([]);
-  const [sessionIds, setSessionIds] = useState<number[]>(); const [index, setIndex] = useState(0); const [revealed, setRevealed] = useState(false);
-  // 会话内记忆曲线：不会的知识点延迟重现
-  const [curveQueue, setCurveQueue] = useState<CurveEntry[]>([]);
-  const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
-  const curveConfigRef = useRef(readSessionCurveConfig());
-  const [recommendVisible, setRecommendVisible] = useState(false);
-  const [recommendPayload, setRecommendPayload] = useState<{ pointIds?: number[] }>({});
-  const recommendShownRef = useRef(false);
+  // 背诵会话清单：本页仅由日历/今日队列深链自动进入，主动背诵请去「练习 → 背诵 → 背知识点」
+  const [sessionIds, setSessionIds] = useState<number[]>();
   // AI 总结 / 单卡全屏
   const [aiSummaryVisible, setAiSummaryVisible] = useState(false);
   // 当前正在跑的总结任务态：null=空闲，否则 Modal 关掉后后台继续跑，完成后弹 Toast + 刷新
@@ -95,25 +84,19 @@ export function KnowledgePointPage(): JSX.Element {
     ];
   }, [tree, currentBank, editing]);
   const currentNode = activeId != null ? tree.byId.get(activeId) : undefined;
-  // 知识点评分（SM-2 记忆曲线）：仅防重复提交 SRS
-  const [kpSubmittedIds, setKpSubmittedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
 
   // Auto-start session once deep-linked points are loaded (once per visit).
+  // 定时任务/深链只安排一次出场，强制单轮，避免同一知识点在会话内循环多遍。
   useEffect(() => {
     if (!deepLinkActive || deepLinkStarted.current || !pointsQuery.data?.length) return;
     const availableIds = new Set(pointsQuery.data.map((point) => point.id));
     const preferred = pointIdsFromQuery.filter((id) => availableIds.has(id));
     if (!preferred.length) return;
     deepLinkStarted.current = true;
-    startCurveSession(preferred);
+    setSessionIds(preferred);
   }, [deepLinkActive, pointIdsFromQuery, pointsQuery.data]);
-
-  const pointById = new Map((pointsQuery.data ?? []).map((point) => [point.id, point]));
-  const sessionPoints = (sessionIds ?? []).map((id) => pointById.get(id)).filter((point): point is KnowledgePoint => Boolean(point));
-  const currentEntry = curveQueue[index];
-  const current = currentEntry ? pointById.get(currentEntry.resourceId) : undefined;
 
   const refresh = (): void => { void queryClient.invalidateQueries({ queryKey: ['knowledge-points', bankId] }); };
 
@@ -251,75 +234,8 @@ export function KnowledgePointPage(): JSX.Element {
     }
   };
 
-  const jump = (next: number): void => { setIndex(next); setRevealed(false); };
-
-  /** 二元评分：会 → quality 4；不会 → quality 0。SRS 只提交首次，重现仅推进会话内队列。 */
-  const rateKp = (known: boolean): void => {
-    if (!current) return;
-    const quality = known ? 4 : 0;
-    if (!kpSubmittedIds.has(current.id)) {
-      setKpSubmittedIds((prev) => new Set(prev).add(current.id));
-      void completeStudy({
-        resourceType: 'knowledge_point',
-        resourceId: current.id,
-        quality,
-        source: 'knowledge',
-        planItemId: planItemId && planResourceId === current.id ? planItemId : undefined,
-        planDate,
-      }).catch(() => {
-        // 后端不可用时静默失败
-      });
-    }
-    const curve = applyCurveAnswer(curveQueue, index, known, curveStates, curveConfigRef.current);
-    setCurveQueue(curve.entries);
-    setCurveStates(curve.states);
-    if (index < curve.entries.length - 1) {
-      jump(index + 1);
-    } else if (dayQueueMode && finishDayQueueStep(navigate)) {
-      return;
-    } else {
-      Message.success('本轮背诵完成');
-      openSessionRecommend();
-    }
-  };
-
-  const openSessionRecommend = (): void => {
-    if (recommendShownRef.current || !sessionIds?.length) return;
-    recommendShownRef.current = true;
-    setRecommendPayload({ pointIds: [...sessionIds] });
-    setRecommendVisible(true);
-  };
-
-  const nextPoint = (): void => {
-    if (!curveQueue.length) return;
-    if (index >= curveQueue.length - 1) {
-      if (dayQueueMode && finishDayQueueStep(navigate)) {
-        return;
-      }
-      Message.success('本轮知识点背诵完成');
-      openSessionRecommend();
-      return;
-    }
-    jump(index + 1);
-  };
-
-  /** 开始一轮背诵会话：按当前会话曲线配置构建出场队列。 */
-  const startCurveSession = (ids: number[]): void => {
-    curveConfigRef.current = readSessionCurveConfig();
-    setSessionIds(ids);
-    setCurveQueue(buildCurveQueue(ids));
-    setCurveStates({});
-    setIndex(0);
-    setRevealed(false);
-    setKpSubmittedIds(new Set());
-    recommendShownRef.current = false;
-    setRecommendVisible(false);
-  };
-
   const returnToLibrary = (): void => {
     setSessionIds(undefined);
-    recommendShownRef.current = false;
-    setRecommendVisible(false);
   };
 
   return <main className="page kp-page"><input hidden ref={fallbackFile} type="file" accept=".md,.markdown,.txt" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then((value) => importMutation.mutate({ markdown: value })); event.target.value = ''; }} />
@@ -378,7 +294,19 @@ export function KnowledgePointPage(): JSX.Element {
           <div className="kp-card-empty">在左侧选择一个知识点开始阅读</div>
         )}
       </div>
-    ) : current ? <div className="study-session-layout"><aside className="panel question-palette"><div className="panel-header"><h2>知识点跳转</h2></div><div className="panel-body"><div className="palette-grid">{curveQueue.map((entry, itemIndex) => <button type="button" title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : undefined} className={`palette-item ${itemIndex === index ? 'current' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} key={entry.entryId} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Typography.Text type="secondary">橙色描边：重现条目</Typography.Text></div></aside><section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 个知识点</span>{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}{current.category && <Tag color="arcoblue">{current.category}</Tag>}</div><h2 className="knowledge-study-title">{current.title}</h2>{revealed ? <div className="knowledge-study-content"><MarkdownContent value={current.content} />{current.questionIds.length > 0 && <div className="linked-question-list"><strong>关联题目</strong>{current.questionIds.map((id) => <div key={id}>{questionsQuery.data?.find((question) => question.id === id)?.stem ?? `题目 #${id}`}</div>)}</div>}{(curveStates[current.id]?.done ?? false) ? <div className="quality-rating" style={{ textAlign: 'center', padding: '16px 0' }}><Divider /><Typography.Text type="secondary">{curveStates[current.id]?.abandoned ? '本轮未记住（已达最大重复次数，可在会话结束后加入跨天复习方案）' : '已记住'}</Typography.Text></div> : <div className="quality-rating"><Divider /><Typography.Text style={{ marginBottom: 8, display: 'block' }}>记住了吗？（不会将在本轮稍后重现，评分写入记忆曲线）</Typography.Text><div className="quality-buttons"><button className="quality-btn quality-0" onClick={() => rateKp(false)}><span className="quality-label">不会</span></button><button className="quality-btn quality-4" onClick={() => rateKp(true)}><span className="quality-label">会</span></button></div></div>}</div> : <div className="knowledge-study-prompt"><Typography.Text type="secondary">先回想这个知识点的核心要点，再展开看内容。</Typography.Text><Button type="primary" icon={<Eye size={16} />} onClick={() => setRevealed(true)}>显示内容</Button></div>}</section><div className="session-nav"><Button icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={() => jump(index - 1)}>上一个</Button><Button icon={<ChevronRight size={16} />} disabled={index === curveQueue.length - 1} onClick={nextPoint}>下一个</Button></div></div> : <Empty description="本轮没有可背的知识点" />}
+    ) : (
+      <KnowledgeMemorizeSession
+        key={sessionIds?.join(',') ?? 'none'}
+        points={pointsQuery.data ?? []}
+        questions={questionsQuery.data ?? []}
+        ids={sessionIds ?? []}
+        singleLoop
+        planItemId={planItemId}
+        planDate={planDate}
+        planResourceId={planResourceId}
+        dayQueueMode={dayQueueMode}
+      />
+    )}
     <Modal
       title={editing ? '编辑知识点' : '新建知识点'}
       visible={editorVisible}
@@ -435,15 +363,6 @@ export function KnowledgePointPage(): JSX.Element {
         </Form.Item>
       </Form>
     </Modal>
-    <SessionPlanRecommendModal
-      visible={recommendVisible}
-      onClose={() => {
-        recommendShownRef.current = false;
-        setRecommendVisible(false);
-      }}
-      sessionType="knowledge"
-      payload={recommendPayload}
-    />
     {fullCardPoint && currentNode && (
       <KnowledgeFullCardView
         tree={tree}

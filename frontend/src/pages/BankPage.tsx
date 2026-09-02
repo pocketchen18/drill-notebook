@@ -353,7 +353,7 @@ export function BankPage(): JSX.Element {
             {selectedBank && <Space className="content-context-header__actions">
               <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
               <Button icon={<Plus size={15} />} onClick={() => { setEditingQuestion(undefined); setQuestionEditorVisible(true); }}>新建题目</Button>
-              <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
+              <Button type="primary" onClick={() => navigate(selectedQuestionIds.length ? `/quiz?bankId=${selectedBank.id}&questionIds=${selectedQuestionIds.join(',')}&from=bank` : `/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
             </Space>}
           </div>
           <div className="bank-question-body">

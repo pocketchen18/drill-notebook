@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Empty, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
-import { BookOpenCheck, CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
+import { BookOpenCheck, CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, Eye, SlidersHorizontal } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../lib/api';
 import type { Bank, Question } from '../lib/types';
@@ -15,8 +15,9 @@ import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendMod
 import { planScopeFromSearch } from '../lib/planProgress';
 import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
-import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../lib/sessionCurve';
-import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
+import { applyCurveAnswer, buildCurveQueue, describeSessionCurveConfig, readSessionCurveConfig } from '../lib/sessionCurve';
+import type { CurveEntry, CurveItemState, SessionCurveConfig } from '../lib/sessionCurve';
+import { SessionCurveSettingsModal } from '../components/SessionCurveSettingsModal';
 
 export function QuestionStudyPage(): JSX.Element {
   const navigate = useNavigate();
@@ -37,6 +38,10 @@ export function QuestionStudyPage(): JSX.Element {
   const [curveQueue, setCurveQueue] = useState<CurveEntry[]>([]);
   const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
   const curveConfigRef = useRef(readSessionCurveConfig());
+  // 当前会话的循环轮数与背诵设置（弹窗可改，保存写 localStorage）
+  const [curveLoops, setCurveLoops] = useState(1);
+  const [curveConfig, setCurveConfig] = useState<SessionCurveConfig>(() => readSessionCurveConfig());
+  const [curveSettingsVisible, setCurveSettingsVisible] = useState(false);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -52,11 +57,14 @@ export function QuestionStudyPage(): JSX.Element {
   const selectionInitialized = useRef(false);
   const deepLinkStarted = useRef(false);
 
-  /** 开始一轮背题会话：按当前会话曲线配置构建出场队列。 */
-  const startSession = (ids: number[]): void => {
-    curveConfigRef.current = readSessionCurveConfig();
+  /** 开始一轮背题会话：按当前会话曲线配置构建多轮循环出场队列。singleLoop 用于日队列/深链等定时任务场景。 */
+  const startSession = (ids: number[], options?: { singleLoop?: boolean }): void => {
+    const config = readSessionCurveConfig();
+    curveConfigRef.current = config;
+    const loops = options?.singleLoop || !config.enabled ? 1 : config.loops;
+    setCurveLoops(loops);
     setSessionIds(ids);
-    setCurveQueue(buildCurveQueue(ids));
+    setCurveQueue(buildCurveQueue(ids, loops));
     setCurveStates({});
     setIndex(0);
     setRevealed(false);
@@ -82,11 +90,12 @@ export function QuestionStudyPage(): JSX.Element {
   }, [bankId, questionsQuery.data]);
 
   // Day-queue / deep-link: start memorize session from questionIds once.
+  // 定时任务只安排了一次出场，强制单轮，避免同一题在会话内循环多遍。
   useEffect(() => {
     if (!queryQuestionIds.length || deepLinkStarted.current) return;
     deepLinkStarted.current = true;
     setSelectedIds(queryQuestionIds);
-    startSession(queryQuestionIds);
+    startSession(queryQuestionIds, { singleLoop: true });
   }, [queryQuestionIds]);
 
   const byId = useMemo(() => new Map((questionsQuery.data ?? []).map((question) => [question.id, question])), [questionsQuery.data]);
@@ -154,7 +163,7 @@ export function QuestionStudyPage(): JSX.Element {
     } else if (dayQueueMode && finishDayQueueStep(navigate)) {
       return;
     } else {
-      Message.success('本轮背题完成');
+      Message.success(curveLoops > 1 ? `全部 ${curveLoops} 轮背题完成` : '本轮背题完成');
       openSessionRecommend(nextReviewAgain);
     }
   };
@@ -167,6 +176,18 @@ export function QuestionStudyPage(): JSX.Element {
   const openPlanForQuestions = (items: Question[]): void => {
     setPlanItems(items.map((item) => ({ resourceId: item.id, title: truncateTitle(item.stem || `题目 #${item.id}`) })));
     setPlanVisible(true);
+  };
+
+  /** 题号跳转面板：多轮循环时按轮次分组，轮内按出场顺序编号。 */
+  const renderPalette = (): JSX.Element => {
+    const rounds = [...new Set(curveQueue.map((entry) => entry.round))].sort((a, b) => a - b);
+    return <div>{rounds.map((round) => {
+      const positions = curveQueue.map((entry, itemIndex) => ({ entry, itemIndex })).filter(({ entry }) => entry.round === round);
+      return <div key={round} className="palette-round">
+        {curveLoops > 1 ? <div className="palette-round-title">第 {round + 1} / {curveLoops} 轮</div> : null}
+        <div className="palette-grid">{positions.map(({ entry, itemIndex }, position) => <button type="button" key={entry.entryId} title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : `第 ${round + 1} 轮 · 第 ${position + 1} 题`} className={`palette-item ${itemIndex === index ? 'current' : ''} ${remembered.includes(entry.resourceId) ? 'known' : ''} ${reviewAgain.includes(entry.resourceId) ? 'review' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} onClick={() => jump(itemIndex)}>{position + 1}</button>)}</div>
+      </div>;
+    })}</div>;
   };
 
   return <main className="page">
@@ -184,10 +205,10 @@ export function QuestionStudyPage(): JSX.Element {
 
     {!sessionIds ? <section className="panel study-setup-panel"><div className="panel-header"><h2>选择并编排要背的题目</h2></div><div className="panel-body">
       <Select value={bankId} placeholder="选择题库" onChange={(value) => { setBankId(Number(value)); setSessionIds(undefined); }} style={{ width: 320, marginBottom: 16 }}>{banksQuery.data?.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}（{bank.questionCount ?? 0} 道）</Select.Option>)}</Select>
-      {questionsQuery.data?.length ? <><AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => startSession([...selectedIds])}>开始背题（{selectedIds.length}）</Button></div></> : <Empty description="该题库暂无题目" />}
+      {questionsQuery.data?.length ? <><AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Space wrap><Button icon={<SlidersHorizontal size={16} />} onClick={() => setCurveSettingsVisible(true)}>记忆曲线 · {describeSessionCurveConfig(curveConfig)}</Button><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => startSession([...selectedIds])}>开始背题（{selectedIds.length}）</Button></Space></div></> : <Empty description="该题库暂无题目" />}
     </div></section> : question ? <div className="study-session-layout">
-      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{curveQueue.map((entry, itemIndex) => <button type="button" key={entry.entryId} title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : undefined} className={`palette-item ${itemIndex === index ? 'current' : ''} ${remembered.includes(entry.resourceId) ? 'known' : ''} ${reviewAgain.includes(entry.resourceId) ? 'review' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Typography.Text type="secondary">绿色：已记住 · 橙色：需复习 · 橙色描边：重现题</Typography.Text></div></aside>
-      <section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div><div className="quiz-stem"><MarkdownContent value={question.stem} /></div>{(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">{question.options.map((option) => {
+      <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body">{renderPalette()}<Typography.Text type="secondary">绿色：已记住 · 橙色：需复习 · 橙色描边：重现题</Typography.Text></div></aside>
+      <section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && curveLoops > 1 ? <Tag color="blue">第 {currentEntry.round + 1} / {curveLoops} 轮</Tag> : null}{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div><div className="quiz-stem"><MarkdownContent value={question.stem} /></div>{(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">{question.options.map((option) => {
         const isSelected = selectedOption === option.key;
         const isCorrectAnswer = question.answer?.split(',').includes(option.key);
         let className = 'quiz-option';
@@ -219,7 +240,7 @@ export function QuestionStudyPage(): JSX.Element {
           ) : (
             <div className="memory-rating-block">
               <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                记住了吗？（不会将在本轮稍后重现，评分写入记忆曲线）
+                记住了吗？（不会将按记忆曲线策略重复出现，评分写入跨天记忆曲线）
               </Typography.Text>
               <div className="quality-buttons">
                 <button
@@ -259,6 +280,12 @@ export function QuestionStudyPage(): JSX.Element {
       }}
       sessionType="memorize"
       payload={recommendPayload}
+    />
+    <SessionCurveSettingsModal
+      visible={curveSettingsVisible}
+      onClose={() => setCurveSettingsVisible(false)}
+      itemCount={selectedIds.length}
+      onSaved={(config) => setCurveConfig(config)}
     />
   </main>;
 }

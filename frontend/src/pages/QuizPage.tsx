@@ -78,6 +78,8 @@ export function QuizPage(): JSX.Element {
   const initialBank = Number(searchParams.get('bankId')) || undefined;
   const { planItemId, planDate } = planScopeFromSearch(searchParams);
   const questionIds = useMemo(() => searchParams.get('questionIds')?.split(',').map(Number).filter(Boolean), [searchParams]);
+  /** 题库页携带已选题目跳转：展示选题器供继续调整，开始练习用调整后的清单 */
+  const fromBank = searchParams.get('from') === 'bank';
   const autoStart = searchParams.get('autoStart') === '1';
   const dayQueueMode = searchParams.get('dayQueue') === '1';
   /** From calendar memory-curve queue: right/wrong drives SRS with forceAdvance. */
@@ -86,7 +88,7 @@ export function QuizPage(): JSX.Element {
   /** Single-resource deep link → CompletePlanButton can target that resource. */
   const planResourceId = questionIds?.length === 1 ? questionIds[0] : undefined;
   const [bankId, setBankId] = useState<number | undefined>(initialBank);
-  const questionsQuery = useQuery({ queryKey: ['quiz-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined && !questionIds?.length });
+  const questionsQuery = useQuery({ queryKey: ['quiz-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined && (!questionIds?.length || fromBank) });
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>(questionIds ?? []);
   const [session, setSession] = useState<QuizSession>();
   const [index, setIndex] = useState(0);
@@ -180,12 +182,13 @@ export function QuizPage(): JSX.Element {
       return;
     }
     try {
-      const plannedIds = questionIds?.length ? questionIds : selectedQuestionIds;
+      const plannedIds = questionIds?.length && !fromBank ? questionIds : selectedQuestionIds;
       if (!plannedIds.length) { Message.warning('请至少选择一道题'); return; }
       const newSession = await post<QuizSession>('/api/quiz/sessions', { bankId, questionIds: plannedIds, shuffle: false, limit: plannedIds.length });
       setSession(newSession);
       setSessionId(newSession.sessionId);
-      curveConfigRef.current = readSessionCurveConfig();
+      // 刷题保持原行为：单轮 + 错题延迟重现；多轮循环与组末复习仅用于背诵模式
+      curveConfigRef.current = { ...readSessionCurveConfig(), loops: 1, strategy: 'gap', nextRoundOrder: 'original' };
       setCurveQueue(buildCurveQueue(newSession.questions.map((item) => item.id)));
       setCurveStates({});
       setIndex(0);
@@ -398,8 +401,8 @@ export function QuizPage(): JSX.Element {
           <div><Text type="secondary">题库</Text><Select style={{ width: '100%', marginTop: 8 }} value={bankId} onChange={(value) => setBankId(Number(value))} placeholder="选择题库">
             {banksQuery.data?.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}（{bank.questionCount ?? 0} 道题）</Select.Option>)}
           </Select></div>
-          {questionIds?.length ? <Tag color="green">错题再练：{questionIds.length} 题</Tag> : null}
-          {!questionIds?.length && questionsQuery.data?.length ? <AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedQuestionIds} onChange={setSelectedQuestionIds} /> : null}
+          {questionIds?.length ? <Tag color="green">{fromBank ? `已选题目：${questionIds.length} 题（可继续调整）` : `错题再练：${questionIds.length} 题`}</Tag> : null}
+          {questionsQuery.data?.length ? <AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedQuestionIds} onChange={setSelectedQuestionIds} /> : null}
           {!banksQuery.isLoading && !banksQuery.data?.length && <Empty description="请先在题库页创建并导入题目" />}
         </Space>
       </div>

@@ -255,29 +255,78 @@ export function SettingsPage(): JSX.Element {
       <section className="panel">
         <div className="panel-header"><h2>会话内记忆曲线</h2></div>
         <div className="panel-body form-stack">
+          <div>
+            <Typography.Text type="secondary">短周期记忆曲线：背题 / 背知识点时所选条目循环出现多遍，答错条目按策略重复；刷题固定为单轮 + 答错延迟重现。也可在「练习 → 背诵」内的记忆曲线设置弹窗中调整。</Typography.Text>
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
             <div>
-              <Typography.Text bold>启用会话内错题重现</Typography.Text>
+              <Typography.Text bold>启用循环背诵与错题重现</Typography.Text>
               <br />
-              <Typography.Text type="secondary">刷题 / 背题 / 背知识点中答错（不会）的条目会在当前会话内延迟重现，直到记住。</Typography.Text>
+              <Typography.Text type="secondary">关闭后背题 / 背知识点按所选顺序单轮过一遍，答错不再重现。</Typography.Text>
             </div>
             <Switch checked={curveConfig.enabled} onChange={(checked) => updateCurveConfig({ enabled: checked })} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
             <div>
-              <Typography.Text bold>重现间隔</Typography.Text>
+              <Typography.Text bold>循环轮数</Typography.Text>
               <br />
-              <Typography.Text type="secondary">答错后隔多少个条目再次出现（推荐 3）；剩余条目不足时排到队尾。</Typography.Text>
+              <Typography.Text type="secondary">背诵时所选条目整体循环出现几遍（推荐 3）。</Typography.Text>
             </div>
             <InputNumber
-              value={curveConfig.gap}
-              onChange={(value) => value != null && updateCurveConfig({ gap: value })}
+              value={curveConfig.loops}
+              onChange={(value) => value != null && updateCurveConfig({ loops: value })}
               min={1}
-              max={50}
+              max={10}
               disabled={!curveConfig.enabled}
               style={{ width: 120 }}
             />
           </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>错题重复策略</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">组末复习（百词斩式，推荐）：每轮分组，错题集中到本组末尾重现；也可选本轮末尾或延迟重现。</Typography.Text>
+            </div>
+            <Radio.Group type="button" size="small" value={curveConfig.strategy} onChange={(value) => updateCurveConfig({ strategy: value as SessionCurveConfig['strategy'] })} disabled={!curveConfig.enabled}>
+              <Radio value="group">组末复习</Radio>
+              <Radio value="tail">本轮末尾</Radio>
+              <Radio value="gap">延迟重现</Radio>
+            </Radio.Group>
+          </div>
+          {curveConfig.strategy === 'group' && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+              <div>
+                <Typography.Text bold>每组题数</Typography.Text>
+                <br />
+                <Typography.Text type="secondary">每轮按此数量分组，答错插入所在组末尾（推荐 10）。</Typography.Text>
+              </div>
+              <InputNumber
+                value={curveConfig.groupSize}
+                onChange={(value) => value != null && updateCurveConfig({ groupSize: value })}
+                min={2}
+                max={100}
+                disabled={!curveConfig.enabled}
+                style={{ width: 120 }}
+              />
+            </div>
+          )}
+          {curveConfig.strategy === 'gap' && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+              <div>
+                <Typography.Text bold>重现间隔</Typography.Text>
+                <br />
+                <Typography.Text type="secondary">答错后隔多少个条目再次出现（推荐 3）；刷题模式始终使用此策略。</Typography.Text>
+              </div>
+              <InputNumber
+                value={curveConfig.gap}
+                onChange={(value) => value != null && updateCurveConfig({ gap: value })}
+                min={1}
+                max={50}
+                disabled={!curveConfig.enabled}
+                style={{ width: 120 }}
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
             <div>
               <Typography.Text bold>不限制重复次数（直到会为止）</Typography.Text>
@@ -320,6 +369,26 @@ export function SettingsPage(): JSX.Element {
               disabled={!curveConfig.enabled}
               style={{ width: 120 }}
             />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>下一轮出场顺序</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">错题优先：上一轮最后答错的条目排到下一轮开头（百词斩总复习式）。</Typography.Text>
+            </div>
+            <Radio.Group type="button" size="small" value={curveConfig.nextRoundOrder} onChange={(value) => updateCurveConfig({ nextRoundOrder: value as SessionCurveConfig['nextRoundOrder'] })} disabled={!curveConfig.enabled || curveConfig.loops <= 1}>
+              <Radio value="original">保持原序</Radio>
+              <Radio value="wrongFirst">错题优先</Radio>
+              <Radio value="random">随机</Radio>
+            </Radio.Group>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>过关后跳过后续轮次</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">开启后已过关的条目不再出现在之后的循环里；关闭（默认）则每轮都完整过一遍。</Typography.Text>
+            </div>
+            <Switch checked={curveConfig.skipPassed} onChange={(checked) => updateCurveConfig({ skipPassed: checked })} disabled={!curveConfig.enabled} />
           </div>
         </div>
       </section>

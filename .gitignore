@@ -35,6 +35,9 @@ coverage/
 .tooling/
 embedding-worker/target/
 
+# CodeGraph local index & daemon artifacts (db / shm / wal / log / pid)
+.codegraph/
+
 # Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
 /*.png
 /*.jpg
@@ -179,6 +182,7 @@ docs/**
 !docs/ai-retrieval.md
 !docs/architecture.md
 !docs/review-srs.md
+!docs/session-curve.md
 !docs/testing/
 !docs/testing/**
 # Design specs / implementation plans stay local
