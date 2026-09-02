@@ -15,6 +15,8 @@ import { planScopeFromSearch } from '../lib/planProgress';
 import { buildKnowledgeTree } from '../lib/knowledgeTree';
 import { KnowledgeTreeNav } from './knowledge/KnowledgeTreeNav';
 import { KnowledgeCardWorkspace } from './knowledge/KnowledgeCardWorkspace';
+import { usePersistSlice } from '../hooks/useViewState';
+import { putScoped, readPageSlice, readScoped } from '../lib/viewState';
 
 export function KnowledgePointPage(): JSX.Element {
   const [searchParams] = useSearchParams();
@@ -30,7 +32,8 @@ export function KnowledgePointPage(): JSX.Element {
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   // When deep-linking with pointIds, load all points (no bank filter) so the id is found across banks.
   const deepLinkActive = pointIdsFromQuery.length > 0;
-  const [bankId, setBankId] = useState<number>();
+  const cachedKnowledge = readPageSlice('knowledge');
+  const [bankId, setBankId] = useState<number | undefined>(cachedKnowledge.bankId);
   const pointsQuery = useQuery({
     queryKey: ['knowledge-points', deepLinkActive ? 'all' : bankId],
     queryFn: () => get<KnowledgePoint[]>(`/api/knowledge-points${deepLinkActive || !bankId ? '' : `?bankId=${bankId}`}`),
@@ -49,10 +52,14 @@ export function KnowledgePointPage(): JSX.Element {
   // 当前正在跑的总结任务态：null=空闲，否则 Modal 关掉后后台继续跑，完成后弹 Toast + 刷新
   const [activeSummaryTask, setActiveSummaryTask] = useState<'import' | 'summarize' | 'resummarize' | null>(null);
   const [fullCardPoint, setFullCardPoint] = useState<KnowledgePoint>();
-  // 树阅读：标题搜索、当前选中节点、标签筛选
-  const [search, setSearch] = useState('');
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  // 树阅读：标题搜索、当前选中节点、标签筛选（均从上次记忆恢复）
+  const [search, setSearch] = useState(cachedKnowledge.search ?? '');
+  const [activeId, setActiveId] = useState<number | null>(cachedKnowledge.activeId ?? null);
+  const [activeTag, setActiveTag] = useState<string | null>(cachedKnowledge.activeTag ?? null);
+  // KnowledgeTreeNav 自行套用本库折叠状态并在变化时回报，这里只做镜像用于落盘
+  const [collapsedKeys, setCollapsedKeys] = useState<string[]>(
+    () => readScoped(cachedKnowledge.treeCollapsed, cachedKnowledge.bankId) ?? []
+  );
   const currentBank = banksQuery.data?.find((b) => b.id === bankId);
   const tree = useMemo(() => buildKnowledgeTree(pointsQuery.data ?? [], currentBank ? currentBank.name : '全部知识点'), [pointsQuery.data, currentBank]);
   const treeSelectData = useMemo(() => {
@@ -86,6 +93,22 @@ export function KnowledgePointPage(): JSX.Element {
   const currentNode = activeId != null ? tree.byId.get(activeId) : undefined;
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
+  useEffect(() => {
+    const banks = banksQuery.data;
+    if (!banks?.length || bankId === undefined) return;
+    if (!banks.some((bank) => bank.id === bankId)) setBankId(undefined);
+  }, [bankId, banksQuery.data]);
+  useEffect(() => {
+    if (!pointsQuery.data || activeId === null) return;
+    if (!tree.byId.has(activeId)) setActiveId(null);
+  }, [activeId, pointsQuery.data, tree]);
+  usePersistSlice('knowledge', {
+    bankId,
+    search,
+    activeId,
+    activeTag,
+    treeCollapsed: putScoped(cachedKnowledge.treeCollapsed, bankId, collapsedKeys)
+  });
 
   // Auto-start session once deep-linked points are loaded (once per visit).
   // 定时任务/深链只安排一次出场，强制单轮，避免同一知识点在会话内循环多遍。
@@ -275,6 +298,9 @@ export function KnowledgePointPage(): JSX.Element {
           search={search}
           activeTag={activeTag}
           onSelect={setActiveId}
+          initialCollapsedKeys={readScoped(cachedKnowledge.treeCollapsed, bankId) ?? []}
+          collapsedScope={bankId ?? 'all'}
+          onCollapsedKeysChange={setCollapsedKeys}
         />
         {currentNode ? (
           <KnowledgeCardWorkspace

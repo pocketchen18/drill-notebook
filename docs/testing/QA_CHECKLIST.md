@@ -128,7 +128,24 @@
 
 ---
 
-## 模块八：自动化覆盖对照（v0.5.x 新增功能）
+## 模块八：界面状态记忆（v0.5.2）
+
+> 设计与约束见 [docs/architecture.md](../architecture.md) §2.3 与 README §2.13。存储位置：`localStorage['ui.viewState.v1']`。
+
+| 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-VS-01** | 冷启动落笔记本 | 全新安装或已清除记忆 | 打开应用 | 落在「笔记本」页（不再是题库页），URL 为 `#/notebooks` | P0 |
+| **TC-VS-02** | 重启回到上次页面 | 依次访问 知识点 → 练习 → 日历，最后停在日历 | 完全退出应用后重新打开 | 直接回到「日历」，不出现先闪题库页再跳转 | P0 |
+| **TC-VS-03** | 各页选择与切换恢复 | 知识点页搜索并选中一张卡、练习页切到「背诵 → 背知识点」并**换过知识点库**且勾了部分卡片、题库页勾了 2 题、笔记本开专注模式 | 重启应用后逐个页面查看 | 搜索词/选中卡片/Tab 与子模式/背知识点所选知识库/背诵勾选范围/题库勾选/专注模式全部恢复；日历仍显示上次翻到的年月，选中日仍是今天 | P0 |
+| **TC-VS-04** | 每库各自记忆 | 题库 A 勾 2 题、题库 B 勾 1 题 | 在 A/B 间来回切换；重启后再看 | 切回某库恢复它自己的勾选（不再被清空）；两库互不污染 | P1 |
+| **TC-VS-05** | 深链不污染记忆 | 从日历「去学习」进入背题会话（URL 带 `questionIds`/`dayQueue=1`） | 会话中直接退出应用并重启 | 启动落在「练习」的选材界面：不自动开始会话、不带上次的题目清单；日历/今日队列深链的排程未被写进题库勾选记忆 | P0 |
+| **TC-VS-06** | 失效记忆自愈 | 记住某题库/笔记本/页面/卡片后将其删除 | 重启应用并进入对应页面 | 回落该页默认第一项，不出现空白页、报错或「没有匹配题目」；已删除的筛选标签被剪掉 | P1 |
+| **TC-VS-07** | 开关与清除 | 已有记忆 | 设置 → 通用 关闭「记住上次停留位置与各页选择」→ 重启；再打开开关 → 重启 | 关闭时立即清空（重启落笔记本、各页归零），关闭期间不再写入；点「清除已记住的位置」后同样立即归零且开关保持开启 | P1 |
+| **TC-VS-08** | 敏感与会话态不外泄 | 刷题页输入过题库主密码、笔记页有未保存内容、背题做到一半 | 检查 `localStorage['ui.viewState.v1']` 内容并重启 | 存储中不含密码、不含笔记正文、不含队列/已答状态；重启后笔记仍走原有自动保存，会话需重新开始 | P0 |
+
+---
+
+## 模块九：自动化覆盖对照（v0.5.x 新增功能）
 
 | 被测功能 | 自动化位置 | 覆盖内容 |
 | :--- | :--- | :--- |
@@ -138,7 +155,10 @@
 | 背诵设置弹窗 | `frontend/src/components/SessionCurveSettingsModal.test.tsx`（3 用例） | 选项渲染、预设应用与保存写入 localStorage、每次打开重读最新配置 |
 | 会话结束顽固项加练 | `frontend/src/components/SessionPlanRecommendModal.stubborn.test.tsx`（4 用例） | 加练卡片默认勾选、提交明天+后天两组并去重并入 enroll 全集、取消勾选后禁止提交、无顽固项不渲染 |
 | 背诵评分最终态 | `frontend/src/pages/knowledge/KnowledgeMemorizeSession.test.tsx`（3 用例） | 首次评分提交、判定翻转才补交（`forceAdvance`）、多轮重复同判定不再提交 |
-| 日历实时今天 | `frontend/src/lib/useToday.test.tsx`（2 用例）+ `frontend/src/pages/CalendarPage.midnight.test.tsx`（3 用例） | 轮询与窗口聚焦校准日期；打开时高亮今天、跨零点选中日跟随并重新拉数、手动选其他日期不被跳转 |
+| 日历实时今天 | `frontend/src/lib/useToday.test.tsx`（2 用例）+ `frontend/src/pages/CalendarPage.midnight.test.tsx`（4 用例） | 轮询与窗口聚焦校准日期；打开时高亮今天、跨零点选中日跟随并重新拉数、手动选其他日期不被跳转、记忆里翻到的上月视图不被零点拽回 |
+| 界面状态存储层 | `frontend/src/lib/viewState.test.ts`（14 用例） | 损坏 JSON/未知页/非法 id 容错、数组截断、防抖合并写入与去重、开关关闭不读不写、`recordRoute` 白名单与练习别名折叠、全选哨兵与 `all`/`some:[]` 往返、作用域按 `recent` 淘汰最久未写的库且永不淘汰正在写入的库 |
+| 启动落点 | `frontend/src/App.startRoute.test.tsx`（6 用例） | 无记忆落笔记本、重启回上次页、未知路径回落、非法记忆忽略、损坏缓存、深链优先 |
+| 题库页选择记忆 | `frontend/src/pages/BankPage.viewState.test.tsx`（4 用例） | 恢复上次题库与部分勾选、`all` 哨兵展开整库、题库已删回落第一个库、无记忆时不勾选 |
 | 题库→刷题选题继承 | `frontend/src/pages/BankPage.workspace.test.tsx`（BNK-16 / BNK-16b） | 无勾选仅携带 bankId；有勾选携带 `questionIds`+`from=bank` |
-| 前端回归 | `npm test --prefix frontend`（Vitest 全量 217 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、题库/知识点/背诵组件交互回归 |
+| 前端回归 | `npm test --prefix frontend`（Vitest 全量 242 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归 |
 | 全量门禁 | `.\mvnw.cmd test`（384 项）+ `npm run build --prefix frontend` | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节 |

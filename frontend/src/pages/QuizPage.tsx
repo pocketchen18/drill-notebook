@@ -22,6 +22,8 @@ import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
 import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../lib/sessionCurve';
 import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
+import { usePersistSlice } from '../hooks/useViewState';
+import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
 
 const { Text } = Typography;
 
@@ -87,9 +89,12 @@ export function QuizPage(): JSX.Element {
   const scheduleIdFromQuery = Number(searchParams.get('scheduleId')) || undefined;
   /** Single-resource deep link → CompletePlanButton can target that resource. */
   const planResourceId = questionIds?.length === 1 ? questionIds[0] : undefined;
-  const [bankId, setBankId] = useState<number | undefined>(initialBank);
+  const cachedPractice = readPageSlice('practice');
+  const [bankId, setBankId] = useState<number | undefined>(initialBank ?? cachedPractice.quizBankId);
   const questionsQuery = useQuery({ queryKey: ['quiz-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined && (!questionIds?.length || fromBank) });
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>(questionIds ?? []);
+  /** 已套用记忆勾选的题库；未套用前不写记忆，避免旧选择覆盖。必须是 state，否则套用同值时不会重渲染。 */
+  const [selectionHydratedBank, setSelectionHydratedBank] = useState<number | undefined>(undefined);
   const [session, setSession] = useState<QuizSession>();
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
@@ -119,9 +124,27 @@ export function QuizPage(): JSX.Element {
     if (!bankId && banksQuery.data?.length) setBankId(banksQuery.data[0].id);
   }, [bankId, banksQuery.data]);
   useEffect(() => {
-    if (questionIds?.length) setSelectedQuestionIds(questionIds);
-    else if (questionsQuery.data) setSelectedQuestionIds(questionsQuery.data.map((item) => item.id));
-  }, [bankId, questionIds, questionsQuery.data]);
+    const banks = banksQuery.data;
+    if (!banks?.length || bankId === undefined) return;
+    if (!banks.some((bank) => bank.id === bankId)) setBankId(undefined);
+  }, [bankId, banksQuery.data]);
+  useEffect(() => {
+    if (questionIds?.length) {
+      setSelectionHydratedBank(bankId);
+      setSelectedQuestionIds(questionIds);
+    }
+    else if (questionsQuery.data) {
+      const available = questionsQuery.data.map((item) => item.id);
+      setSelectionHydratedBank(bankId);
+      setSelectedQuestionIds(readIdSet(cachedPractice.quizSelection, bankId, available) ?? available);
+    }
+  }, [bankId, questionIds, questionsQuery.data, selectionHydratedBank]); // eslint-disable-line react-hooks/exhaustive-deps -- cachedPractice 每次渲染重读
+  // 日历/今日队列深链带来的 id 清单是「排程」而不是用户勾选，不写入记忆；
+  // 本库勾选尚未套用前也不写，避免用切换前的旧勾选覆盖记忆。
+  usePersistSlice('practice', autoStart || fromQueue || selectionHydratedBank !== bankId ? {} : {
+    quizBankId: bankId,
+    quizSelection: putScoped(cachedPractice.quizSelection, bankId, captureIdSet(selectedQuestionIds, questionsQuery.data?.length ?? 0))
+  });
 
   const questionBySessionId = useMemo(() => new Map((session?.questions ?? []).map((item) => [item.id, item])), [session?.questions]);
   const currentEntry = curveQueue[index];
@@ -402,7 +425,7 @@ export function QuizPage(): JSX.Element {
             {banksQuery.data?.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}（{bank.questionCount ?? 0} 道题）</Select.Option>)}
           </Select></div>
           {questionIds?.length ? <Tag color="green">{fromBank ? `已选题目：${questionIds.length} 题（可继续调整）` : `错题再练：${questionIds.length} 题`}</Tag> : null}
-          {questionsQuery.data?.length ? <AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedQuestionIds} onChange={setSelectedQuestionIds} /> : null}
+          {questionsQuery.data?.length ? <AdvancedQuestionSelector filterScope="quiz" questions={questionsQuery.data} selectedIds={selectedQuestionIds} onChange={setSelectedQuestionIds} /> : null}
           {!banksQuery.isLoading && !banksQuery.data?.length && <Empty description="请先在题库页创建并导入题目" />}
         </Space>
       </div>

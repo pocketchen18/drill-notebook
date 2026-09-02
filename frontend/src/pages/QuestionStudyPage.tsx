@@ -19,6 +19,8 @@ import { applyCurveAnswer, buildCurveQueue, deriveStubbornIds, describeSessionCu
 import type { CurveEntry, CurveItemState, SessionCurveConfig } from '../lib/sessionCurve';
 import { SessionCurveSettingsModal } from '../components/SessionCurveSettingsModal';
 import type { StubbornCandidate } from '../components/SessionPlanRecommendModal';
+import { usePersistSlice } from '../hooks/useViewState';
+import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
 
 export function QuestionStudyPage(): JSX.Element {
   const navigate = useNavigate();
@@ -32,7 +34,8 @@ export function QuestionStudyPage(): JSX.Element {
   const planResourceId = queryQuestionIds.length === 1 ? queryQuestionIds[0] : undefined;
   const queryClient = useQueryClient();
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
-  const [bankId, setBankId] = useState<number>();
+  const cachedPractice = readPageSlice('practice');
+  const [bankId, setBankId] = useState<number | undefined>(cachedPractice.studyBankId);
   const questionsQuery = useQuery({ queryKey: ['study-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined });
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sessionIds, setSessionIds] = useState<number[]>();
@@ -57,6 +60,8 @@ export function QuestionStudyPage(): JSX.Element {
   const [submittedRatings, setSubmittedRatings] = useState<Map<number, boolean>>(new Map());
   const selectionBank = useRef<number>();
   const selectionInitialized = useRef(false);
+  /** 记忆勾选已套用的题库：必须是 state，套用同值时 ref 门闩会让写入器不再运行。 */
+  const [selectionReady, setSelectionReady] = useState<number | undefined>(undefined);
   const deepLinkStarted = useRef(false);
 
   /** 开始一轮背题会话：按当前会话曲线配置构建多轮循环出场队列。singleLoop 用于日队列/深链等定时任务场景。 */
@@ -79,17 +84,24 @@ export function QuestionStudyPage(): JSX.Element {
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
   useEffect(() => {
+    const banks = banksQuery.data;
+    if (!banks?.length || bankId === undefined) return;
+    if (!banks.some((bank) => bank.id === bankId)) setBankId(undefined);
+  }, [bankId, banksQuery.data]);
+  useEffect(() => {
     if (!questionsQuery.data) return;
     const available = questionsQuery.data.map((question) => question.id);
     if (!selectionInitialized.current || selectionBank.current !== bankId) {
       selectionInitialized.current = true;
       selectionBank.current = bankId;
-      setSelectedIds(available);
+      setSelectionReady(bankId);
+      // 深链/定时任务会随后覆盖；无记忆时保持「整库都背」的旧默认
+      setSelectedIds(readIdSet(cachedPractice.studySelection, bankId, available) ?? available);
       return;
     }
     const availableIds = new Set(available);
     setSelectedIds((ids) => ids.filter((id) => availableIds.has(id)));
-  }, [bankId, questionsQuery.data]);
+  }, [bankId, questionsQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps -- cachedPractice 每次渲染重读
 
   // Day-queue / deep-link: start memorize session from questionIds once.
   // 定时任务只安排了一次出场，强制单轮，避免同一题在会话内循环多遍。
@@ -99,6 +111,12 @@ export function QuestionStudyPage(): JSX.Element {
     setSelectedIds(queryQuestionIds);
     startSession(queryQuestionIds, { singleLoop: true });
   }, [queryQuestionIds]);
+  // 日历/今日队列深链带来的 id 清单是「排程」而不是用户勾选，不写入记忆；
+  // 本库勾选尚未套用前（selectionReady 不匹配）也不写，避免用旧值覆盖记忆。
+  usePersistSlice('practice', queryQuestionIds.length || dayQueueMode || selectionReady !== bankId ? {} : {
+    studyBankId: bankId,
+    studySelection: putScoped(cachedPractice.studySelection, bankId, captureIdSet(selectedIds, questionsQuery.data?.length ?? 0))
+  });
 
   const byId = useMemo(() => new Map((questionsQuery.data ?? []).map((question) => [question.id, question])), [questionsQuery.data]);
   const currentEntry = curveQueue[index];
@@ -215,7 +233,7 @@ export function QuestionStudyPage(): JSX.Element {
 
     {!sessionIds ? <section className="panel study-setup-panel"><div className="panel-header"><h2>选择并编排要背的题目</h2></div><div className="panel-body">
       <Select value={bankId} placeholder="选择题库" onChange={(value) => { setBankId(Number(value)); setSessionIds(undefined); }} style={{ width: 320, marginBottom: 16 }}>{banksQuery.data?.map((bank) => <Select.Option key={bank.id} value={bank.id}>{bank.name}（{bank.questionCount ?? 0} 道）</Select.Option>)}</Select>
-      {questionsQuery.data?.length ? <><AdvancedQuestionSelector questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Space wrap><Button icon={<SlidersHorizontal size={16} />} onClick={() => setCurveSettingsVisible(true)}>记忆曲线 · {describeSessionCurveConfig(curveConfig)}</Button><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => startSession([...selectedIds])}>开始背题（{selectedIds.length}）</Button></Space></div></> : <Empty description="该题库暂无题目" />}
+      {questionsQuery.data?.length ? <><AdvancedQuestionSelector filterScope="study" questions={questionsQuery.data} selectedIds={selectedIds} onChange={setSelectedIds} /><div className="setup-actions"><Space wrap><Button icon={<SlidersHorizontal size={16} />} onClick={() => setCurveSettingsVisible(true)}>记忆曲线 · {describeSessionCurveConfig(curveConfig)}</Button><Button type="primary" icon={<BookOpenCheck size={16} />} disabled={!selectedIds.length} onClick={() => startSession([...selectedIds])}>开始背题（{selectedIds.length}）</Button></Space></div></> : <Empty description="该题库暂无题目" />}
     </div></section> : question ? <div className="study-session-layout">
       <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body">{renderPalette()}<Typography.Text type="secondary">绿色：已记住 · 橙色：需复习 · 橙色描边：重现题</Typography.Text></div></aside>
       <section className="quiz-card memory-card"><div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && curveLoops > 1 ? <Tag color="blue">第 {currentEntry.round + 1} / {curveLoops} 轮</Tag> : null}{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div><div className="quiz-stem"><MarkdownContent value={question.stem} /></div>{(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">{question.options.map((option) => {

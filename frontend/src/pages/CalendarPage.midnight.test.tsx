@@ -2,12 +2,14 @@
  * 日历「今天」实时性（CAL-MD-*）：锁定跨零点行为。
  * - 今天高亮与选中队列跟随真实日期前进
  * - 手动停留在其他日期时不被跨零点跳转打断
+ * - 记忆里翻到的上月视图同样不被零点拽回
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { CalendarPage } from './CalendarPage';
+import { LS_VIEW_STATE } from '../lib/viewState';
 
 const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));
 
@@ -48,6 +50,8 @@ const todayCell = (): string | undefined =>
 
 const selectedCell = (): string | undefined =>
   document.querySelector('.calendar-day-cell.selected')?.getAttribute('aria-label') ?? undefined;
+
+const monthLabel = (): string => document.querySelector('.calendar-month-title')?.textContent ?? '';
 
 function dayColumnTitle(): string {
   return Array.from(document.querySelectorAll('h2'))
@@ -105,5 +109,20 @@ describe('CalendarPage 跨零点', () => {
     expect(selectedCell()).toBe('2026-09-10');
     expect(todayCell()).toBe('2026-09-04');
     expect(dayColumnTitle()).toBe('自主安排 · 2026-09-10');
+  });
+
+  it('keeps the remembered month view when midnight passes', async () => {
+    localStorage.setItem(LS_VIEW_STATE, JSON.stringify({ version: 1, pages: { calendar: { viewYear: 2026, viewMonth: 7 } } }));
+    renderPage();
+    await flush();
+    expect(monthLabel()).toBe('2026年8月');
+    // 8 月网格里没有 9-03，所以没有高亮/选中格，但右侧仍是选中的今天
+    expect(todayCell()).toBeUndefined();
+    expect(selectedCell()).toBeUndefined();
+    expect(dayColumnTitle()).toBe('自主安排 · 2026-09-03');
+    await crossMidnight();
+    // 视图停在昨天记忆里的上月＝用户在看别处：数据刷新，但不被拽回新的今天
+    expect(monthLabel()).toBe('2026年8月');
+    expect(dayColumnTitle()).toBe('自主安排 · 2026-09-03');
   });
 });

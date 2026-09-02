@@ -41,9 +41,14 @@ export interface KeySet {
   keys?: string[];
 }
 
-/** 按题库作用域保存的选择，只留最近 MAX_SCOPES 个库。 */
+/**
+ * 按题库作用域保存的选择，只留最近 MAX_SCOPES 个库。
+ * `recent` 显式记录写入新旧（旧→新，最多 MAX_SCOPES 条）：数字型 key 在对象里只会按升序
+ * 枚举，光靠键序表达不了「最近用过」，不记就会被挤掉 id 最小的库（往往是主力库）。
+ */
 export interface ScopedById<T> {
   lastId?: number;
+  recent?: string[];
   byId: Record<string, T>;
 }
 
@@ -74,7 +79,6 @@ export interface PageStates {
     activeId?: number | null;
     activeTag?: string | null;
     treeCollapsed?: ScopedById<string[]>;
-    fullCardWidth?: number;
   };
   practice: {
     tab?: PracticeTab;
@@ -99,7 +103,7 @@ export interface PageStates {
 export interface ViewState {
   version: 1;
   lastRoute?: PagePath;
-  pages: PageStates;
+  pages: Partial<PageStates>;
 }
 
 export const DEFAULT_VIEW_STATE: ViewState = { version: 1, pages: {} };
@@ -162,18 +166,34 @@ function keySet(value: unknown): KeySet | undefined {
   return { mode, keys: keys ?? [] };
 }
 
+/**
+ * 超限时保留哪些作用域：优先按 `recent`（新→旧）保留，其次至少保住 `lastId` 指向的库，
+ * 剩下的按枚举序补齐。
+ */
+function pickScopeKeys(keys: string[], recent: string[] | undefined, lastId: number | undefined): string[] {
+  if (keys.length <= MAX_SCOPES) return keys;
+  const preferred = (recent ?? []).slice().reverse().filter((key) => keys.includes(key));
+  if (preferred.length === 0 && lastId !== undefined && keys.includes(String(lastId))) preferred.push(String(lastId));
+  const rest = keys.filter((key) => !preferred.includes(key));
+  return [...preferred, ...rest].slice(0, MAX_SCOPES);
+}
+
 function scoped<T>(value: unknown, parse: (entry: unknown) => T | undefined): ScopedById<T> | undefined {
   if (!isRecord(value) || !isRecord(value.byId)) return undefined;
+  const keys = Object.keys(value.byId);
+  const lastId = num(value.lastId);
+  const recent = strArray(value.recent, MAX_SCOPES)?.filter((key) => keys.includes(key));
   const byId: Record<string, T> = {};
-  for (const [key, entry] of Object.entries(value.byId)) {
-    if (Object.keys(byId).length >= MAX_SCOPES) break;
-    const parsed = parse(entry);
+  for (const key of pickScopeKeys(keys, recent, lastId)) {
+    const parsed = parse(value.byId[key]);
     if (parsed) byId[key] = parsed;
   }
   const out: ScopedById<T> = { byId };
-  const lastId = num(value.lastId);
   if (lastId !== undefined) out.lastId = lastId;
-  return Object.keys(byId).length > 0 ? out : undefined;
+  const keptKeys = Object.keys(byId);
+  const keptRecent = (recent ?? []).filter((key) => keptKeys.includes(key));
+  if (keptRecent.length > 0) out.recent = keptRecent;
+  return keptKeys.length > 0 ? out : undefined;
 }
 
 function selectors(value: unknown): SelectorFilters | undefined {
@@ -216,7 +236,6 @@ function normalizePage(page: PageKey, value: unknown): Record<string, unknown> {
       pick('activeId', value.activeId === null ? null : num(value.activeId));
       pick('activeTag', text(value.activeTag));
       pick('treeCollapsed', scoped(value.treeCollapsed, (entry) => strArray(entry, MAX_KEYS)));
-      pick('fullCardWidth', num(value.fullCardWidth));
       break;
     case 'practice':
       pick('tab', oneOf(value.tab, PRACTICE_TABS));
@@ -242,14 +261,14 @@ function normalizePage(page: PageKey, value: unknown): Record<string, unknown> {
 
 export function normalizeViewState(raw: unknown): ViewState {
   if (!isRecord(raw)) return { version: 1, pages: {} };
-  const pages: Partial<PageStates> = {};
+  const pages: Record<string, unknown> = {};
   if (isRecord(raw.pages)) {
     for (const page of PAGE_KEYS) {
       const slice = normalizePage(page, raw.pages[page]);
-      if (Object.keys(slice).length > 0) pages[page] = slice as unknown as PageStates[typeof page];
+      if (Object.keys(slice).length > 0) pages[page] = slice;
     }
   }
-  const out: ViewState = { version: 1, pages: pages as PageStates };
+  const out: ViewState = { version: 1, pages: pages as unknown as Partial<PageStates> };
   const route = oneOf(raw.lastRoute, PAGE_PATHS);
   if (route) out.lastRoute = route;
   return out;
@@ -291,11 +310,11 @@ export function readViewState(): ViewState {
   if (!isRememberViewStateEnabled()) return DEFAULT_VIEW_STATE;
   syncFromStorage();
   if (Object.keys(pendingPages).length === 0 && !pendingRoute) return cached;
-  const pages = { ...cached.pages };
+  const pages: Record<string, unknown> = { ...cached.pages };
   for (const [page, patch] of Object.entries(pendingPages)) {
-    pages[page as PageKey] = { ...pages[page as PageKey], ...patch } as never;
+    pages[page] = { ...(pages[page] as object | undefined), ...patch };
   }
-  return { ...cached, pages, ...(pendingRoute ? { lastRoute: pendingRoute } : {}) };
+  return { ...cached, pages: pages as unknown as Partial<PageStates>, ...(pendingRoute ? { lastRoute: pendingRoute } : {}) };
 }
 
 export function readPageSlice<K extends PageKey>(page: K): PageStates[K] {
@@ -358,7 +377,7 @@ function shrink(state: ViewState): ViewState {
     }
     pages[page] = next;
   }
-  return { ...state, pages: pages as unknown as PageStates };
+  return { ...state, pages: pages as unknown as Partial<PageStates> };
 }
 
 export function flushViewState(): void {
@@ -409,24 +428,43 @@ export function clearViewState(): void {
 
 /* ------------------------------------------------------- 勾选集合小工具 */
 
-function evictOldest<T>(scope: ScopedById<T>): ScopedById<T> {
+function evictOldest<T>(scope: ScopedById<T>, keep?: string): ScopedById<T> {
   const keys = Object.keys(scope.byId);
   if (keys.length <= MAX_SCOPES) return scope;
+  const hot = (scope.recent ?? []).filter((key) => keys.includes(key) && key !== keep);
+  const cold = keys.filter((key) => !hot.includes(key) && key !== keep);
+  // 没有近期记录的先出局，其次按写入新旧从旧到新；刚写入的那个永不淘汰
+  const doomed = [...cold, ...hot].slice(0, keys.length - MAX_SCOPES);
+  if (doomed.length === 0) return scope;
   const byId = { ...scope.byId };
-  for (const key of keys.slice(0, keys.length - MAX_SCOPES)) delete byId[key];
-  return { ...scope, byId };
+  for (const key of doomed) delete byId[key];
+  const kept = Object.keys(byId);
+  const recent = (scope.recent ?? []).filter((key) => kept.includes(key));
+  const out: ScopedById<T> = { ...scope, byId };
+  if (recent.length > 0) out.recent = recent;
+  else delete out.recent;
+  return out;
 }
 
-/** 写入某个题库作用域的选择；scope 里其它库的选择保持不变。 */
+/** 写入某个作用域（题库 id 或选择器名）的选择；作用域内其它条目保持不变。 */
 export function putScoped<T>(
   scope: ScopedById<T> | undefined,
-  id: number | undefined,
+  id: number | string | undefined,
   value: T
 ): ScopedById<T> {
   const next: ScopedById<T> = { ...(scope ?? { byId: {} }), byId: { ...(scope?.byId ?? {}) } };
-  if (id !== undefined) next.lastId = id;
-  if (value !== undefined) next.byId[String(id)] = value;
-  return evictOldest(next);
+  if (typeof id === 'number') next.lastId = id;
+  const key = id === undefined ? undefined : String(id);
+  if (key !== undefined && value !== undefined) {
+    next.byId[key] = value;
+    next.recent = [...(scope?.recent ?? []).filter((entry) => entry !== key), key].slice(-MAX_SCOPES);
+  }
+  return evictOldest(next, key);
+}
+
+export function readScoped<T>(scope: ScopedById<T> | undefined, id: number | string | undefined): T | undefined {
+  if (id === undefined) return undefined;
+  return scope?.byId[String(id)];
 }
 
 /** 全选 → `{all:true}` 哨兵；零散勾选超过上限 → 放弃缓存（`{}`）。 */

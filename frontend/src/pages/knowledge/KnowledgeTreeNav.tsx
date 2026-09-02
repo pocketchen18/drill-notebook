@@ -10,6 +10,11 @@ export interface KnowledgeTreeNavProps {
   search: string;
   activeTag: string | null;
   onSelect: (id: number) => void;
+  /** 折叠状态记忆：挂载时恢复；不传则保持组件内部状态（旧调用方不受影响）。 */
+  initialCollapsedKeys?: string[];
+  /** 折叠作用域（如题库 id）：变化时重新套用 initialCollapsedKeys。 */
+  collapsedScope?: string | number;
+  onCollapsedKeysChange?: (keys: string[]) => void;
 }
 
 interface TreeNodeViewProps {
@@ -69,8 +74,31 @@ function TreeNodeView({ node, depth, activeId, search, activeTag, collapsed, onT
 
 const INDENT_PER_LEVEL = 14;
 
-export function KnowledgeTreeNav({ tree, activeId, search, activeTag, onSelect }: KnowledgeTreeNavProps): JSX.Element {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+export function KnowledgeTreeNav({
+  tree,
+  activeId,
+  search,
+  activeTag,
+  onSelect,
+  initialCollapsedKeys,
+  collapsedScope,
+  onCollapsedKeysChange
+}: KnowledgeTreeNavProps): JSX.Element {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(initialCollapsedKeys ?? []));
+  const prevScopeRef = useRef(collapsedScope);
+  const initialKeysRef = useRef(initialCollapsedKeys);
+  initialKeysRef.current = initialCollapsedKeys;
+
+  // 切库时套用该库自己的折叠状态（挂载时已用初始值，无需再动）。
+  useEffect(() => {
+    if (prevScopeRef.current === collapsedScope) return;
+    prevScopeRef.current = collapsedScope;
+    setCollapsed(new Set(initialKeysRef.current ?? []));
+  }, [collapsedScope]);
+
+  useEffect(() => {
+    onCollapsedKeysChange?.(Array.from(collapsed).sort((a, b) => Number(a) - Number(b)));
+  }, [collapsed]); // eslint-disable-line react-hooks/exhaustive-deps -- 回调稳定即可，避免自触发
   const prevActiveIdRef = useRef<number | null>(null);
 
   useEffect(() => {

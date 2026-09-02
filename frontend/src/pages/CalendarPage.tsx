@@ -32,6 +32,8 @@ import { friendlyMessage } from '../lib/errors';
 import { completeStudy } from '../lib/study';
 import { TodayQueuePanel } from '../components/TodayQueuePanel';
 import { useToday } from '../lib/useToday';
+import { usePersistSlice } from '../hooks/useViewState';
+import { readPageSlice } from '../lib/viewState';
 import {
   collectTodoKnowledgePointIds,
   collectTodoKnowledgePointIdsFromGroups,
@@ -222,9 +224,17 @@ export function CalendarPage(): JSX.Element {
   })();
   const initialParts = parseYmdParts(initialDate) ?? parseYmdParts(today)!;
 
-  const [viewYear, setViewYear] = useState(initialParts.year);
-  const [viewMonth, setViewMonth] = useState(initialParts.month);
+  // 月视图记住上次翻到的年月；?date= 深链与「今天」按钮优先。
+  const cachedCalendar = readPageSlice('calendar');
+  const dateQuery = searchParams.get('date');
+  const hasDateQuery = !!dateQuery && !!parseYmdParts(dateQuery);
+  const cachedView = !hasDateQuery && cachedCalendar.viewYear && cachedCalendar.viewMonth !== undefined
+    ? { year: cachedCalendar.viewYear, month: cachedCalendar.viewMonth }
+    : null;
+  const [viewYear, setViewYear] = useState(cachedView?.year ?? initialParts.year);
+  const [viewMonth, setViewMonth] = useState(cachedView?.month ?? initialParts.month);
   const [selectedDate, setSelectedDate] = useState(initialDate);
+  usePersistSlice('calendar', { viewYear, viewMonth });
   const [editGroup, setEditGroup] = useState<StudyPlanGroup | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editNote, setEditNote] = useState('');
@@ -344,7 +354,10 @@ export function CalendarPage(): JSX.Element {
     void queryClient.invalidateQueries({ queryKey: ['study-plans-day'] });
     void queryClient.invalidateQueries({ queryKey: ['review-calendar-stats'] });
     void queryClient.invalidateQueries({ queryKey: ['study-today'] });
-    if (selectedDate === prev) selectDate(today);
+    // 视图停在别的年月（例如记忆里翻到的上月）＝ 用户在看别处，和手动选日期一样不跟随。
+    const prevParts = parseYmdParts(prev);
+    const onPrevTodayMonth = !prevParts || (viewYear === prevParts.year && viewMonth === prevParts.month);
+    if (selectedDate === prev && onPrevTodayMonth) selectDate(today);
   }, [today, selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps -- queryClient 稳定，selectDate 每次渲染重建
 
   const shiftMonth = (delta: number): void => {

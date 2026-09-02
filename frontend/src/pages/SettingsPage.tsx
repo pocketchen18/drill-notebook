@@ -99,13 +99,13 @@ export function SettingsPage(): JSX.Element {
     writeBoolPref(LS_REMEMBER_VIEW_STATE, checked);
     if (!checked) {
       clearViewState();
-      Message.success('已停止记忆，并清除已记住的界面位置');
+      Message.success('已停止记忆并清除');
     }
   };
 
   const onClearViewState = (): void => {
     clearViewState();
-    Message.success('已清除记住的界面位置，下次启动回到笔记本');
+    Message.success('已清除，下次启动回到笔记本');
   };
 
   // 会话内记忆曲线（答错延迟重现）
@@ -220,11 +220,7 @@ export function SettingsPage(): JSX.Element {
             <Switch checked={theme === 'dark'} onChange={toggleTheme} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
-            <div>
-              <Typography.Text bold>记住上次停留位置与各页选择</Typography.Text>
-              <br />
-              <Typography.Text type="secondary">下次启动回到上次的页面（默认笔记本），并恢复笔记本 / 题库 / 知识点 / 练习的勾选、切换与筛选。不会保存做到一半的练习会话。</Typography.Text>
-            </div>
+            <div><Typography.Text bold>记住上次停留位置与各页选择</Typography.Text><br /><Typography.Text type="secondary">重启后回到上次页面，并恢复各页勾选与切换。</Typography.Text></div>
             <Space align="center">
               <Button type="text" size="mini" disabled={!rememberViewState} onClick={onClearViewState}>清除已记住的位置</Button>
               <Switch checked={rememberViewState} onChange={onRememberViewStateChange} />

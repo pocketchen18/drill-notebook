@@ -2,7 +2,7 @@
  * 启动落点（START-*）：无记忆时落笔记本，有记忆时回到上次页面。
  * 页面组件全部替身，只验证路由决策本身。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppRoutes } from './App';
