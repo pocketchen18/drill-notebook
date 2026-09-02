@@ -5,10 +5,12 @@ import { useNavigate } from 'react-router-dom';
 import type { KnowledgePoint, Question } from '../../lib/types';
 import { MarkdownContent } from '../../components/markdown/MarkdownRenderer';
 import { completeStudy } from '../../lib/study';
-import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../../lib/sessionCurve';
+import { truncateTitle } from '../../lib/studyPlan';
+import { applyCurveAnswer, buildCurveQueue, deriveStubbornIds, readSessionCurveConfig } from '../../lib/sessionCurve';
 import type { CurveEntry, CurveItemState } from '../../lib/sessionCurve';
 import { finishDayQueueStep } from '../../components/DayQueueSessionBar';
 import { SessionPlanRecommendModal } from '../../components/SessionPlanRecommendModal';
+import type { StubbornCandidate } from '../../components/SessionPlanRecommendModal';
 
 export interface KnowledgeMemorizeSessionProps {
   /** 全量知识点（按 id 查找会话条目） */
@@ -40,10 +42,10 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
   const [curveStates, setCurveStates] = useState<Record<number, CurveItemState>>({});
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  // 知识点评分（SM-2 跨天曲线）：仅防重复提交 SRS
-  const [kpSubmittedIds, setKpSubmittedIds] = useState<Set<number>>(new Set());
+  // SM-2 记「会话最终态」：每条已提交的会/不会判定；翻转时 forceAdvance 覆盖重提
+  const [submittedRatings, setSubmittedRatings] = useState<Map<number, boolean>>(new Map());
   const [recommendVisible, setRecommendVisible] = useState(false);
-  const [recommendPayload, setRecommendPayload] = useState<{ pointIds?: number[] }>({});
+  const [recommendPayload, setRecommendPayload] = useState<{ pointIds?: number[]; stubborn?: StubbornCandidate[] }>({});
   const recommendShownRef = useRef(false);
 
   const pointById = new Map(points.map((point) => [point.id, point]));
@@ -52,19 +54,25 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
 
   const jump = (next: number): void => { setIndex(next); setRevealed(false); };
 
-  const openSessionRecommend = (): void => {
+  const openSessionRecommend = (states: Record<number, CurveItemState>): void => {
     if (recommendShownRef.current || !ids.length) return;
     recommendShownRef.current = true;
-    setRecommendPayload({ pointIds: [...ids] });
+    const stubborn: StubbornCandidate[] = deriveStubbornIds(states).map((id) => ({
+      resourceType: 'knowledge_point',
+      resourceId: id,
+      title: truncateTitle(pointById.get(id)?.title || `知识点 #${id}`)
+    }));
+    setRecommendPayload({ pointIds: [...ids], stubborn });
     setRecommendVisible(true);
   };
 
-  /** 二元评分：会 → quality 4；不会 → quality 0。SRS 只提交首次，重现仅推进会话内队列。 */
+  /** 二元评分：会 → quality 4；不会 → quality 0。判定翻转时以最终态覆盖 SM-2 到期。 */
   const rateKp = (known: boolean): void => {
     if (!current) return;
     const quality = known ? 4 : 0;
-    if (!kpSubmittedIds.has(current.id)) {
-      setKpSubmittedIds((prev) => new Set(prev).add(current.id));
+    const lastSubmitted = submittedRatings.get(current.id);
+    if (lastSubmitted === undefined || lastSubmitted !== known) {
+      setSubmittedRatings((prev) => new Map(prev).set(current.id, known));
       void completeStudy({
         resourceType: 'knowledge_point',
         resourceId: current.id,
@@ -72,6 +80,8 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
         source: 'knowledge',
         planItemId: planItemId && planResourceId === current.id ? planItemId : undefined,
         planDate,
+        // 会话内改判：覆盖式推进（跳过同日 extra 短路）
+        forceAdvance: lastSubmitted !== undefined
       }).catch(() => {
         // 后端不可用时静默失败
       });
@@ -85,7 +95,7 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
       return;
     } else {
       Message.success(curveLoops > 1 ? `全部 ${curveLoops} 轮背诵完成` : '本轮背诵完成');
-      openSessionRecommend();
+      openSessionRecommend(curve.states);
     }
   };
 
@@ -96,7 +106,7 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
         return;
       }
       Message.success(curveLoops > 1 ? `全部 ${curveLoops} 轮知识点背诵完成` : '本轮知识点背诵完成');
-      openSessionRecommend();
+      openSessionRecommend(curveStates);
       return;
     }
     jump(index + 1);

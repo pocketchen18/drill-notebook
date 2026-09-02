@@ -15,9 +15,10 @@ import { SessionPlanRecommendModal } from '../components/SessionPlanRecommendMod
 import { planScopeFromSearch } from '../lib/planProgress';
 import { completeStudy } from '../lib/study';
 import { truncateTitle } from '../lib/studyPlan';
-import { applyCurveAnswer, buildCurveQueue, describeSessionCurveConfig, readSessionCurveConfig } from '../lib/sessionCurve';
+import { applyCurveAnswer, buildCurveQueue, deriveStubbornIds, describeSessionCurveConfig, readSessionCurveConfig } from '../lib/sessionCurve';
 import type { CurveEntry, CurveItemState, SessionCurveConfig } from '../lib/sessionCurve';
 import { SessionCurveSettingsModal } from '../components/SessionCurveSettingsModal';
+import type { StubbornCandidate } from '../components/SessionPlanRecommendModal';
 
 export function QuestionStudyPage(): JSX.Element {
   const navigate = useNavigate();
@@ -50,9 +51,10 @@ export function QuestionStudyPage(): JSX.Element {
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const [recommendVisible, setRecommendVisible] = useState(false);
-  const [recommendPayload, setRecommendPayload] = useState<{ reviewAgainIds?: number[] }>({});
+  const [recommendPayload, setRecommendPayload] = useState<{ reviewAgainIds?: number[]; stubborn?: StubbornCandidate[] }>({});
   const recommendShownRef = useRef(false);
-  const [submittedReviewIds, setSubmittedReviewIds] = useState<Set<number>>(new Set());
+  // 每条已提交的「会/不会」终值：SM-2 以会话最终态为准，判定翻转时以 forceAdvance 覆盖重提
+  const [submittedRatings, setSubmittedRatings] = useState<Map<number, boolean>>(new Map());
   const selectionBank = useRef<number>();
   const selectionInitialized = useRef(false);
   const deepLinkStarted = useRef(false);
@@ -71,7 +73,7 @@ export function QuestionStudyPage(): JSX.Element {
     setSelectedOption(null);
     setRemembered([]);
     setReviewAgain([]);
-    setSubmittedReviewIds(new Set());
+    setSubmittedRatings(new Map());
     recommendShownRef.current = false;
   };
 
@@ -104,10 +106,15 @@ export function QuestionStudyPage(): JSX.Element {
 
   const jump = (nextIndex: number): void => { setIndex(nextIndex); setRevealed(false); setSelectedOption(null); };
 
-  const openSessionRecommend = (reviewAgainIds: number[]): void => {
+  const openSessionRecommend = (reviewAgainIds: number[], states: Record<number, CurveItemState>): void => {
     if (recommendShownRef.current) return;
     recommendShownRef.current = true;
-    setRecommendPayload({ reviewAgainIds });
+    const stubborn: StubbornCandidate[] = deriveStubbornIds(states).map((id) => ({
+      resourceType: 'question',
+      resourceId: id,
+      title: truncateTitle(byId.get(id)?.stem || `题目 #${id}`)
+    }));
+    setRecommendPayload({ reviewAgainIds, stubborn });
     setRecommendVisible(true);
   };
 
@@ -125,8 +132,11 @@ export function QuestionStudyPage(): JSX.Element {
       : [...new Set([...reviewAgain, question.id])];
     setReviewAgain(nextReviewAgain);
 
-    if (!submittedReviewIds.has(question.id)) {
-      setSubmittedReviewIds((prev) => new Set(prev).add(question.id));
+    // SM-2 记「会话最终态」：首次评分提交；判定翻转（不会↔会）时 forceAdvance 覆盖到期日；
+    // 同一判定重复出现（如多轮都答对）不再提交，避免单会话过度推进曲线。
+    const lastSubmitted = submittedRatings.get(question.id);
+    if (lastSubmitted === undefined || lastSubmitted !== known) {
+      setSubmittedRatings((prev) => new Map(prev).set(question.id, known));
       void completeStudy({
         resourceType: 'question',
         resourceId: question.id,
@@ -135,8 +145,8 @@ export function QuestionStudyPage(): JSX.Element {
         planItemId: planItemId && planResourceId === question.id ? planItemId : undefined,
         planDate,
         scheduleId: scheduleIdFromQuery,
-        // From calendar curve queue: always advance (补做), not same-day extra.
-        forceAdvance: fromQueue
+        // From calendar curve queue: always advance (补做); 会话内改判: 覆盖式推进
+        forceAdvance: fromQueue || lastSubmitted !== undefined
       })
         .then((result) => {
           const next = result.srs?.nextReview;
@@ -164,7 +174,7 @@ export function QuestionStudyPage(): JSX.Element {
       return;
     } else {
       Message.success(curveLoops > 1 ? `全部 ${curveLoops} 轮背题完成` : '本轮背题完成');
-      openSessionRecommend(nextReviewAgain);
+      openSessionRecommend(nextReviewAgain, curve.states);
     }
   };
 

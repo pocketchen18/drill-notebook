@@ -9,6 +9,8 @@
 - 背题会话：`frontend/src/pages/QuestionStudyPage.tsx`（练习 → 背诵 → 背题）
 - 背知识点选材与会话：`frontend/src/pages/knowledge/KnowledgeMemorizePanel.tsx`、`KnowledgeMemorizeSession.tsx`（练习 → 背诵 → 背知识点）
 - 全局默认值：设置页「会话内记忆曲线」卡片（`SettingsPage.tsx`）与背诵设置弹窗共用同一份 localStorage 配置
+- 会话结束排程与顽固项加练：`frontend/src/components/SessionPlanRecommendModal.tsx`
+- 实时「今天」：`frontend/src/lib/useToday.ts`（`CalendarPage.tsx` 消费）
 
 ---
 
@@ -22,7 +24,7 @@
 - **过关条件（passStreak）**：连续答对多少次算过关。开启 `skipPassed` 后，过关条目从后续轮次移除（默认关闭：每轮完整循环）。
 - **次轮顺序（nextRoundOrder）**：进入下一轮时，未过关条目可选「排到轮首（错题优先）」或「随机」；默认保持原序。
 
-答对/答错同时首次提交 SM-2 评分（会 = quality 4，不会 = quality 0，同会话内同条只提交一次），两套曲线互不干扰。
+答对/答错同时写入跨天曲线（会 = quality 4，不会 = quality 0）。**以会话最终判定为准**：同一条目首次评分即提交，之后只有当「会/不会」判定翻转时才再补交一次（带 `forceAdvance`），判定不变就不再重复提交——多轮循环不会把一张已判定的卡在同一天反复推远。详见第 5 节。
 
 ## 2. 配置项（localStorage `session.curveConfig`）
 
@@ -100,10 +102,43 @@ CurveItemState { streak, repeats, done, abandoned, lastRatedEntryId?, lastRoundW
 
 题库页勾选部分题目后点「开始练习」，跳转 `/quiz?bankId=X&questionIds=…&from=bank`；刷题页显示「已选题目：N 题（可继续调整）」并保留选题器供增减；未勾选时仍按整库进入。错题页「错题再练」深链行为不变。
 
-## 5. 测试
+## 5. 会话 ↔ 日历 / 跨天曲线联动
+
+短周期会话的结论要落到长周期安排上，才有「今天错的高频题，明天日历里再见」。三块联动都是**前端策略 + 既有后端接口**，后端零改动。
+
+### 5.1 跨天评分以会话最终态为准
+
+- 会话内维护 `submittedRatings: Map<resourceId, known>`：首次评分正常提交；之后**只有判定翻转**才再提交一次，并带上 `forceAdvance: true`。
+- `forceAdvance` 绕过后端「同一天已有主推进 → 只记 extra 练习、不动 `next_review`」的策略（`CompletionSyncService.onItemCompleted`），于是「先判不会、后来又判会」的卡片当天真的被推远；反之重复答对不会反复推远。
+- 判「会」后 `ensureNextReviewAfterViewDay` 保证卡片离开当天队列（含查看未来日期的补做场景）。
+- 来自日历 / 今日队列的会话（`fromQueue`）本就按补做语义恒定 `forceAdvance`。
+
+### 5.2 顽固项自动加练（会话结束弹窗内）
+
+| 环节 | 行为 |
+|---|---|
+| 识别 | `deriveStubbornIds(states)`：`abandoned`（重复用尽仍未过关）或 `repeats ≥ STUBBORN_REPEAT_THRESHOLD(2)`，对应 Anki 的 leech、百词斩的「顽固错词」 |
+| 呈现 | 「本轮结束后的学习计划」弹窗底部的 **顽固项加练（N）** 卡片，**默认勾选**，展示条目名（最多 6 条，超出显示「等 N 项」） |
+| 排程 | 额外生成 2 个计划组「顽固项加练 · 第 1 天 / 第 2 天」= 明天、后天各一轮，独立于用户所选窗口，不受均分影响 |
+| 写入 | 与常规候选合并成一次 `/api/study-plans/recommend/session-apply` 提交；顽固项即使不在常规候选里，也会并入 `enroll` 全集（按 `资源类型:id` 去重） |
+| 边界 | 取消勾选 → 不产出加练组；只有顽固项时不再写空条目的常规组；「加入学习日历」关闭时卡片内提示排程不会写入；开启 AI 排程时 AI 分组 + 顽固组一并提交 |
+
+背题、背知识点两条会话共用同一套逻辑（`SessionPlanRecommendModal`），日历与今日队列随后即可看到这两天的加练条目。
+
+### 5.3 日历实时「今天」
+
+- `useToday()`（`frontend/src/lib/useToday.ts`）：每 60 秒对齐系统日期，窗口重新聚焦时立即校准一次。
+- `CalendarPage` 用它替代原先渲染期一次性取的 `todayYmd()`——今天高亮、逾期红点、`?date=` 是否省略都跟手。
+- 跨零点：真实日期前进时失效 `study-plans` / `study-plans-day` / `review-calendar-stats` / `study-today` 缓存；若用户正停留在旧的今天，选中日自动跟随到新的一天；手动翻看其它日期时只刷新数据、不跳转。
+
+## 6. 测试
 
 | 自动化位置 | 覆盖 |
 |---|---|
-| `frontend/src/lib/sessionCurve.test.ts`（18 用例） | 多轮队列构建、三种插入策略与轮边界、组末定位、重复上限与放弃、连对过关、skipPassed 剪枝、次轮错题优先、逐轮重评、配置钳位、摘要文案 |
+| `frontend/src/lib/sessionCurve.test.ts`（20 用例） | 多轮队列构建、三种插入策略与轮边界、组末定位、重复上限与放弃、连对过关、skipPassed 剪枝、次轮错题优先、逐轮重评、配置钳位、摘要文案、**顽固项阈值与真实会话推导** |
 | `frontend/src/components/SessionCurveSettingsModal.test.tsx`（3 用例） | 弹窗渲染、预设应用与保存落库、每次打开重读最新配置 |
+| `frontend/src/components/SessionPlanRecommendModal.stubborn.test.tsx`（4 用例） | 加练卡片默认勾选、提交明天+后天两组并去重并入 enroll 全集、取消勾选后禁止提交、无顽固项不渲染 |
+| `frontend/src/pages/knowledge/KnowledgeMemorizeSession.test.tsx`（3 用例） | 首次评分提交、判定翻转才补交（`forceAdvance`）、多轮重复同判定不再提交 |
+| `frontend/src/lib/useToday.test.tsx`（2 用例） | 轮询跨零点变更日期、窗口聚焦立即校准 |
+| `frontend/src/pages/CalendarPage.midnight.test.tsx`（3 用例） | 打开时高亮今天并加载其队列、跨零点选中日跟随并重新拉数、手动选中其他日期时不被跳转 |
 | `frontend/src/pages/BankPage.workspace.test.tsx` BNK-16/16b | 开始练习跳转：无勾选仅 bankId；有勾选携带 questionIds+from=bank |

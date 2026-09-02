@@ -12,9 +12,16 @@ import {
   LS_ENROLL_DEFAULT,
   LS_FORCE_ADVANCE,
   LS_PLAN_DEFAULT,
+  LS_REMEMBER_VIEW_STATE,
   readBoolPref,
   writeBoolPref
 } from '../lib/sessionPrefs';
+import {
+  clearViewState,
+  persistViewState,
+  readPageSlice,
+  type SettingsTab
+} from '../lib/viewState';
 import {
   normalizeSessionCurveConfig,
   readSessionCurveConfig,
@@ -42,8 +49,6 @@ const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
 
 // 设置页顶部横向 Tab（pill 分区，按本软件实际设置内容划分）：
 // 常规=外观与全局行为；AI 连接=生成模型接入；嵌入与检索=知识库索引基础设施；学习与复习=学习行为与 SRS；数据管理=备份/导出/导入。
-type SettingsTab = 'general' | 'ai' | 'embedding' | 'study' | 'data';
-
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'general', label: '常规' },
   { key: 'ai', label: 'AI 连接' },
@@ -56,7 +61,8 @@ function readTabFromUrl(): SettingsTab {
   // HashRouter：查询参数在 hash 段内（#/settings?tab=ai），window.location.search 恒为空
   const hashQuery = window.location.hash.split('?')[1] ?? '';
   const tab = new URLSearchParams(hashQuery).get('tab');
-  return TABS.some((item) => item.key === tab) ? (tab as SettingsTab) : 'general';
+  if (TABS.some((item) => item.key === tab)) return tab as SettingsTab;
+  return readPageSlice('settings').tab ?? 'general';
 }
 
 export function SettingsPage(): JSX.Element {
@@ -85,6 +91,22 @@ export function SettingsPage(): JSX.Element {
   const [enrollDefault, setEnrollDefault] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
   const [planDefault, setPlanDefault] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
   const [forceAdvance, setForceAdvance] = useState(() => readBoolPref(LS_FORCE_ADVANCE, false));
+  // 界面状态记忆开关：关闭时立即清除已记住的页面与各页选择
+  const [rememberViewState, setRememberViewState] = useState(() => readBoolPref(LS_REMEMBER_VIEW_STATE, true));
+
+  const onRememberViewStateChange = (checked: boolean): void => {
+    setRememberViewState(checked);
+    writeBoolPref(LS_REMEMBER_VIEW_STATE, checked);
+    if (!checked) {
+      clearViewState();
+      Message.success('已停止记忆，并清除已记住的界面位置');
+    }
+  };
+
+  const onClearViewState = (): void => {
+    clearViewState();
+    Message.success('已清除记住的界面位置，下次启动回到笔记本');
+  };
 
   // 会话内记忆曲线（答错延迟重现）
   const [curveConfig, setCurveConfig] = useState<SessionCurveConfig>(() => readSessionCurveConfig());
@@ -96,6 +118,7 @@ export function SettingsPage(): JSX.Element {
 
   const switchTab = (key: SettingsTab): void => {
     setActiveTab(key);
+    persistViewState('settings', { tab: key });
     const basePath = window.location.hash.split('?')[0] || '#/settings';
     window.history.replaceState(null, '', `${basePath}?tab=${key}`);
   };
@@ -195,6 +218,17 @@ export function SettingsPage(): JSX.Element {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div><Typography.Text bold>深色主题</Typography.Text><br /><Typography.Text type="secondary">适合夜间整理笔记。</Typography.Text></div>
             <Switch checked={theme === 'dark'} onChange={toggleTheme} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+            <div>
+              <Typography.Text bold>记住上次停留位置与各页选择</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">下次启动回到上次的页面（默认笔记本），并恢复笔记本 / 题库 / 知识点 / 练习的勾选、切换与筛选。不会保存做到一半的练习会话。</Typography.Text>
+            </div>
+            <Space align="center">
+              <Button type="text" size="mini" disabled={!rememberViewState} onClick={onClearViewState}>清除已记住的位置</Button>
+              <Switch checked={rememberViewState} onChange={onRememberViewStateChange} />
+            </Space>
           </div>
           <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
         </div>

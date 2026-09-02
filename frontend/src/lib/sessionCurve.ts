@@ -300,3 +300,17 @@ export function applyCurveAnswer(
   const ordered = roundHasMore ? nextEntries : applyNextRoundOrder(nextEntries, current.round, nextStates, config);
   return { entries: ordered, states: nextStates, requeued: true };
 }
+
+/** 顽固项判定阈值：额外重复达到该次数仍未稳定过关。 */
+export const STUBBORN_REPEAT_THRESHOLD = 2;
+
+/**
+ * 从会话曲线状态中提取「顽固项」：已放弃（重复用尽仍未记住）或额外重复 ≥ 阈值的条目。
+ * 对应 Anki leech / 百词斩顽固错词，用于会话结束后的跨天加练排程。
+ */
+export function deriveStubbornIds(states: Record<number, CurveItemState>): number[] {
+  return Object.entries(states)
+    .filter(([, state]) => state.abandoned || state.repeats >= STUBBORN_REPEAT_THRESHOLD)
+    .map(([id]) => Number(id))
+    .filter((id) => Number.isFinite(id));
+}

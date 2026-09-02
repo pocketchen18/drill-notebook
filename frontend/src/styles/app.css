@@ -332,6 +332,8 @@ button, input, textarea { font: inherit; }
 .memorize-tree { max-height: 540px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .memorize-picker-summary { position: sticky; top: 90px; }
 .memorize-picker-summary .setup-actions { justify-content: stretch; }
+.stubborn-practice-card { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--warn-border); border-radius: 8px; background: var(--warn-soft); }
+.stubborn-practice-items { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .memory-card { min-height: 520px; }
 .memory-cover { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 150px; margin-top: 22px; border: 1px dashed #b8c7df; border-radius: 8px; color: var(--muted); background: var(--subtle-bg); }
 .form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

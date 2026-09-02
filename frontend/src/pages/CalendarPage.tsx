@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
@@ -31,6 +31,7 @@ import { del, get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import { completeStudy } from '../lib/study';
 import { TodayQueuePanel } from '../components/TodayQueuePanel';
+import { useToday } from '../lib/useToday';
 import {
   collectTodoKnowledgePointIds,
   collectTodoKnowledgePointIdsFromGroups,
@@ -43,8 +44,7 @@ import {
   planKnowledgePath,
   planNotePath,
   planQuizPath,
-  planStudyPath,
-  todayYmd
+  planStudyPath
 } from '../lib/studyPlan';
 import type { PlanStatus, StudyPlanGroup, StudyPlanItem, StudyPlanRangeResponse } from '../lib/types';
 
@@ -213,7 +213,7 @@ export function CalendarPage(): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const today = todayYmd();
+  const today = useToday();
 
   const initialDate = (() => {
     const fromQuery = searchParams.get('date');
@@ -331,12 +331,21 @@ export function CalendarPage(): JSX.Element {
   };
 
   const goToday = (): void => {
-    const t = todayYmd();
-    const parts = parseYmdParts(t)!;
-    setViewYear(parts.year);
-    setViewMonth(parts.month);
-    selectDate(t);
+    selectDate(today);
   };
+
+  // 跨零点：真实「今天」前进时刷新计划与到期数据；仅当用户正停留在旧的今天时跟随跳转。
+  const prevTodayRef = useRef(today);
+  useEffect(() => {
+    const prev = prevTodayRef.current;
+    if (prev === today) return;
+    prevTodayRef.current = today;
+    void queryClient.invalidateQueries({ queryKey: ['study-plans'] });
+    void queryClient.invalidateQueries({ queryKey: ['study-plans-day'] });
+    void queryClient.invalidateQueries({ queryKey: ['review-calendar-stats'] });
+    void queryClient.invalidateQueries({ queryKey: ['study-today'] });
+    if (selectedDate === prev) selectDate(today);
+  }, [today, selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps -- queryClient 稳定，selectDate 每次渲染重建
 
   const shiftMonth = (delta: number): void => {
     const d = new Date(viewYear, viewMonth + delta, 1);

@@ -3,8 +3,11 @@ import {
   applyCurveAnswer,
   buildCurveQueue,
   DEFAULT_SESSION_CURVE_CONFIG,
+  deriveStubbornIds,
   describeSessionCurveConfig,
-  normalizeSessionCurveConfig
+  emptyCurveState,
+  normalizeSessionCurveConfig,
+  STUBBORN_REPEAT_THRESHOLD
 } from './sessionCurve';
 import type { CurveItemState, SessionCurveConfig } from './sessionCurve';
 
@@ -200,5 +203,30 @@ describe('sessionCurve', () => {
     expect(describeSessionCurveConfig(CONFIG)).toContain('循环 3 轮');
     expect(describeSessionCurveConfig({ ...CONFIG, enabled: false })).toContain('关闭');
     expect(describeSessionCurveConfig({ ...CONFIG, loops: 1 })).toContain('单轮');
+  });
+
+  it('flags abandoned or threshold-crossing items as stubborn', () => {
+    const states: Record<number, CurveItemState> = {
+      1: { ...emptyCurveState(), repeats: STUBBORN_REPEAT_THRESHOLD },
+      2: { ...emptyCurveState(), repeats: 1, abandoned: true },
+      3: { ...emptyCurveState(), repeats: STUBBORN_REPEAT_THRESHOLD - 1, done: true },
+      4: emptyCurveState()
+    };
+    expect(deriveStubbornIds(states).sort((a, b) => a - b)).toEqual([1, 2]);
+  });
+
+  it('derives stubborn ids from a real curve run', () => {
+    const config: SessionCurveConfig = { ...CONFIG, loops: 1, maxRepeats: 2, strategy: 'tail' };
+    let result = applyCurveAnswer(buildCurveQueue([7], 1), 0, false, {}, config);
+    // 阈值之下：只重现一次，还不算顽固
+    expect(deriveStubbornIds(result.states)).toEqual([]);
+    result = applyCurveAnswer(result.entries, 1, false, result.states, config);
+    expect(result.states[7].repeats).toBe(STUBBORN_REPEAT_THRESHOLD);
+    expect(deriveStubbornIds(result.states)).toEqual([7]);
+    // 重复用尽仍未答对：放弃后依旧在顽固清单内
+    const last = result.entries.findIndex((entry, i) => i > 1 && entry.resourceId === 7);
+    result = applyCurveAnswer(result.entries, last, false, result.states, config);
+    expect(result.states[7].abandoned).toBe(true);
+    expect(deriveStubbornIds(result.states)).toEqual([7]);
   });
 });

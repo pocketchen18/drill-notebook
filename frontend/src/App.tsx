@@ -3,6 +3,7 @@ import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
 import { BookOpenText, BrainCircuit, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore } from './stores/uiStore';
+import { readLastRoute, recordRoute } from './lib/viewState';
 import { BankPage } from './pages/BankPage';
 import { WrongPage } from './pages/WrongPage';
 import { NotebookPage } from './pages/NotebookPage';
@@ -56,6 +57,9 @@ function Shell(): JSX.Element {
       /* ignore */
     }
   }, [theme]);
+  useEffect(() => {
+    recordRoute(normalizedPath);
+  }, [normalizedPath]);
   useEffect(() => {
     void window.api?.config.get().then((config) => {
       if (config.theme === 'dark' || config.theme === 'light') setTheme(config.theme);
@@ -240,9 +244,11 @@ export function App(): JSX.Element {
 }
 
 export function AppRoutes(): JSX.Element {
+  // 只记 pathname：/quiz?autoStart=1… 这类深链不会在下次启动自动续考。
+  const landing = readLastRoute() ?? '/notebooks';
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/banks" replace />} />
+      <Route path="/" element={<Navigate to={landing} replace />} />
       <Route path="/banks" element={<BankPage />} />
       <Route path="/practice" element={<PracticePage />} />
       <Route path="/quiz" element={<PracticePage initialTab="quiz" />} />
@@ -254,7 +260,7 @@ export function AppRoutes(): JSX.Element {
       <Route path="/notebooks" element={<NotebookPage />} />
       <Route path="/ai" element={<Navigate to="/settings" replace />} />
       <Route path="/settings" element={<SettingsPage />} />
-      <Route path="*" element={<Navigate to="/banks" replace />} />
+      <Route path="*" element={<Navigate to={landing} replace />} />
     </Routes>
   );
 }

@@ -3,18 +3,20 @@ import { Radio, Tabs } from '@arco-design/web-react';
 import { QuizPage } from './QuizPage';
 import { QuestionStudyPage } from './QuestionStudyPage';
 import { KnowledgeMemorizePanel } from './knowledge/KnowledgeMemorizePanel';
-
-type PracticeTab = 'quiz' | 'memorize';
-/** 背诵子模式：背题库题目 / 背知识点 */
-type MemorizeTarget = 'questions' | 'knowledge';
+import { usePersistSlice } from '../hooks/useViewState';
+import { readPageSlice } from '../lib/viewState';
+import type { MemorizeTarget, PracticeTab } from '../lib/viewState';
 
 /** 「练习」页：刷题 / 背诵两种模式的合并入口；背诵内含「背题（题库）」与「背知识点」两个子模式。 */
-export function PracticePage({ initialTab = 'quiz' }: { initialTab?: PracticeTab }): JSX.Element {
-  const [tab, setTab] = useState<PracticeTab>(initialTab);
-  const [memorizeTarget, setMemorizeTarget] = useState<MemorizeTarget>('questions');
+export function PracticePage({ initialTab }: { initialTab?: PracticeTab }): JSX.Element {
+  // 深链（/quiz、/memorize）显式指定的 Tab 优先；否则回到上次停留的 Tab 与背诵子模式。
+  const [tab, setTab] = useState<PracticeTab>(() => initialTab ?? readPageSlice('practice').tab ?? 'quiz');
+  const [memorizeTarget, setMemorizeTarget] = useState<MemorizeTarget>(
+    () => readPageSlice('practice').memorizeTarget ?? 'questions'
+  );
 
-  // 深链（/quiz?... 或 /memorize?...）变化时同步切到对应 Tab。
-  useEffect(() => { setTab(initialTab); }, [initialTab]);
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
+  usePersistSlice('practice', { tab, memorizeTarget });
 
   return (
     <div className="practice-page">
