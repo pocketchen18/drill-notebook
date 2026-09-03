@@ -15,11 +15,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
-const { uploadAttachment } = vi.hoisted(() => ({ uploadAttachment: vi.fn() }));
+const { uploadAttachment, attachmentContentUrl } = vi.hoisted(() => ({
+  uploadAttachment: vi.fn(),
+  attachmentContentUrl: vi.fn()
+}));
 
 vi.mock('../../lib/attachments', () => ({
   uploadAttachment: (...args: unknown[]) => uploadAttachment(...args),
-  attachmentContentUrl: vi.fn().mockResolvedValue('about:blank')
+  attachmentContentUrl: (...args: unknown[]) => attachmentContentUrl(...args)
 }));
 
 // jsdom doesn't implement getClientRects/getBoundingClientRect on Element;
@@ -85,6 +88,9 @@ const baseWindowApi = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   (window as unknown as { api: Record<string, unknown> }).api = baseWindowApi() as Record<string, unknown>;
   uploadAttachment.mockReset();
+  // afterEach 的 restoreAllMocks 会清掉 vi.fn 的实现，这里逐个用例重新装好
+  attachmentContentUrl.mockReset();
+  attachmentContentUrl.mockResolvedValue('about:blank');
 });
 
 afterEach(() => {

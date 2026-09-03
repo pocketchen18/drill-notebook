@@ -19,6 +19,7 @@ import {
   distributeItemsAcrossWindow,
   formatPlanWindowLabel,
   resolvePlanWindow,
+  addDaysYmd,
   tomorrowYmd,
   type PlanWindow
 } from '../lib/studyPlan';
@@ -32,6 +33,13 @@ import {
 
 const { Text, Title } = Typography;
 
+/** 背诵会话中反复答错（放弃或额外重复≥2）的顽固项，用于「顽固项加练」排程。 */
+export interface StubbornCandidate {
+  resourceType: 'question' | 'knowledge_point';
+  resourceId: number;
+  title: string;
+}
+
 export interface SessionPlanRecommendModalProps {
   visible: boolean;
   onClose: () => void;
@@ -41,6 +49,7 @@ export interface SessionPlanRecommendModalProps {
     reviewAgainIds?: number[];
     answered?: Array<{ questionId: number; isCorrect: boolean | null }>;
     pointIds?: number[];
+    stubborn?: StubbornCandidate[];
   };
 }
 
@@ -115,6 +124,9 @@ export function SessionPlanRecommendModal({
   const [schedule, setSchedule] = useState<AiScheduleResponse | null>(null);
   const [enrollEnabled, setEnrollEnabled] = useState(() => readBoolPref(LS_ENROLL_DEFAULT, true));
   const [writePlanEnabled, setWritePlanEnabled] = useState(() => readBoolPref(LS_PLAN_DEFAULT, true));
+  // 顽固项加练：默认勾选，提交时自动排入明天/后天各一次
+  const [stubbornEnabled, setStubbornEnabled] = useState(true);
+  const stubbornList = payload.stubborn ?? [];
 
   const payloadKey = JSON.stringify(payload);
 
@@ -145,6 +157,7 @@ export function SessionPlanRecommendModal({
     setSchedule(null);
     setAiLoading(false);
     setApplying(false);
+    setStubbornEnabled(true);
 
     void (async () => {
       try {
@@ -262,6 +275,33 @@ export function SessionPlanRecommendModal({
     }));
   };
 
+  /** 顽固项加练组：明天、后天各排一轮（独立于用户选择的窗口，不受均分影响）。 */
+  const buildStubbornGroups = (): ScheduleGroup[] => {
+    if (!stubbornEnabled || !stubbornList.length) return [];
+    const tomorrow = tomorrowYmd();
+    return [0, 1].map((offset) => ({
+      planDate: addDaysYmd(tomorrow, offset),
+      title: `顽固项加练 · 第 ${offset + 1} 天`,
+      note: '会话内重复答错未过关，按记忆曲线自动排入。',
+      items: stubbornList.map((item) => ({
+        resourceType: item.resourceType as PlanResourceType,
+        resourceId: item.resourceId,
+        title: item.title
+      }))
+    }));
+  };
+
+  // 实际生效的顽固项 + 去重后的 enroll 全集（顽固项可能不在常规候选里）
+  const effectiveStubborn = stubbornEnabled ? stubbornList : [];
+  const enrollCandidates = (() => {
+    const seen = new Set(selectedCandidates.map(candidateKey));
+    return [
+      ...selectedCandidates,
+      ...effectiveStubborn.filter((item) => !seen.has(`${item.resourceType}:${item.resourceId}`))
+    ];
+  })();
+  const hasAnything = selectedCandidates.length > 0 || effectiveStubborn.length > 0;
+
   const onEnrollChange = (checked: boolean): void => {
     setEnrollEnabled(checked);
     writeBoolPref(LS_ENROLL_DEFAULT, checked);
@@ -286,7 +326,7 @@ export function SessionPlanRecommendModal({
       const body: Record<string, unknown> = {
         enroll: enrollEnabled,
         writePlan: writePlanEnabled,
-        candidates: selectedCandidates.map((item) => ({
+        candidates: enrollCandidates.map((item) => ({
           resourceType: item.resourceType,
           resourceId: item.resourceId,
           title: item.title
@@ -347,7 +387,7 @@ export function SessionPlanRecommendModal({
   };
 
   const onSubmit = (): void => {
-    if (!selectedCandidates.length) {
+    if (!hasAnything) {
       Message.warning('请至少选择一项内容');
       return;
     }
@@ -360,15 +400,16 @@ export function SessionPlanRecommendModal({
         Message.warning(planWindowState.error);
         return;
       }
+      const stubbornGroups = buildStubbornGroups();
       if (useAiSchedule) {
-        if (!schedule?.groups?.length) {
+        if (!schedule?.groups?.length && !stubbornGroups.length) {
           Message.warning('请先生成 AI 方案，或关闭「让 AI 排计划」后手动写入');
           return;
         }
-        void applySession(schedule.groups);
+        void applySession([...(schedule?.groups ?? []), ...stubbornGroups]);
         return;
       }
-      void applySession(buildManualGroups());
+      void applySession([...(selectedCandidates.length ? buildManualGroups() : []), ...stubbornGroups]);
       return;
     }
     // enroll only — groups not required
@@ -394,14 +435,15 @@ export function SessionPlanRecommendModal({
     loadingCandidates ||
     applying ||
     aiLoading ||
-    !selectedCandidates.length ||
+    !hasAnything ||
     (!enrollEnabled && !writePlanEnabled) ||
     (writePlanEnabled &&
-      (windowInvalid || (useAiSchedule && !schedule?.groups?.length)));
+      (windowInvalid ||
+        (useAiSchedule && !schedule?.groups?.length && !(stubbornEnabled && stubbornList.length))));
 
   const manualPreview =
-    writePlanEnabled && !useAiSchedule && selectedCandidates.length && !windowInvalid
-      ? buildManualGroups()
+    writePlanEnabled && !useAiSchedule && !windowInvalid
+      ? [...(selectedCandidates.length ? buildManualGroups() : []), ...buildStubbornGroups()]
       : [];
 
   const okText = (() => {
@@ -428,7 +470,7 @@ export function SessionPlanRecommendModal({
         <div style={{ textAlign: 'center', padding: 24 }}>
           <Spin tip="正在加载本轮可安排内容…" />
         </div>
-      ) : candidates.length === 0 ? (
+      ) : candidates.length === 0 && !stubbornList.length ? (
         <Text type="secondary">本轮没有可安排的内容，可关闭后从错题/知识点/笔记页手动加入计划。</Text>
       ) : (
         <Space direction="vertical" style={{ width: '100%' }} size="medium">
@@ -469,6 +511,31 @@ export function SessionPlanRecommendModal({
               </Checkbox>
             ))}
           </Checkbox.Group>
+
+          {stubbornList.length ? (
+            <div className="stubborn-practice-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <Checkbox checked={stubbornEnabled} onChange={setStubbornEnabled}>
+                  <Text bold>顽固项加练（{stubbornList.length}）</Text>
+                </Checkbox>
+                <Tag size="small" color="orangered">本会话重复答错</Tag>
+              </div>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', margin: '4px 0 8px' }}>
+                会话内答错 2 次以上仍未过关的条目，自动排入明天、后天各一轮加练（写入日历，今日队列可见）。
+              </Text>
+              <div className="stubborn-practice-items">
+                {stubbornList.slice(0, 6).map((item) => (
+                  <Tag key={`${item.resourceType}-${item.resourceId}`} size="small">{item.title}</Tag>
+                ))}
+                {stubbornList.length > 6 ? <Text type="secondary" style={{ fontSize: 12 }}>等 {stubbornList.length} 项</Text> : null}
+              </div>
+              {stubbornEnabled && !writePlanEnabled ? (
+                <Text type="warning" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+                  「加入学习日历」当前关闭，加练排程不会写入。
+                </Text>
+              ) : null}
+            </div>
+          ) : null}
 
           <Form layout="vertical">
             <Form.Item label="写入目标">

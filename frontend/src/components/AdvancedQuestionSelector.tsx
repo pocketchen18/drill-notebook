@@ -1,23 +1,47 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Empty, Input, Select, Space, Tag, Typography } from '@arco-design/web-react';
 import { ArrowDown, ArrowUp, ListRestart, Shuffle } from 'lucide-react';
 import type { Question } from '../lib/types';
 import { filterQuestions, moveId, shuffleIds } from '../lib/study';
 import { questionTypeLabel } from '../lib/quiz';
+import { usePersistSlice } from '../hooks/useViewState';
+import { putScoped, readPageSlice, readScoped } from '../lib/viewState';
+
+const QUESTION_TYPES = ['single', 'multiple', 'fill', 'true_false', 'essay'];
 
 interface AdvancedQuestionSelectorProps {
   questions: Question[];
   selectedIds: number[];
   onChange: (ids: number[]) => void;
+  /** 传入后记住本选择器的筛选条件（如 'quiz' / 'study'），互不干扰。 */
+  filterScope?: string;
 }
 
-export function AdvancedQuestionSelector({ questions, selectedIds, onChange }: AdvancedQuestionSelectorProps): JSX.Element {
-  const [search, setSearch] = useState('');
-  const [types, setTypes] = useState<string[]>([]);
-  const [chapters, setChapters] = useState<string[]>([]);
-  const [tags, setTags] = useState<string[]>([]);
+export function AdvancedQuestionSelector({ questions, selectedIds, onChange, filterScope }: AdvancedQuestionSelectorProps): JSX.Element {
+  const cachedFilters = filterScope ? readScoped(readPageSlice('practice').selectors, filterScope) : undefined;
+  const [search, setSearch] = useState(cachedFilters?.search ?? '');
+  const [types, setTypes] = useState<string[]>(() => (cachedFilters?.types ?? []).filter((type) => QUESTION_TYPES.includes(type)));
+  const [chapters, setChapters] = useState<string[]>(cachedFilters?.chapters ?? []);
+  const [tags, setTags] = useState<string[]>(cachedFilters?.tags ?? []);
   const chapterOptions = useMemo(() => [...new Set(questions.map((question) => question.chapter).filter((value): value is string => Boolean(value)))].sort(), [questions]);
   const tagOptions = useMemo(() => [...new Set(questions.flatMap((question) => question.tags ?? []))].sort(), [questions]);
+  // 题库变化后剪掉已不存在的章节/标签筛选，避免恢复出「没有匹配题目」的空列表
+  useEffect(() => {
+    if (!questions.length) return;
+    const chapterSet = new Set(chapterOptions);
+    const tagSet = new Set(tagOptions);
+    setChapters((current) => {
+      const next = current.filter((chapter) => chapterSet.has(chapter));
+      return next.length === current.length ? current : next;
+    });
+    setTags((current) => {
+      const next = current.filter((tag) => tagSet.has(tag));
+      return next.length === current.length ? current : next;
+    });
+  }, [chapterOptions, tagOptions, questions.length]);
+  usePersistSlice('practice', filterScope ? {
+    selectors: putScoped(readPageSlice('practice').selectors, filterScope, { search, types, chapters, tags })
+  } : {});
   const filtered = useMemo(() => filterQuestions(questions, { search, types, chapters, tags }), [chapters, questions, search, tags, types]);
   const selectedQuestions = selectedIds.map((id) => questions.find((question) => question.id === id)).filter((question): question is Question => Boolean(question));
 

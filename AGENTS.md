@@ -40,7 +40,7 @@
 - **环境变量**：子进程可传进程级 env（随进程消失）；禁止 `setx`、`[Environment]::SetEnvironmentVariable(User/Machine)` 等持久化写法。
 - **Electron 落点**：`userData` / `sessionData` / `cache` / `temp` 已由 `electron/paths.ts` 重定向进 APP_ROOT，新增 Chromium 侧能力时确认不引入新的系统目录落点。
 - **JVM 兜底**：`BackendApplication.main` 已设 `java.io.tmpdir → root/runtime/tmp`；已知残余限制——Spring Boot 3.x loader 在 main() 之前会污染 `File.createTempFile` 的 tmpdir 缓存，裸 `java -jar` 启动时 Tomcat 小目录仍落系统 %TEMP%（Electron 正式启动经 `java-bridge.ts` 显式传 `-Djava.io.tmpdir`，不受影响）。
-- **测试例外**：`mvn test` 的测试 fixture 会在系统 %TEMP% 产生 `drill-notebook-*` 临时目录（开发期产物，不影响应用便携性）；审计时勿与运行时泄漏混淆。
+- **测试例外**：`mvn test` 的测试 fixture 会在系统 %TEMP% 留下临时目录——前缀不止 `drill-notebook-*`，各测试类各用自己的 `createTempDirectory("<xxx>-test")`（如 `retrieval-maint-test*`、`ewl-test-*`、`study-plan-*`），因此会长期堆积；属开发期产物，不影响应用便携性，审计时勿与运行时泄漏混淆。清理用本地脚本 `pwsh -NoProfile -File scripts/clean-temp-artifacts.ps1`（已 gitignore、不入库；前缀白名单从测试源码扫描得到，默认 dry-run，`-Apply` 时删除进回收站）。
 - **审计工具**：
   - `pwsh -NoProfile -File scripts/portable-audit.ps1` — 运行时落盘审计（embedding 缓存 / %APPDATA% / %LOCALAPPDATA% / %TEMP% 监控）
   - `pwsh -NoProfile -File cache/portable-registry-audit.ps1` — 源码静态扫描（注册表 / 持久化环境变量 API）

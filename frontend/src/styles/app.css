@@ -325,6 +325,15 @@ button, input, textarea { font: inherit; }
 .palette-item.answered, .palette-item.known { border-color: #2ba471; color: #147d4b; background: #effaf5; }
 .palette-item.review { border-color: #ff9a2e; color: var(--warn-text); background: var(--warn-soft); }
 .palette-item.repeat { border-style: dashed; border-color: #ff9a2e; }
+.palette-round { margin-bottom: 12px; }
+.palette-round-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.memorize-mode-bar { display: flex; justify-content: center; margin-bottom: 14px; }
+.memorize-picker-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; align-items: start; }
+.memorize-tree { max-height: 540px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.memorize-picker-summary { position: sticky; top: 90px; }
+.memorize-picker-summary .setup-actions { justify-content: stretch; }
+.stubborn-practice-card { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--warn-border); border-radius: 8px; background: var(--warn-soft); }
+.stubborn-practice-items { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .memory-card { min-height: 520px; }
 .memory-cover { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 150px; margin-top: 22px; border: 1px dashed #b8c7df; border-radius: 8px; color: var(--muted); background: var(--subtle-bg); }
 .form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

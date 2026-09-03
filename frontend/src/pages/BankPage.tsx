@@ -14,6 +14,8 @@ import { PdfImportButton } from '../components/PdfImportButton';
 import { questionExportDocument } from '../lib/export';
 import { QuestionEditorModal } from '../components/QuestionEditorModal';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
+import { usePersistSlice } from '../hooks/useViewState';
+import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
 
 const { Text } = Typography;
 
@@ -43,10 +45,12 @@ export function BankPage(): JSX.Element {
   const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
   const jsonFileInput = useRef<HTMLInputElement>(null);
-  const [selectedId, setSelectedId] = useState<number>();
+  const cachedBanks = readPageSlice('banks');
+  const [selectedId, setSelectedId] = useState<number | undefined>(cachedBanks.selectedId);
   const [createVisible, setCreateVisible] = useState(false);
   const [newName, setNewName] = useState('');
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>([]);
+  const [hydratedBank, setHydratedBank] = useState<number | undefined>(undefined);
   const [questionEditorVisible, setQuestionEditorVisible] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<Question>();
   const [renamingId, setRenamingId] = useState<number>();
@@ -64,12 +68,31 @@ export function BankPage(): JSX.Element {
   useEffect(() => {
     if (selectedId === undefined && banksQuery.data?.length) setSelectedId(banksQuery.data[0].id);
   }, [banksQuery.data, selectedId]);
-  useEffect(() => { setSelectedQuestionIds([]); }, [selectedId]);
+  useEffect(() => {
+    const banks = banksQuery.data;
+    if (!banks?.length || selectedId === undefined) return;
+    if (!banks.some((bank) => bank.id === selectedId)) setSelectedId(undefined);
+  }, [banksQuery.data, selectedId]);
   useEffect(() => {
     if (!questionsQuery.data) return;
     const available = new Set(questionsQuery.data.map((question) => question.id));
     setSelectedQuestionIds((ids) => ids.filter((id) => available.has(id)));
   }, [questionsQuery.data]);
+  // 每个题库各自记住勾选：切回某个库时恢复它自己的选择，而不是清空。
+  useEffect(() => {
+    const questions = questionsQuery.data;
+    if (!questions || selectedId === undefined || hydratedBank === selectedId) return;
+    setHydratedBank(selectedId);
+    setSelectedQuestionIds(readIdSet(cachedBanks.selection, selectedId, questions.map((question) => question.id)) ?? []);
+  }, [questionsQuery.data, selectedId, hydratedBank]); // eslint-disable-line react-hooks/exhaustive-deps -- cachedBanks 每次渲染重读
+  usePersistSlice('banks', hydratedBank === selectedId ? {
+    selectedId,
+    selection: putScoped(
+      cachedBanks.selection,
+      selectedId,
+      captureIdSet(selectedQuestionIds, questionsQuery.data?.length ?? 0)
+    )
+  } : {});
 
   /** Invalidate bank lists everywhere (quiz / memorize / knowledge selectors). */
   const invalidateBanksEverywhere = (): void => {
@@ -353,7 +376,7 @@ export function BankPage(): JSX.Element {
             {selectedBank && <Space className="content-context-header__actions">
               <ExportActions count={selectedQuestions.length} document={() => questionExportDocument(`${selectedBank.name} · 题库`, selectedQuestions)} />
               <Button icon={<Plus size={15} />} onClick={() => { setEditingQuestion(undefined); setQuestionEditorVisible(true); }}>新建题目</Button>
-              <Button type="primary" onClick={() => navigate(`/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
+              <Button type="primary" onClick={() => navigate(selectedQuestionIds.length ? `/quiz?bankId=${selectedBank.id}&questionIds=${selectedQuestionIds.join(',')}&from=bank` : `/quiz?bankId=${selectedBank.id}`)}>开始练习</Button>
             </Space>}
           </div>
           <div className="bank-question-body">
@@ -365,7 +388,7 @@ export function BankPage(): JSX.Element {
                 {questions.map((question) => (
                   <div className={`dense-content-row question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
                     <div className="question-row-top">
-                      <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} /><MarkdownContent className="question-stem" value={question.stem} /></div>
+                      <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))}><span className="route-workspace__sr-only">{`选择题目：${question.stem}`}</span></Checkbox><MarkdownContent className="question-stem" value={question.stem} /></div>
                       <Space><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag><Button type="text" size="mini" icon={<Edit3 size={14} />} onClick={() => { setEditingQuestion(question); setQuestionEditorVisible(true); }} aria-label="编辑题目" /><Popconfirm title="删除这道题？" onOk={() => deleteQuestionMutation.mutate(question.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} aria-label="删除题目" /></Popconfirm></Space>
                     </div>
                     <div className="question-options">{question.options.map((option) => <div className="question-option" key={option.key}><strong>{option.key}.</strong><MarkdownContent inline value={option.text} /></div>)}</div>

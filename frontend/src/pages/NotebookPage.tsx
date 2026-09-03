@@ -16,6 +16,8 @@ import { AddToPlanModal } from '../components/AddToPlanModal';
 import { CompletePlanButton } from '../components/CompletePlanButton';
 import { DayQueueSessionBar, finishDayQueueStep } from '../components/DayQueueSessionBar';
 import { truncateTitle } from '../lib/studyPlan';
+import { useIdSwitchReset, usePersistSlice } from '../hooks/useViewState';
+import { readPageSlice } from '../lib/viewState';
 
 export function NotebookPage(): JSX.Element {
   const navigate = useNavigate();
@@ -29,16 +31,17 @@ export function NotebookPage(): JSX.Element {
   );
   const queryClient = useQueryClient();
   const setNotebookFocusMode = useUiStore((state) => state.setNotebookFocusMode);
-  const [notebookId, setNotebookId] = useState<number>();
-  const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery);
+  const cachedNotebooks = readPageSlice('notebooks');
+  const [notebookId, setNotebookId] = useState<number | undefined>(cachedNotebooks.notebookId);
+  const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery ?? cachedNotebooks.pageId);
   const [newPageVisible, setNewPageVisible] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
   const [pendingContent, setPendingContent] = useState<Record<string, unknown>>();
   const pendingSaveRef = useRef<{ pageId: number; content: Record<string, unknown> } | null>(null);
-  const [selectedPageIds, setSelectedPageIds] = useState<number[]>([]);
+  const [selectedPageIds, setSelectedPageIds] = useState<number[]>(() => cachedNotebooks.selectedPageIds ?? []);
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
-  const [focusMode, setFocusMode] = useState(false);
+  const [focusMode, setFocusMode] = useState<boolean>(() => cachedNotebooks.focusMode ?? false);
   const deepLinkApplied = useRef(false);
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
   const pagesQuery = useQuery({ queryKey: ['note-pages', notebookId], queryFn: () => get<NotePage[]>(`/api/notebooks/${notebookId}/pages`), enabled: notebookId !== undefined });
@@ -88,7 +91,12 @@ export function NotebookPage(): JSX.Element {
       setNotebookId(notebooksQuery.data[0].id);
     }
   }, [deepLinkPageQuery.isError, notebookId, notebooksQuery.data, pageIdFromQuery]);
-  useEffect(() => { setSelectedPageIds([]); }, [notebookId]);
+  useEffect(() => {
+    const notebooks = notebooksQuery.data;
+    if (!notebooks?.length || notebookId === undefined) return;
+    if (!notebooks.some((notebook) => notebook.id === notebookId)) setNotebookId(undefined);
+  }, [notebookId, notebooksQuery.data]);
+  useIdSwitchReset(notebookId, () => setSelectedPageIds([]));
   useEffect(() => {
     if (!pagesQuery.data) return;
     const available = new Set(pagesQuery.data.map((page) => page.id));
@@ -99,6 +107,8 @@ export function NotebookPage(): JSX.Element {
     if (pageId !== undefined) {
       // Keep deep-linked or user-selected page if it belongs to current notebook
       if (pagesQuery.data.some((page) => page.id === pageId)) return;
+      setPageId(undefined);
+      return;
     }
     if (pageIdFromQuery && pagesQuery.data.some((page) => page.id === pageIdFromQuery)) {
       setPageId(pageIdFromQuery);
@@ -150,6 +160,7 @@ export function NotebookPage(): JSX.Element {
     const available = new Set((pagesQuery.data ?? []).map((page) => page.id));
     return selectedPageIds.filter((id) => available.has(id));
   }, [pagesQuery.data, selectedPageIds]);
+  usePersistSlice('notebooks', { notebookId, pageId, selectedPageIds: validSelectedPageIds, focusMode });
 
   const openPlanForPages = (pages: NotePage[]): void => {
     if (!pages.length) {
