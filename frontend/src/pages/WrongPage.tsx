@@ -14,6 +14,8 @@ import { questionTypeLabel } from '../lib/quiz';
 import { AddToPlanModal } from '../components/AddToPlanModal';
 import { truncateTitle } from '../lib/studyPlan';
 import { enrollItems } from '../lib/review';
+import { usePersistSlice } from '../hooks/useViewState';
+import { readPageSlice } from '../lib/viewState';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -23,7 +25,8 @@ export function WrongPage(): JSX.Element {
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const query = useQuery({ queryKey: ['wrong'], queryFn: () => get<Question[]>('/api/quiz/wrong') });
   const rows = query.data ?? EMPTY_QUESTIONS;
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const cachedWrong = readPageSlice('wrong');
+  const [selectedIds, setSelectedIds] = useState<number[]>(() => cachedWrong.selectedIds ?? []);
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
@@ -66,7 +69,7 @@ export function WrongPage(): JSX.Element {
     const available = new Set(query.data.map((row) => row.id));
     setSelectedIds((ids) => ids.filter((id) => available.has(id)));
   }, [query.data]);
-
+  usePersistSlice('wrong', { selectedIds });
   const pageContext = useMemo(() => ({
     kind: 'wrong' as const,
     title: `错题本（${rows.length} 道）`,

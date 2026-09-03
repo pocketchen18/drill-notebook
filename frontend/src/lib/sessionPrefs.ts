@@ -8,6 +8,8 @@ export const LS_FORCE_ADVANCE = 'study.forceAdvance';
 export const LS_RETRIEVE_NOTES = 'ai.retrieveNotes';
 /** AI 侧栏检索范围偏好：'current' | 'all'。 */
 export const LS_RETRIEVAL_SCOPE = 'ai.retrievalScope';
+/** 是否记住上次停留页面与各页选择/切换/筛选（默认开启）。 */
+export const LS_REMEMBER_VIEW_STATE = 'ui.rememberViewState';
 
 export function readBoolPref(key: string, fallback: boolean): boolean {
   try {

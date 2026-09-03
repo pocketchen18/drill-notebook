@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
@@ -31,6 +31,9 @@ import { del, get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import { completeStudy } from '../lib/study';
 import { TodayQueuePanel } from '../components/TodayQueuePanel';
+import { useToday } from '../lib/useToday';
+import { usePersistSlice } from '../hooks/useViewState';
+import { readPageSlice } from '../lib/viewState';
 import {
   collectTodoKnowledgePointIds,
   collectTodoKnowledgePointIdsFromGroups,
@@ -43,8 +46,7 @@ import {
   planKnowledgePath,
   planNotePath,
   planQuizPath,
-  planStudyPath,
-  todayYmd
+  planStudyPath
 } from '../lib/studyPlan';
 import type { PlanStatus, StudyPlanGroup, StudyPlanItem, StudyPlanRangeResponse } from '../lib/types';
 
@@ -213,7 +215,7 @@ export function CalendarPage(): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const today = todayYmd();
+  const today = useToday();
 
   const initialDate = (() => {
     const fromQuery = searchParams.get('date');
@@ -222,9 +224,17 @@ export function CalendarPage(): JSX.Element {
   })();
   const initialParts = parseYmdParts(initialDate) ?? parseYmdParts(today)!;
 
-  const [viewYear, setViewYear] = useState(initialParts.year);
-  const [viewMonth, setViewMonth] = useState(initialParts.month);
+  // 月视图记住上次翻到的年月；?date= 深链与「今天」按钮优先。
+  const cachedCalendar = readPageSlice('calendar');
+  const dateQuery = searchParams.get('date');
+  const hasDateQuery = !!dateQuery && !!parseYmdParts(dateQuery);
+  const cachedView = !hasDateQuery && cachedCalendar.viewYear && cachedCalendar.viewMonth !== undefined
+    ? { year: cachedCalendar.viewYear, month: cachedCalendar.viewMonth }
+    : null;
+  const [viewYear, setViewYear] = useState(cachedView?.year ?? initialParts.year);
+  const [viewMonth, setViewMonth] = useState(cachedView?.month ?? initialParts.month);
   const [selectedDate, setSelectedDate] = useState(initialDate);
+  usePersistSlice('calendar', { viewYear, viewMonth });
   const [editGroup, setEditGroup] = useState<StudyPlanGroup | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editNote, setEditNote] = useState('');
@@ -331,12 +341,24 @@ export function CalendarPage(): JSX.Element {
   };
 
   const goToday = (): void => {
-    const t = todayYmd();
-    const parts = parseYmdParts(t)!;
-    setViewYear(parts.year);
-    setViewMonth(parts.month);
-    selectDate(t);
+    selectDate(today);
   };
+
+  // 跨零点：真实「今天」前进时刷新计划与到期数据；仅当用户正停留在旧的今天时跟随跳转。
+  const prevTodayRef = useRef(today);
+  useEffect(() => {
+    const prev = prevTodayRef.current;
+    if (prev === today) return;
+    prevTodayRef.current = today;
+    void queryClient.invalidateQueries({ queryKey: ['study-plans'] });
+    void queryClient.invalidateQueries({ queryKey: ['study-plans-day'] });
+    void queryClient.invalidateQueries({ queryKey: ['review-calendar-stats'] });
+    void queryClient.invalidateQueries({ queryKey: ['study-today'] });
+    // 视图停在别的年月（例如记忆里翻到的上月）＝ 用户在看别处，和手动选日期一样不跟随。
+    const prevParts = parseYmdParts(prev);
+    const onPrevTodayMonth = !prevParts || (viewYear === prevParts.year && viewMonth === prevParts.month);
+    if (selectedDate === prev && onPrevTodayMonth) selectDate(today);
+  }, [today, selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps -- queryClient 稳定，selectDate 每次渲染重建
 
   const shiftMonth = (delta: number): void => {
     const d = new Date(viewYear, viewMonth + delta, 1);

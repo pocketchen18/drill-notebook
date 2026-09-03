@@ -35,6 +35,9 @@ coverage/
 .tooling/
 embedding-worker/target/
 
+# CodeGraph local index & daemon artifacts (db / shm / wal / log / pid)
+.codegraph/
+
 # Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
 /*.png
 /*.jpg
@@ -146,6 +149,9 @@ temp/
 *.orig
 backend/testroot/
 
+# 本地维护脚本：只服务于个人机器的清理/体检，不作为项目工具链入库
+/scripts/clean-temp-artifacts.ps1
+
 # Private planning material, model prompts and agent state
 .omo/
 .agents/
@@ -179,6 +185,7 @@ docs/**
 !docs/ai-retrieval.md
 !docs/architecture.md
 !docs/review-srs.md
+!docs/session-curve.md
 !docs/testing/
 !docs/testing/**
 # Design specs / implementation plans stay local

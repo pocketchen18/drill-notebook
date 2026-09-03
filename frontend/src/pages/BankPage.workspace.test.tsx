@@ -309,11 +309,20 @@ describe('BankPage behavior — baseline regression (Task 1)', () => {
       expect(arg.content || arg.html).toBeTruthy();
     });
 
-    it('BNK-16 开始练习 navigates to /quiz?bankId=11 (database ID, not selectedQuestion IDs)', async () => {
+    it('BNK-16 开始练习 without selection navigates to /quiz?bankId=11', async () => {
       renderBankPage();
       await waitFor(() => expect(screen.getByRole('button', { name: '开始练习' })).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: '开始练习' }));
       await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/quiz?bankId=11'));
+    });
+
+    it('BNK-16b 开始练习 carries selected question ids so quiz inherits the selection', async () => {
+      renderBankPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: '开始练习' })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('全选当前题库')).toBeInTheDocument());
+      fireEvent.click(screen.getByText('全选当前题库'));
+      fireEvent.click(screen.getByRole('button', { name: '开始练习' }));
+      await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/quiz?bankId=11&questionIds=104,105&from=bank'));
     });
 
     it('BNK-18..21: question row shows full stem, all options, chapter', async () => {
