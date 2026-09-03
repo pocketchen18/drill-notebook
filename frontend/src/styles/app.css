@@ -802,6 +802,23 @@ mark.kp-search-highlight.kp-search-highlight-active {
 .settings-tab:focus-visible { outline: 3px solid rgb(21 94 239 / 22%); outline-offset: 2px; }
 .settings-tab-panel { max-width: 980px; }
 .settings-tab-stack { display: grid; max-width: 980px; gap: 20px; }
+/* 设置行：左侧标题 + 一句说明，右侧控件 */
+.settings-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+/* 快捷键编辑器：作用域分组 + 绑定 chip（含移除按钮）+ 录入按钮（全部跟主题变量，明暗两态共用） */
+.settings-group { display: grid; gap: 12px; }
+.settings-group + .settings-group { padding-top: 14px; border-top: 1px dashed var(--line); }
+.settings-group-caption { font-size: 12px; }
+.shortcut-editor { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 440px; }
+.shortcut-binding { display: inline-flex; align-items: center; gap: 3px; padding: 3px 3px 3px 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.shortcut-binding-remove { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.shortcut-binding-remove:hover { background: var(--hover-bg); color: var(--danger); }
+.shortcut-recorder { display: inline-flex; justify-content: center; align-items: center; gap: 4px; min-width: 32px; min-height: 32px; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, color 140ms ease; }
+.shortcut-recorder:hover { border-color: var(--accent-border-2); background: var(--hover-bg); color: var(--text); }
+.shortcut-recorder:focus-visible { outline: 3px solid rgb(21 94 239 / 22%); outline-offset: 2px; }
+.shortcut-recorder.is-recording { min-width: 120px; border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); animation: shortcut-pulse 1.2s ease-in-out infinite; }
+.shortcut-key { display: inline-block; min-width: 22px; padding: 1px 7px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel-bg); color: var(--text-strong); font: 600 12px/18px "Segoe UI", "Microsoft YaHei", sans-serif; text-align: center; }
+.shortcut-key--empty { border-style: dashed; color: var(--muted); font-weight: 400; }
+@keyframes shortcut-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgb(21 94 239 / 25%); } 50% { box-shadow: 0 0 0 4px rgb(21 94 239 / 0%); } }
 
 /* 数据管理面板（备份/导出/导入）— 全部跟主题变量 */
 .data-manage { display: grid; gap: 20px; }

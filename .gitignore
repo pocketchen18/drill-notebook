@@ -21,7 +21,8 @@ electron-builder-cache/
 /jre/
 
 # Browser automation, visual QA and coverage artifacts
-/.playwright-mcp/
+# (.playwright-mcp is created wherever the MCP session's cwd is — ignore it at any depth)
+.playwright-mcp/
 /playwright-report/
 /test-results/
 /blob-report/
@@ -164,6 +165,19 @@ ai-prompts/
 *.prompt.md
 .atomcode.md
 .superpowers/
+# Harness-local state written into the repo by coding agents (Claude Code / Codex / OpenCode / Qoder / Gemini / omp pipeline):
+# permission caches, worktrees, session state and per-machine instruction overrides never belong in the repo.
+.claude/
+.codex/
+.opencode/
+.qoder/
+.gemini/
+.cursor/
+.kiro/
+.serena/
+.pipeline/
+CLAUDE.local.md
+AGENTS.local.md
 
 backend/src/test/resources/fixtures/六级真题.md
 backend/src/test/resources/fixtures/java.md

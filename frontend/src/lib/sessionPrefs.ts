@@ -10,6 +10,8 @@ export const LS_RETRIEVE_NOTES = 'ai.retrieveNotes';
 export const LS_RETRIEVAL_SCOPE = 'ai.retrievalScope';
 /** 是否记住上次停留页面与各页选择/切换/筛选（默认开启）。 */
 export const LS_REMEMBER_VIEW_STATE = 'ui.rememberViewState';
+/** 是否显示右下角 AI 悬浮球（默认显示；隐藏不影响快捷键唤出）。 */
+export const LS_SHOW_AI_FAB = 'ui.showAiFab';
 
 export function readBoolPref(key: string, fallback: boolean): boolean {
   try {

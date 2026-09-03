@@ -1,7 +1,9 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgeFullCardView } from './KnowledgeFullCardView';
 import { buildKnowledgeTree, ROOT_ID } from '../../lib/knowledgeTree';
+import { defaultShortcutConfig } from '../../lib/shortcuts';
+import { useUiStore } from '../../stores/uiStore';
 import type { KnowledgePoint } from '../../lib/types';
 
 function point(id: number, title: string, content: string, headingPath: string[], tags: string[] = []): KnowledgePoint {
@@ -14,6 +16,11 @@ describe('KnowledgeFullCardView', () => {
     point(2, '1.1 进程与线程', '进程模型正文。', ['第一章 操作系统']),
   ];
   const tree = buildKnowledgeTree(points, '计算机考研');
+
+  // 快捷键绑定来自模块级 uiStore：逐条用例复位，避免改绑用例影响其它断言
+  beforeEach(() => {
+    useUiStore.setState({ shortcutConfig: defaultShortcutConfig() });
+  });
 
   it('renders full screen layout with sidebar navigation and main content', () => {
     const node = tree.byId.get(2)!;
@@ -66,6 +73,35 @@ describe('KnowledgeFullCardView', () => {
 
     // 按键盘 T 键再次展开
     fireEvent.keyDown(window, { key: 't' });
+    expect(screen.getByRole('button', { name: '折叠大纲' })).toBeInTheDocument();
+  });
+
+  it('honours an outline shortcut rebound in settings (T → O)', () => {
+    useUiStore.getState().setShortcutConfig({ ...defaultShortcutConfig(), kcToggleOutline: ['O'] });
+    const node = tree.byId.get(2)!;
+
+    render(
+      <KnowledgeFullCardView
+        tree={tree}
+        node={node}
+        questions={[]}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '折叠大纲' }));
+    expect(screen.getByRole('button', { name: '展开大纲' })).toBeInTheDocument();
+
+    // 旧键 T 不再生效
+    fireEvent.keyDown(window, { key: 't' });
+    expect(screen.getByRole('button', { name: '展开大纲' })).toBeInTheDocument();
+
+    // 新键 O 生效
+    fireEvent.keyDown(window, { key: 'o' });
     expect(screen.getByRole('button', { name: '折叠大纲' })).toBeInTheDocument();
   });
 

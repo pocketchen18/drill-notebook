@@ -24,6 +24,7 @@ import { applyCurveAnswer, buildCurveQueue, readSessionCurveConfig } from '../li
 import type { CurveEntry, CurveItemState } from '../lib/sessionCurve';
 import { usePersistSlice } from '../hooks/useViewState';
 import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
+import { describeAccelerator, describeAccelerators, resolveShortcutAction } from '../lib/shortcuts';
 
 const { Text } = Typography;
 
@@ -76,6 +77,16 @@ export function QuizPage(): JSX.Element {
   const [searchParams] = useSearchParams();
   const { setSessionId } = useSessionStore();
   const setAiOpen = useUiStore((state) => state.setAiOpen);
+  // 底部快捷键提示跟随「设置 → 常规 → 快捷键」里的当前绑定；数字选选项固定
+  const shortcutConfig = useUiStore((state) => state.shortcutConfig);
+  const shortcutHint = useMemo(() => {
+    const parts = ['数字 1-4 选择'];
+    if (shortcutConfig.quizSubmit.length) parts.push(`${describeAccelerators(shortcutConfig.quizSubmit, '/')} 提交`);
+    if (shortcutConfig.quizPrev.length) parts.push(`${describeAccelerators(shortcutConfig.quizPrev, '/')} 上一题`);
+    if (shortcutConfig.quizNext.length) parts.push(`${describeAccelerators(shortcutConfig.quizNext, '/')} 下一题`);
+    const ai = shortcutConfig.toggleAi[0];
+    return `${parts.join('，')}${ai ? ` · ${describeAccelerator(ai)} AI` : ''}`;
+  }, [shortcutConfig]);
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const initialBank = Number(searchParams.get('bankId')) || undefined;
   const { planItemId, planDate } = planScopeFromSearch(searchParams);
@@ -179,18 +190,19 @@ export function QuizPage(): JSX.Element {
         choose(option.key);
         return;
       }
-      const key = event.key.toLowerCase();
-      if (!result && (event.key === 'Enter' || (event.ctrlKey && key === 's'))) {
+      // 作答中：提交 / 上一题；已提交：下一题 / 上一题（可在设置 → 常规 → 快捷键改绑）
+      const action = resolveShortcutAction(event, shortcutConfig, result ? ['quizNext', 'quizPrev'] : ['quizSubmit', 'quizPrev']);
+      if (action === 'quizSubmit') {
         event.preventDefault();
         void submit();
         return;
       }
-      if (result && (event.key === 'Enter' || event.key === 'ArrowRight' || event.key === 'PageDown' || key === 'n')) {
+      if (action === 'quizNext') {
         event.preventDefault();
         next();
         return;
       }
-      if (event.key === 'ArrowLeft' || event.key === 'PageUp' || key === 'p') {
+      if (action === 'quizPrev') {
         event.preventDefault();
         previous();
       }
@@ -461,7 +473,7 @@ export function QuizPage(): JSX.Element {
           {!result ? <Button type="primary" loading={submitting} onClick={() => void submit()}>{question.type === 'essay' ? '提交并请求 AI 辅助判题' : '提交答案'}</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === curveQueue.length - 1 ? '完成' : '下一题'}</Button>}
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">数字 1-4 选择，Enter 提交，←/→ 或 P/N 切题 · Ctrl+J AI</Text></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}><Button type="text" icon={<ChevronLeft size={16} />} disabled={index === 0} onClick={previous}>上一题</Button><Text type="secondary">{shortcutHint}</Text></div>
     </div></div> : <Empty description="题库中没有可练习的题目" />}
     <AddToNoteModal question={noteQuestion} visible={noteVisible} onClose={() => setNoteVisible(false)} />
     <AddToPlanModal

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { MarkdownContent } from '../markdown/MarkdownRenderer';
+import { matchesAny } from '../../lib/shortcuts';
+import { useUiStore } from '../../stores/uiStore';
 
 export function MarkdownBlockNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
   const markdown = String(node.attrs.markdown ?? '');
@@ -38,7 +40,7 @@ export function MarkdownBlockNode({ node, updateAttributes, selected }: NodeView
               setDraft(markdown);
               setEditing(false);
             }
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
               event.preventDefault();
               commit();
             }

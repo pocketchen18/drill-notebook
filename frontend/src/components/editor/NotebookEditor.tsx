@@ -7,6 +7,8 @@ import { Button, Divider, Message, Modal, Radio, Space, Input as ArcoInput } fro
 import { Bold, Code, Expand, FileCode2, Heading2, Italic, Network, Paperclip, Sigma, Video } from 'lucide-react';
 import { MarkdownBlock, MathBlock, MathInline, MermaidBlock, QuestionBlockNode, FileBlock, VideoBlock } from './extensions';
 import { uploadAttachment } from '../../lib/attachments';
+import { describeAccelerators } from '../../lib/shortcuts';
+import { useUiStore } from '../../stores/uiStore';
 import type { NoteAttachment, Question } from '../../lib/types';
 
 export interface NotebookEditorProps {
@@ -28,6 +30,8 @@ const focusCanvasPadding: CSSProperties = { padding: 0 };
 const toolbarMinHeight: CSSProperties = { minHeight: 44 };
 
 export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusModeChange }: NotebookEditorProps): JSX.Element {
+  // 「完成块编辑」当前绑定，提示文案跟随设置
+  const finishKeys = useUiStore((state) => state.shortcutConfig.editorFinishBlock);
   const [videoModalVisible, setVideoModalVisible] = useState(false);
   const [videoModalType, setVideoModalType] = useState<'url' | 'remote'>('url');
   const [videoModalUrl, setVideoModalUrl] = useState('');
@@ -207,7 +211,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
           {focusMode ? '退出专注' : '专注模式'}
         </Button>
       </Space>
-      {focusMode ? null : <span className="editor-hint">块默认渲染 · 点击即可编辑 · Ctrl/⌘+Enter 完成 · 工具栏「添加文件」或拖拽/粘贴插入附件</span>}
+      {focusMode ? null : <span className="editor-hint">块默认渲染 · 点击即可编辑 · {finishKeys.length ? `${describeAccelerators(finishKeys)} 完成` : '点「完成」结束编辑'} · 工具栏「添加文件」或拖拽/粘贴插入附件</span>}
     </div>
   );
 

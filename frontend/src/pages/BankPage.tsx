@@ -16,6 +16,8 @@ import { QuestionEditorModal } from '../components/QuestionEditorModal';
 import { questionTypeColor, questionTypeLabel } from '../lib/quiz';
 import { usePersistSlice } from '../hooks/useViewState';
 import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
+import { matchesAny } from '../lib/shortcuts';
+import { useUiStore } from '../stores/uiStore';
 
 const { Text } = Typography;
 
@@ -286,7 +288,8 @@ export function BankPage(): JSX.Element {
                       onKeyDown={(event) => {
                         if (isListRenaming) return;
                         if (event.key === 'Enter') setSelectedId(bank.id);
-                        if (event.key === 'F2') beginRename(bank, 'list', event);
+                        // 重命名键可在设置 → 常规 → 快捷键改绑（默认 F2）
+                        if (matchesAny(event, useUiStore.getState().shortcutConfig.bankRename)) beginRename(bank, 'list', event);
                       }}
                     >
                       <div style={{ minWidth: 0, flex: 1 }}>

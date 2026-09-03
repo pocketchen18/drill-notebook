@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
 import { BookOpenText, BrainCircuit, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { useUiStore } from './stores/uiStore';
+import { resolveSystemTheme, useUiStore } from './stores/uiStore';
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
+import { describeAccelerator } from './lib/shortcuts';
 import { readLastRoute, recordRoute } from './lib/viewState';
 import { BankPage } from './pages/BankPage';
 import { WrongPage } from './pages/WrongPage';
@@ -30,8 +32,12 @@ function Shell(): JSX.Element {
   const navigate = useNavigate();
   const theme = useUiStore((state) => state.theme);
   const toggleTheme = useUiStore((state) => state.toggleTheme);
-  const setTheme = useUiStore((state) => state.setTheme);
+  const setThemeMode = useUiStore((state) => state.setThemeMode);
   const clearPageContext = useUiStore((state) => state.clearPageContext);
+  // AI 助手当前的第一个绑定（设置页改绑后提示同步更新）
+  const aiAccelerator = useUiStore((state) => state.shortcutConfig.toggleAi[0]);
+  // 全局快捷键（设置 → 常规 → 快捷键）
+  useGlobalShortcuts();
   const [configLoaded, setConfigLoaded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   // 折叠后自动隐藏：折叠态停留 3 秒自动收起侧栏；鼠标靠近左边缘唤回（保持折叠态）。
@@ -62,10 +68,23 @@ function Shell(): JSX.Element {
   }, [normalizedPath]);
   useEffect(() => {
     void window.api?.config.get().then((config) => {
-      if (config.theme === 'dark' || config.theme === 'light') setTheme(config.theme);
+      // 「跟随系统」时以当前系统深浅色为准，不用上次会话的明暗快照覆盖；
+      // 显式模式下按 Electron 配置对齐，并同步模式本身，保证设置页单选与实际明暗一致
+      if (useUiStore.getState().themeMode !== 'system' && (config.theme === 'dark' || config.theme === 'light')) setThemeMode(config.theme);
       setConfigLoaded(true);
     }).catch(() => setConfigLoaded(true));
-  }, [setTheme]);
+  }, [setThemeMode]);
+  // 主题跟随系统：系统深浅色变化时同步（仅 system 模式生效）
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media || typeof media.addEventListener !== 'function') return;
+    const onChange = (): void => {
+      const { themeMode, setTheme: applyTheme } = useUiStore.getState();
+      if (themeMode === 'system') applyTheme(resolveSystemTheme());
+    };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
   useEffect(() => {
     if (configLoaded) void window.api?.config.set({ theme });
   }, [configLoaded, theme]);
@@ -217,7 +236,7 @@ function Shell(): JSX.Element {
           <Header className="topbar">
             <Typography.Title heading={5} className="topbar-title">{title}</Typography.Title>
             <div className="topbar-actions">
-              <Typography.Text type="secondary" className="topbar-hint">AI · Ctrl+J</Typography.Text>
+              <Typography.Text type="secondary" className="topbar-hint">{aiAccelerator ? `AI · ${describeAccelerator(aiAccelerator)}` : 'AI 助手'}</Typography.Text>
               <Switch
                 checked={theme === 'dark'}
                 onChange={toggleTheme}
