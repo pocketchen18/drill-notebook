@@ -155,7 +155,7 @@
 
 ---
 
-## 模块九：自动化覆盖对照（v0.5.x 新增功能）
+## 模块九：自动化覆盖对照（v0.5.x–v0.6.1 新增功能）
 
 | 被测功能 | 自动化位置 | 覆盖内容 |
 | :--- | :--- | :--- |
@@ -165,6 +165,7 @@
 | 背诵设置弹窗 | `frontend/src/components/SessionCurveSettingsModal.test.tsx`（3 用例） | 选项渲染、预设应用与保存写入 localStorage、每次打开重读最新配置 |
 | 会话结束顽固项加练 | `frontend/src/components/SessionPlanRecommendModal.stubborn.test.tsx`（4 用例） | 加练卡片默认勾选、提交明天+后天两组并去重并入 enroll 全集、取消勾选后禁止提交、无顽固项不渲染 |
 | 背诵评分最终态 | `frontend/src/pages/knowledge/KnowledgeMemorizeSession.test.tsx`（3 用例） | 首次评分提交、判定翻转才补交（`forceAdvance`）、多轮重复同判定不再提交 |
+| 错题本频率与移出 | `backend/src/test/java/com/drillnotebook/app/repository/QuestionWrongBookTest.java`（6 用例，真库） | 答错计入 `wrongCount`、答错后答对 1 次仍在（修「重复到对」陷阱）、连续答对 2 次自动清出、手动移出后重答错重新计入（`wrong_excluded` 重置）、按错误次数降序、错误率计算 |
 | 日历实时今天 | `frontend/src/lib/useToday.test.tsx`（2 用例）+ `frontend/src/pages/CalendarPage.midnight.test.tsx`（4 用例） | 轮询与窗口聚焦校准日期；打开时高亮今天、跨零点选中日跟随并重新拉数、手动选其他日期不被跳转、记忆里翻到的上月视图不被零点拽回 |
 | 界面状态存储层 | `frontend/src/lib/viewState.test.ts`（14 用例） | 损坏 JSON/未知页/非法 id 容错、数组截断、防抖合并写入与去重、开关关闭不读不写、`recordRoute` 白名单与练习别名折叠、全选哨兵与 `all`/`some:[]` 往返、作用域按 `recent` 淘汰最久未写的库且永不淘汰正在写入的库 |
 | 启动落点 | `frontend/src/App.startRoute.test.tsx`（6 用例） | 无记忆落笔记本、重启回上次页、未知路径回落、非法记忆忽略、损坏缓存、深链优先 |
@@ -178,7 +179,7 @@
 | 视频 / 附件块入索引 | `backend/.../NoteNormalizerTest.java`（3 用例） | `videoBlock` 取标题 + URL、`fileBlock` 取文件名、空 attrs 不产生分块 |
 | provider 可用性可见 | `backend/.../EmbeddingJobExecutorTest.java` + `frontend/src/components/EmbeddingSettingsCard.test.tsx` | status 返回 `providerReady`；`REBUILDING && providerReady=false` 时设置页显示「本地向量组件不可用」而非「索引构建中」 |
 | 前端回归 | `npm test --prefix frontend`（Vitest 全量 316 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归、Markdown 题干纯文本化（`markdownText`）、`app.css` 令牌约束（Embedding 条目跟主题变量） |
-| 全量门禁 | `.\mvnw.cmd test`（384 项）+ `npm run build --prefix frontend` | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节 |
+| 全量门禁 | `.\mvnw.cmd test`（399 项）+ `npm run build --prefix frontend` | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节 |
 
 ---
 
@@ -195,3 +196,16 @@
 | **TC-UI-05** | 练习题卡 | 有题库 | 刷题：选项 → 提交；背题：揭示答案 → 评分 | 顶部进度条随题号推进；选项字母徽章，选中 / 正确 / 错误三态清晰；反馈卡左侧强调条；评分按钮悬停显示语义色 | P1 |
 | **TC-UI-06** | 日历 | 日历页 | 观察月份头部与今天格 | 今天日期为实心徽章、选中日浅蓝描边；月份标题与年 / 月选择器在 380px 侧栏内自动换行不溢出 | P1 |
 | **TC-UI-07** | 工作台契约不变 | 笔记本 / 题库 | 1100 / 1440px 下观察 explorer 与命令行 | 232px explorer、命令行 min-height 44、路由留白 16/20/24 与 v0.5 一致；`BankPage.workspace` / `NotebookEditor.workspace` 测试通过 | P0 |
+
+---
+
+## 模块十一：错题本频率与会话结束返回（v0.6.1）
+
+| 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-WB-01** | 错题按错误次数排序 | 有题库 | 刷题对 A 题答错 2 次、B 题答错 1 次 → 打开错题 | 错题本按「错 N / 答 M」显示，A 排在 B 前；附错误率列；不再只看最近一次对错 | P0 |
+| **TC-WB-02** | 连续答对自动清出 | 某题在错题本 | 对该题连续答对 2 次 | 第 2 次答对后该题从错题本消失（`WRONG_MASTER_STREAK=2`）；只答对 1 次仍在列 | P0 |
+| **TC-WB-03** | 手动移出错题本 | 某题在错题本 | 点该行操作列 ✓「移出错题本」（或勾选后批量移出） | 该题立即不在列表；提示「已移出错题本，下次答错会重新计入」 | P0 |
+| **TC-WB-04** | 移出后重答错重新计入 | 已手动移出某题 | 再答错该题一次 | 该题重新出现在错题本（`recordAnswer` 把 `wrong_excluded` 重置为 0） | P1 |
+| **TC-WB-05** | 刷题内移出入口 | 刷题已提交某题 | 提交后点「移出错题本」 | 提示成功；错题页刷新后该题不在列 | P1 |
+| **TC-WB-06** | 会话结束返回初始界面 | 刷题 / 背题 / 背知识点 | 做完最后一题 → 弹「本轮结束后的学习计划」→ 点「跳过」或提交计划后关闭 | 回到选题初始界面，不停在最后一题 | P0 |

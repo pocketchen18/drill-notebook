@@ -305,6 +305,8 @@ export function QuestionStudyPage(): JSX.Element {
       onClose={() => {
         recommendShownRef.current = false;
         setRecommendVisible(false);
+        // 会话结束（跳过或写入计划后）回到背题初始界面，而不是停在最后一题。
+        setSessionIds(undefined);
       }}
       sessionType="memorize"
       payload={recommendPayload}

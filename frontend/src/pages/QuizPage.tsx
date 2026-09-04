@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Empty, Input, Message, Modal, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react';
-import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
+import { CalendarPlus, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus2, Play, RotateCcw, Sparkles, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { get, post } from '../lib/api';
+import { get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, NotePage, Notebook, Question, QuizSession, SubmitResult } from '../lib/types';
 import { useSessionStore } from '../stores/sessionStore';
@@ -240,6 +240,22 @@ export function QuizPage(): JSX.Element {
     }
   };
 
+  /** 结束当前会话，回到练习初始（选题）界面。会话结束弹窗关闭与「重新选择」共用。 */
+  const resetToSetup = (): void => {
+    setSession(undefined);
+    setResult(undefined);
+    setMasterPassword('');
+    setAnswerStates({});
+    setAnsweredIds([]);
+    setCurveQueue([]);
+    setCurveStates({});
+    setIndex(0);
+    setSelected([]);
+    setTextAnswer('');
+    recommendShownRef.current = false;
+    setRecommendVisible(false);
+  };
+
   // Day-queue / deep-link: auto start once when questionIds present.
   useEffect(() => {
     if (!autoStart || !questionIds?.length || autoStartedRef.current || session) return;
@@ -383,6 +399,14 @@ export function QuizPage(): JSX.Element {
     setPlanVisible(true);
   };
 
+  /** 手动把当前题移出错题本（答错会自动重置为未移出）。 */
+  const excludeFromWrongBook = (): void => {
+    if (!question) return;
+    void put(`/api/questions/${question.id}/wrong-excluded`, { excluded: true })
+      .then(() => Message.success('已移出错题本，下次答错会重新计入'))
+      .catch((error: unknown) => Message.error(friendlyMessage(error, '移出失败，请稍后重试')));
+  };
+
   const setupPlanQuestions = useMemo(() => {
     if (questionIds?.length) {
       // Deep-link / 错题再练：questionsQuery 可能未按 bank 拉取，无题干时用占位标题仍可加入计划。
@@ -423,7 +447,7 @@ export function QuizPage(): JSX.Element {
           </Button>
         ) : null}
         <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>问 AI</Button>
-        <Button icon={<RotateCcw size={16} />} onClick={() => { setSession(undefined); setResult(undefined); setMasterPassword(''); setAnswerStates({}); setAnsweredIds([]); setCurveQueue([]); setCurveStates({}); recommendShownRef.current = false; setRecommendVisible(false); }}>重新选择</Button>
+        <Button icon={<RotateCcw size={16} />} onClick={resetToSetup}>重新选择</Button>
         {!autoStart || !session ? (
           <Button type="primary" icon={<Play size={16} />} onClick={() => void start()}>开始练习</Button>
         ) : null}
@@ -471,6 +495,7 @@ export function QuizPage(): JSX.Element {
           <Button icon={<FilePlus2 size={16} />} onClick={() => { setNoteQuestion(question); setNoteVisible(true); }}>添加到笔记</Button>
           <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForQuestions([question])}>加入计划</Button>
           <Button icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>AI 讲解</Button>
+          {result ? <Button icon={<CheckCircle2 size={16} />} onClick={excludeFromWrongBook}>移出错题本</Button> : null}
           {!result ? <Button type="primary" loading={submitting} onClick={() => void submit()}>{question.type === 'essay' ? '提交并请求 AI 辅助判题' : '提交答案'}</Button> : <Button type="primary" icon={<ChevronRight size={16} />} onClick={next}>{index === curveQueue.length - 1 ? '完成' : '下一题'}</Button>}
         </div>
       </div>
@@ -486,10 +511,7 @@ export function QuizPage(): JSX.Element {
     />
     <SessionPlanRecommendModal
       visible={recommendVisible}
-      onClose={() => {
-        recommendShownRef.current = false;
-        setRecommendVisible(false);
-      }}
+      onClose={resetToSetup}
       sessionType="quiz"
       payload={recommendPayload}
     />
