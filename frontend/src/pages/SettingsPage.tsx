@@ -1,13 +1,26 @@
 import { useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
-import { Edit3, Plus, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Edit3, Plus, RotateCcw, Sparkles, Star, Trash2 } from 'lucide-react';
 import { AiModelSlotCard } from '../components/AiModelSlotCard';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { DataManagementPanel } from '../components/DataManagementPanel';
-import { useUiStore } from '../stores/uiStore';
+import { ShortcutRecorder } from '../components/ShortcutRecorder';
+import { useUiStore, type ThemeMode } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
+import {
+  SHORTCUT_ACTIONS,
+  SHORTCUT_SCOPES,
+  defaultShortcutConfig,
+  describeAccelerator,
+  findShortcutConflicts,
+  isActionDefault,
+  isDefaultShortcutConfig,
+  ruleForAction,
+  shortcutActionMeta,
+  type ShortcutAction
+} from '../lib/shortcuts';
 import {
   LS_ENROLL_DEFAULT,
   LS_FORCE_ADVANCE,
@@ -67,10 +80,54 @@ function readTabFromUrl(): SettingsTab {
 
 export function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient();
-  const theme = useUiStore((state) => state.theme);
-  const toggleTheme = useUiStore((state) => state.toggleTheme);
+  const themeMode = useUiStore((state) => state.themeMode);
+  const setThemeMode = useUiStore((state) => state.setThemeMode);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
+  const aiFabVisible = useUiStore((state) => state.aiFabVisible);
+  const setAiFabVisible = useUiStore((state) => state.setAiFabVisible);
+  const shortcutConfig = useUiStore((state) => state.shortcutConfig);
+  const setShortcutConfig = useUiStore((state) => state.setShortcutConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>(readTabFromUrl);
+
+  // 快捷键：同一时刻只允许一个动作处于录制态
+  const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
+  const shortcutsAreDefault = isDefaultShortcutConfig(shortcutConfig);
+
+  const onShortcutAdd = (action: ShortcutAction, accelerator: string): void => {
+    const label = describeAccelerator(accelerator);
+    if (shortcutConfig[action].includes(accelerator)) {
+      Message.info(`${label} 已在列表中`);
+      return;
+    }
+    const candidate = { ...shortcutConfig, [action]: [...shortcutConfig[action], accelerator] };
+    const conflictWith = findShortcutConflicts(candidate)[action];
+    if (conflictWith) {
+      Message.warning(`${label} 已用于「${shortcutActionMeta(conflictWith).label}」`);
+      return;
+    }
+    setShortcutConfig(candidate);
+    Message.success(`已添加 ${label}`);
+  };
+
+  const onShortcutRemove = (action: ShortcutAction, accelerator: string): void => {
+    setShortcutConfig({ ...shortcutConfig, [action]: shortcutConfig[action].filter((entry) => entry !== accelerator) });
+  };
+
+  const onShortcutClear = (action: ShortcutAction): void => {
+    setShortcutConfig({ ...shortcutConfig, [action]: [] });
+    Message.success('已清空该项快捷键');
+  };
+
+  const onShortcutResetOne = (action: ShortcutAction): void => {
+    setRecordingAction(null);
+    setShortcutConfig({ ...shortcutConfig, [action]: [...shortcutActionMeta(action).defaults] });
+  };
+
+  const onResetShortcuts = (): void => {
+    setRecordingAction(null);
+    setShortcutConfig(defaultShortcutConfig());
+    Message.success('快捷键已恢复默认');
+  };
 
   // 复习方案编辑器 state
   const [reviewEditorVisible, setReviewEditorVisible] = useState(false);
@@ -193,7 +250,7 @@ export function SettingsPage(): JSX.Element {
 
   return <main className="page">
     <div className="page-heading">
-      <div><h1>设置</h1><p>主题、AI 连接、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球或 Ctrl+J。</p></div>
+      <div><h1>设置</h1><p>主题、快捷键、AI 连接、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
     </div>
     <div className="settings-tab-bar" role="tablist" aria-label="设置分区" onKeyDown={onTabBarKeyDown}>
       {TABS.map((tab) => (
@@ -211,15 +268,23 @@ export function SettingsPage(): JSX.Element {
       ))}
     </div>
     {activeTab === 'general' && (
-      <div className="settings-tab-panel" role="tabpanel">
+      <div className="settings-tab-stack" role="tabpanel">
       <section className="panel">
         <div className="panel-header"><h2>界面</h2></div>
         <div className="panel-body form-stack">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div><Typography.Text bold>深色主题</Typography.Text><br /><Typography.Text type="secondary">适合夜间整理笔记。</Typography.Text></div>
-            <Switch checked={theme === 'dark'} onChange={toggleTheme} />
+          <div className="settings-row">
+            <div><Typography.Text bold>主题</Typography.Text><br /><Typography.Text type="secondary">跟随系统时随 Windows 深浅色自动切换。</Typography.Text></div>
+            <Radio.Group type="button" size="small" value={themeMode} onChange={(value) => setThemeMode(value as ThemeMode)}>
+              <Radio value="light">浅色</Radio>
+              <Radio value="dark">深色</Radio>
+              <Radio value="system">跟随系统</Radio>
+            </Radio.Group>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <div className="settings-row">
+            <div><Typography.Text bold>显示 AI 悬浮球</Typography.Text><br /><Typography.Text type="secondary">隐藏后仍可用快捷键或下方按钮打开。</Typography.Text></div>
+            <Switch checked={aiFabVisible} onChange={setAiFabVisible} />
+          </div>
+          <div className="settings-row">
             <div><Typography.Text bold>记住上次停留位置与各页选择</Typography.Text><br /><Typography.Text type="secondary">重启后回到上次页面，并恢复各页勾选与切换。</Typography.Text></div>
             <Space align="center">
               <Button type="text" size="mini" disabled={!rememberViewState} onClick={onClearViewState}>清除已记住的位置</Button>
@@ -227,6 +292,43 @@ export function SettingsPage(): JSX.Element {
             </Space>
           </div>
           <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>快捷键</h2>
+          <Button type="text" size="small" icon={<RotateCcw size={14} />} disabled={shortcutsAreDefault} onClick={onResetShortcuts}>全部恢复默认</Button>
+        </div>
+        <div className="panel-body form-stack">
+          {SHORTCUT_SCOPES.map((scope) => (
+            <div key={scope.id} className="settings-group" data-scope={scope.id}>
+              <Typography.Text type="secondary" className="settings-group-caption">{`${scope.label} · ${scope.description}`}</Typography.Text>
+              {SHORTCUT_ACTIONS.filter((meta) => meta.scope === scope.id).map((meta) => (
+                <div key={meta.id} className="settings-row" data-shortcut={meta.id}>
+                  <div>
+                    <Typography.Text bold>{meta.label}</Typography.Text>
+                    {meta.description ? <><br /><Typography.Text type="secondary">{meta.description}</Typography.Text></> : null}
+                  </div>
+                  <Space align="center" size={4}>
+                    {isActionDefault(meta.id, shortcutConfig) ? null : (
+                      <Button type="text" size="mini" icon={<RotateCcw size={12} />} aria-label={`恢复默认：${meta.label}`} title="恢复此项默认" onClick={() => onShortcutResetOne(meta.id)} />
+                    )}
+                    <ShortcutRecorder
+                      values={shortcutConfig[meta.id]}
+                      rule={ruleForAction(meta.id)}
+                      recording={recordingAction === meta.id}
+                      onStart={() => setRecordingAction(meta.id)}
+                      onStop={() => setRecordingAction(null)}
+                      onAdd={(accelerator) => onShortcutAdd(meta.id, accelerator)}
+                      onRemove={(accelerator) => onShortcutRemove(meta.id, accelerator)}
+                      onClear={() => onShortcutClear(meta.id)}
+                    />
+                  </Space>
+                </div>
+              ))}
+            </div>
+          ))}
+          <Typography.Text type="secondary">点 + 录入新键；Esc 取消，Backspace 清空该项。输入框聚焦时页面内快捷键不生效。</Typography.Text>
         </div>
       </section>
       </div>

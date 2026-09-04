@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { renderToString } from 'katex';
+import { matchesAny } from '../../lib/shortcuts';
+import { useUiStore } from '../../stores/uiStore';
 
 function MathDisplay({ latex, displayMode }: { latex: string; displayMode: boolean }): JSX.Element {
   let html = '';
@@ -49,7 +51,7 @@ export function MathNode({ node, updateAttributes, selected }: NodeViewProps): J
               setDraft(latex);
               setEditing(false);
             }
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
               event.preventDefault();
               commit();
             }

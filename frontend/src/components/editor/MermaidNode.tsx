@@ -3,6 +3,7 @@ import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
 import { ensureMermaidTheme } from '../../lib/mermaidTheme';
+import { matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 
 function MermaidPreview({ code }: { code: string }): JSX.Element {
@@ -67,7 +68,7 @@ export function MermaidNode({ node, updateAttributes, selected }: NodeViewProps)
               setDraft(code);
               setEditing(false);
             }
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
               event.preventDefault();
               commit();
             }
