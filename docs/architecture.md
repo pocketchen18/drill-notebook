@@ -23,7 +23,8 @@ components/editor/  TipTap 编辑器扩展：MathBlock / MermaidBlock / Markdown
 stores/         Zustand（主题、AI 开关、页面上下文、复习会话、笔记本专注/全屏模式等）
 lib/            API 客户端、导入导出、复习/计划算法、dayQueueSession、knowledgeApi、mermaidTheme、planProgress、sessionPrefs、**viewState（界面状态记忆）**、**attachments（上传/列表/删除）、videoEmbed（YouTube/Bilibili URL 解析）**、工具
 hooks/          如 useRegisterPageContext（避免 setState 死循环）、useReviewSession、**useViewState（切片读取 / 去重写入 / 切库不清空）**
-styles/app.css  设计 token + 组件样式 + 深色模式 + video/file-block 样式
+styles/app.css  设计令牌（明暗同源）+ Arco 变量桥接 + 壳层 / 页面 / 编辑器 / AI 侧栏样式 + 工作台几何契约（DESIGN.md）
+components/BrandMark.tsx  品牌标识（与 resources/icon/icon.svg、public/favicon.svg 同一几何；`npm run build:icons` 生成 icon.png / icon.ico）
 ```
 
 ### 2.1 主题
@@ -33,6 +34,7 @@ styles/app.css  设计 token + 组件样式 + 深色模式 + video/file-block �
 3. `body[arco-theme=dark]`：Arco 组件库暗色  
 4. `localStorage['drill-notebook-theme']`：首屏兜底  
 5. Electron `config`：跨会话持久化  
+6. Arco 变量桥接：`app.css` 晚于 `arco.css` 加载，在 `body` / `body[arco-theme=dark]` 上覆盖 `--arcoblue-*`、圆角、文本 / 边框 / 填充变量，Arco 组件与自有令牌同源（v0.6）
 
 Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`，避免「侧栏不跟主题」。
 

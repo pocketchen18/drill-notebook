@@ -210,6 +210,23 @@ public class RetrievalIndexRepository {
                 });
     }
 
+    /**
+     * Page ids that already carry a {@code content_hash}, for the startup
+     * normalizer audit. Only ids/hashes are loaded; the content itself is read
+     * per page inside the re-index transaction so memory stays bounded.
+     */
+    public List<Map<String, Object>> findPageHashes() {
+        return jdbc.query(
+                "SELECT np.id AS page_id, np.content_hash FROM note_page np"
+                        + " WHERE np.content_hash IS NOT NULL ORDER BY np.id",
+                (rs, row) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("page_id", rs.getLong("page_id"));
+                    m.put("content_hash", rs.getString("content_hash"));
+                    return m;
+                });
+    }
+
     public int updatePageContentHash(long pageId, String contentHash) {
         return jdbc.update(
                 "UPDATE note_page SET content_hash = ? WHERE id = ?",

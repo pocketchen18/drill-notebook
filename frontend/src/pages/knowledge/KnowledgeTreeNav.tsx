@@ -85,6 +85,7 @@ export function KnowledgeTreeNav({
   onCollapsedKeysChange
 }: KnowledgeTreeNavProps): JSX.Element {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(initialCollapsedKeys ?? []));
+  const panelRef = useRef<HTMLElement>(null);
   const prevScopeRef = useRef(collapsedScope);
   const initialKeysRef = useRef(initialCollapsedKeys);
   initialKeysRef.current = initialCollapsedKeys;
@@ -121,7 +122,16 @@ export function KnowledgeTreeNav({
       return next;
     });
     requestAnimationFrame(() => {
-      document.querySelector(`[data-node-id="${activeId}"]`)?.scrollIntoView({ block: 'center' });
+      // 只在本组件内查找（页面大纲与全屏大纲可能同时挂载），并且只滚动大纲自己的滚动容器：
+      // scrollIntoView 会连带滚动所有祖先容器（含横向），在全屏卡片里会带动正文滚动条。
+      const panel = panelRef.current;
+      const row = panel?.querySelector<HTMLElement>(`[data-node-id="${activeId}"]`);
+      const scroller = panel?.querySelector<HTMLElement>('.kp-tree-panel-body');
+      if (!row || !scroller) return;
+      const rowRect = row.getBoundingClientRect();
+      const boxRect = scroller.getBoundingClientRect();
+      const delta = (rowRect.top + rowRect.height / 2) - (boxRect.top + boxRect.height / 2);
+      if (Math.abs(delta) > 1) scroller.scrollTop += delta;
     });
   }, [activeId, tree]);
 
@@ -141,7 +151,7 @@ export function KnowledgeTreeNav({
   const isRootCollapsed = collapsed.has(String(ROOT_ID));
 
   return (
-    <aside className="kp-tree-panel">
+    <aside className="kp-tree-panel" ref={panelRef}>
       <div className="kp-tree-panel-header">大纲</div>
       <div className="kp-tree-panel-body">
         {hasRoots && (

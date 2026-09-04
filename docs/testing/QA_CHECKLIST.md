@@ -167,5 +167,27 @@
 | 启动落点 | `frontend/src/App.startRoute.test.tsx`（6 用例） | 无记忆落笔记本、重启回上次页、未知路径回落、非法记忆忽略、损坏缓存、深链优先 |
 | 题库页选择记忆 | `frontend/src/pages/BankPage.viewState.test.tsx`（4 用例） | 恢复上次题库与部分勾选、`all` 哨兵展开整库、题库已删回落第一个库、无记忆时不勾选 |
 | 题库→刷题选题继承 | `frontend/src/pages/BankPage.workspace.test.tsx`（BNK-16 / BNK-16b） | 无勾选仅携带 bankId；有勾选携带 `questionIds`+`from=bank` |
-| 前端回归 | `npm test --prefix frontend`（Vitest 全量 242 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归 |
+| 笔记本创建 | `frontend/src/pages/NotebookPage.workspace.test.tsx`（NBK-14） | 「新建笔记本」弹窗 POST `/api/notebooks` 并切换到新笔记本；空标题不发请求 |
+| 全屏卡片快捷键不滚动 | `frontend/src/pages/knowledge/KnowledgeFullCardView.test.tsx`（3 用例） | ←/→/T/Esc 命中即 `preventDefault`（`fireEvent` 返回 false）、未绑定键不拦截、改绑到 ↑↓/PageUp/PageDown 同样不滚动、输入框内方向键与字母键交还控件 |
+| RAG 索引状态自愈 | `backend/.../EmbeddingJobExecutorTest.java`（空语料激活 / supersede 后激活 / 有待跑任务不激活 / 无 provider 也能结算空语料 4 用例） | REBUILDING + 队列无可运行任务时重算 coverage 并激活；退避窗口内的任务与有排队任务时不会误激活 |
+| normalizer 升级迁移 | `backend/.../NoteIndexingServiceTest.java`（2 用例） | 启动审计重建 hash 不符的页（视频页从 0 分块变为可检索）、二次运行幂等；hash 一致的页与笔记正文不被改写 |
+| 视频 / 附件块入索引 | `backend/.../NoteNormalizerTest.java`（3 用例） | `videoBlock` 取标题 + URL、`fileBlock` 取文件名、空 attrs 不产生分块 |
+| provider 可用性可见 | `backend/.../EmbeddingJobExecutorTest.java` + `frontend/src/components/EmbeddingSettingsCard.test.tsx` | status 返回 `providerReady`；`REBUILDING && providerReady=false` 时设置页显示「本地向量组件不可用」而非「索引构建中」 |
+| 前端回归 | `npm test --prefix frontend`（Vitest 全量 311 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归、Markdown 题干纯文本化（`markdownText`）、`app.css` 令牌约束（Embedding 条目跟主题变量） |
 | 全量门禁 | `.\mvnw.cmd test`（384 项）+ `npm run build --prefix frontend` | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节 |
+
+---
+
+## 模块十：v0.6 UI 视觉回归
+
+> 设计令牌与几何契约见 [DESIGN.md](../../DESIGN.md)；图标产物由 `npm run build:icons` 生成到 `resources/icon/`。
+
+| 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-UI-01** | 品牌与图标 | 打包或 `npm run dev` | 看窗口 / 任务栏图标与侧栏品牌行 | 均为新图标（渐变方块 + 折角页 + 对勾）；浏览器标签页 favicon 同款 | P1 |
+| **TC-UI-02** | 分组侧栏 | 任意页面 | 1. 观察侧栏<br>2. 点「收起侧栏」→ 悬停图标 → 等 3 秒 → 鼠标贴左缘 | 1. 资料（笔记本 / 题库 / 知识点）、学习（练习 / 错题）、规划（日历）三组，设置在底部，当前页浅蓝高亮<br>2. 56px 窄栏图标居中并显示名称提示；3 秒后自动隐藏，贴左缘唤回（行为与 v0.5 一致） | P0 |
+| **TC-UI-03** | 顶栏 | 任意页面 | 1. 切换页面看标题<br>2. 点「AI 助手」药丸<br>3. 点右侧圆形明暗按钮 | 1. 标题随页面变化<br>2. 药丸显示当前首个绑定（默认 Ctrl+J），点击打开侧栏<br>3. 明暗即时切换，设置 → 常规「主题」单选同步 | P0 |
+| **TC-UI-04** | 明暗两态无残留 | 深色模式 | 逐页（笔记本 / 题库 / 错题 / 知识点 / 练习 / 日历 / 设置）并打开 Select 下拉、Modal、AI 侧栏 | 无纯白 / 纯黑残留，输入框、表格、弹层、Tag 均随令牌换色；文字对比度可读 | P0 |
+| **TC-UI-05** | 练习题卡 | 有题库 | 刷题：选项 → 提交；背题：揭示答案 → 评分 | 顶部进度条随题号推进；选项字母徽章，选中 / 正确 / 错误三态清晰；反馈卡左侧强调条；评分按钮悬停显示语义色 | P1 |
+| **TC-UI-06** | 日历 | 日历页 | 观察月份头部与今天格 | 今天日期为实心徽章、选中日浅蓝描边；月份标题与年 / 月选择器在 380px 侧栏内自动换行不溢出 | P1 |
+| **TC-UI-07** | 工作台契约不变 | 笔记本 / 题库 | 1100 / 1440px 下观察 explorer 与命令行 | 232px explorer、命令行 min-height 44、路由留白 16/20/24 与 v0.5 一致；`BankPage.workspace` / `NotebookEditor.workspace` 测试通过 | P0 |

@@ -48,6 +48,33 @@ function javaBinary(paths: PortablePaths): string {
   return process.platform === 'win32' ? 'java.exe' : 'java';
 }
 
+/**
+ * Locate the Rust embedding worker for the backend. Without this the backend
+ * only sees DRILL_EMBEDDING_WORKER_EXE when the app was launched through
+ * scripts/start-mvp.ps1, so `npm run dev:electron` / a packaged build leaves the
+ * local embedding provider permanently unavailable and the vector index stuck in
+ * REBUILDING. Release build wins; the debug build is a dev-only fallback.
+ */
+function findEmbeddingWorker(paths: PortablePaths): string | undefined {
+  const exeName = process.platform === 'win32' ? 'embedding-worker.exe' : 'embedding-worker';
+  const explicit = process.env.DRILL_EMBEDDING_WORKER_EXE?.trim();
+  if (explicit) {
+    if (fs.existsSync(explicit)) return path.resolve(explicit);
+    console.warn(`[portable] DRILL_EMBEDDING_WORKER_EXE points at a missing file: ${explicit}`);
+  }
+
+  const workspace = path.resolve(__dirname, '..');
+  const candidates = [
+    path.join(paths.root, 'embedding-worker', exeName),
+    path.join(process.resourcesPath ?? '', 'embedding-worker', exeName),
+    path.join(workspace, 'embedding-worker', 'target', 'x86_64-pc-windows-msvc', 'release', exeName),
+    path.join(workspace, 'embedding-worker', 'target', 'release', exeName),
+    path.join(workspace, 'embedding-worker', 'target', 'x86_64-pc-windows-msvc', 'debug', exeName),
+    path.join(workspace, 'embedding-worker', 'target', 'debug', exeName)
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate));
+}
+
 function readPid(pidFile: string): number | undefined {
   if (!fs.existsSync(pidFile)) return undefined;
   const value = Number(fs.readFileSync(pidFile, 'utf8').trim());
@@ -106,6 +133,9 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
 
   const jar = findBackendJar(paths);
   const java = javaBinary(paths);
+  const workerExe = findEmbeddingWorker(paths);
+  if (workerExe) console.log(`[portable] embedding worker: ${workerExe}`);
+  else console.warn('[portable] embedding worker not found; local vector index stays unavailable (run npm run build:embedding-worker)');
   const child = spawn(
     java,
     [
@@ -121,7 +151,14 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
     ],
     {
       cwd: paths.root,
-      env: { ...process.env, APP_ROOT: paths.root, TEMP: paths.tmp, TMP: paths.tmp, TMPDIR: paths.tmp },
+      env: {
+        ...process.env,
+        APP_ROOT: paths.root,
+        TEMP: paths.tmp,
+        TMP: paths.tmp,
+        TMPDIR: paths.tmp,
+        ...(workerExe ? { DRILL_EMBEDDING_WORKER_EXE: workerExe } : {})
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     }

@@ -1007,7 +1007,7 @@ public class AiService {
     }
 
     private AiConfigRepository.ConfigRow requireChatConfig() {
-        return requireConfig(AiConfigRepository.PURPOSE_CHAT, "请先在设置中配置「主模型」AI API Key", "请先在设置中配置「主模型」Endpoint");
+        return requireConfig(AiConfigRepository.PURPOSE_CHAT, "请先在设置中配置「主模型」AI API Key", "请先在设置中配置「主模型」Base URL");
     }
 
     private AiConfigRepository.ConfigRow requireImportConfig() {
@@ -1022,7 +1022,7 @@ public class AiService {
                 && chatConfig.endpoint() != null && !chatConfig.endpoint().isBlank()) {
             return chatConfig;
         }
-        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Endpoint");
+        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Base URL");
     }
 
     private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {

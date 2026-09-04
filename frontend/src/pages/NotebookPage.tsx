@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin } from '@arco-design/web-react';
-import { CalendarPlus, FilePlus2, Trash2 } from 'lucide-react';
+import { CalendarPlus, FilePlus2, Plus, Trash2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { del, flushRequest, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -36,6 +36,8 @@ export function NotebookPage(): JSX.Element {
   const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery ?? cachedNotebooks.pageId);
   const [newPageVisible, setNewPageVisible] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
+  const [newNotebookVisible, setNewNotebookVisible] = useState(false);
+  const [newNotebookTitle, setNewNotebookTitle] = useState('');
   const [pendingContent, setPendingContent] = useState<Record<string, unknown>>();
   const pendingSaveRef = useRef<{ pageId: number; content: Record<string, unknown> } | null>(null);
   const [selectedPageIds, setSelectedPageIds] = useState<number[]>(() => cachedNotebooks.selectedPageIds ?? []);
@@ -63,6 +65,20 @@ export function NotebookPage(): JSX.Element {
     mutationFn: (title: string) => post<NotePage>(`/api/notebooks/${notebookId}/pages`, { title, content: { type: 'doc', content: [{ type: 'paragraph' }] } }),
     onSuccess: (page) => { setPageId(page.id); setNewPageVisible(false); setNewPageTitle(''); refresh(); Message.success('页面已创建'); },
     onError: (error) => Message.error(friendlyMessage(error, '页面创建失败，请稍后重试'))
+  });
+  const createNotebook = useMutation({
+    mutationFn: (title: string) => post<Notebook>('/api/notebooks', { title }),
+    onSuccess: (notebook) => {
+      // 先写入缓存再切换，避免「不在列表中的笔记本」被兜底逻辑重置回第一个
+      queryClient.setQueryData<Notebook[]>(['notebooks'], (current) => [...(current ?? []), notebook]);
+      setNotebookId(notebook.id);
+      setPageId(undefined);
+      setNewNotebookVisible(false);
+      setNewNotebookTitle('');
+      void queryClient.invalidateQueries({ queryKey: ['notebooks'] });
+      Message.success('笔记本已创建');
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '笔记本创建失败，请稍后重试'))
   });
   const deletePage = useMutation({
     mutationFn: (id: number) => del<void>(`/api/note-pages/${id}`),
@@ -216,6 +232,7 @@ export function NotebookPage(): JSX.Element {
         <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
           {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
         </Select>
+        <Button icon={<Plus size={16} />} onClick={() => setNewNotebookVisible(true)}>新建笔记本</Button>
       </div>
       <Space className="route-command-row__actions">
         <CompletePlanButton
@@ -272,6 +289,9 @@ export function NotebookPage(): JSX.Element {
     </div> : <Empty description="正在创建默认笔记本…" />}
     <Modal title="新建页面" visible={newPageVisible} onCancel={() => setNewPageVisible(false)} onOk={() => { if (!newPageTitle.trim()) { Message.warning('请输入页面标题'); return; } createPage.mutate(newPageTitle.trim()); }} confirmLoading={createPage.isPending} autoFocus={false}>
       <Input autoFocus placeholder="例如：错题总结" value={newPageTitle} onChange={setNewPageTitle} onPressEnter={() => { if (newPageTitle.trim()) createPage.mutate(newPageTitle.trim()); }} />
+    </Modal>
+    <Modal title="新建笔记本" visible={newNotebookVisible} onCancel={() => setNewNotebookVisible(false)} onOk={() => { if (!newNotebookTitle.trim()) { Message.warning('请输入笔记本标题'); return; } createNotebook.mutate(newNotebookTitle.trim()); }} confirmLoading={createNotebook.isPending} autoFocus={false}>
+      <Input autoFocus placeholder="例如：高等数学" value={newNotebookTitle} onChange={setNewNotebookTitle} onPressEnter={() => { if (newNotebookTitle.trim()) createNotebook.mutate(newNotebookTitle.trim()); }} />
     </Modal>
     <AddToPlanModal
       visible={planVisible}

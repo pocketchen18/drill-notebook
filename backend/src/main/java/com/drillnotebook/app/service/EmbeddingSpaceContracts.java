@@ -83,20 +83,20 @@ public final class EmbeddingSpaceContracts {
      */
     public static String normalizeEndpoint(String endpoint) {
         if (endpoint == null || endpoint.isBlank()) {
-            throw new IllegalArgumentException("Endpoint 不能为空");
+            throw new IllegalArgumentException("Base URL 不能为空");
         }
         java.net.URI uri;
         try {
             uri = new java.net.URI(endpoint.trim());
         } catch (java.net.URISyntaxException e) {
-            throw new IllegalArgumentException("Endpoint 不是合法 URL");
+            throw new IllegalArgumentException("Base URL 不是合法 URL");
         }
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
         if (!"http".equals(scheme) && !"https".equals(scheme)) {
-            throw new IllegalArgumentException("Endpoint 仅支持 http/https");
+            throw new IllegalArgumentException("Base URL 仅支持 http/https");
         }
         if (uri.getHost() == null || uri.getHost().isBlank()) {
-            throw new IllegalArgumentException("Endpoint 缺少主机名");
+            throw new IllegalArgumentException("Base URL 缺少主机名");
         }
         String host = uri.getHost().toLowerCase(java.util.Locale.ROOT);
         int port = uri.getPort();

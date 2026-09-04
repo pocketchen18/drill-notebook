@@ -163,6 +163,8 @@ export interface RetrievalStatus {
   indexState: string;
   embeddingSpaceId?: string | null;
   provider?: string | null;
+  /** 当前 provider 是否可用（本地模型未编译 worker 时为 false）。 */
+  providerReady?: boolean;
 }
 
 export interface AiChatSession {

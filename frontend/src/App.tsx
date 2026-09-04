@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Layout, Menu, Switch, Typography } from '@arco-design/web-react';
-import { BookOpenText, BrainCircuit, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sun, Target, XCircle } from 'lucide-react';
+import { Layout } from '@arco-design/web-react';
+import { BookOpenText, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sparkles, Sun, Target, XCircle } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { resolveSystemTheme, useUiStore } from './stores/uiStore';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
 import { describeAccelerator } from './lib/shortcuts';
 import { readLastRoute, recordRoute } from './lib/viewState';
+import { BrandMark } from './components/BrandMark';
 import { BankPage } from './pages/BankPage';
 import { WrongPage } from './pages/WrongPage';
 import { NotebookPage } from './pages/NotebookPage';
@@ -17,15 +18,36 @@ import { CalendarPage } from './pages/CalendarPage';
 
 const { Sider, Header, Content } = Layout;
 
-const navItems = [
-  { key: '/notebooks', label: '笔记本', icon: <FileText size={17} /> },
-  { key: '/banks', label: '题库', icon: <BookOpenText size={17} /> },
-  { key: '/wrong', label: '错题', icon: <XCircle size={17} /> },
-  { key: '/knowledge', label: '知识点', icon: <Layers3 size={17} /> },
-  { key: '/practice', label: '练习', icon: <Target size={17} /> },
-  { key: '/calendar', label: '日历', icon: <Calendar size={17} /> },
-  { key: '/settings', label: '设置', icon: <Settings size={17} /> }
+interface NavItem {
+  key: string;
+  label: string;
+  icon: JSX.Element;
+}
+
+/** 主导航按用途分组：资料 → 学习 → 规划；「设置」固定在侧栏底部。 */
+const navGroups: Array<{ caption: string; items: NavItem[] }> = [
+  {
+    caption: '资料',
+    items: [
+      { key: '/notebooks', label: '笔记本', icon: <FileText size={18} /> },
+      { key: '/banks', label: '题库', icon: <BookOpenText size={18} /> },
+      { key: '/knowledge', label: '知识点', icon: <Layers3 size={18} /> }
+    ]
+  },
+  {
+    caption: '学习',
+    items: [
+      { key: '/practice', label: '练习', icon: <Target size={18} /> },
+      { key: '/wrong', label: '错题', icon: <XCircle size={18} /> }
+    ]
+  },
+  {
+    caption: '规划',
+    items: [{ key: '/calendar', label: '日历', icon: <Calendar size={18} /> }]
+  }
 ];
+const settingsItem: NavItem = { key: '/settings', label: '设置', icon: <Settings size={18} /> };
+const navItems: NavItem[] = [...navGroups.flatMap((group) => group.items), settingsItem];
 
 function Shell(): JSX.Element {
   const location = useLocation();
@@ -34,6 +56,8 @@ function Shell(): JSX.Element {
   const toggleTheme = useUiStore((state) => state.toggleTheme);
   const setThemeMode = useUiStore((state) => state.setThemeMode);
   const clearPageContext = useUiStore((state) => state.clearPageContext);
+  const setAiOpen = useUiStore((state) => state.setAiOpen);
+  const notebookFocusMode = useUiStore((state) => state.notebookFocusMode);
   // AI 助手当前的第一个绑定（设置页改绑后提示同步更新）
   const aiAccelerator = useUiStore((state) => state.shortcutConfig.toggleAi[0]);
   // 全局快捷键（设置 → 常规 → 快捷键）
@@ -119,6 +143,39 @@ function Shell(): JSX.Element {
     return () => window.removeEventListener('mousemove', onMove);
   }, [collapsed, siderHidden]);
 
+  /** 折叠态提示：贴着触发元素右侧垂直居中（固定定位，不受侧栏 overflow 裁剪）。 */
+  const showTip = (label: string, target: HTMLElement): void => {
+    const rect = target.getBoundingClientRect();
+    setHoverTip({ label, left: rect.right + 10, top: rect.top + rect.height / 2 });
+  };
+
+  const renderNavItem = (item: NavItem): JSX.Element => {
+    const active = item.key === activeKey;
+    const isSettings = item.key === settingsItem.key;
+    return (
+      <button
+        type="button"
+        key={item.key}
+        role="menuitem"
+        className={`sider-nav-item${active ? ' is-active' : ''}${isSettings ? ` sider-settings${active ? ' active' : ''}` : ''}`}
+        data-menukey={item.key}
+        aria-label={item.label}
+        aria-current={active ? 'page' : undefined}
+        title={isSettings && !collapsed ? item.label : undefined}
+        onClick={() => { setHoverTip(null); navigate(item.key); }}
+        onMouseEnter={(event) => { if (collapsed) showTip(item.label, event.currentTarget); }}
+        onMouseLeave={() => setHoverTip(null)}
+        onFocus={(event) => { if (collapsed) showTip(item.label, event.currentTarget); }}
+        onBlur={() => setHoverTip(null)}
+      >
+        <span className="sider-nav-icon">{item.icon}</span>
+        {!collapsed && <span className="sider-nav-label">{item.label}</span>}
+      </button>
+    );
+  };
+
+  const collapseLabel = collapsed ? '展开导航栏' : '折叠导航栏';
+
   return (
     <Layout className="app-shell">
       <Sider
@@ -131,99 +188,37 @@ function Shell(): JSX.Element {
         onCollapse={setCollapsed}
       >
         <div className="brand">
-          <div className="brand-mark"><BrainCircuit size={18} /></div>
+          <div className="brand-mark"><BrandMark size={32} /></div>
           {!collapsed && <span className="brand-name">Drill Notebook</span>}
         </div>
         <div className="sider-body">
-          <div className="sider-menu-wrap">
-            <Menu
-              selectedKeys={[activeKey]}
-              onClickMenuItem={(key) => navigate(key)}
-              collapse={collapsed}
-              style={{ border: 0, padding: collapsed ? '12px 0' : '12px 10px' }}
+          <nav className="sider-nav" role="menu" aria-label="主导航">
+            {navGroups.map((group) => (
+              <div className="sider-nav-group" key={group.caption} role="group" aria-label={group.caption}>
+                {!collapsed && <div className="sider-nav-caption">{group.caption}</div>}
+                {group.items.map(renderNavItem)}
+              </div>
+            ))}
+          </nav>
+          <div className="sider-footer">
+            {renderNavItem(settingsItem)}
+            <button
+              type="button"
+              className="sider-collapse-btn"
+              onClick={() => {
+                setHoverTip(null);
+                setCollapsed((value) => !value);
+              }}
+              aria-label={collapseLabel}
+              onMouseEnter={(event) => { if (collapsed) showTip(collapseLabel, event.currentTarget); }}
+              onMouseLeave={() => setHoverTip(null)}
+              onFocus={(event) => { if (collapsed) showTip(collapseLabel, event.currentTarget); }}
+              onBlur={() => setHoverTip(null)}
             >
-              {navItems.filter((item) => item.key !== '/settings').map((item) => (
-                <Menu.Item key={item.key}>
-                  {collapsed ? (
-                    <button
-                      type="button"
-                      className="menu-icon-only"
-                      data-menukey={item.key}
-                      aria-label={item.label}
-                      onMouseEnter={(event) => {
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        setHoverTip({ label: item.label, left: rect.right + 10, top: rect.top + rect.height / 2 });
-                      }}
-                      onMouseLeave={() => setHoverTip(null)}
-                      onFocus={(event) => {
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        setHoverTip({ label: item.label, left: rect.right + 10, top: rect.top + rect.height / 2 });
-                      }}
-                      onBlur={() => setHoverTip(null)}
-                      onClick={() => setHoverTip(null)}
-                    >
-                      {item.icon}
-                    </button>
-                  ) : (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>{item.icon}<span>{item.label}</span></span>
-                  )}
-                </Menu.Item>
-              ))}
-            </Menu>
+              {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+              {!collapsed && <span className="sider-collapse-label">收起侧栏</span>}
+            </button>
           </div>
-          <button
-            type="button"
-            className="sider-collapse-btn"
-            onClick={() => {
-              setHoverTip(null);
-              setCollapsed((value) => !value);
-            }}
-            aria-label={collapsed ? '展开导航栏' : '折叠导航栏'}
-            onMouseEnter={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setHoverTip({
-                label: collapsed ? '展开导航栏' : '折叠导航栏',
-                left: rect.right + 10,
-                top: rect.top + rect.height / 2,
-              });
-            }}
-            onMouseLeave={() => setHoverTip(null)}
-            onFocus={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setHoverTip({
-                label: collapsed ? '展开导航栏' : '折叠导航栏',
-                left: rect.right + 10,
-                top: rect.top + rect.height / 2,
-              });
-            }}
-            onBlur={() => setHoverTip(null)}
-          >
-            {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-          </button>
-          <button
-            type="button"
-            className={`sider-settings ${activeKey === '/settings' ? 'active' : ''}`}
-            onClick={() => { setHoverTip(null); navigate('/settings'); }}
-            title="设置"
-            aria-label="设置"
-            onMouseEnter={(event) => {
-              if (collapsed) {
-                const rect = event.currentTarget.getBoundingClientRect();
-                setHoverTip({ label: '设置', left: rect.right + 10, top: rect.top + rect.height / 2 });
-              }
-            }}
-            onMouseLeave={() => setHoverTip(null)}
-            onFocus={(event) => {
-              if (collapsed) {
-                const rect = event.currentTarget.getBoundingClientRect();
-                setHoverTip({ label: '设置', left: rect.right + 10, top: rect.top + rect.height / 2 });
-              }
-            }}
-            onBlur={() => setHoverTip(null)}
-          >
-            <Settings size={18} />
-            {!collapsed && <span className="sider-settings-text">设置</span>}
-          </button>
         </div>
       </Sider>
       {hoverTip && (
@@ -232,18 +227,26 @@ function Shell(): JSX.Element {
         </div>
       )}
       <Layout>
-        {useUiStore((state) => state.notebookFocusMode) ? null : (
+        {notebookFocusMode ? null : (
           <Header className="topbar">
-            <Typography.Title heading={5} className="topbar-title">{title}</Typography.Title>
+            <span className="topbar-title">{title}</span>
             <div className="topbar-actions">
-              <Typography.Text type="secondary" className="topbar-hint">{aiAccelerator ? `AI · ${describeAccelerator(aiAccelerator)}` : 'AI 助手'}</Typography.Text>
-              <Switch
-                checked={theme === 'dark'}
-                onChange={toggleTheme}
-                checkedText={<Moon size={14} />}
-                uncheckedText={<Sun size={14} />}
+              <button type="button" className="topbar-ai-pill" onClick={() => setAiOpen(true)} title="打开 AI 助手">
+                <Sparkles size={15} />
+                <span>AI 助手</span>
+                {aiAccelerator ? <kbd>{describeAccelerator(aiAccelerator)}</kbd> : null}
+              </button>
+              <button
+                type="button"
+                role="switch"
+                className="theme-toggle"
+                onClick={toggleTheme}
+                aria-checked={theme === 'dark'}
                 aria-label="切换主题"
-              />
+                title={theme === 'dark' ? '切换到浅色' : '切换到深色'}
+              >
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              </button>
             </div>
           </Header>
         )}

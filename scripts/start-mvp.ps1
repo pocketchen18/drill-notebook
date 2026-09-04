@@ -235,8 +235,23 @@ $oldAppRoot = $env:APP_ROOT
 $oldWorkerExe = $env:DRILL_EMBEDDING_WORKER_EXE
 $oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $env:APP_ROOT = $root
-# Embedding worker path: workspace-release binary (not compiled automatically).
-$env:DRILL_EMBEDDING_WORKER_EXE = Join-Path $workspace 'embedding-worker\target\x86_64-pc-windows-msvc\release\embedding-worker.exe'
+# Embedding worker path: release binary preferred, debug build as dev fallback
+# (neither is compiled automatically — see npm run build:embedding-worker).
+# Electron resolves the same candidates itself; this only pins the choice earlier.
+$workerCandidates = @(
+    'embedding-worker\target\x86_64-pc-windows-msvc\release\embedding-worker.exe',
+    'embedding-worker\target\release\embedding-worker.exe',
+    'embedding-worker\target\x86_64-pc-windows-msvc\debug\embedding-worker.exe',
+    'embedding-worker\target\debug\embedding-worker.exe'
+) | ForEach-Object { Join-Path $workspace $_ }
+$workerExe = $workerCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($workerExe) {
+    $env:DRILL_EMBEDDING_WORKER_EXE = $workerExe
+    Write-Host "Embedding worker: $workerExe" -ForegroundColor DarkGray
+} else {
+    Remove-Item Env:DRILL_EMBEDDING_WORKER_EXE -ErrorAction SilentlyContinue
+    Write-Host 'Embedding worker not built; local vector index stays unavailable (npm run build:embedding-worker).' -ForegroundColor Yellow
+}
 # Some shells/tools export ELECTRON_RUN_AS_NODE=1, which makes Electron behave as plain Node
 # and breaks require('electron').app. Clear it for the app process only.
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue

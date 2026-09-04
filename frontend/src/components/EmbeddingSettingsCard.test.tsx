@@ -159,6 +159,28 @@ describe('EmbeddingSettingsCard', () => {
     await waitFor(() => expect(uninstallEmbeddingModel).toHaveBeenCalledWith('bge-small-zh-v1.5'));
   });
 
+  it('REBUILDING 时区分「索引构建中」与「本地向量组件不可用」', async () => {
+    vi.mocked(getEmbeddingCatalog).mockResolvedValue(catalog({ installationState: 'READY' }));
+    const rebuilding: RetrievalStatus = {
+      ...idleStatus,
+      indexedChunks: 0,
+      indexState: 'REBUILDING',
+      embeddingSpaceId: 'space-local',
+      provider: 'local-rust',
+      providerReady: true
+    };
+    vi.mocked(getRetrievalStatus).mockResolvedValue(rebuilding);
+    const first = renderCard();
+    expect(await screen.findByText('索引构建中')).toBeInTheDocument();
+    first.unmount();
+
+    // worker 未编译：provider 永远不可用，必须直接说明原因而不是一直「构建中」
+    vi.mocked(getRetrievalStatus).mockResolvedValue({ ...rebuilding, providerReady: false });
+    renderCard();
+    expect(await screen.findByText(/本地向量组件不可用/)).toBeInTheDocument();
+    expect(screen.queryByText('索引构建中')).not.toBeInTheDocument();
+  });
+
   it('远程授权勾选后，更改 endpoint 使确认自动失效', async () => {
     aiGet.mockResolvedValue({
       embedding: { provider: 'openai', endpoint: 'https://api.example.com/v1', model: 'text-embedding-3-small', dimensions: 512, hasKey: false, enabled: false, consent: false }

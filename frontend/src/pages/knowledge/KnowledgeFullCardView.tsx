@@ -259,6 +259,11 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const inSearchInput = target?.tagName === 'INPUT' && target.getAttribute('aria-label') === '搜索大纲与正文';
+      const inEditable = !inSearchInput && target != null
+        && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
+
       // 开启搜索（默认 Ctrl+F / Cmd+F）
       if (matchesAny(e, shortcuts.kcSearch)) {
         e.preventDefault();
@@ -269,8 +274,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
 
       // 如果搜索框打开且按下 Enter，支持正文匹配跳转
       if (searchVisible && e.key === 'Enter') {
-        const isFocusedInSearch = document.activeElement?.tagName === 'INPUT' && document.activeElement.getAttribute('aria-label') === '搜索大纲与正文';
-        if (isFocusedInSearch || matchCount > 0) {
+        if (inSearchInput || matchCount > 0) {
           e.preventDefault();
           if (e.shiftKey) {
             jumpToMatch(currentMatchIndex - 1);
@@ -281,18 +285,35 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
         }
       }
 
+      // 其它可编辑控件里的按键交给控件本身（方向键移动光标、字母键输入）
+      if (inEditable) return;
+
       if (matchesAny(e, shortcuts.kcExit)) {
+        e.preventDefault();
         if (searchVisible) {
-          e.preventDefault();
           e.stopPropagation();
           closeSearch();
         } else {
           onClose();
         }
+        return;
       }
-      else if (!searchVisible && matchesAny(e, shortcuts.kcPrev)) { const p = tree.flatList[index - 1]; if (p) onNavigate(p.id); }
-      else if (!searchVisible && matchesAny(e, shortcuts.kcNext)) { const n = tree.flatList[index + 1]; if (n) onNavigate(n.id); }
-      else if (!searchVisible && matchesAny(e, shortcuts.kcToggleOutline)) setSidebarOpen((v) => !v);
+      if (searchVisible) return;
+
+      // 翻页 / 折叠大纲命中后必须 preventDefault：方向键、PageUp/PageDown、空格等
+      // 的浏览器默认动作会同时滚动最近点击过的滚动容器（大纲栏横向、正文纵向）。
+      if (matchesAny(e, shortcuts.kcPrev)) {
+        e.preventDefault();
+        const p = tree.flatList[index - 1];
+        if (p) onNavigate(p.id);
+      } else if (matchesAny(e, shortcuts.kcNext)) {
+        e.preventDefault();
+        const n = tree.flatList[index + 1];
+        if (n) onNavigate(n.id);
+      } else if (matchesAny(e, shortcuts.kcToggleOutline)) {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -591,7 +612,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
             <div className="knowledge-full-card-links">
               <strong>关联题目</strong>
               {current.questionIds.map((id) => (
-                <div key={id}>{questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`}</div>
+                <div key={id}><MarkdownContent inline value={questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`} /></div>
               ))}
             </div>
           )}

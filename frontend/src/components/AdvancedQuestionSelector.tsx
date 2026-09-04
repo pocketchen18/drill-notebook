@@ -6,6 +6,8 @@ import { filterQuestions, moveId, shuffleIds } from '../lib/study';
 import { questionTypeLabel } from '../lib/quiz';
 import { usePersistSlice } from '../hooks/useViewState';
 import { putScoped, readPageSlice, readScoped } from '../lib/viewState';
+import { markdownToPlainText } from '../lib/markdownText';
+import { MarkdownContent } from './markdown/MarkdownRenderer';
 
 const QUESTION_TYPES = ['single', 'multiple', 'fill', 'true_false', 'essay'];
 
@@ -72,13 +74,13 @@ export function AdvancedQuestionSelector({ questions, selectedIds, onChange, fil
       <div className="selector-list">
         {filtered.length ? filtered.map((question) => <label className={`selector-question ${selectedIds.includes(question.id) ? 'selected' : ''}`} key={question.id}>
           <Checkbox checked={selectedIds.includes(question.id)} onChange={(checked) => onChange(checked ? [...selectedIds, question.id] : selectedIds.filter((id) => id !== question.id))} />
-          <span><span className="selector-question-title">{question.stem}</span><span className="selector-question-meta">{questionTypeLabel(question.type)} · {question.chapter || '未分类'} {(question.tags ?? []).map((tag) => <Tag size="small" key={tag}>{tag}</Tag>)}</span></span>
+          <span><span className="selector-question-title" title={markdownToPlainText(question.stem)}><MarkdownContent inline value={question.stem} /></span><span className="selector-question-meta">{questionTypeLabel(question.type)} · {question.chapter || '未分类'} {(question.tags ?? []).map((tag) => <Tag size="small" key={tag}>{tag}</Tag>)}</span></span>
         </label>) : <Empty description="没有匹配题目" />}
       </div>
       <div className="selector-order">
         <div className="selector-order-title">会话顺序</div>
         {selectedQuestions.map((question, index) => <div className="order-item" key={question.id}>
-          <span className="order-index">{index + 1}</span><span title={question.stem}>{question.stem}</span>
+          <span className="order-index">{index + 1}</span><span title={markdownToPlainText(question.stem)}><MarkdownContent inline value={question.stem} /></span>
           <Space size={2}><Button type="text" size="mini" icon={<ArrowUp size={13} />} disabled={index === 0} onClick={() => onChange(moveId(selectedIds, question.id, -1))} aria-label="上移" /><Button type="text" size="mini" icon={<ArrowDown size={13} />} disabled={index === selectedQuestions.length - 1} onClick={() => onChange(moveId(selectedIds, question.id, 1))} aria-label="下移" /></Space>
         </div>)}
       </div>

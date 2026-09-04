@@ -53,10 +53,11 @@ public class NoteIndexingStartupBackfill {
 
     /**
      * Deterministic direct method for tests. Scans pages with
-     * {@code content_hash IS NULL} and runs full indexing on each one.
+     * {@code content_hash IS NULL} and runs full indexing on each one, then
+     * audits already-hashed pages against the current normalizer.
      *
      * <p>Repeat calls are idempotent: after all pages are processed, the
-     * scan returns zero rows.
+     * scan returns zero rows and the audit finds no hash drift.
      */
     public void backfillAll() {
         try {
@@ -64,22 +65,56 @@ public class NoteIndexingStartupBackfill {
                     retrievalRepo.findPagesWithNullContentHash();
             if (pages.isEmpty()) {
                 log.info("Note indexing backfill: no pages to process");
-                return;
+            } else {
+                log.info("Note indexing backfill: processing {} pages", pages.size());
+                for (Map<String, Object> page : pages) {
+                    long pageId = ((Number) page.get("page_id")).longValue();
+                    try {
+                        indexingService.backfillPage(pageId);
+                        log.info("Backfilled page {}", pageId);
+                    } catch (Exception e) {
+                        log.warn("Full indexing failed for page {}; leaving it pending",
+                                pageId);
+                    }
+                }
+                log.info("Note indexing backfill: completed");
             }
-            log.info("Note indexing backfill: processing {} pages", pages.size());
+        } catch (Exception e) {
+            log.warn("Note indexing backfill: scan failed", e);
+        }
+        auditNormalization();
+    }
+
+    /**
+     * Re-index pages whose stored {@code content_hash} disagrees with the current
+     * normalizer. Without this a normalizer upgrade (e.g. indexing video/file
+     * blocks) never reaches pages that were already indexed — they keep the stale
+     * chunk set, or none at all, until the user edits them.
+     *
+     * <p>Cheap in the common case: hashes are compared, and only mismatching pages
+     * are re-chunked.
+     */
+    private void auditNormalization() {
+        try {
+            List<Map<String, Object>> pages = retrievalRepo.findPageHashes();
+            int repaired = 0;
+            int failed = 0;
             for (Map<String, Object> page : pages) {
                 long pageId = ((Number) page.get("page_id")).longValue();
                 try {
-                    indexingService.backfillPage(pageId);
-                    log.info("Backfilled page {}", pageId);
+                    if (indexingService.reindexIfNormalizationChanged(pageId)) repaired++;
                 } catch (Exception e) {
-                    log.warn("Full indexing failed for page {}; leaving it pending",
+                    failed++;
+                    log.warn("Normalizer audit failed for page {}; leaving it as is",
                             pageId);
                 }
             }
-            log.info("Note indexing backfill: completed");
+            if (repaired > 0 || failed > 0) {
+                log.info("Normalizer audit: re-indexed {} of {} pages ({} failed)",
+                        repaired, pages.size(), failed);
+            }
         } catch (Exception e) {
-            log.warn("Note indexing backfill: scan failed", e);
+            log.warn("Normalizer audit: scan failed", e);
         }
     }
 }

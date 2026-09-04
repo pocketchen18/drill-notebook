@@ -53,6 +53,15 @@ function nodeMarkdown(node: Record<string, unknown>): string {
     case 'mathBlock': return `$$\n${String(attrs.latex ?? '')}\n$$\n\n`;
     case 'mermaidBlock': return `\`\`\`mermaid\n${String(attrs.code ?? '')}\n\`\`\`\n\n`;
     case 'markdownBlock': return `${String(attrs.markdown ?? '')}\n\n`;
+    // 视频/附件是 atom 节点，标题与链接只存在 attrs 里；与后端 NoteNormalizer 保持一致
+    case 'videoBlock': {
+      const label = [attrs.title, attrs.url].map((value) => String(value ?? '').trim()).filter(Boolean).join(' ');
+      return label ? `视频：${label}\n\n` : '';
+    }
+    case 'fileBlock': {
+      const fileName = String(attrs.fileName ?? '').trim();
+      return fileName ? `附件：${fileName}\n\n` : '';
+    }
     case 'questionBlock': {
       const snapshot = attrs.snapshot && typeof attrs.snapshot === 'object' ? attrs.snapshot as Question : undefined;
       return snapshot ? `${questionMarkdown(snapshot)}\n\n` : '';

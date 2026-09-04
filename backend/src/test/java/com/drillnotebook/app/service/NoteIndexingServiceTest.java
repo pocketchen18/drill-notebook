@@ -770,6 +770,63 @@ class NoteIndexingServiceTest {
         assertEquals(0, countJobs());
     }
 
+    // ── Normalizer upgrade audit ───────────────────────────────────────────
+
+    @Test
+    void backfillReindexesPagesWhoseStoredHashPredatesTheNormalizer() {
+        // A page indexed by an older normalizer that produced nothing for its
+        // content (e.g. a video-only page before videoBlock was indexable): the
+        // hash of the empty normalization is stored and no chunks exist. The
+        // NULL-hash backfill skips it, so only the audit can repair it.
+        String videoOnly = "{\"type\":\"doc\",\"content\":["
+                + "{\"type\":\"videoBlock\",\"attrs\":{"
+                + "\"videoType\":\"url\",\"url\":\"https://example.com/v\","
+                + "\"title\":\"线性代数第 3 讲\"}},"
+                + "{\"type\":\"paragraph\"}]}";
+        long stalePageId = jdbc.queryForObject(
+                "INSERT INTO note_page(notebook_id, title, content, content_hash)"
+                + " VALUES (?, 'video', ?, ?) RETURNING id",
+                Long.class, notebookId, videoOnly,
+                NoteIndexingService.sha256(""));
+        assertEquals(0, (int) jdbc.queryForObject(
+                "SELECT COUNT(*) FROM retrieval_chunk WHERE source_id = ?",
+                Integer.class, stalePageId));
+
+        backfill.backfillAll();
+
+        assertNotEquals(NoteIndexingService.sha256(""), getPageHash(stalePageId),
+                "audit must rewrite the stale hash");
+        List<Map<String, Object>> chunks = jdbc.queryForList(
+                "SELECT text FROM retrieval_chunk WHERE source_id = ?", stalePageId);
+        assertEquals(1, chunks.size(), "video title is now indexable");
+        assertTrue(String.valueOf(chunks.get(0).get("text")).contains("线性代数第 3 讲"));
+        assertTrue(countFtsRows() > 0, "FTS row written so BM25 can find it");
+
+        // Second run is a no-op: hashes now agree with the current normalizer.
+        long chunksAfter = countChunks();
+        String hashAfter = getPageHash(stalePageId);
+        backfill.backfillAll();
+        assertEquals(chunksAfter, countChunks());
+        assertEquals(hashAfter, getPageHash(stalePageId));
+    }
+
+    @Test
+    void normalizerAuditLeavesStoredContentAndUpToDatePagesAlone() {
+        svc.savePageAndIndex(pageId, "Test Page", SAMPLE_CONTENT);
+        String hashBefore = getPageHash(pageId);
+        String contentBefore = jdbc.queryForObject(
+                "SELECT content FROM note_page WHERE id = ?", String.class, pageId);
+        long chunksBefore = countChunks();
+
+        assertFalse(svc.reindexIfNormalizationChanged(pageId),
+                "a page already matching the current normalizer is untouched");
+        assertEquals(hashBefore, getPageHash(pageId));
+        assertEquals(contentBefore, jdbc.queryForObject(
+                "SELECT content FROM note_page WHERE id = ?", String.class, pageId),
+                "audit must never rewrite stored note content");
+        assertEquals(chunksBefore, countChunks());
+    }
+
     @Test
     void backfillLeavesMalformedPagePending() {
         svc.savePageAndIndex(pageId, "Test Page", SAMPLE_CONTENT);

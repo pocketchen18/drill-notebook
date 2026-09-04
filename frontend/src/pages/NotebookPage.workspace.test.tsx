@@ -121,6 +121,8 @@ function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean } = 
     if (path === '/api/notebooks') return Promise.resolve(baseNotebooks);
     if (path === '/api/note-pages') return Promise.reject(new Error('deprecated'));
     if (path === '/api/notebooks/1/pages') return Promise.resolve(basePages);
+    // 其他笔记本（如 NBK-14 新建后切换到的）没有页面
+    if (/^\/api\/notebooks\/\d+\/pages$/.test(path)) return Promise.resolve([]);
     if (path === '/api/note-pages/11') {
       if (opts.slowPages) return new Promise((res) => setTimeout(() => res(page11), 250));
       return Promise.resolve(page11);
@@ -290,6 +292,33 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
       fireEvent.click(screen.getByRole('button', { name: '新建页面' }));
       fireEvent.click(await screen.findByRole('button', { name: '确定' }));
       await waitFor(() => expect(apiPost.mock.calls.filter((c) => c[0] === '/api/notebooks/1/pages').length).toBe(0));
+    });
+  });
+
+  describe('New notebook modal (NBK-14)', () => {
+    beforeEach(() => {
+      primeNotebookApi();
+      apiPost.mockResolvedValue({ id: 2, title: '离散数学' });
+    });
+
+    it('NBK-14: 新建笔记本 modal POSTs to /api/notebooks with title', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: '新建笔记本' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: '新建笔记本' }));
+      const input = await screen.findByPlaceholderText(/高等数学/);
+      fireEvent.change(input, { target: { value: '离散数学' } });
+      fireEvent.click(screen.getByRole('button', { name: '确定' }));
+      await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/notebooks', { title: '离散数学' }));
+      // 创建成功后切换到新笔记本并拉取其页面
+      await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/notebooks/2/pages'));
+    });
+
+    it('NBK-14: blank title rejected (no POST)', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: '新建笔记本' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: '新建笔记本' }));
+      fireEvent.click(await screen.findByRole('button', { name: '确定' }));
+      await waitFor(() => expect(apiPost.mock.calls.filter((c) => c[0] === '/api/notebooks').length).toBe(0));
     });
   });
 

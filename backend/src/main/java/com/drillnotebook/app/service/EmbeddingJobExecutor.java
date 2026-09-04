@@ -138,17 +138,28 @@ public class EmbeddingJobExecutor {
         int dimensions = ((Number) space.get("dimensions")).intValue();
         if (!"REBUILDING".equals(state) && !"ACTIVE".equals(state)) return false;
 
+        // Coverage/activation is otherwise only recomputed when a job commits, so a
+        // REBUILDING space whose queue is empty (empty corpus, or every job already
+        // superseded) would stay REBUILDING for good — the UI shows「索引构建中」and
+        // retrieval stays BM25-only. Settling needs no provider: an empty corpus is
+        // 100% covered by definition, so this runs even when the worker is missing.
+        boolean rebuilding = "REBUILDING".equals(state);
+
         EmbeddingProvider provider = providers.active();
         if (provider == null || !provider.isAvailable()
                 || provider.dimensions() != dimensions) {
             // Provider missing/unhealthy/mismatched: keep the queue intact and
             // idle-wait instead of claiming (avoids burning attempts).
+            if (rebuilding) settleRebuildingSpace(spaceId);
             return false;
         }
 
         String claimToken = UUID.randomUUID().toString();
         ClaimedJob job = tx.execute(status -> jobs.claimNext(claimToken, spaceId));
-        if (job == null) return false;
+        if (job == null) {
+            if (rebuilding) settleRebuildingSpace(spaceId);
+            return false;
+        }
 
         // Cheap pre-checks outside any transaction.
         String pageHash = jobs.findPageContentHash(job.sourceId());
@@ -244,6 +255,32 @@ public class EmbeddingJobExecutor {
             log.debug("Embedding job {} completed ({} chunks)", job.id(), chunks.size());
         }
         return true;
+    }
+
+    /**
+     * Recompute coverage for a REBUILDING space with an empty runnable queue and
+     * flip it to ACTIVE once it is fully covered. Returns {@code false}-safe: the
+     * caller still idle-waits, this only repairs the stuck state.
+     */
+    private void settleRebuildingSpace(String spaceId) {
+        Boolean activated = tx.execute(status -> {
+            Map<String, Object> current = jobs.findSelectedSpaceAnyState();
+            if (current == null || !spaceId.equals(current.get("embedding_space_id"))
+                    || !"REBUILDING".equals(current.get("state"))) {
+                return false;
+            }
+            if (jobs.countJobsByStatuses(
+                    spaceId, List.of("QUEUED", "CLAIMED", "RETRY"), null) > 0) {
+                // Work is still pending (backoff window, or another poller holds it).
+                return false;
+            }
+            double coverage = jobs.computeCoverage("NOTEBOOK", spaceId);
+            jobs.updateSpaceCoverage(spaceId, coverage);
+            return coverage >= 1.0 && jobs.activateSpaceIfComplete(spaceId) > 0;
+        });
+        if (Boolean.TRUE.equals(activated)) {
+            log.info("Embedding space {} activated with an empty job queue", spaceId);
+        }
     }
 
     private void handleProviderFailure(
