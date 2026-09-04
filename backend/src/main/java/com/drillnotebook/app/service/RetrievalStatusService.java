@@ -21,9 +21,24 @@ public class RetrievalStatusService {
     private static final String CORPUS_NOTEBOOK = "NOTEBOOK";
 
     private final EmbeddingJobRepository jobs;
+    private final EmbeddingProviderRegistry providers;
 
-    public RetrievalStatusService(EmbeddingJobRepository jobs) {
+    public RetrievalStatusService(
+            EmbeddingJobRepository jobs, EmbeddingProviderRegistry providers) {
         this.jobs = jobs;
+        this.providers = providers;
+    }
+
+    /**
+     * Whether the active provider can actually produce vectors right now. The
+     * local provider reports {@code false} when the Rust worker binary is not
+     * configured/built, which is the difference between "still building" and
+     * "will never finish".
+     */
+    private boolean providerReady(int dimensions) {
+        EmbeddingProvider provider = providers == null ? null : providers.active();
+        return provider != null && provider.isAvailable()
+                && provider.dimensions() == dimensions;
     }
 
     public Map<String, Object> status(String scope, Long notebookId) {
@@ -49,6 +64,7 @@ public class RetrievalStatusService {
             out.put("indexState", "DISABLED");
             out.put("embeddingSpaceId", null);
             out.put("provider", null);
+            out.put("providerReady", false);
             return out;
         }
 
@@ -65,6 +81,8 @@ public class RetrievalStatusService {
         out.put("indexState", space.get("state"));
         out.put("embeddingSpaceId", spaceId);
         out.put("provider", space.get("provider_type"));
+        out.put("providerReady",
+                providerReady(((Number) space.get("dimensions")).intValue()));
         return out;
     }
 }

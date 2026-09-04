@@ -277,4 +277,101 @@ describe('KnowledgeFullCardView', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByPlaceholderText(/搜索大纲与正文/)).not.toBeInTheDocument();
   });
+
+  it('navigates with ←/→ and swallows the browser default so scroll containers stay put', () => {
+    const node = tree.byId.get(1)!;
+    const onNavigate = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <KnowledgeFullCardView
+        tree={tree}
+        node={node}
+        questions={[]}
+        onNavigate={onNavigate}
+        onClose={onClose}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    // fireEvent 返回 false 表示 preventDefault 已被调用（默认滚动被拦截）
+    expect(fireEvent.keyDown(window, { key: 'ArrowRight' })).toBe(false);
+    expect(onNavigate).toHaveBeenLastCalledWith(2);
+
+    // 已在第一张卡：没有上一张也要拦截默认滚动，但不触发导航
+    onNavigate.mockClear();
+    expect(fireEvent.keyDown(window, { key: 'ArrowLeft' })).toBe(false);
+    expect(onNavigate).not.toHaveBeenCalled();
+
+    // 折叠大纲快捷键同样拦截默认动作
+    expect(fireEvent.keyDown(window, { key: 't' })).toBe(false);
+    expect(screen.getByRole('button', { name: '展开大纲' })).toBeInTheDocument();
+
+    // 未命中任何快捷键的按键不拦截（交给浏览器，例如 ↓ 正常滚动正文）
+    expect(fireEvent.keyDown(window, { key: 'ArrowDown' })).toBe(true);
+
+    // 退出快捷键也拦截默认动作
+    expect(fireEvent.keyDown(window, { key: 'Escape' })).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours rebinding prev/next to vertical keys without scrolling', () => {
+    useUiStore.getState().setShortcutConfig({ ...defaultShortcutConfig(), kcPrev: ['ArrowUp', 'PageUp'], kcNext: ['ArrowDown', 'PageDown'] });
+    const node = tree.byId.get(1)!;
+    const onNavigate = vi.fn();
+
+    render(
+      <KnowledgeFullCardView
+        tree={tree}
+        node={node}
+        questions={[]}
+        onNavigate={onNavigate}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+        onModified={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
+
+    expect(fireEvent.keyDown(window, { key: 'ArrowDown' })).toBe(false);
+    expect(onNavigate).toHaveBeenLastCalledWith(2);
+    expect(fireEvent.keyDown(window, { key: 'PageDown' })).toBe(false);
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+
+    // 旧键 → 已解除绑定：不导航，也不拦截
+    expect(fireEvent.keyDown(window, { key: 'ArrowRight' })).toBe(true);
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves arrow keys alone while typing in an editable control', () => {
+    const node = tree.byId.get(1)!;
+    const onNavigate = vi.fn();
+
+    render(
+      <>
+        <input aria-label="外部输入框" defaultValue="abc" />
+        <KnowledgeFullCardView
+          tree={tree}
+          node={node}
+          questions={[]}
+          onNavigate={onNavigate}
+          onClose={vi.fn()}
+          onDeleted={vi.fn()}
+          onModified={vi.fn()}
+          onEdit={vi.fn()}
+        />
+      </>
+    );
+
+    const input = screen.getByRole('textbox', { name: '外部输入框' });
+    input.focus();
+    // 光标移动交给输入框：不导航、不拦截
+    expect(fireEvent.keyDown(input, { key: 'ArrowRight' })).toBe(true);
+    expect(onNavigate).not.toHaveBeenCalled();
+    // 输入字母 t 也不能折叠大纲
+    fireEvent.keyDown(input, { key: 't' });
+    expect(screen.getByRole('button', { name: '折叠大纲' })).toBeInTheDocument();
+  });
 });

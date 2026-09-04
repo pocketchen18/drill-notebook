@@ -16,7 +16,7 @@
 10. [降级与错误处理](#10-降级与错误处理)
 11. [索引维护](#11-索引维护)
 12. [开发命令与自动 QA](#12-开发命令与自动-qa)
-13. [v0.6 corpus 边界](#13-v06-corpus-边界)
+13. [v0.7 corpus 边界](#13-v07-corpus-边界)
 14. [常见问题](#14-常见问题)
 
 ---
@@ -189,6 +189,8 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 
 有序文本单元以 `\n\n` 拼接成全文后切分；超长单单元做硬窗口切分。每块记录 `start_offset` / `end_offset` / `heading_path` / `content_hash`。
 
+**可索引节点（`NoteNormalizer`，与前端 `aiContext.ts` 对齐）**：`paragraph` / `heading` / `bulletList` / `orderedList` / `codeBlock` / `blockquote` / `mathInline` / `mathBlock` / `mermaidBlock` / `markdownBlock`，以及 atom 节点 `videoBlock`（`视频：<标题> <url>`）与 `fileBlock`（`附件：<文件名>`）。`questionBlock` 不属于 NOTEBOOK corpus，直接跳过；图片等其它未知节点递归子节点，无文本则不产生分块。**只含跳过节点的页面 chunk 数为 0**，既不入 BM25 也不入向量——AI「读不到笔记」时先确认页面有正文。
+
 ### 4.2 查询规范化（`RetrievalService`）
 
 - 原始查询先截断到 `MAX_QUERY_CODEPOINTS = 512` 个码点。
@@ -252,11 +254,14 @@ CREATE TABLE IF NOT EXISTS embedding_job (
   "indexedChunks": 30, "staleChunks": 0,
   "queuedJobs": 0, "failedJobs": 0,
   "coverage": 1.0, "indexState": "ACTIVE",
-  "embeddingSpaceId": "…", "provider": "local"
+  "embeddingSpaceId": "…", "provider": "local",
+  "providerReady": true
 }
 ```
 
-未选中任何空间时：`indexState=DISABLED`、`coverage=0`、计数字段为 0。
+未选中任何空间时：`indexState=DISABLED`、`coverage=0`、计数字段为 0、`providerReady=false`。
+
+`providerReady` = 已注册 provider 且 `isAvailable()` 且维度与空间一致。本地模型下它等价于「worker 可执行文件已配置且存在」，用于区分「正在构建索引」与「worker 没编译，永远构建不完」——设置页在 `REBUILDING && providerReady=false` 时直接提示需要先构建 worker。
 
 ### 5.3 维护端点
 
@@ -297,6 +302,17 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 ## 6. 离线 Embedding Worker 协议
 
 本地向量由 Rust `embedding-worker` 子进程提供，stdin/stdout 走 **NDJSON**（每行一个 JSON 对象）。`protocolVersion = 1`，每个请求/响应含 `protocolVersion`、`requestId`、`type` 标签。
+
+### 6.0 可执行文件定位顺序
+
+`EmbeddingWorkerLifecycle` 只认系统属性 / 环境变量 `DRILL_EMBEDDING_WORKER_EXE`；找不到即 `WorkerNotBuilt`，`LocalEmbeddingProvider.isAvailable()` 返回 false，poller 空转。该变量由启动方注入，两条启动路径都会解析（首个存在者胜）：
+
+1. 已有的 `DRILL_EMBEDDING_WORKER_EXE`（存在才用，缺失时打警告并继续往下找）
+2. `<APP_ROOT>/embedding-worker/embedding-worker.exe`、打包资源 `<resources>/embedding-worker/…`
+3. 工作区 `embedding-worker/target/x86_64-pc-windows-msvc/release/`、`target/release/`
+4. 工作区 `target/x86_64-pc-windows-msvc/debug/`、`target/debug/`（仅开发兜底）
+
+`electron/java-bridge.ts` 在 spawn 后端时注入解析结果并打印路径；未找到时打印一行警告。`scripts/start-mvp.ps1` 同序预解析。二进制不会自动编译，需 `npm run build:embedding-worker`。
 
 ### 6.1 请求（stdin）
 
@@ -390,9 +406,14 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 
 ## 11. 索引维护
 
-### 11.1 启动回填
+### 11.1 启动回填与 normalizer 审计
 
-`NoteIndexingStartupBackfill` 在启动时为 `content_hash` 为空的旧页（v7 遗留）补建 chunk/FTS，**不阻塞启动**，回填期间笔记仍可被 BM25 搜索。
+`NoteIndexingStartupBackfill` 在启动时做两件事，**均不阻塞启动**，期间笔记仍可被 BM25 搜索：
+
+1. **NULL-hash 回填**：为 `content_hash` 为空的旧页（v7 遗留）补建 chunk/FTS。
+2. **normalizer 审计**：对已有 `content_hash` 的页重算「当前 normalizer 下的 hash」，不一致则重建 chunk/FTS 并按需排队 embedding job（`reason=NORMALIZER_UPGRADE`）。
+
+审计是 normalizer 变更的唯一迁移通道：`savePageAndIndex` 只在用户编辑时触发，NULL-hash 回填又只看空 hash，若没有审计，旧 normalizer 索引过的页会一直保留过期分块——旧 normalizer 产出为空时甚至一条分块都没有（例如只含视频块的页面），直到用户偶然编辑它才会修复。审计只改 hash / 分块 / FTS / job，**从不重写笔记正文**；hash 一致的页零成本跳过，解析失败的页保持原样并记 WARN。
 
 ### 11.2 全库重建与重试
 
@@ -426,9 +447,9 @@ node scripts/qa-electron.mjs              # Electron CDP UI QA，含 RAG 软检�
 
 Evidence 由测试内 `writeEvidence` 在 `DRILL_EVIDENCE_DIR` 环境变量指向 `.omo/evidence` 时写出（断言始终运行，写文件被门控）。
 
-## 13. v0.6 corpus 边界
+## 13. v0.7 corpus 边界
 
-当前 `corpus_type` 仅有 `NOTEBOOK`。v0.6 可将 `CONVERSATION_MEMORY` 作为**独立 corpus** 加入，约束：
+当前 `corpus_type` 仅有 `NOTEBOOK`。v0.7（AI 跨会话记忆，原列入 v0.6，因 v0.6 前端 UI 重塑优先而顺延）可将 `CONVERSATION_MEMORY` 作为**独立 corpus** 加入，约束：
 
 - 不改变笔记本数据所有权：`retrieval_chunk` 以 `(corpus_type, source_id, chunk_index)` 唯一，新 corpus 用独立 `corpus_type` 隔离。
 - 保持向量空间不变量：`retrieval_embedding` 仍按 `embedding_space_id` + `corpus_type` 过滤，激活/coverage 仍是 corpus 级属性。
@@ -452,6 +473,21 @@ Evidence 由测试内 `writeEvidence` 在 `DRILL_EVIDENCE_DIR` 环境变量指�
 
 不会。自动保存写入新 `content_hash` 后，旧 hash 的重建任务被 `SUPERSEDED`，最终 chunk/FTS/vector 只保留最新内容。
 
-### 14.5 远程 embedding 会把笔记发给谁？
+### 14.5 状态是 ACTIVE 但 AI 还是读不到笔记？
+
+先看 `totalChunks`：为 0 说明没有任何可索引正文。除了页面真的是空的，还有一种情况是页面内容被**旧 normalizer** 判定为空（如只含视频块的页），`content_hash` 因此是空串的 sha256。这类页由启动时的 normalizer 审计自动修复（见 §11.1），重启一次即可；`chunks` 有了但 AI 仍不引用时，确认 AI 侧栏的「检索笔记」开关已勾选——未勾选时请求不带 `retrievalOptions`，后端根本不做检索。
+
+### 14.6 一直显示「索引构建中」怎么排查？
+
+按顺序看 `GET /api/ai/retrieval/status`：
+
+1. `providerReady=false` → provider 不可用。本地模型即 worker 未编译或未被定位（见 §6.0），跑 `npm run build:embedding-worker` 后重启应用；设置页此时显示「本地向量组件不可用」而不是「索引构建中」。
+2. `failedJobs>0` → 点「重试失败任务」。
+3. `queuedJobs=0` 且 `totalChunks=0` → 笔记里没有可索引正文（只有题块 / 图片等），coverage 视为 1.0，poller 下一轮就会把空间转 ACTIVE。
+4. `queuedJobs>0` 且 `providerReady=true` → 正常回填中，等待即可。
+
+REBUILDING 且队列里没有可运行任务时，poller 每轮都会重算一次 coverage 并在满覆盖时激活，因此不再存在「队列空了但状态卡住」的情况。
+
+### 14.7 远程 embedding 会把笔记发给谁？
 
 只发给用户自己配置的 OpenAI/Ollama endpoint，且必须先勾选「同意发送笔记内容」。更换 endpoint/model 后授权失效，需重新同意。本地模型则完全在本机 worker 子进程内计算，不出机器。

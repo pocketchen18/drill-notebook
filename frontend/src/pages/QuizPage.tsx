@@ -445,6 +445,7 @@ export function QuizPage(): JSX.Element {
       <aside className="panel question-palette"><div className="panel-header"><h2>题号跳转</h2></div><div className="panel-body"><div className="palette-grid">{curveQueue.map((entry, itemIndex) => <button type="button" key={entry.entryId} title={entry.attempt > 0 ? `第 ${entry.attempt + 1} 遍重现` : undefined} className={`palette-item ${itemIndex === index ? 'current' : ''} ${answeredIds.includes(entry.resourceId) ? 'answered' : ''} ${entry.attempt > 0 ? 'repeat' : ''}`} onClick={() => jump(itemIndex)}>{itemIndex + 1}</button>)}</div><Text type="secondary">蓝色：当前 · 绿色：已作答 · 橙色描边：重现题</Text></div></aside>
       <div className="quiz-layout"><div className="quiz-card">
         <div className="quiz-progress"><span>第 {index + 1} / {curveQueue.length} 题</span>{currentEntry && currentEntry.attempt > 0 ? <Tag color="orange">第 {currentEntry.attempt + 1} 遍</Tag> : null}<Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag></div>
+        <div className="quiz-progress-track" aria-hidden="true"><div className="quiz-progress-fill" style={{ width: `${((index + 1) / Math.max(curveQueue.length, 1)) * 100}%` }} /></div>
         <div className="quiz-stem"><MarkdownContent value={question.stem} /></div>
         {(question.type === 'single' || question.type === 'multiple') && <div className="quiz-options">
           {question.options.map((option) => {

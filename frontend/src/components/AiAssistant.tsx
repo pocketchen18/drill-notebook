@@ -1024,7 +1024,7 @@ export function AiAssistant(): JSX.Element {
               title={streaming ? '中断生成' : '发送'}
             />
           </div>
-          {!configQuery.data?.hasKey ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置」中配置 Endpoint 与 API Key 后即可使用。</Typography.Text> : null}
+          {!configQuery.data?.hasKey ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中填写 Base URL 与 API Key 后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
         </div>
         <Modal

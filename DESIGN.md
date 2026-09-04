@@ -27,24 +27,29 @@ Primary personas:
 
 ### Palette
 
-The existing CSS variables remain authoritative. New workspace styles must use
-these tokens rather than introduce route-local raw colors.
+The CSS variables in `frontend/src/styles/app.css` remain authoritative. New
+workspace styles must use these tokens rather than introduce route-local raw
+colors. Since v0.6 the same file also overrides Arco's theme variables on
+`body` / `body[arco-theme='dark']` (`--arcoblue-*`, radius, text / border /
+fill), so Arco components inherit this palette without per-component patches.
 
 | Role | Token | Light | Dark | Usage |
 |---|---|---:|---:|---|
-| Page canvas | `--page-bg` | `#f5f7fa` | `#17181a` | App and route background |
-| Working surface | `--panel-bg` | `#ffffff` | `#232527` | Editor and question content |
-| Whisper divider | `--line` | `#e5e6eb` | `#3b3e43` | Pane and row separation |
-| Tonal hover | `--hover-bg` | `#f2f3f5` | `#30343a` | Hovered explorer rows |
-| Tonal pane | `--subtle-bg` | `#f7f8fa` | `#1f2124` | Explorer and command surfaces |
-| Primary text | `--text` | `#1d2129` | `#e5e6eb` | Body and controls |
-| Strong text | `--text-strong` | `#1d2129` | `#f2f3f5` | Titles and active rows |
-| Secondary text | `--muted` | `#86909c` | `#a9abb2` | Metadata and hints |
-| Primary action | `--accent` | `#155eef` | `#6aa1ff` | Primary controls and focus |
-| Selected surface | `--accent-soft` | `#edf4ff` | `#182c4b` | Active explorer row |
-| Secondary selection | `--accent-soft-2` | `#f4f8ff` | `#1c2b40` | Multi-selected content |
-| Selection divider | `--accent-border` | `#b8d3ff` | `#4078d8` | Selected boundaries |
-| Destructive | `--danger` | `#f53f3f` | `#ff6b6b` | Delete commands |
+| Page canvas | `--page-bg` | `#f4f6fa` | `#131519` | App and route background |
+| Working surface | `--panel-bg` | `#ffffff` | `#1b1e24` | Editor and question content |
+| Sider surface | `--sider-bg` | `#fafbfd` | `#16181d` | Global navigation rail |
+| Whisper divider | `--line` | `#e4e7ee` | `#2a2f38` | Pane and row separation |
+| Tonal hover | `--hover-bg` | `#eff2f7` | `#242931` | Hovered explorer rows |
+| Tonal pane | `--subtle-bg` | `#f6f8fb` | `#20242b` | Explorer and command surfaces |
+| Primary text | `--text` | `#1e2433` | `#e2e6ee` | Body and controls |
+| Strong text | `--text-strong` | `#0f1420` | `#f7f8fa` | Titles and active rows |
+| Secondary text | `--muted` | `#6b7385` | `#98a2b3` | Metadata and hints |
+| Primary action | `--accent` | `#2f54eb` | `#8da2ff` | Accent text, borders and focus |
+| Primary fill | `--accent-fill` | `#2f54eb` | `#4b6bf0` | Solid buttons and badges (white text) |
+| Selected surface | `--accent-soft` | `#eef2ff` | `#1f2a4d` | Active explorer row |
+| Secondary selection | `--accent-soft-2` | `#f5f7ff` | `#1b2340` | Multi-selected content |
+| Selection divider | `--accent-border` | `#c7d2fe` | `#3b52a8` | Selected boundaries |
+| Destructive | `--danger` | `#e5484d` | `#ff7b7b` | Delete commands |
 
 ### Rules
 
@@ -58,7 +63,8 @@ these tokens rather than introduce route-local raw colors.
 
 ### Font Stack
 
-- UI and reading: `"Segoe UI", "Microsoft YaHei", sans-serif`.
+- UI and reading: `"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei",
+  "PingFang SC", sans-serif` (system fonts only).
 - Code: `Consolas, monospace` where the current editor already uses it.
 - No new webfont or font dependency is introduced.
 
@@ -184,7 +190,10 @@ Strategy: **tonal shift with whisper dividers**.
 - Shadows are reserved for existing overlays, drawers, modals, and popovers.
   Workspace panes do not float.
 - Radius stays functional: 4-6px for row controls, 8px only where an actual
-  framed tool needs containment.
+  framed tool needs containment. Outside the workspace (v0.6 page primitives)
+  panels use `--radius-lg` (12px) and study cards `--radius-xl` (16px) with the
+  `--shadow-xs` / `--shadow-sm` tiers; the workspace itself still does not
+  float.
 
 ## 8. Accessibility Constraints & Accepted Debt
 
@@ -206,7 +215,7 @@ Strategy: **tonal shift with whisper dividers**.
 | Item | Location | Why accepted | Exit condition |
 |---|---|---|---|
 | Page-switch autosave race | `frontend/src/pages/NotebookPage.tsx` | Current observable behavior is explicitly locked: a switch inside the 400ms debounce PUTs the captured prior page id with latest pending content. The owner did not authorize behavior change in this visual task. | Separate behavior task with explicit owner approval and migration test |
-| Existing global raw color values | `frontend/src/styles/app.css` outside workspace selectors | This task extracts and uses the existing theme; it is not a whole-app palette rewrite. | Future design-system consolidation |
+| Existing global raw color values | `frontend/src/styles/app.css` outside workspace selectors | v0.6 moved page styles onto the shared tokens; the remaining raw values are intentional (search-hit marks, brand gradient on the icon / AI fab, PowerPoint brand orange, `#000` video backdrop). | Future design-system consolidation |
 
 No new design debt may be added silently. Critical accessibility or command
 parity failures block delivery.

@@ -295,6 +295,41 @@ class NoteNormalizerTest {
     }
 
     @Test
+    void videoBlockIndexesTitleAndUrl() {
+        String json = """
+                {"type":"doc","content":[{"type":"videoBlock","attrs":{
+                    "videoType":"url","url":"https://example.com/v.mp4",
+                    "title":"线性代数第 3 讲","view":"link"}}]}
+                """;
+        List<NormalizedUnit> units = normalizer.normalize(json);
+        assertEquals(1, units.size());
+        assertEquals("视频：线性代数第 3 讲 https://example.com/v.mp4", units.get(0).text());
+    }
+
+    @Test
+    void fileBlockIndexesFileName() {
+        String json = """
+                {"type":"doc","content":[{"type":"fileBlock","attrs":{
+                    "attachmentId":7,"fileName":"考纲.pdf",
+                    "mimeType":"application/pdf","fileSize":1024}}]}
+                """;
+        List<NormalizedUnit> units = normalizer.normalize(json);
+        assertEquals(1, units.size());
+        assertEquals("附件：考纲.pdf", units.get(0).text());
+    }
+
+    @Test
+    void emptyVideoAndFileBlocksProduceNoUnits() {
+        String json = """
+                {"type":"doc","content":[
+                    {"type":"videoBlock","attrs":{"title":"","url":null}},
+                    {"type":"fileBlock","attrs":{"fileName":""}}
+                ]}
+                """;
+        assertTrue(normalizer.normalize(json).isEmpty());
+    }
+
+    @Test
     void unknownBlockNodeRecursesIntoChildren() {
         // unknown container nodes should recurse into their content children
         String json = """

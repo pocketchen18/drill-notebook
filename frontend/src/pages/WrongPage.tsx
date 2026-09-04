@@ -16,6 +16,7 @@ import { truncateTitle } from '../lib/studyPlan';
 import { enrollItems } from '../lib/review';
 import { usePersistSlice } from '../hooks/useViewState';
 import { readPageSlice } from '../lib/viewState';
+import { markdownToPlainText } from '../lib/markdownText';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
 const EMPTY_QUESTIONS: Question[] = [];
@@ -93,7 +94,7 @@ export function WrongPage(): JSX.Element {
             最近一次答错且尚未纠正的题目。勾选后点「加入记忆曲线」进入间隔复习；「加入日历计划」仅钉日期。
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="page-heading__actions">
           <ExportActions count={selectedRows.length} document={() => questionExportDocument('错题本', selectedRows)} />
           <Button
             icon={<CalendarPlus size={16} />}
@@ -130,7 +131,7 @@ export function WrongPage(): JSX.Element {
               pagination={false}
               rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(Number)) }}
               columns={[
-                { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{stem}</Typography.Text> },
+                { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{markdownToPlainText(stem)}</Typography.Text> },
                 { title: '类型', dataIndex: 'type', width: 100, render: (_: unknown, row: Question) => questionTypeLabel(row.type) },
                 { title: '章节', dataIndex: 'chapter', width: 160, render: (chapter?: string) => chapter || '未分类' },
                 {

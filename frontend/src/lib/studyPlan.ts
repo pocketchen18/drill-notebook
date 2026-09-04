@@ -1,4 +1,5 @@
 import type { StudyPlanGroup, StudyPlanItem } from './types';
+import { markdownToPlainText } from './markdownText';
 
 export function formatYmd(d: Date): string {
   const year = d.getFullYear();
@@ -125,8 +126,9 @@ export function tomorrowYmd(): string {
   return formatYmd(d);
 }
 
+/** 计划 / 加练条目标题：先去掉题干里的 Markdown 标记再截断。 */
 export function truncateTitle(text: string, max = 80): string {
-  const trimmed = text.trim();
+  const trimmed = markdownToPlainText(text);
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(0, max);
 }
