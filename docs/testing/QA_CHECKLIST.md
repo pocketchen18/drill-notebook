@@ -132,6 +132,9 @@
 | **TC-NB-03** | 退出兜底保存 | 刚输入 1 秒内 | 立即关闭应用窗口后重启 | 最近编辑大概率已落盘（尽力而为策略，不承诺 100%） | P1 |
 | **TC-NB-04** | 新建笔记本 | 笔记本页面已打开 | 点击「新建笔记本」→ 输入标题 → Enter/确认 | 1. 弹出 Modal 创建成功并选中<br>2. 空标题提交给出警告，不创建 | P0 |
 | **TC-NB-05** | 首次启动种子数据 | 笔记本数据为空 | 启动应用进入笔记本页 | 自动出现「默认笔记本 / 开始这里」，无需手动新建 | P1 |
+| **TC-NB-06** | 编辑区页面标题改名 | 已选中某个页面 | 1. 在编辑区顶部标题框改名<br>2. 按 Enter（或点空白处失焦）<br>3. 另试改名后按 `Esc` | 1. 逐字输入不发请求、不被旧标题顶回<br>2. 提交后左侧列表与标题框同步为新名，只发一次 `PUT /api/note-pages/{id}`<br>3. `Esc` 回到原标题且不发请求；标题清空提交时提示「页面标题不能为空」并留在输入框 | P0 |
+| **TC-NB-07** | 页面列表改名（双击 / F2） | 笔记本存在多个页面 | 1. 双击某行页面标题<br>2. 改名后点别处失焦<br>3. 另选一行按 `F2` | 1. 该行标题变输入框并全选，勾选框与删除按钮保持可用<br>2. 失焦提交并刷新列表；改名期间点该行不切换选中页<br>3. `F2` 同样进入改名（可在设置 → 常规 → 快捷键「重命名笔记页」改绑） | P0 |
+| **TC-NB-08** | 笔记本改名 | 笔记本页已打开 | 1. 点下拉框右侧的改名图标按钮<br>2. 输入新名按 Enter<br>3. 再次进入后按 `Esc`；另试切换笔记本 | 1. 下拉框临时换成输入框并全选原名<br>2. 提交后下拉框与其它页面的笔记本选择器都显示新名<br>3. `Esc` / 切换笔记本都会收起输入框并恢复下拉，不发请求 | P0 |
 
 ---
 
@@ -168,12 +171,13 @@
 | 题库页选择记忆 | `frontend/src/pages/BankPage.viewState.test.tsx`（4 用例） | 恢复上次题库与部分勾选、`all` 哨兵展开整库、题库已删回落第一个库、无记忆时不勾选 |
 | 题库→刷题选题继承 | `frontend/src/pages/BankPage.workspace.test.tsx`（BNK-16 / BNK-16b） | 无勾选仅携带 bankId；有勾选携带 `questionIds`+`from=bank` |
 | 笔记本创建 | `frontend/src/pages/NotebookPage.workspace.test.tsx`（NBK-14） | 「新建笔记本」弹窗 POST `/api/notebooks` 并切换到新笔记本；空标题不发请求 |
+| 笔记本 / 页面重命名 | `frontend/src/pages/NotebookPage.workspace.test.tsx`（NBK-18，5 用例） | 编辑区标题本地成稿、回车只 PUT 一次且不被旧值顶回、`Esc` 放弃草稿；列表双击标题失焦提交、`F2` 进入改名且空标题被拒；笔记本改名按钮把下拉换成输入框并 PUT `/api/notebooks/{id}` |
 | 全屏卡片快捷键不滚动 | `frontend/src/pages/knowledge/KnowledgeFullCardView.test.tsx`（3 用例） | ←/→/T/Esc 命中即 `preventDefault`（`fireEvent` 返回 false）、未绑定键不拦截、改绑到 ↑↓/PageUp/PageDown 同样不滚动、输入框内方向键与字母键交还控件 |
 | RAG 索引状态自愈 | `backend/.../EmbeddingJobExecutorTest.java`（空语料激活 / supersede 后激活 / 有待跑任务不激活 / 无 provider 也能结算空语料 4 用例） | REBUILDING + 队列无可运行任务时重算 coverage 并激活；退避窗口内的任务与有排队任务时不会误激活 |
 | normalizer 升级迁移 | `backend/.../NoteIndexingServiceTest.java`（2 用例） | 启动审计重建 hash 不符的页（视频页从 0 分块变为可检索）、二次运行幂等；hash 一致的页与笔记正文不被改写 |
 | 视频 / 附件块入索引 | `backend/.../NoteNormalizerTest.java`（3 用例） | `videoBlock` 取标题 + URL、`fileBlock` 取文件名、空 attrs 不产生分块 |
 | provider 可用性可见 | `backend/.../EmbeddingJobExecutorTest.java` + `frontend/src/components/EmbeddingSettingsCard.test.tsx` | status 返回 `providerReady`；`REBUILDING && providerReady=false` 时设置页显示「本地向量组件不可用」而非「索引构建中」 |
-| 前端回归 | `npm test --prefix frontend`（Vitest 全量 311 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归、Markdown 题干纯文本化（`markdownText`）、`app.css` 令牌约束（Embedding 条目跟主题变量） |
+| 前端回归 | `npm test --prefix frontend`（Vitest 全量 316 项） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归、Markdown 题干纯文本化（`markdownText`）、`app.css` 令牌约束（Embedding 条目跟主题变量） |
 | 全量门禁 | `.\mvnw.cmd test`（384 项）+ `npm run build --prefix frontend` | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节 |
 
 ---

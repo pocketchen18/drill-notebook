@@ -1182,6 +1182,12 @@ mark.kp-search-highlight.kp-search-highlight-active {
 .note-list { display: grid; gap: 5px; }
 .note-page-item { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; }
 .note-page-item:hover, .note-page-item.selected { background: var(--hover-bg); }
+.note-page-item.is-renaming { cursor: default; }
+.note-page-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-page-title-editable { cursor: text; border-radius: 4px; padding: 1px 2px; margin: -1px -2px; }
+.note-page-title-editable:hover { background: var(--hover-bg); }
+.note-rename-input { flex: 1; min-width: 0; max-width: 100%; }
+.notebook-rename-input { max-width: 240px; }
 .chat-compose { display: flex; gap: 10px; padding: 12px; }
 .chat-compose textarea { flex: 1; resize: vertical; }
 .attachment-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; }

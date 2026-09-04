@@ -13,7 +13,7 @@
  *   避免改绑「打开 AI 助手」时旧绑定把侧栏一起唤出。
  */
 
-export type ShortcutScope = 'global' | 'quiz' | 'knowledgeCard' | 'editor' | 'bank' | 'ai';
+export type ShortcutScope = 'global' | 'quiz' | 'knowledgeCard' | 'editor' | 'bank' | 'notebook' | 'ai';
 
 export interface ShortcutScopeMeta {
   id: ShortcutScope;
@@ -30,6 +30,7 @@ export const SHORTCUT_SCOPES: ShortcutScopeMeta[] = [
   { id: 'knowledgeCard', label: '知识卡片全屏', description: '知识点全屏阅读时生效。', plainKeys: true },
   { id: 'editor', label: '笔记编辑器', description: '编辑公式 / 图表 / Markdown 块时生效。', plainKeys: false },
   { id: 'bank', label: '题库', description: '题库列表项选中时生效。', plainKeys: true },
+  { id: 'notebook', label: '笔记本', description: '笔记页列表项选中时生效。', plainKeys: true },
   { id: 'ai', label: 'AI 助手', description: '侧栏输入框内生效。', plainKeys: true }
 ];
 
@@ -39,6 +40,7 @@ export type ShortcutAction =
   | 'kcSearch' | 'kcToggleOutline' | 'kcPrev' | 'kcNext' | 'kcExit'
   | 'editorFinishBlock'
   | 'bankRename'
+  | 'noteRename'
   | 'aiSend';
 
 export interface ShortcutActionMeta {
@@ -70,6 +72,7 @@ export const SHORTCUT_ACTIONS: ShortcutActionMeta[] = [
   { id: 'kcExit', scope: 'knowledgeCard', label: '退出全屏', description: '搜索框打开时先关闭搜索。', defaults: ['Escape'] },
   { id: 'editorFinishBlock', scope: 'editor', label: '完成块编辑', description: '公式 / 图表 / Markdown 块。', defaults: ['Ctrl+Enter'] },
   { id: 'bankRename', scope: 'bank', label: '重命名题库', description: '', defaults: ['F2'] },
+  { id: 'noteRename', scope: 'notebook', label: '重命名笔记页', description: '', defaults: ['F2'] },
   { id: 'aiSend', scope: 'ai', label: '发送消息', description: '其余 Enter 组合用于换行。', defaults: ['Enter'], mainKeys: ['Enter'] }
 ];
 
