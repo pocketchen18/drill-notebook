@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Checkbox, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin } from '@arco-design/web-react';
-import { CalendarPlus, FilePlus2, Plus, Trash2 } from 'lucide-react';
+import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
+import { CalendarPlus, Edit3, FilePlus2, Plus, Trash2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { del, flushRequest, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -18,6 +19,10 @@ import { DayQueueSessionBar, finishDayQueueStep } from '../components/DayQueueSe
 import { truncateTitle } from '../lib/studyPlan';
 import { useIdSwitchReset, usePersistSlice } from '../hooks/useViewState';
 import { readPageSlice } from '../lib/viewState';
+import { matchesAny } from '../lib/shortcuts';
+
+/** 页面标题的两个改名入口：左侧列表行 vs 编辑区标题。任一时刻只有一个在编辑。 */
+type PageRenameSurface = 'list' | 'header';
 
 export function NotebookPage(): JSX.Element {
   const navigate = useNavigate();
@@ -44,6 +49,14 @@ export function NotebookPage(): JSX.Element {
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
   const [focusMode, setFocusMode] = useState<boolean>(() => cachedNotebooks.focusMode ?? false);
+  const [renamingPageId, setRenamingPageId] = useState<number | undefined>(undefined);
+  const [renameSurface, setRenameSurface] = useState<PageRenameSurface | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renamingNotebook, setRenamingNotebook] = useState(false);
+  const [notebookDraft, setNotebookDraft] = useState('');
+  const listRenameInputRef = useRef<RefInputType>(null);
+  const headerRenameInputRef = useRef<RefInputType>(null);
+  const notebookRenameInputRef = useRef<RefInputType>(null);
   const deepLinkApplied = useRef(false);
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
   const pagesQuery = useQuery({ queryKey: ['note-pages', notebookId], queryFn: () => get<NotePage[]>(`/api/notebooks/${notebookId}/pages`), enabled: notebookId !== undefined });
@@ -84,11 +97,144 @@ export function NotebookPage(): JSX.Element {
     mutationFn: (id: number) => del<void>(`/api/note-pages/${id}`),
     onSuccess: () => {
       setPageId(undefined);
+      cancelPageRename();
       void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] });
       Message.success('页面已删除');
     },
     onError: (error) => Message.error(friendlyMessage(error, '页面删除失败，请稍后重试'))
   });
+
+  const renamePage = useMutation({
+    mutationFn: ({ id, title }: { id: number; title: string }) => put<NotePage>(`/api/note-pages/${id}`, { title }),
+    onSuccess: (page) => {
+      cancelPageRename();
+      // 直接写缓存：标题在列表、编辑区标题、AI 引用里同时出现，等 refetch 会闪一下旧名。
+      queryClient.setQueryData<NotePage[]>(['note-pages', notebookId], (current) =>
+        (current ?? []).map((item) => (item.id === page.id ? { ...item, title: page.title } : item))
+      );
+      queryClient.setQueryData<NotePage>(['note-page', page.id], (current) =>
+        current ? { ...current, title: page.title } : current
+      );
+      void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] });
+      Message.success('页面标题已更新');
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '页面重命名失败，请稍后重试'))
+  });
+
+  const renameNotebook = useMutation({
+    mutationFn: ({ id, title }: { id: number; title: string }) => put<Notebook>(`/api/notebooks/${id}`, { title }),
+    onSuccess: (notebook) => {
+      cancelNotebookRename();
+      queryClient.setQueryData<Notebook[]>(['notebooks'], (current) =>
+        (current ?? []).map((item) => (item.id === notebook.id ? { ...item, title: notebook.title } : item))
+      );
+      void queryClient.invalidateQueries({ queryKey: ['notebooks'] });
+      Message.success('笔记本名称已更新');
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '笔记本重命名失败，请稍后重试'))
+  });
+
+  // 只有列表行的改名需要抢焦点：编辑区标题是常驻输入框，用户一打字就已经在里面了，
+  // 这时再 select() 会把光标位置和已输入内容一起冲掉。
+  useEffect(() => {
+    if (renamingPageId === undefined || renameSurface !== 'list') return;
+    const timer = window.setTimeout(() => {
+      const input = listRenameInputRef.current?.dom;
+      if (!input) return;
+      input.focus();
+      input.select();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renamingPageId, renameSurface]);
+
+  useEffect(() => {
+    if (!renamingNotebook) return;
+    const timer = window.setTimeout(() => {
+      const input = notebookRenameInputRef.current?.dom;
+      if (!input) return;
+      input.focus();
+      input.select();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renamingNotebook]);
+
+  // 切走页面时丢弃未提交的编辑区草稿，否则下一页的标题框会显示上一页的半成品。
+  useEffect(() => {
+    if (renameSurface === 'header' && renamingPageId !== undefined && renamingPageId !== pageId) {
+      cancelPageRename();
+    }
+  }, [pageId, renameSurface, renamingPageId]);
+
+  // 换笔记本时同样收掉笔记本改名框（Select 已被输入框顶掉，留着会指向旧本子）。
+  useEffect(() => {
+    cancelNotebookRename();
+  }, [notebookId]);
+
+  function beginPageRename(page: NotePage, surface: PageRenameSurface, event?: React.MouseEvent | React.KeyboardEvent): void {
+    event?.stopPropagation();
+    event?.preventDefault();
+    if (renamePage.isPending) return;
+    // 从列表改名时同时选中该页；编辑区改名保持当前选中不变。
+    if (surface === 'list') setPageId(page.id);
+    setRenameDraft(page.title);
+    setRenamingPageId(page.id);
+    setRenameSurface(surface);
+  }
+
+  function cancelPageRename(): void {
+    setRenamingPageId(undefined);
+    setRenameSurface(null);
+    setRenameDraft('');
+  }
+
+  function commitPageRename(page: NotePage, surface: PageRenameSurface): void {
+    if (renamePage.isPending) return;
+    // 忽略已经不在编辑中的入口传来的 blur
+    if (renamingPageId !== page.id || renameSurface !== surface) return;
+    const title = renameDraft.trim();
+    if (!title) {
+      Message.warning('页面标题不能为空');
+      const input = (surface === 'list' ? listRenameInputRef : headerRenameInputRef).current?.dom;
+      input?.focus();
+      input?.select();
+      return;
+    }
+    if (title === page.title) {
+      cancelPageRename();
+      return;
+    }
+    renamePage.mutate({ id: page.id, title });
+  }
+
+  function beginNotebookRename(notebook: Notebook, event?: React.MouseEvent): void {
+    event?.stopPropagation();
+    event?.preventDefault();
+    if (renameNotebook.isPending) return;
+    setNotebookDraft(notebook.title);
+    setRenamingNotebook(true);
+  }
+
+  function cancelNotebookRename(): void {
+    setRenamingNotebook(false);
+    setNotebookDraft('');
+  }
+
+  function commitNotebookRename(notebook: Notebook): void {
+    if (renameNotebook.isPending || !renamingNotebook) return;
+    const title = notebookDraft.trim();
+    if (!title) {
+      Message.warning('笔记本名称不能为空');
+      const input = notebookRenameInputRef.current?.dom;
+      input?.focus();
+      input?.select();
+      return;
+    }
+    if (title === notebook.title) {
+      cancelNotebookRename();
+      return;
+    }
+    renameNotebook.mutate({ id: notebook.id, title });
+  }
 
   // Deep link: select notebook + page from ?pageId=
   useEffect(() => {
@@ -229,9 +375,24 @@ export function NotebookPage(): JSX.Element {
       <div className="route-command-row__context">
         <h1 className="route-workspace__sr-only">笔记本</h1>
         <p className="route-workspace__sr-only">所见即所得：公式/图表/Markdown 块默认渲染，点击即可编辑。AI 回复可一键插入本页。</p>
-        <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { setNotebookId(Number(value)); setPageId(undefined); }}>
-          {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
-        </Select>
+        {renamingNotebook && selectedNotebook ? (
+          <Input
+            ref={notebookRenameInputRef}
+            className="notebook-rename-input"
+            value={notebookDraft}
+            disabled={renameNotebook.isPending}
+            onChange={setNotebookDraft}
+            onBlur={() => commitNotebookRename(selectedNotebook)}
+            onPressEnter={(event) => { event.preventDefault(); commitNotebookRename(selectedNotebook); }}
+            onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); cancelNotebookRename(); } }}
+            aria-label="重命名当前笔记本"
+          />
+        ) : (
+          <Select value={notebookId} placeholder="选择笔记本" onChange={(value) => { cancelPageRename(); setNotebookId(Number(value)); setPageId(undefined); }}>
+            {notebooksQuery.data?.map((notebook) => <Select.Option key={notebook.id} value={notebook.id}>{notebook.title}</Select.Option>)}
+          </Select>
+        )}
+        {selectedNotebook && !renamingNotebook ? <Button type="text" icon={<Edit3 size={16} />} onClick={() => beginNotebookRename(selectedNotebook)} aria-label="重命名笔记本" title="重命名笔记本" /> : null}
         <Button icon={<Plus size={16} />} onClick={() => setNewNotebookVisible(true)}>新建笔记本</Button>
       </div>
       <Space className="route-command-row__actions">
@@ -273,14 +434,70 @@ export function NotebookPage(): JSX.Element {
         <div className="local-explorer__list">
           {pagesQuery.isLoading ? <Spin /> : pagesQuery.data?.length ? <div className="note-list">
             <div className="selection-toolbar"><Checkbox checked={validSelectedPageIds.length === pagesQuery.data.length} indeterminate={validSelectedPageIds.length > 0 && validSelectedPageIds.length < pagesQuery.data.length} onChange={(checked) => setSelectedPageIds(checked ? pagesQuery.data.map((page) => page.id) : [])}>全选页面</Checkbox></div>
-            {pagesQuery.data.map((page) => <div key={page.id} className={`dense-content-row note-page-item ${pageId === page.id ? 'selected' : ''} ${validSelectedPageIds.includes(page.id) ? 'is-export-selected' : ''}`} onClick={() => setPageId(page.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setPageId(page.id); }}><span className="selection-line"><Checkbox aria-label={`选择页面：${page.title}`} checked={validSelectedPageIds.includes(page.id)} onClick={(event) => event.stopPropagation()} onChange={(checked) => setSelectedPageIds((ids) => checked ? [...ids, page.id] : ids.filter((id) => id !== page.id))} />{page.title}</span><Popconfirm title="删除这个页面" content="页面内容和 AI 引用将一并删除，且不可恢复。" onOk={() => deletePage.mutate(page.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${page.title}`} /></Popconfirm></div>)}
+            {pagesQuery.data.map((page) => {
+              const isListRenaming = renamingPageId === page.id && renameSurface === 'list';
+              return <div
+                key={page.id}
+                className={`dense-content-row note-page-item ${pageId === page.id ? 'selected' : ''} ${validSelectedPageIds.includes(page.id) ? 'is-export-selected' : ''}${isListRenaming ? ' is-renaming' : ''}`}
+                onClick={() => { if (!isListRenaming) setPageId(page.id); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (isListRenaming) return;
+                  if (event.key === 'Enter') setPageId(page.id);
+                  // 重命名键可在设置 → 常规 → 快捷键改绑（默认 F2）
+                  if (matchesAny(event, useUiStore.getState().shortcutConfig.noteRename)) beginPageRename(page, 'list', event);
+                }}
+              >
+                <span className="selection-line">
+                  <Checkbox aria-label={`选择页面：${page.title}`} checked={validSelectedPageIds.includes(page.id)} onClick={(event) => event.stopPropagation()} onChange={(checked) => setSelectedPageIds((ids) => checked ? [...ids, page.id] : ids.filter((id) => id !== page.id))} />
+                  {isListRenaming ? (
+                    <Input
+                      ref={listRenameInputRef}
+                      size="small"
+                      className="note-rename-input"
+                      value={renameDraft}
+                      disabled={renamePage.isPending}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={setRenameDraft}
+                      onBlur={() => commitPageRename(page, 'list')}
+                      onPressEnter={(event) => { event.preventDefault(); commitPageRename(page, 'list'); }}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === 'Escape') { event.preventDefault(); cancelPageRename(); }
+                      }}
+                      aria-label="重命名页面"
+                    />
+                  ) : (
+                    <span className="note-page-title note-page-title-editable" title="双击重命名" onDoubleClick={(event) => beginPageRename(page, 'list', event)}>{page.title}</span>
+                  )}
+                </span>
+                <Popconfirm title="删除这个页面" content="页面内容和 AI 引用将一并删除，且不可恢复。" onOk={() => deletePage.mutate(page.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} onClick={(event) => event.stopPropagation()} aria-label={`删除${page.title}`} /></Popconfirm>
+              </div>;
+            })}
           </div> : <div className="empty-state"><div><p>还没有页面</p><Button type="text" onClick={() => setNewPageVisible(true)}>创建第一页</Button></div></div>}
         </div>
       </aside>
       <section className="route-workspace__content">
         {currentPage ? <>
           {focusMode ? null : <div className="editor-canvas__header">
-            <Input value={currentPage.title} onChange={(title) => { void put(`/api/note-pages/${currentPage.id}`, { title }); void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] }); }} className="editor-canvas__title" />
+            <Input
+              ref={headerRenameInputRef}
+              className="editor-canvas__title"
+              value={renamingPageId === currentPage.id && renameSurface === 'header' ? renameDraft : currentPage.title}
+              disabled={renamePage.isPending}
+              onChange={(title) => {
+                // 先本地成稿、失焦或回车才提交：原先每敲一个字符发一次 PUT，而 ['note-page', pageId]
+                // 从不失效，输入框立刻被服务端旧标题覆盖回去，看起来就是「改不了名」。
+                setRenameDraft(title);
+                setRenamingPageId(currentPage.id);
+                setRenameSurface('header');
+              }}
+              onBlur={() => commitPageRename(currentPage, 'header')}
+              onPressEnter={(event) => { event.preventDefault(); commitPageRename(currentPage, 'header'); }}
+              onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); cancelPageRename(); } }}
+              aria-label="重命名当前页面"
+            />
             <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForPages([currentPage])}>加入计划</Button>
           </div>}
           <NotebookEditor content={pendingContent ?? currentPage.content} onChange={setPendingContent} pageId={pageId} focusMode={focusMode} onFocusModeChange={setFocusMode} />

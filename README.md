@@ -110,7 +110,7 @@
 |---|---|
 | **主题跟随系统** | 设置 → 常规「主题」三选一：浅色 / 深色 / 跟随系统；跟随系统时监听 `prefers-color-scheme`，系统切换深浅色即时生效；顶栏开关或快捷键切换会自动转为显式模式 |
 | **AI 悬浮球开关** | 可隐藏右下角悬浮球；快捷键与设置页「打开 AI 助手」按钮仍可唤出侧栏 |
-| **自定义快捷键（全局 + 页面内）** | 设置 → 常规 → 快捷键按作用域分组：**全局**（打开 / 关闭 AI 助手 默认 `Ctrl+J`、切换深浅主题、打开设置）、**刷题**（提交答案 `Enter`/`Ctrl+S`、下一题 `Enter`/`→`/`PgDn`/`N`、上一题 `←`/`PgUp`/`P`）、**知识卡片全屏**（搜索 `Ctrl+F`、折叠 / 展开大纲 `T`、上一张 `←`、下一张 `→`、退出 `Esc`）、**笔记编辑器**（完成块编辑 `Ctrl+Enter`）、**题库**（重命名 `F2`）、**AI 助手**（发送 `Enter`）。每个动作可绑多个组合键：点「+」录入，Esc 取消，Backspace 清空该项，chip 上的 × 移除单个，单项 / 全部恢复默认。规则：全局与编辑器内动作须含 Ctrl 或 Alt（F1–F12 可单独），页面内动作允许单键（输入框聚焦时不生效）；AI 发送只能是 Enter 组合；全局动作与任何动作互斥，同一页面内除不同阶段（刷题作答中 / 已提交）外互斥，不同页面可共用；录制期间全局监听让路。所有提示文案（顶栏、悬浮球 title、刷题页底部、卡片工具提示、编辑器提示、AI 输入框占位）跟随当前绑定。实现见 `frontend/src/lib/shortcuts.ts` + `hooks/useGlobalShortcuts.ts`，各页面用 `matchesAny` / `resolveShortcutAction` 读 `uiStore.shortcutConfig`；存储 `localStorage['ui.shortcuts.v1']`（每项 string[]，兼容早期单串） |
+| **自定义快捷键（全局 + 页面内）** | 设置 → 常规 → 快捷键按作用域分组：**全局**（打开 / 关闭 AI 助手 默认 `Ctrl+J`、切换深浅主题、打开设置）、**刷题**（提交答案 `Enter`/`Ctrl+S`、下一题 `Enter`/`→`/`PgDn`/`N`、上一题 `←`/`PgUp`/`P`）、**知识卡片全屏**（搜索 `Ctrl+F`、折叠 / 展开大纲 `T`、上一张 `←`、下一张 `→`、退出 `Esc`）、**笔记编辑器**（完成块编辑 `Ctrl+Enter`）、**题库**（重命名 `F2`）、**笔记本**（重命名笔记页 `F2`）、**AI 助手**（发送 `Enter`）。每个动作可绑多个组合键：点「+」录入，Esc 取消，Backspace 清空该项，chip 上的 × 移除单个，单项 / 全部恢复默认。规则：全局与编辑器内动作须含 Ctrl 或 Alt（F1–F12 可单独），页面内动作允许单键（输入框聚焦时不生效）；AI 发送只能是 Enter 组合；全局动作与任何动作互斥，同一页面内除不同阶段（刷题作答中 / 已提交）外互斥，不同页面可共用；录制期间全局监听让路。所有提示文案（顶栏、悬浮球 title、刷题页底部、卡片工具提示、编辑器提示、AI 输入框占位）跟随当前绑定。实现见 `frontend/src/lib/shortcuts.ts` + `hooks/useGlobalShortcuts.ts`，各页面用 `matchesAny` / `resolveShortcutAction` 读 `uiStore.shortcutConfig`；存储 `localStorage['ui.shortcuts.v1']`（每项 string[]，兼容早期单串） |
 
 ### 1.8 v0.6（进行中）前端 UI 全面重塑
 
@@ -122,6 +122,7 @@
 | **页面精修** | 错题、知识点、练习（刷题 / 背诵：题卡圆角、选项字母徽章、进度条、反馈卡）、日历（今天徽章、月份头部自适应换行）、设置（pill Tab、分隔行）与 AI 侧栏（气泡、会话栏）逐页重构视觉层；笔记本与题库保持工作台几何契约（`DESIGN.md`）只做视觉微调 |
 | **约束** | 不改变现有功能与交互逻辑，仅做不破坏性的微调（折叠按钮展开态显示「收起侧栏」文字、主题开关改为图标按钮）；既有测试与几何契约测试继续通过 |
 | **随手修补** | 笔记本命令行补回「新建笔记本」入口（v0.5 工作台重构时遗失，后端接口一直存在）；练习选题器、知识点关联题目改为 Markdown 内联渲染，错题表格 / 计划标题 / 下拉选项等纯文本场景用 `lib/markdownText` 剥离 Markdown 与 LaTeX 记号；AI 连接提示与后端报错统一为「Base URL + API Key」措辞 |
+| **笔记本 / 页面重命名** | 页面标题原先每敲一个字符就 PUT 一次，且从不失效 `['note-page', pageId]`，输入框被服务端旧标题顶回去，看起来「改不了名」；现改为本地成稿、失焦或回车提交一次，Esc 放弃。页面列表行支持双击标题或按 `F2`（作用域「笔记本」，设置 → 常规 → 快捷键可改绑）改名；笔记本在命令行的下拉旁新增改名按钮，编辑时下拉临时换成输入框。提交后直接回写 `['notebooks']` / `['note-pages', id]` / `['note-page', id]` 缓存，列表、编辑区标题、AI 引用同步更新 |
 | **快捷键不再带动滚动条** | 知识卡片全屏内命中的快捷键（上一个 / 下一个 / 折叠大纲 / 退出）一律 `preventDefault`，方向键、PageUp/PageDown 等不再同时滚动大纲横向或正文纵向滚动条；输入框 / 文本域 / contentEditable 内的按键交还控件本身；大纲跟随高亮改为只滚动大纲自己的滚动容器 |
 | **RAG 修复** | ① `embedding-worker` 可执行文件由 `electron/java-bridge.ts` 与 `scripts/start-mvp.ps1` 同序自动定位（release → debug 兜底）并注入后端，`npm run dev:electron` / 打包启动不再因缺少 `DRILL_EMBEDDING_WORKER_EXE` 而永久「索引构建中」；② poller 在 REBUILDING 且队列无可运行任务时重算 coverage 并按需激活，队列被 supersede 清空后不再卡住；③ `videoBlock` / `fileBlock` 的标题、链接、文件名纳入索引（此前只含视频块的页面 chunk 数为 0，检索与 AI 都读不到）；④ 启动时新增 normalizer 审计：已索引页的 `content_hash` 与当前 normalizer 不符即重建分块 / FTS / 向量任务，这是 normalizer 变更的迁移通道（否则旧页要等用户手动编辑才会修复）；⑤ `retrieval/status` 新增 `providerReady`，设置页据此区分「索引构建中」与「本地向量组件不可用」 |
 
