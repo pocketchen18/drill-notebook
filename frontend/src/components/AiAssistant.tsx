@@ -16,6 +16,7 @@ import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
 import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
 import { streamChat } from '../lib/aiStream';
+import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
 
@@ -61,8 +62,14 @@ export function AiAssistant(): JSX.Element {
   const fileInput = useRef<HTMLInputElement>(null);
   const aiOpen = useUiStore((state) => state.aiOpen);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
-  const toggleAi = useUiStore((state) => state.toggleAi);
   const pageContext = useUiStore((state) => state.pageContext);
+  const aiFabVisible = useUiStore((state) => state.aiFabVisible);
+  // 悬浮球提示与发送键跟随设置 → 常规 → 快捷键里的当前绑定
+  const aiAccelerator = useUiStore((state) => state.shortcutConfig.toggleAi[0]);
+  const sendKeys = useUiStore((state) => state.shortcutConfig.aiSend);
+  // 未被「发送」占用的 Enter 组合用于换行
+  const newlineHint = !sendKeys.includes('Enter') ? 'Enter 换行' : !sendKeys.includes('Shift+Enter') ? 'Shift+Enter 换行' : '';
+  const composePlaceholder = `提问… ${sendKeys.length ? `${describeAccelerators(sendKeys)} 发送` : '点按钮发送'}${newlineHint ? ` · ${newlineHint}` : ''}`;
   const configQuery = useQuery({
     queryKey: ['ai-config'],
     queryFn: async () => {
@@ -229,17 +236,6 @@ export function AiAssistant(): JSX.Element {
       return [...pending, ...serverMessages];
     });
   }, [messagesQuery.data]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'j') {
-        event.preventDefault();
-        toggleAi();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [toggleAi]);
 
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
@@ -722,9 +718,17 @@ export function AiAssistant(): JSX.Element {
 
   return (
     <>
-      <button type="button" className={`ai-fab${aiOpen ? ' is-open' : ''}`} onClick={() => setAiOpen(!aiOpen)} title="AI 助手 (Ctrl+J)" aria-label="打开 AI 助手">
-        <Sparkles size={22} />
-      </button>
+      {aiFabVisible ? (
+        <button
+          type="button"
+          className={`ai-fab${aiOpen ? ' is-open' : ''}`}
+          onClick={() => setAiOpen(!aiOpen)}
+          title={aiAccelerator ? `AI 助手 (${describeAccelerator(aiAccelerator)})` : 'AI 助手'}
+          aria-label="打开 AI 助手"
+        >
+          <Sparkles size={22} />
+        </button>
+      ) : null}
       <Drawer
         width={drawerWidth}
         title={
@@ -978,13 +982,15 @@ export function AiAssistant(): JSX.Element {
               autoSize={{ minRows: 2, maxRows: 6 }}
               value={message}
               onChange={setMessage}
-              onPressEnter={(event) => {
-                if (!event.shiftKey) {
+              onKeyDown={(event) => {
+                // 中文输入法组词阶段的 Enter 用于选字，不发送
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                if (matchesAny(event, useUiStore.getState().shortcutConfig.aiSend)) {
                   event.preventDefault();
                   send();
                 }
               }}
-              placeholder="提问… Enter 发送 · Shift+Enter 换行"
+              placeholder={composePlaceholder}
             />
             <input
               ref={fileInput}

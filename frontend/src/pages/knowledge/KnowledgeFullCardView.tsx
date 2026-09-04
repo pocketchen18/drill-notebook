@@ -17,6 +17,8 @@ import {
 import { friendlyMessage } from '../../lib/errors';
 import type { KnowledgePoint, Question } from '../../lib/types';
 import { KnowledgeTreeNav } from './KnowledgeTreeNav';
+import { describeAccelerators, matchesAny } from '../../lib/shortcuts';
+import { useUiStore } from '../../stores/uiStore';
 
 export interface KnowledgeFullCardViewProps {
   tree: KnowledgeTree;
@@ -251,10 +253,14 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
     setCurrentMatchIndex(0);
   }, []);
 
+  // 全屏视图内的快捷键（设置 → 常规 → 快捷键 · 知识卡片全屏）
+  const shortcuts = useUiStore((state) => state.shortcutConfig);
+  const keyHint = (accelerators: readonly string[]): string => (accelerators.length ? ` (${describeAccelerators(accelerators)})` : '');
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // Ctrl+F / Cmd+F 开启搜索
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      // 开启搜索（默认 Ctrl+F / Cmd+F）
+      if (matchesAny(e, shortcuts.kcSearch)) {
         e.preventDefault();
         e.stopPropagation();
         openSearch();
@@ -275,7 +281,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
         }
       }
 
-      if (e.key === 'Escape') {
+      if (matchesAny(e, shortcuts.kcExit)) {
         if (searchVisible) {
           e.preventDefault();
           e.stopPropagation();
@@ -284,13 +290,13 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
           onClose();
         }
       }
-      else if (!searchVisible && e.key === 'ArrowLeft') { const p = tree.flatList[index - 1]; if (p) onNavigate(p.id); }
-      else if (!searchVisible && e.key === 'ArrowRight') { const n = tree.flatList[index + 1]; if (n) onNavigate(n.id); }
-      else if (!searchVisible && (e.key === 't' || e.key === 'T')) setSidebarOpen((v) => !v);
+      else if (!searchVisible && matchesAny(e, shortcuts.kcPrev)) { const p = tree.flatList[index - 1]; if (p) onNavigate(p.id); }
+      else if (!searchVisible && matchesAny(e, shortcuts.kcNext)) { const n = tree.flatList[index + 1]; if (n) onNavigate(n.id); }
+      else if (!searchVisible && matchesAny(e, shortcuts.kcToggleOutline)) setSidebarOpen((v) => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, tree, index, openSearch, closeSearch, searchVisible, matchCount, currentMatchIndex]);
+  }, [onClose, onNavigate, tree, index, openSearch, closeSearch, searchVisible, matchCount, currentMatchIndex, shortcuts]);
 
   const nodeAsPoint = (n: KnowledgeTreeNode): KnowledgePoint => ({
     id: n.id, title: n.title, content: n.content, category: n.category,
@@ -443,7 +449,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
       <div className="knowledge-full-card-toolbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button type="text" icon={<ArrowLeft size={18} />} onClick={onClose}>返回</Button>
-          <Tooltip content={sidebarOpen ? '折叠大纲 (T)' : '展开大纲 (T)'}>
+          <Tooltip content={`${sidebarOpen ? '折叠大纲' : '展开大纲'}${keyHint(shortcuts.kcToggleOutline)}`}>
             <Button
               type="text"
               icon={sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
@@ -458,7 +464,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
           {isRoot ? '总览全文' : `第 ${index + 1} / ${total} 个知识点`}
         </span>
         <div className="knowledge-full-card-actions">
-          <Tooltip content="搜索大纲与正文 (Ctrl+F)">
+          <Tooltip content={`搜索大纲与正文${keyHint(shortcuts.kcSearch)}`}>
             <Button
               type={searchVisible ? 'primary' : 'default'}
               icon={<Search size={14} />}
@@ -505,7 +511,7 @@ export function KnowledgeFullCardView({ tree, node, questions, bankId, onNavigat
             <Input
               ref={searchInputRef}
               prefix={<Search size={14} />}
-              placeholder="搜索大纲与正文 (Enter 下一个，Shift+Enter 上一个，Esc 退出)..."
+              placeholder={`搜索大纲与正文 (Enter 下一个，Shift+Enter 上一个${shortcuts.kcExit.length ? `，${describeAccelerators(shortcuts.kcExit)} 退出` : ''})...`}
               value={searchQuery}
               onChange={(val) => {
                 setSearchQuery(val);

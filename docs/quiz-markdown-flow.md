@@ -332,13 +332,13 @@ QuizPage 组件
          └── AI 讲解（打开 AiAssistant，上下文已自动注入当前题目）
 ```
 
-**快捷键监听边界：** QuizPage 的 `keydown` 监听会先检查 `event.target.tagName`，若目标落在 `INPUT`/`TEXTAREA`/`SELECT`/`BUTTON` 元素上则直接 return，避免在表单输入时误触发选题或提交。
+**快捷键监听边界：** QuizPage 的 `keydown` 监听会先检查 `event.target.tagName`，若目标落在 `INPUT`/`TEXTAREA`/`SELECT`/`BUTTON` 元素上则直接 return，避免在表单输入时误触发选题或提交。按键与动作的对应关系不再硬编码：数字选选项固定，其余先按当前阶段挑候选动作（作答中 `['quizSubmit', 'quizPrev']`，已提交 `['quizNext', 'quizPrev']`），再用 `resolveShortcutAction(event, shortcutConfig, candidates)` 匹配用户在设置 → 常规 → 快捷键里的绑定；底部提示文案由同一份配置生成。
 
 ---
 
 ## 7. 键盘快捷键一览
 
-**刷题页（QuizPage）：**
+**刷题页（QuizPage）：** 下表为默认绑定；除数字外均可在设置 → 常规 → 快捷键改绑（动作 id：`quizSubmit` / `quizNext` / `quizPrev`，每项可绑多个键）。
 
 | 按键 | 作用 |
 |------|------|
@@ -347,15 +347,15 @@ QuizPage 组件
 | `Enter` / `→` / `PageDown` / `N` | 下一题（仅在已提交后）——**`Enter` 是状态依赖二态键**：未提交时为提交，提交后为下一题 |
 | `←` / `PageUp` / `P` | 上一题 |
 
-**全局快捷键（AiAssistant 监听，非 QuizPage）：**
+**全局快捷键（`useGlobalShortcuts` 监听，非 QuizPage）：**
 
 | 按键 | 作用 |
 |------|------|
-| `Ctrl+J` | 切换 AI 助手开合——此键由 `AiAssistant` 组件独立监听 `toggleAi`，**不在 QuizPage 的 keydown 处理分支内**，全局可用 |
+| `Ctrl+J`（默认，可在设置 → 常规 → 快捷键改绑） | 切换 AI 助手开合——由 `useGlobalShortcuts`（`App.tsx` 挂载）按用户绑定统一监听，**不在 QuizPage 的 keydown 处理分支内**，全局可用；底部提示文案跟随当前绑定 |
 
 **Markdown 块编辑器（MarkdownBlock）：**
 
 | 按键 | 作用 |
 |------|------|
 | `Escape` | 取消编辑 |
-| `Ctrl+Enter` / `Cmd+Enter` | 完成编辑 |
+| `Ctrl+Enter` / `Cmd+Enter`（默认，动作 id：`editorFinishBlock`，可在设置 → 常规 → 快捷键改绑；公式块 / 图表块共用） | 完成编辑 |

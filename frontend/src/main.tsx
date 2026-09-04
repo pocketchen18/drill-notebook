@@ -17,7 +17,11 @@ const queryClient = new QueryClient({
 /** Apply theme before first paint when possible (Electron may restore theme after mount). */
 function bootstrapThemeAttribute(): void {
   try {
-    const saved = localStorage.getItem('drill-notebook-theme');
+    // 主题偏好支持「跟随系统」：system 时实时解析系统深浅色，否则用上次生效的明暗
+    const mode = localStorage.getItem('ui.themeMode');
+    const saved = mode === 'system'
+      ? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : localStorage.getItem('drill-notebook-theme');
     if (saved === 'dark' || saved === 'light') {
       document.documentElement.dataset.theme = saved;
       if (saved === 'dark') document.body.setAttribute('arco-theme', 'dark');
