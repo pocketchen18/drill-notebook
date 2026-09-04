@@ -17,8 +17,8 @@ import java.util.List;
  *
  * <p>Node types handled: text, hardBreak, paragraph, heading, bulletList,
  * orderedList, codeBlock, blockquote, mathInline, mathBlock, mermaidBlock,
- * markdownBlock. The questionBlock node type is <em>skipped</em> — it is
- * not part of the v0.5 NOTEBOOK corpus.</p>
+ * markdownBlock, videoBlock, fileBlock. The questionBlock node type is
+ * <em>skipped</em> — it is not part of the v0.5 NOTEBOOK corpus.</p>
  */
 public class NoteNormalizer {
 
@@ -89,6 +89,8 @@ public class NoteNormalizer {
             case "mathBlock" -> List.of(normalizeMathBlock(node));
             case "mermaidBlock" -> List.of(normalizeMermaidBlock(node));
             case "markdownBlock" -> List.of(normalizeMarkdownBlock(node));
+            case "videoBlock" -> List.of(normalizeVideoBlock(node));
+            case "fileBlock" -> List.of(normalizeFileBlock(node));
             case "questionBlock" -> List.of(); // excluded from v0.5 corpus
             default -> normalizeBlockChildren(node); // unknown container → recurse
         };
@@ -200,5 +202,33 @@ public class NoteNormalizer {
     private NormalizedUnit normalizeMarkdownBlock(JsonNode node) {
         String markdown = node.path("attrs").path("markdown").asText("");
         return new NormalizedUnit(markdown, 0, "");
+    }
+
+    /**
+     * Video embeds are atom nodes: their title/URL only live in attrs, so
+     * without this they would contribute nothing to the index and a page whose
+     * content is a single video would be invisible to search.
+     */
+    private NormalizedUnit normalizeVideoBlock(JsonNode node) {
+        JsonNode attrs = node.path("attrs");
+        String text = joinNonBlank(
+                attrs.path("title").asText(""), attrs.path("url").asText(""));
+        return new NormalizedUnit(text.isBlank() ? "" : "视频：" + text, 0, "");
+    }
+
+    /** File attachments are atom nodes too; the file name is the searchable part. */
+    private NormalizedUnit normalizeFileBlock(JsonNode node) {
+        String fileName = node.path("attrs").path("fileName").asText("");
+        return new NormalizedUnit(fileName.isBlank() ? "" : "附件：" + fileName, 0, "");
+    }
+
+    private static String joinNonBlank(String... parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part == null || part.isBlank()) continue;
+            if (sb.length() > 0) sb.append(" ");
+            sb.append(part.trim());
+        }
+        return sb.toString();
     }
 }

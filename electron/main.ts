@@ -23,12 +23,21 @@ function windowBackgroundColor(): string {
     const configPath = path.join(portablePaths.config, 'app-config.json');
     if (fs.existsSync(configPath)) {
       const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as { theme?: string };
-      if (raw.theme === 'dark') return '#17181a';
+      // 与 frontend/src/styles/app.css 的 --page-bg 保持一致，避免首帧闪色
+      if (raw.theme === 'dark') return '#131519';
     }
   } catch {
     /* ignore */
   }
-  return '#f5f7fa';
+  return '#f4f6fa';
+}
+
+/** 窗口图标：开发态读仓库 resources/icon，打包后由 extraResources 拷到 resources/icon；缺失时交给系统默认。 */
+function appIconPath(): string | undefined {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon', 'icon.ico')
+    : path.join(__dirname, '..', 'resources', 'icon', 'icon.ico');
+  return fs.existsSync(candidate) ? candidate : undefined;
 }
 
 function createWindow(): void {
@@ -38,6 +47,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 720,
     backgroundColor: windowBackgroundColor(),
+    icon: appIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

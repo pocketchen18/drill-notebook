@@ -115,7 +115,7 @@ KnowledgePointImportService.importMarkdown(bankId, source)
 | 情况 | 抛错 |
 |---|---|
 | 主模型与导入兜底均未配置 Key | `请先在设置中配置「主模型」或「导入兜底」AI API Key`（由 `AiService.requireConfig` 抛出） |
-| 主模型与导入兜底均未配置 Endpoint | `请先在设置中配置「主模型」或「导入兜底」Endpoint` |
+| 主模型与导入兜底均未配置 Base URL | `请先在设置中配置「主模型」或「导入兜底」Base URL` |
 | AI 调用 HTTP 非 2xx | `AI 服务请求失败（HTTP N）` |
 | AI 返回空内容 | `AI 服务返回内容为空` |
 | 规则失败 + AI 兜底也返回空列表 | `规则解析失败且 AI 兜底不可用：…` |

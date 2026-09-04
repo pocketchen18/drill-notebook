@@ -116,7 +116,7 @@ class EmbeddingJobExecutorTest {
         registry.setActive(provider);
         executor = new EmbeddingJobExecutor(
                 jobs, registry, new DataSourceTransactionManager(ds), false, 1000);
-        statusService = new RetrievalStatusService(jobs);
+        statusService = new RetrievalStatusService(jobs, registry);
 
         notebookId = notebooks.insert("Test Notebook");
         pageId = notebooks.insertPage(notebookId, "Test Page", null);
@@ -341,6 +341,74 @@ class EmbeddingJobExecutorTest {
         assertEquals("QUEUED", jobRows().get(0).get("status"));
     }
 
+    // ── Empty runnable queue must not leave the space stuck REBUILDING ─────
+
+    @Test
+    void rebuildingSpaceWithEmptyCorpusActivatesWithoutJobs() {
+        insertSelectedSpace("REBUILDING");
+
+        // No chunks at all → nothing to embed. Coverage is 1.0 by definition, so
+        // the space must reach ACTIVE instead of showing "索引构建中" forever.
+        assertFalse(executor.runOnce(), "no job to process");
+        Map<String, Object> space = spaceRow();
+        assertEquals("ACTIVE", space.get("state"));
+        assertEquals(1.0, ((Number) space.get("coverage")).doubleValue(), 1e-9);
+        assertEquals("ACTIVE", statusService.status("all", null).get("indexState"));
+    }
+
+    @Test
+    void rebuildingSpaceActivatesAfterAllJobsSuperseded() {
+        insertSelectedSpace("REBUILDING");
+        indexing.savePageAndIndex(pageId, null, threeChunkContent("A"));
+        assertEquals("QUEUED", jobRows().get(0).get("status"));
+
+        // The user empties the page before the queued job ever ran: chunks are
+        // deleted, the job is SUPERSEDED and no replacement job is queued (a
+        // zero-chunk page has nothing to embed). Coverage/activation used to be
+        // recomputed only on a job commit, so the space stayed REBUILDING forever.
+        indexing.savePageAndIndex(pageId, null,
+                Map.of("type", "doc", "content", List.of(Map.of("type", "paragraph"))));
+        assertEquals("SUPERSEDED", jobRows().get(0).get("status"));
+        assertEquals(0L, (long) jdbc.queryForObject(
+                "SELECT COUNT(*) FROM retrieval_chunk", Long.class));
+        assertEquals("REBUILDING", spaceRow().get("state"));
+
+        assertFalse(executor.runOnce(), "no runnable job left");
+        assertEquals("ACTIVE", spaceRow().get("state"));
+    }
+
+    @Test
+    void rebuildingSpaceStaysRebuildingWhileJobsAreStillPending() {
+        insertSelectedSpace("REBUILDING");
+        indexing.savePageAndIndex(pageId, null, threeChunkContent("A"));
+        // Job exists but is not yet due (backoff window) → not claimable.
+        jdbc.update("UPDATE embedding_job SET status = 'RETRY',"
+                + " next_run_at = datetime('now', '+300 seconds')");
+
+        assertFalse(executor.runOnce());
+        Map<String, Object> space = spaceRow();
+        assertEquals("REBUILDING", space.get("state"), "pending work must not activate");
+        assertEquals(0.0, ((Number) space.get("coverage")).doubleValue(), 1e-9);
+    }
+
+    @Test
+    void emptyCorpusActivatesEvenWithoutAProvider() {
+        insertSelectedSpace("REBUILDING");
+        registry.clear();
+
+        // An empty corpus is 100%-covered by definition, so a missing worker must
+        // not keep the space in REBUILDING forever. With queued work it still must
+        // not activate (that would claim full coverage it does not have).
+        assertFalse(executor.runOnce());
+        assertEquals("ACTIVE", spaceRow().get("state"));
+
+        jdbc.update("UPDATE embedding_space SET state = 'REBUILDING', coverage = 0.0"
+                + " WHERE embedding_space_id = ?", SPACE_ID);
+        indexing.savePageAndIndex(pageId, null, threeChunkContent("A"));
+        assertFalse(executor.runOnce());
+        assertEquals("REBUILDING", spaceRow().get("state"));
+    }
+
     @Test
     void dimensionMismatchedProviderDoesNotClaim() {
         insertSelectedSpace("REBUILDING");
@@ -437,6 +505,7 @@ class EmbeddingJobExecutorTest {
         assertEquals("DISABLED", status.get("indexState"));
         assertNull(status.get("embeddingSpaceId"));
         assertNull(status.get("provider"));
+        assertEquals(false, status.get("providerReady"));
         assertEquals(0, status.get("queuedJobs"));
         assertEquals(0.0, ((Number) status.get("coverage")).doubleValue(), 1e-9);
     }
@@ -457,6 +526,13 @@ class EmbeddingJobExecutorTest {
         assertEquals("REBUILDING", before.get("indexState"));
         assertEquals(SPACE_ID, before.get("embeddingSpaceId"));
         assertEquals("local-rust", before.get("provider"));
+        assertEquals(true, before.get("providerReady"));
+
+        // Worker missing / provider unregistered must be visible to the UI, so the
+        // user learns why the index never leaves REBUILDING.
+        provider.available = false;
+        assertEquals(false, statusService.status("all", null).get("providerReady"));
+        provider.available = true;
 
         assertTrue(executor.runOnce());
 

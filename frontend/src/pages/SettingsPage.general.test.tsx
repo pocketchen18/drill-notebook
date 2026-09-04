@@ -68,15 +68,18 @@ describe('SettingsPage 常规分区', () => {
     expect(screen.getByText('浅色')).toBeInTheDocument();
     expect(screen.getByText('深色')).toBeInTheDocument();
     expect(screen.getByText('跟随系统')).toBeInTheDocument();
-    expect(document.querySelectorAll('[data-scope]')).toHaveLength(6);
+    expect(document.querySelectorAll('[data-scope]')).toHaveLength(7);
     expect(screen.getByText('全局 · 任意页面生效。')).toBeInTheDocument();
     expect(screen.getByText('知识卡片全屏 · 知识点全屏阅读时生效。')).toBeInTheDocument();
+    expect(screen.getByText('笔记本 · 笔记页列表项选中时生效。')).toBeInTheDocument();
     expect(chipsIn(shortcutRow('打开 / 关闭 AI 助手'))).toEqual(['Ctrl', 'J']);
     expect(chipsIn(shortcutRow('切换深浅主题'))).toEqual(['未设置']);
     expect(chipsIn(shortcutRow('提交答案'))).toEqual(['Enter', 'Ctrl', 'S']);
     expect(chipsIn(shortcutRow('上一题'))).toEqual(['←', 'PgUp', 'P']);
     expect(chipsIn(shortcutRow('退出全屏'))).toEqual(['Esc']);
     expect(chipsIn(shortcutRow('重命名题库'))).toEqual(['F2']);
+    // 题库与笔记本是不同作用域，F2 可以并存不冲突
+    expect(chipsIn(shortcutRow('重命名笔记页'))).toEqual(['F2']);
     expect(screen.getByRole('button', { name: '全部恢复默认' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /^恢复默认：/ })).toBeNull();
   });

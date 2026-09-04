@@ -17,6 +17,7 @@ import { KnowledgeTreeNav } from './knowledge/KnowledgeTreeNav';
 import { KnowledgeCardWorkspace } from './knowledge/KnowledgeCardWorkspace';
 import { usePersistSlice } from '../hooks/useViewState';
 import { putScoped, readPageSlice, readScoped } from '../lib/viewState';
+import { markdownToPlainText } from '../lib/markdownText';
 
 export function KnowledgePointPage(): JSX.Element {
   const [searchParams] = useSearchParams();
@@ -382,7 +383,7 @@ export function KnowledgePointPage(): JSX.Element {
           >
             {questionsQuery.data?.map((question) => (
               <Select.Option key={question.id} value={question.id}>
-                {question.stem}
+                {markdownToPlainText(question.stem)}
               </Select.Option>
             ))}
           </Select>

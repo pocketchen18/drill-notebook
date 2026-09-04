@@ -208,7 +208,7 @@ export function KnowledgeCardWorkspace({ tree, node, questions, bankId, onNaviga
           <div className="kp-card-questions">
             <strong>关联题目</strong>
             {node.questionIds.map((id) => (
-              <div key={id}>{questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`}</div>
+              <div key={id}><MarkdownContent inline value={questions.find((q) => q.id === id)?.stem ?? `题目 #${id}`} /></div>
             ))}
           </div>
         )}

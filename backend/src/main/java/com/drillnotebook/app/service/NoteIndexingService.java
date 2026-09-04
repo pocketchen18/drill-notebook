@@ -353,6 +353,56 @@ public class NoteIndexingService {
         replaceIndex(pageId, notebookId, chunks, contentHash, "STARTUP_BACKFILL");
     }
 
+    /**
+     * Re-index a page whose stored {@code content_hash} no longer matches what
+     * the current {@link NoteNormalizer} produces from its stored content.
+     *
+     * <p>This is the migration path for normalizer changes: {@code savePageAndIndex}
+     * only runs on user edits and the startup backfill only looks at pages with a
+     * {@code NULL} hash, so without this a page indexed by an older normalizer keeps
+     * its stale chunks (or, when the old normalizer produced nothing, no chunks at
+     * all) until someone happens to edit it.
+     *
+     * <p>Stored note content is never rewritten — only the hash, chunks, FTS rows
+     * and embedding jobs.
+     *
+     * @return {@code true} when the page was re-indexed
+     * @throws IllegalArgumentException when the stored content cannot be normalized
+     */
+    @Transactional
+    public boolean reindexIfNormalizationChanged(long pageId) {
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT notebook_id, title, content, content_hash"
+                        + " FROM note_page WHERE id = ?",
+                pageId);
+        String storedHash = (String) row.get("content_hash");
+        // Pages without a hash belong to the NULL-hash backfill, not to this audit.
+        if (storedHash == null) return false;
+
+        long notebookId = ((Number) row.get("notebook_id")).longValue();
+        String title = row.get("title") == null ? "" : String.valueOf(row.get("title"));
+        String contentJson = row.get("content") == null
+                ? ""
+                : String.valueOf(row.get("content"));
+
+        List<NormalizedUnit> units = normalizer.normalize(contentJson);
+        String contentHash = sha256(buildFullText(units));
+        if (contentHash.equals(storedHash)) return false;
+
+        List<Chunk> chunks = chunker.chunk(units, title);
+        jdbc.update(
+                "UPDATE note_page SET content_hash = ?, updated_at = datetime('now')"
+                        + " WHERE id = ?",
+                contentHash, pageId);
+        List<Long> oldChunkIds = retrievalRepo.findChunkIdsBySource("NOTEBOOK", pageId);
+        if (!oldChunkIds.isEmpty()) {
+            retrievalRepo.deleteFtsByChunkIds(oldChunkIds);
+        }
+        retrievalRepo.deleteChunksBySource("NOTEBOOK", pageId);
+        replaceIndex(pageId, notebookId, chunks, contentHash, "NORMALIZER_UPGRADE");
+        return true;
+    }
+
     // ── Utility methods ────────────────────────────────────────────────────
 
     static String buildFullText(List<NormalizedUnit> units) {

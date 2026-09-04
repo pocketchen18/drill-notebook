@@ -16,6 +16,7 @@
     "build:electron": "tsc -p electron/tsconfig.json",
     "build:backend": "mvnw.cmd -f backend/pom.xml -DskipTests package",
     "build:embedding-worker": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-embedding-worker.ps1",
+    "build:icons": "electron scripts/build-icons.mjs",
     "build": "npm run build:frontend && npm run build:electron",
     "test:embedding-worker": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/test-embedding-worker.ps1",
     "test:frontend": "npm --workspace frontend run test",
@@ -53,9 +54,15 @@
         "from": "jre",
         "to": "jre",
         "filter": ["**/*"]
+      },
+      {
+        "from": "resources/icon",
+        "to": "icon",
+        "filter": ["icon.ico", "icon.png"]
       }
     ],
     "win": {
+      "icon": "resources/icon/icon.ico",
       "target": [
         {
           "target": "portable",

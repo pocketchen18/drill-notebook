@@ -121,6 +121,8 @@ function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean } = 
     if (path === '/api/notebooks') return Promise.resolve(baseNotebooks);
     if (path === '/api/note-pages') return Promise.reject(new Error('deprecated'));
     if (path === '/api/notebooks/1/pages') return Promise.resolve(basePages);
+    // 其他笔记本（如 NBK-14 新建后切换到的）没有页面
+    if (/^\/api\/notebooks\/\d+\/pages$/.test(path)) return Promise.resolve([]);
     if (path === '/api/note-pages/11') {
       if (opts.slowPages) return new Promise((res) => setTimeout(() => res(page11), 250));
       return Promise.resolve(page11);
@@ -290,6 +292,111 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
       fireEvent.click(screen.getByRole('button', { name: '新建页面' }));
       fireEvent.click(await screen.findByRole('button', { name: '确定' }));
       await waitFor(() => expect(apiPost.mock.calls.filter((c) => c[0] === '/api/notebooks/1/pages').length).toBe(0));
+    });
+  });
+
+  describe('New notebook modal (NBK-14)', () => {
+    beforeEach(() => {
+      primeNotebookApi();
+      apiPost.mockResolvedValue({ id: 2, title: '离散数学' });
+    });
+
+    it('NBK-14: 新建笔记本 modal POSTs to /api/notebooks with title', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: '新建笔记本' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: '新建笔记本' }));
+      const input = await screen.findByPlaceholderText(/高等数学/);
+      fireEvent.change(input, { target: { value: '离散数学' } });
+      fireEvent.click(screen.getByRole('button', { name: '确定' }));
+      await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/notebooks', { title: '离散数学' }));
+      // 创建成功后切换到新笔记本并拉取其页面
+      await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/notebooks/2/pages'));
+    });
+
+    it('NBK-14: blank title rejected (no POST)', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: '新建笔记本' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: '新建笔记本' }));
+      fireEvent.click(await screen.findByRole('button', { name: '确定' }));
+      await waitFor(() => expect(apiPost.mock.calls.filter((c) => c[0] === '/api/notebooks').length).toBe(0));
+    });
+  });
+
+  describe('Rename notebook + page (NBK-18)', () => {
+    beforeEach(() => primeNotebookApi());
+
+    it('NBK-18: 编辑区标题本地成稿，只在回车时 PUT 一次且不被服务端旧值顶回', async () => {
+      apiPut.mockImplementation((path: string, body: Record<string, unknown>) => {
+        if (path === '/api/note-pages/11') return Promise.resolve({ ...page11, title: String(body.title ?? page11.title) });
+        return Promise.resolve({});
+      });
+      renderNotebookPage();
+      const input = (await screen.findByLabelText('重命名当前页面')) as HTMLInputElement;
+      expect(input.value).toBe('页面-11');
+      fireEvent.change(input, { target: { value: '期末复盘' } });
+      // 逐字输入期间不发请求，且草稿不被 currentPage.title 覆盖
+      expect(apiPut.mock.calls.filter((c) => c[0] === '/api/note-pages/11').length).toBe(0);
+      expect((screen.getByLabelText('重命名当前页面') as HTMLInputElement).value).toBe('期末复盘');
+      fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+      await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/note-pages/11', { title: '期末复盘' }));
+      expect(apiPut.mock.calls.filter((c) => c[0] === '/api/note-pages/11').length).toBe(1);
+      // 缓存回写后标题保持新值
+      await waitFor(() => expect((screen.getByLabelText('重命名当前页面') as HTMLInputElement).value).toBe('期末复盘'));
+    });
+
+    it('NBK-18: 编辑区标题按 Esc 放弃草稿，回到原标题且不发请求', async () => {
+      renderNotebookPage();
+      const input = (await screen.findByLabelText('重命名当前页面')) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '半成品' } });
+      fireEvent.keyDown(input, { key: 'Escape', keyCode: 27 });
+      await waitFor(() => expect((screen.getByLabelText('重命名当前页面') as HTMLInputElement).value).toBe('页面-11'));
+      expect(apiPut.mock.calls.filter((c) => c[0] === '/api/note-pages/11').length).toBe(0);
+    });
+
+    it('NBK-18: 页面列表双击标题改名，失焦提交 PUT', async () => {
+      apiPut.mockImplementation((path: string, body: Record<string, unknown>) => {
+        if (path === '/api/note-pages/37') return Promise.resolve({ ...page37, title: String(body.title ?? page37.title) });
+        return Promise.resolve({});
+      });
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByText('页面-37')).toBeInTheDocument());
+      fireEvent.doubleClick(screen.getByText('页面-37'));
+      const input = (await screen.findByLabelText('重命名页面')) as HTMLInputElement;
+      expect(input.value).toBe('页面-37');
+      fireEvent.change(input, { target: { value: '排序算法' } });
+      fireEvent.blur(input);
+      await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/note-pages/37', { title: '排序算法' }));
+      await waitFor(() => expect(screen.queryByLabelText('重命名页面')).not.toBeInTheDocument());
+    });
+
+    it('NBK-18: 列表行按 F2 进入改名；空标题被拒绝且不发请求', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByText('页面-104')).toBeInTheDocument());
+      const row = screen.getByText('页面-104').closest('.note-page-item') as HTMLElement;
+      fireEvent.keyDown(row, { key: 'F2', keyCode: 113 });
+      const input = (await screen.findByLabelText('重命名页面')) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '   ' } });
+      fireEvent.blur(input);
+      await waitFor(() => expect(screen.getByText('页面标题不能为空')).toBeInTheDocument());
+      expect(apiPut.mock.calls.filter((c) => c[0] === '/api/note-pages/104').length).toBe(0);
+    });
+
+    it('NBK-18: 笔记本改名按钮把 Select 换成输入框，回车 PUT /api/notebooks/{id}', async () => {
+      apiPut.mockImplementation((path: string, body: Record<string, unknown>) => {
+        if (path === '/api/notebooks/1') return Promise.resolve({ id: 1, title: String(body.title ?? '默认笔记本') });
+        return Promise.resolve({});
+      });
+      renderNotebookPage();
+      const trigger = await screen.findByRole('button', { name: '重命名笔记本' });
+      fireEvent.click(trigger);
+      const input = (await screen.findByLabelText('重命名当前笔记本')) as HTMLInputElement;
+      expect(input.value).toBe('默认笔记本');
+      fireEvent.change(input, { target: { value: '数据结构' } });
+      fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+      await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/notebooks/1', { title: '数据结构' }));
+      // 提交后收起输入框、恢复 Select（列表文案由 ['notebooks'] 重新拉取决定，这里不断言）
+      await waitFor(() => expect(screen.queryByLabelText('重命名当前笔记本')).toBeNull());
+      expect(await screen.findByRole('button', { name: '重命名笔记本' })).toBeInTheDocument();
     });
   });
 

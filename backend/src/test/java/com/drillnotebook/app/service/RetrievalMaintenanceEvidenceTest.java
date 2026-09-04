@@ -102,7 +102,7 @@ class RetrievalMaintenanceEvidenceTest {
         executor = new EmbeddingJobExecutor(
                 jobs, registry, new DataSourceTransactionManager(ds), false, 1000);
         maintenance = new RetrievalMaintenanceService(models, jobs, executor);
-        statusService = new RetrievalStatusService(jobs);
+        statusService = new RetrievalStatusService(jobs, registry);
         hybrid = new HybridRetrievalService(
                 new RetrievalService(retrievalRepo, notebooks),
                 retrievalRepo, jobs, registry, 1500, 500);

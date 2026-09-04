@@ -192,7 +192,7 @@ System prompt（`KNOWLEDGE_SUMMARIZE_IMPORT_V1`）：
 
 | 场景 | 行为 |
 |---|---|
-| 导入兜底模型未配置 | 自动无缝降级回退使用「主模型」配置（API Key + Endpoint），无需用户重复配置两套相同的模型 Key。 |
+| 导入兜底模型未配置 | 自动无缝降级回退使用「主模型」配置（API Key + Base URL），无需用户重复配置两套相同的模型 Key。 |
 | AI 未配置（主模型与兜底均无 Key / Endpoint） | 后端 `AiService.requireConfig` 抛 `请先在设置中配置「主模型」或「导入兜底」AI API Key`，前端 `Message.error` |
 | 单卡总结失败 | 计入 `errors`，记录服务端 error log，不中断其他卡片，已成功的总结不回滚 |
 | 「重新总结」时无原文 | 后端 412 `当前知识卡片还未总结，请先点击"总结"`，前端 tooltip 提示 |

@@ -191,7 +191,7 @@ export function EmbeddingSettingsCard(): JSX.Element {
 
           {remote && (
             <>
-              <Form.Item label="Endpoint">
+              <Form.Item label="Base URL">
                 <Input value={endpoint} onChange={(value) => { setEndpoint(value); setConsent(false); }} placeholder="https://api.example.com/v1 或 http://localhost:11434" />
               </Form.Item>
               <Form.Item label="Model">
@@ -328,7 +328,11 @@ function ModelCatalogItem({ model, status, busy, downloading, onDownload, onCanc
           {state === 'READY' && isLocalSelected && (
             <div style={{ marginTop: 4 }}>
               {status?.indexState === 'ACTIVE' && <Tag size="small" color="green">已启用</Tag>}
-              {status?.indexState === 'REBUILDING' && <Tag size="small" color="orange">索引构建中</Tag>}
+              {status?.indexState === 'REBUILDING' && (
+                status.providerReady === false
+                  ? <Tag size="small" color="red">本地向量组件不可用，需先构建 embedding worker</Tag>
+                  : <Tag size="small" color="orange">索引构建中</Tag>
+              )}
               {status?.indexState === 'DISABLED' && <Tag size="small">未启用</Tag>}
             </div>
           )}
