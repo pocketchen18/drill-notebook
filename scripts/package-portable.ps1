@@ -47,11 +47,24 @@ if (-not (Test-Path -LiteralPath $backendJar)) {
     throw "Backend jar is missing after build: $backendJar"
 }
 
-Invoke-Checked $electronBuilder @('--win', 'portable')
+# 目录模式打包：绿色便携以「zip 解压即用」的文件夹分发。
+# 不用单文件 portable——它会自解压到 %TEMP%，数据写进临时目录、退出即丢，且部分机器上
+# 会触发杀软拦截/深路径问题导致内置 JRE 起不来（后端 30 秒不健康、需管理员）。
+Invoke-Checked $electronBuilder @('--win', 'dir')
 
-$artifacts = @(Get-ChildItem -LiteralPath (Join-Path $workspace 'dist') -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+$unpacked = Join-Path $workspace 'dist\win-unpacked'
+if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'Drill Notebook.exe'))) {
+    throw "electron-builder completed but dist\win-unpacked\Drill Notebook.exe is missing."
+}
+
+$version = '0.6.1'
+$zip = Join-Path $workspace ("dist\Drill-Notebook-$version-win-x64-portable.zip")
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+Invoke-Checked 'powershell' @('-NoLogo', '-NoProfile', '-Command', "Compress-Archive -Path 'dist\win-unpacked\*' -DestinationPath 'dist\Drill-Notebook-$version-win-x64-portable.zip' -CompressionLevel Optimal")
+
+$artifacts = @(Get-ChildItem -LiteralPath (Join-Path $workspace 'dist') -Filter 'Drill-Notebook-*-win-x64-portable.zip' -File -ErrorAction SilentlyContinue)
 if ($artifacts.Count -eq 0) {
-    throw 'electron-builder completed but no portable .exe was found under dist.'
+    throw 'electron-builder completed but no portable zip was found under dist.'
 }
 
 Write-Host 'Portable package created:' -ForegroundColor Green
