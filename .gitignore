@@ -178,6 +178,8 @@ ai-prompts/
 .pipeline/
 CLAUDE.local.md
 AGENTS.local.md
+# 根目录 AGENTS.md 是本人私人代理约束文件，不上传 GitHub（保留本地）
+/AGENTS.md
 
 backend/src/test/resources/fixtures/六级真题.md
 backend/src/test/resources/fixtures/java.md

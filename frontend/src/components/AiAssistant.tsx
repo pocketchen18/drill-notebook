@@ -132,7 +132,10 @@ export function AiAssistant(): JSX.Element {
   const messagesQuery = useQuery({
     queryKey: ['ai-session-messages', sessionId],
     queryFn: () => get<ServerChatMessage[]>(`/api/ai/sessions/${sessionId}/messages`),
-    enabled: aiOpen && sessionId !== undefined
+    enabled: aiOpen && sessionId !== undefined,
+    // 切换会话必须拿到服务端真实内容：全局 staleTime=10s 会让「中断时抢在落库前的空 refetch」被缓存，
+    // 切回该会话时读到空缓存显示空白。置 0 使每次挂载/聚焦都重取，彻底消除串会话与空缓存。
+    staleTime: 0
   });
 
   useEffect(() => {
@@ -324,7 +327,9 @@ export function AiAssistant(): JSX.Element {
   const handleNewSession = (): void => {
     if (createSessionMutation.isPending) return;
     const sessions = sessionsQuery.data ?? [];
-    const blank = sessions.find((item) => !item.archived && (item.messageCount ?? 0) === 0);
+    // 当前会话以本地 messages 为准（缓存 messageCount 可能因刚中断/未刷新而过期），
+    // 其余会话用缓存计数判断是否空白。
+    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? messages.length === 0 : (item.messageCount ?? 0) === 0));
     if (blank) {
       lastExplicitSessionIdRef.current = blank.id;
       setSessionId(blank.id);
@@ -388,7 +393,11 @@ export function AiAssistant(): JSX.Element {
 
   const deleteSessionMutation = useMutation({
     mutationFn: (id: number) => del(`/api/ai/sessions/${id}`),
-    onSuccess: () => {
+    onSuccess: (_result, deletedId) => {
+      // 先从缓存移除被删会话及其消息，避免会话 effect 在 refetch 完成前把「已删会话」当作
+      // data[0] 重新选中、切回时又把它的内容合并进新会话顶部（删除后短暂串会话的根因）。
+      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
+      queryClient.removeQueries({ queryKey: ['ai-session-messages', deletedId] });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = undefined;
       setSessionId(undefined);
@@ -544,6 +553,10 @@ export function AiAssistant(): JSX.Element {
       abortFetch?.();
       chatAbortRef.current = null;
       setStreaming(false);
+      // 中断后刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为
+      // 空白会话而复用（表现为「思考中断后永远新建不了」）。注意：不要在此 invalidate 该会话的
+      // 消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存，导致切回时显示空。
+      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       if (sessionId !== streamingSessionId) return;
       setMessages((current) => {
         const next = [...current];
