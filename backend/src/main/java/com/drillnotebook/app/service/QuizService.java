@@ -100,7 +100,7 @@ public class QuizService {
         return response;
     }
 
-    public List<Map<String, Object>> wrong() { return questions.wrongQuestions().stream().map((question) -> question.toMap(true)).toList(); }
+    public List<Map<String, Object>> wrong() { return questions.wrongBook(); }
 
     public Map<String, Object> summary(String sessionId) {
         SessionState session = sessions.get(sessionId);

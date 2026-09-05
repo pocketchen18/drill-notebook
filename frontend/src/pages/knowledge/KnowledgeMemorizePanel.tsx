@@ -98,7 +98,7 @@ export function KnowledgeMemorizePanel(): JSX.Element {
         <div><h1>背知识点</h1><p>短周期记忆曲线：{describeSessionCurveConfig(curveSummary)}</p></div>
         <Button onClick={() => setSessionIds(undefined)}>结束背诵</Button>
       </div>
-      <KnowledgeMemorizeSession points={points} questions={questionsQuery.data ?? []} ids={sessionIds} />
+      <KnowledgeMemorizeSession points={points} questions={questionsQuery.data ?? []} ids={sessionIds} onFinish={() => setSessionIds(undefined)} />
     </main>;
   }
 

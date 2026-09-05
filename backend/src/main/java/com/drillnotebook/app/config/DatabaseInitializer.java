@@ -66,6 +66,8 @@ public class DatabaseInitializer {
             ensureColumn(connection, "knowledge_point", "heading_path", "TEXT");
             ensureColumn(connection, "knowledge_point", "sort_index", "INTEGER");
             ensureColumn(connection, "note_page", "content_hash", "TEXT");
+            // 错题本：手动「移出错题本」标记；答错时由 recordAnswer 重置为 0，使其重新计入错题本
+            ensureColumn(connection, "question", "wrong_excluded", "INTEGER NOT NULL DEFAULT 0");
             migrateAiChatSessions(connection);
             migrateAiConfigPurposes(connection);
             exec(connection, "CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");

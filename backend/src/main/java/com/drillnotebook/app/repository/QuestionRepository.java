@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,6 +20,8 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class QuestionRepository {
+    /** 最近一次答错后需连续答对满此次数，才自动移出错题本（跨会话累计；避开「重复到对」使最新态恒为对的陷阱）。 */
+    private static final int WRONG_MASTER_STREAK = 2;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final org.springframework.jdbc.core.RowMapper<QuestionRecord> rowMapper;
@@ -126,16 +129,59 @@ public class QuestionRepository {
         try { gradingJson = grading == null ? null : mapper.writeValueAsString(grading); }
         catch (JsonProcessingException error) { throw new IllegalArgumentException("判题结果无法保存"); }
         jdbc.update("INSERT INTO answer_record(question_id, user_answer, is_correct, time_spent, session_id, grading_status, grading_json) VALUES (?, ?, ?, ?, ?, ?, ?)", questionId, userAnswer, correct == null ? null : (correct ? 1 : 0), timeSpent, sessionId, gradingStatus, gradingJson);
+        // 再次答错：撤销手动「移出错题本」，让该题重新计入错题本（错题库应反映真实薄弱点）。
+        if (correct != null && !correct) {
+            jdbc.update("UPDATE question SET wrong_excluded = 0 WHERE id = ?", questionId);
+        }
     }
 
+    /**
+     * 错题本成员规则（单一真相源）：
+     * 1) 累计答错过（wrongCount > 0）；
+     * 2) 未被手动移出（wrong_excluded = 0）；
+     * 3) 最近一次答错之后尚未连续答对满 {@link #WRONG_MASTER_STREAK} 次。
+     * 排序：错误次数多者优先，其次最近答错时间。
+     */
     public List<QuestionRecord> wrongQuestions() {
         return jdbc.query("""
                 SELECT q.* FROM question q
-                JOIN answer_record a ON a.question_id = q.id
-                WHERE a.id = (SELECT MAX(a2.id) FROM answer_record a2 WHERE a2.question_id = q.id)
-                  AND a.is_correct = 0
-                ORDER BY a.answered_at DESC
+                JOIN (
+                    SELECT question_id,
+                           SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_count,
+                           MAX(CASE WHEN is_correct = 0 THEN id END) AS last_wrong_id,
+                           MAX(CASE WHEN is_correct = 0 THEN answered_at END) AS last_wrong_at
+                    FROM answer_record GROUP BY question_id
+                ) agg ON agg.question_id = q.id
+                WHERE agg.wrong_count > 0
+                  AND q.wrong_excluded = 0
+                   AND (SELECT COUNT(*) FROM answer_record c
+                          WHERE c.question_id = q.id AND c.is_correct = 1 AND c.id > agg.last_wrong_id) < """ + WRONG_MASTER_STREAK + """
+                 ORDER BY agg.wrong_count DESC, agg.last_wrong_at DESC
                 """, rowMapper);
+    }
+
+    /** 错题本视图：在成员规则基础上附带错误次数 / 作答次数 / 错误率，供前端展示与排序。 */
+    public List<Map<String, Object>> wrongBook() {
+        List<QuestionRecord> list = wrongQuestions();
+        if (list.isEmpty()) return List.of();
+        Map<Long, Map<String, Object>> stats = answerStats(list.stream().map((question) -> question.id).toList());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (QuestionRecord question : list) {
+            Map<String, Object> row = question.toMap(true);
+            Map<String, Object> stat = stats.getOrDefault(question.id, Map.of());
+            int wrongCount = ((Number) stat.getOrDefault("wrongCount", 0)).intValue();
+            int attemptCount = ((Number) stat.getOrDefault("attemptCount", 0)).intValue();
+            row.put("wrongCount", wrongCount);
+            row.put("attemptCount", attemptCount);
+            row.put("errorRate", attemptCount > 0 ? Math.round(wrongCount * 10000.0 / attemptCount) / 10000.0 : 0);
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /** 手动移出/恢复错题本。答错会由 recordAnswer 自动重置为未移出。 */
+    public void setWrongExcluded(long questionId, boolean excluded) {
+        jdbc.update("UPDATE question SET wrong_excluded = ? WHERE id = ?", excluded ? 1 : 0, questionId);
     }
 
     /**

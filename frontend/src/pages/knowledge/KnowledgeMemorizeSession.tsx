@@ -25,13 +25,15 @@ export interface KnowledgeMemorizeSessionProps {
   planDate?: string;
   planResourceId?: number;
   dayQueueMode?: boolean;
+  /** 会话结束弹窗关闭后回调：父级据此切回背诵选择 / 知识库界面。 */
+  onFinish?: () => void;
 }
 
 /**
  * 背知识点会话：短周期记忆曲线（多轮循环 + 错题重复）的播放界面。
  * 由「练习 → 背诵 → 背知识点」面板与知识点页深链（日历/今日队列）共用。
  */
-export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, planItemId, planDate, planResourceId, dayQueueMode }: KnowledgeMemorizeSessionProps): JSX.Element {
+export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, planItemId, planDate, planResourceId, dayQueueMode, onFinish }: KnowledgeMemorizeSessionProps): JSX.Element {
   const navigate = useNavigate();
   const [curveLoops] = useState(() => {
     const config = readSessionCurveConfig();
@@ -138,6 +140,8 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
       onClose={() => {
         recommendShownRef.current = false;
         setRecommendVisible(false);
+        // 会话结束（跳过或写入计划后）通知父级切回背诵选择 / 知识库界面。
+        onFinish?.();
       }}
       sessionType="knowledge"
       payload={recommendPayload}

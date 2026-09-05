@@ -82,6 +82,15 @@ public class BankController {
     @DeleteMapping("/questions/{id}")
     public void deleteQuestion(@PathVariable long id) { try { questions.findById(id); questions.delete(id); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); } }
 
+    /** 手动移出/恢复错题本：body { excluded: boolean }（缺省 true）。答错会自动重置为未移出。 */
+    @PutMapping("/questions/{id}/wrong-excluded")
+    public Map<String, Object> setQuestionWrongExcluded(@PathVariable long id, @RequestBody Map<String, Object> body) {
+        try { questions.findById(id); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); }
+        boolean excluded = !Boolean.FALSE.equals(body.get("excluded")) && !"false".equalsIgnoreCase(String.valueOf(body.getOrDefault("excluded", "true")));
+        questions.setWrongExcluded(id, excluded);
+        return Map.of("id", id, "wrongExcluded", excluded);
+    }
+
     @PostMapping("/banks/{id}/import/markdown")
     public Map<String, Object> importMarkdown(@PathVariable long id, @RequestBody JsonNode body) {
         findBank(id);

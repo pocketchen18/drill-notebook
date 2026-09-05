@@ -20,6 +20,13 @@ export interface Question {
   orderInGroup?: number;
 }
 
+/** 错题本条目：题目 + 累计作答统计（错误次数 / 作答次数 / 错误率 0~1）。 */
+export interface WrongBookEntry extends Question {
+  wrongCount: number;
+  attemptCount: number;
+  errorRate: number;
+}
+
 export interface KnowledgePoint {
   id: number;
   bankId?: number;
