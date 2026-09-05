@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Button, Empty, Message, Spin, Table, Tag, Typography } from '@arco-design/web-react';
-import { BrainCircuit, CalendarPlus, RotateCcw, Sparkles, XCircle } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Empty, Message, Popconfirm, Spin, Table, Tag, Tooltip, Typography } from '@arco-design/web-react';
+import { BrainCircuit, CalendarPlus, CheckCircle2, RotateCcw, Sparkles, Target, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { get } from '../lib/api';
-import type { Question } from '../lib/types';
+import { get, put } from '../lib/api';
+import type { WrongBookEntry } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 import { questionsToMarkdown } from '../lib/aiContext';
 import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
@@ -19,12 +19,13 @@ import { readPageSlice } from '../lib/viewState';
 import { markdownToPlainText } from '../lib/markdownText';
 
 /** Stable empty array - never allocate a new [] for missing query data. */
-const EMPTY_QUESTIONS: Question[] = [];
+const EMPTY_QUESTIONS: WrongBookEntry[] = [];
 
 export function WrongPage(): JSX.Element {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const setAiOpen = useUiStore((state) => state.setAiOpen);
-  const query = useQuery({ queryKey: ['wrong'], queryFn: () => get<Question[]>('/api/quiz/wrong') });
+  const query = useQuery({ queryKey: ['wrong'], queryFn: () => get<WrongBookEntry[]>('/api/quiz/wrong') });
   const rows = query.data ?? EMPTY_QUESTIONS;
   const cachedWrong = readPageSlice('wrong');
   const [selectedIds, setSelectedIds] = useState<number[]>(() => cachedWrong.selectedIds ?? []);
@@ -65,6 +66,16 @@ export function WrongPage(): JSX.Element {
   const enrollOne = (id: number): void => {
     enrollMutation.mutate([id]);
   };
+
+  const excludeMutation = useMutation({
+    mutationFn: (ids: number[]) => Promise.all(ids.map((id) => put(`/api/questions/${id}/wrong-excluded`, { excluded: true }))),
+    onSuccess: (_result, ids) => {
+      void queryClient.invalidateQueries({ queryKey: ['wrong'] });
+      setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
+      Message.success(ids.length > 1 ? `已将 ${ids.length} 道题移出错题本` : '已移出错题本');
+    },
+    onError: (error) => Message.error(error instanceof Error ? error.message : '移出失败，请稍后重试')
+  });
   useEffect(() => {
     if (!query.data) return;
     const available = new Set(query.data.map((row) => row.id));
@@ -80,7 +91,7 @@ export function WrongPage(): JSX.Element {
 
   useRegisterPageContext(pageContext);
 
-  const openPlanForRows = (items: Question[]): void => {
+  const openPlanForRows = (items: WrongBookEntry[]): void => {
     setPlanItems(items.map((row) => ({ resourceId: row.id, title: truncateTitle(row.stem || `题目 #${row.id}`) })));
     setPlanVisible(true);
   };
@@ -91,7 +102,7 @@ export function WrongPage(): JSX.Element {
         <div>
           <h1>错题</h1>
           <p>
-            最近一次答错且尚未纠正的题目。勾选后点「加入记忆曲线」进入间隔复习；「加入日历计划」仅钉日期。
+            累计答错、尚未掌握的题目，按错误次数排序。连续答对 2 次会自动清出；勾选后可批量「移出错题本」或「加入记忆曲线」。
           </p>
         </div>
         <div className="page-heading__actions">
@@ -112,6 +123,16 @@ export function WrongPage(): JSX.Element {
           >
             加入记忆曲线
           </Button>
+          <Popconfirm
+            title={`移出错题本？`}
+            content={`将把选中的 ${selectedIds.length} 道题移出错题本；下次答错会自动重新计入。`}
+            disabled={!selectedIds.length}
+            onOk={() => excludeMutation.mutate(selectedIds)}
+          >
+            <Button icon={<CheckCircle2 size={16} />} disabled={!selectedIds.length} loading={excludeMutation.isPending}>
+              移出错题本
+            </Button>
+          </Popconfirm>
           <Button icon={<Sparkles size={16} />} disabled={!rows.length} onClick={() => setAiOpen(true)}>AI 分析错题</Button>
           <Button icon={<RotateCcw size={16} />} disabled={!rows.length} onClick={() => navigate(`/quiz?questionIds=${rows.map((row) => row.id).join(',')}`)}>再练一遍</Button>
         </div>
@@ -132,29 +153,67 @@ export function WrongPage(): JSX.Element {
               rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(Number)) }}
               columns={[
                 { title: '题目', dataIndex: 'stem', render: (stem: string) => <Typography.Text ellipsis={{ showTooltip: true }}>{markdownToPlainText(stem)}</Typography.Text> },
-                { title: '类型', dataIndex: 'type', width: 100, render: (_: unknown, row: Question) => questionTypeLabel(row.type) },
-                { title: '章节', dataIndex: 'chapter', width: 160, render: (chapter?: string) => chapter || '未分类' },
+                { title: '类型', dataIndex: 'type', width: 90, render: (_: unknown, row: WrongBookEntry) => questionTypeLabel(row.type) },
+                { title: '章节', dataIndex: 'chapter', width: 130, render: (chapter?: string) => chapter || '未分类' },
+                {
+                  title: '错误次数',
+                  dataIndex: 'wrongCount',
+                  width: 120,
+                  sorter: (a: WrongBookEntry, b: WrongBookEntry) => a.wrongCount - b.wrongCount,
+                  render: (_: unknown, row: WrongBookEntry) => (
+                    <Tag color={row.wrongCount >= 3 ? 'red' : row.wrongCount >= 2 ? 'orange' : 'arcoblue'}>
+                      错 {row.wrongCount} / 答 {row.attemptCount}
+                    </Tag>
+                  )
+                },
+                {
+                  title: '错误率',
+                  dataIndex: 'errorRate',
+                  width: 90,
+                  sorter: (a: WrongBookEntry, b: WrongBookEntry) => a.errorRate - b.errorRate,
+                  render: (_: unknown, row: WrongBookEntry) => `${Math.round(row.errorRate * 100)}%`
+                },
                 {
                   title: '操作',
-                  width: 260,
-                  render: (_: unknown, row: Question) => (
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      <Button type="text" onClick={() => navigate(`/quiz?questionIds=${row.id}`)}>练习</Button>
-                      <Button
-                        type="text"
-                        loading={enrollMutation.isPending}
-                        onClick={() => enrollOne(row.id)}
-                      >
-                        记忆曲线
-                      </Button>
-                      <Button type="text" onClick={() => openPlanForRows([row])}>日历计划</Button>
+                  dataIndex: 'actions',
+                  width: 152,
+                  align: 'center',
+                  render: (_: unknown, row: WrongBookEntry) => (
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+                      <Tooltip content="练习这道题">
+                        <Button type="text" size="mini" aria-label="练习" icon={<Target size={15} />} onClick={() => navigate(`/quiz?questionIds=${row.id}`)} />
+                      </Tooltip>
+                      <Tooltip content="加入记忆曲线">
+                        <Button
+                          type="text"
+                          size="mini"
+                          aria-label="加入记忆曲线"
+                          loading={enrollMutation.isPending && (enrollMutation.variables?.includes(row.id) ?? false)}
+                          icon={<BrainCircuit size={15} />}
+                          onClick={() => enrollOne(row.id)}
+                        />
+                      </Tooltip>
+                      <Tooltip content="加入日历计划">
+                        <Button type="text" size="mini" aria-label="加入日历计划" icon={<CalendarPlus size={15} />} onClick={() => openPlanForRows([row])} />
+                      </Tooltip>
+                      <Tooltip content="移出错题本（下次答错自动重新计入）">
+                        <Button
+                          type="text"
+                          size="mini"
+                          status="success"
+                          aria-label="移出错题本"
+                          loading={excludeMutation.isPending && (excludeMutation.variables?.includes(row.id) ?? false)}
+                          icon={<CheckCircle2 size={15} />}
+                          onClick={() => excludeMutation.mutate([row.id])}
+                        />
+                      </Tooltip>
                     </div>
                   )
                 }
               ]}
             />
           ) : (
-            <Empty icon={<XCircle size={34} />} description="还没有错题，完成一次练习后会自动统计。" />
+            <Empty icon={<XCircle size={34} />} description="还没有错题。做错的题会按错误次数累计在这里，连续答对 2 次后自动清出。" />
           )}
         </div>
       </section>

@@ -332,6 +332,7 @@ export function KnowledgePointPage(): JSX.Element {
         planDate={planDate}
         planResourceId={planResourceId}
         dayQueueMode={dayQueueMode}
+        onFinish={returnToLibrary}
       />
     )}
     <Modal
