@@ -837,6 +837,7 @@ export function AiAssistant(): JSX.Element {
                 </div>
               }
               position="br"
+              trigger="click"
             >
               <Button size="small" type="text" icon={<MoreHorizontal size={16} />} aria-label="会话更多操作" />
             </Dropdown>
