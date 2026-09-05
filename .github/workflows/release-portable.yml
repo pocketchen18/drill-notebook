@@ -1,9 +1,10 @@
 name: Build portable pre-release
 
-# 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」exe，并发布为 Pre-release。
+# 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 两种触发方式：
 #   1) 打标签推送：git tag v0.6.1 && git push origin v0.6.1  → 自动编译并发布 v0.6.1 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
+# 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
 
 on:
@@ -87,14 +88,26 @@ jobs:
       - name: 构建后端 jar（跳过测试，产物名固定为 drill-notebook-backend-0.1.0.jar）
         run: ./mvnw.cmd -f backend/pom.xml -DskipTests package
 
-      - name: 打包便携 exe（注入版本号，不改 package.json）
-        run: npx electron-builder --win portable --publish never --config.extraMetadata.version=${{ steps.ver.outputs.version }}
+      # 目录模式打包：绿色便携以「zip 解压即用」的文件夹分发（data/logs/runtime 固定写在 exe 旁）。
+      # 不用单文件 portable——它会自解压到 %TEMP%，数据写进临时目录、退出即丢，且在部分机器上
+      # 触发杀软拦截 / 深路径问题导致内置 JRE 起不来（表现为后端 30 秒不健康、只有管理员能启动）。
+      - name: 打包便携应用目录（注入版本号，不改 package.json）
+        run: npx electron-builder --win dir --publish never --config.extraMetadata.version=${{ steps.ver.outputs.version }}
+
+      - name: 压缩为绿色便携 zip
+        run: |
+          $exe = 'dist\win-unpacked\Drill Notebook.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'electron-builder 完成但 dist\win-unpacked 下没有 Drill Notebook.exe' }
+          $zip = "dist\Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip"
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -Path 'dist\win-unpacked\*' -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "便携包已生成：$zip"
 
       - name: 校验产物
         run: |
-          $exe = @(Get-ChildItem -LiteralPath 'dist' -Filter '*.exe' -File)
-          if ($exe.Count -eq 0) { throw 'electron-builder 完成但 dist 下没有 .exe 产物' }
-          $exe | ForEach-Object { Write-Host $_.FullName }
+          $zip = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Drill-Notebook-*-win-x64-portable.zip' -File)
+          if ($zip.Count -eq 0) { throw '压缩完成但 dist 下没有便携 zip 产物' }
+          $zip | ForEach-Object { Write-Host $_.FullName }
 
       # 标签推送时必发；手动触发时按 publish_release 开关（严格匹配布尔）决定是否发预发行版
       - name: 发布 GitHub Release（预发行版）
@@ -104,7 +117,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           prerelease: true
           generate_release_notes: true
-          files: dist/*.exe
+          files: dist/Drill-Notebook-*-win-x64-portable.zip
 
       # 手动触发时只上传构建产物，方便先自测流水线
       - name: 上传构建产物（手动触发时）
@@ -112,5 +125,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable
-          path: dist/*.exe
+          path: dist/Drill-Notebook-*-win-x64-portable.zip
           if-no-files-found: error
