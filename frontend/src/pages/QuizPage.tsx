@@ -97,6 +97,8 @@ export function QuizPage(): JSX.Element {
   const dayQueueMode = searchParams.get('dayQueue') === '1';
   /** From calendar memory-curve queue: right/wrong drives SRS with forceAdvance. */
   const fromQueue = searchParams.get('fromQueue') === '1' || dayQueueMode;
+  /** 日历/计划深链（今日队列「去学习」、计划组「去学习」）带来的 id 是排程而非用户勾选，不写入练习记忆。 */
+  const fromPlanDeepLink = planItemId !== undefined || planDate !== undefined;
   const scheduleIdFromQuery = Number(searchParams.get('scheduleId')) || undefined;
   /** Single-resource deep link → CompletePlanButton can target that resource. */
   const planResourceId = questionIds?.length === 1 ? questionIds[0] : undefined;
@@ -146,13 +148,16 @@ export function QuizPage(): JSX.Element {
     }
     else if (questionsQuery.data) {
       const available = questionsQuery.data.map((item) => item.id);
+      const availableSet = new Set(available);
       setSelectionHydratedBank(bankId);
-      setSelectedQuestionIds(readIdSet(cachedPractice.quizSelection, bankId, available) ?? available);
+      // 恢复勾选只保留当前题库真实存在的题，清掉旧版本把计划/队列深链跨库误写进来的脏 id。
+      const restored = readIdSet(cachedPractice.quizSelection, bankId, available);
+      setSelectedQuestionIds(restored ? restored.filter((id) => availableSet.has(id)) : available);
     }
   }, [bankId, questionIds, questionsQuery.data, selectionHydratedBank]); // eslint-disable-line react-hooks/exhaustive-deps -- cachedPractice 每次渲染重读
-  // 日历/今日队列深链带来的 id 清单是「排程」而不是用户勾选，不写入记忆；
+  // 日历/今日队列/计划深链带来的 id 清单是「排程」而不是用户勾选，不写入记忆；
   // 本库勾选尚未套用前也不写，避免用切换前的旧勾选覆盖记忆。
-  usePersistSlice('practice', autoStart || fromQueue || selectionHydratedBank !== bankId ? {} : {
+  usePersistSlice('practice', autoStart || fromQueue || fromPlanDeepLink || selectionHydratedBank !== bankId ? {} : {
     quizBankId: bankId,
     quizSelection: putScoped(cachedPractice.quizSelection, bankId, captureIdSet(selectedQuestionIds, questionsQuery.data?.length ?? 0))
   });
