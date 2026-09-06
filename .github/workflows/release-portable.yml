@@ -76,9 +76,16 @@ jobs:
         run: npm install
 
       - name: 生成内嵌 JRE（docs/jlink.md 的模块清单）
+        # 精简 JRE 必须覆盖 Spring Boot 3 + 内嵌 Tomcat 启动的全部依赖模块，否则后端在启动早期即退出、
+        # Electron 侧表现为「Backend did not become healthy within 30 seconds」+ 前端 Failed to fetch。
+        # 实测教训（v0.6.1 打包后端起不来根因）：只列 java.base+少数模块会逐个 NoClassDefFoundError
+        # （java.beans.PropertyEditorSupport→缺 java.desktop；javax.naming→缺 java.naming），
+        # 且补齐这几个后仍会在日志系统初始化阶段「静默 exit 1、无任何堆栈」——因为缺 jdk.charsets
+        # （Windows 控制台代码页字符集）/ java.logging / java.prefs 等，异常发生在 Logback 接管前无法打印。
+        # 用 java.se 聚合模块（含全部标准 java.*）+ 服务端/Windows 常用 jdk.* 一次覆盖，实测健康启动、约 50MB。
         run: >
           jlink
-          --add-modules java.base,java.net.http,java.sql,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.unsupported
+          --add-modules java.se,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.crypto.mscapi,jdk.naming.dns,jdk.unsupported,jdk.zipfs,jdk.httpserver,jdk.management,jdk.charsets,jdk.security.auth,jdk.security.jgss
           --strip-debug --no-header-files --no-man-pages --compress=2
           --output jre
 
