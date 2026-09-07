@@ -35,6 +35,7 @@
     "appId": "com.drillnotebook.app",
     "productName": "Drill Notebook",
     "asar": true,
+    "afterPack": "scripts/after-pack-trim-locales.mjs",
     "files": [
       "electron-dist/**/*",
       "frontend/dist/**/*",
