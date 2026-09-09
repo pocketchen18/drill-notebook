@@ -3,6 +3,7 @@ import { Message } from '@arco-design/web-react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { resolveEmbedUrl } from '../../lib/videoEmbed';
 import { attachmentContentUrl } from '../../lib/attachments';
+import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
 
 type View = 'link' | 'title' | 'preview';
 type VideoType = 'url' | 'local' | 'remote';
@@ -15,7 +16,7 @@ interface VideoAttrs {
   view: View;
 }
 
-export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
+export function VideoBlockNode({ node, updateAttributes, selected, view, getPos }: NodeViewProps): JSX.Element {
   const attrs = node.attrs as VideoAttrs;
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuUpward, setMenuUpward] = useState(false);
@@ -33,6 +34,7 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
   const [localView, setLocalView] = useState<View>(attrs.view);
   const clickTimer = useRef<number | null>(null);
   const handleRef = useRef<HTMLDivElement>(null);
+  const cancelBeforeBlurRef = useRef(false);
 
   useEffect(() => {
     setLocalView(attrs.view);
@@ -113,16 +115,19 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
   };
 
   const handleClick = (): void => {
+    exitNodeSelection(view, getPos, node);
     if (editing) return;
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => { openExternal(); }, 250);
   };
 
   const handleDoubleClick = (): void => {
+    exitNodeSelection(view, getPos, node);
     if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
     const field = localView === 'title' ? 'title' : 'url';
     setEditField(field);
     setDraft(field === 'title' ? (attrs.title || '') : (attrs.url ?? ''));
+    cancelBeforeBlurRef.current = false;
     setEditing(true);
   };
 
@@ -130,16 +135,26 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
     setMenuOpen(false);
     setEditField('title');
     setDraft(attrs.title || '');
+    cancelBeforeBlurRef.current = false;
     setEditing(true);
   };
 
   const commitEdit = (): void => {
+    if (cancelBeforeBlurRef.current) {
+      cancelBeforeBlurRef.current = false;
+      return;
+    }
     setEditing(false);
     if (editField === 'title') {
       updateAttributes({ title: draft });
     } else {
       updateAttributes({ url: draft });
     }
+  };
+
+  const cancelEdit = (): void => {
+    cancelBeforeBlurRef.current = true;
+    setEditing(false);
   };
 
   const switchView = (view: View): void => {
@@ -172,7 +187,7 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
       onKeyDown={(event) => {
         event.stopPropagation();
         if (event.key === 'Enter') { event.preventDefault(); commitEdit(); }
-        if (event.key === 'Escape') { setEditing(false); }
+        if (event.key === 'Escape') { event.preventDefault(); cancelEdit(); }
       }}
       onBlur={commitEdit}
     />
@@ -185,6 +200,19 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
         className="video-link-text"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            handleClick();
+          }
+          if (event.key === ' ') {
+            event.preventDefault();
+            handleClick();
+          }
+        }}
+        role="link"
+        tabIndex={0}
+        aria-label={text}
         title="单击打开，双击编辑"
       >
         {text}
@@ -288,12 +316,14 @@ export function VideoBlockNode({ node, updateAttributes, selected }: NodeViewPro
       contentEditable={false}
       data-video-block="true"
     >
+      <BlockDragHandle label="拖动视频块" />
       <div className="video-block-handle" ref={handleRef}>
         <button
           type="button"
           className="video-block-handle-btn"
           contentEditable={false}
           onClick={toggleMenu}
+          aria-label="视频块菜单"
           title="切换视图"
         >▾</button>
         {menuOpen ? (

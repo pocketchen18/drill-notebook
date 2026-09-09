@@ -2,6 +2,7 @@ import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import type { Question, QuestionOption } from '../../lib/types';
 import { MarkdownContent } from '../markdown/MarkdownRenderer';
 import { questionTypeLabel } from '../../lib/quiz';
+import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
 
 function snapshotQuestion(attrs: Record<string, unknown>): Partial<Question> {
   const snapshot = attrs.snapshot;
@@ -9,10 +10,11 @@ function snapshotQuestion(attrs: Record<string, unknown>): Partial<Question> {
   return { id: Number(attrs.questionId) };
 }
 
-export function QuestionBlock({ node }: NodeViewProps): JSX.Element {
+export function QuestionBlock({ node, selected, view, getPos }: NodeViewProps): JSX.Element {
   const question = snapshotQuestion(node.attrs as Record<string, unknown>);
   const options = Array.isArray(question.options) ? question.options as QuestionOption[] : [];
-  return <NodeViewWrapper className="question-block" contentEditable={false} data-question-block="true">
+  return <NodeViewWrapper className={`question-block${selected ? ' is-selected' : ''}`} contentEditable={false} data-question-block="true" onClick={() => exitNodeSelection(view, getPos, node)}>
+    <BlockDragHandle label="拖动题目块" />
     <div className="question-block-header"><span>题目快照 · {question.type ? questionTypeLabel(question.type) : '未知题型'}</span><span>#{question.id ?? node.attrs.questionId}</span></div>
     <MarkdownContent className="question-block-stem" value={question.stem || '原题目已删除，仅保留题块快照。'} />
     {options.length ? <div className="question-block-options">{options.map((option) => <div key={option.key}><strong>{option.key}.</strong><MarkdownContent inline value={option.text} /></div>)}</div> : null}

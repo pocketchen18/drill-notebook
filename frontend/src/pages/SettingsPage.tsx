@@ -6,7 +6,7 @@ import { AiModelSlotCard } from '../components/AiModelSlotCard';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { DataManagementPanel } from '../components/DataManagementPanel';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
-import { useUiStore, type ThemeMode } from '../stores/uiStore';
+import { useUiStore, type OutlineSide, type ThemeMode } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
 import {
@@ -82,6 +82,10 @@ export function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient();
   const themeMode = useUiStore((state) => state.themeMode);
   const setThemeMode = useUiStore((state) => state.setThemeMode);
+  const outlineSide = useUiStore((state) => state.outlineSide);
+  const setOutlineSide = useUiStore((state) => state.setOutlineSide);
+  const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
+  const setNotebookPanelsSwapped = useUiStore((state) => state.setNotebookPanelsSwapped);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const aiFabVisible = useUiStore((state) => state.aiFabVisible);
   const setAiFabVisible = useUiStore((state) => state.setAiFabVisible);
@@ -279,6 +283,17 @@ export function SettingsPage(): JSX.Element {
               <Radio value="dark">深色</Radio>
               <Radio value="system">跟随系统</Radio>
             </Radio.Group>
+          </div>
+          <div className="settings-row">
+            <div><Typography.Text bold>专注模式大纲位置</Typography.Text><br /><Typography.Text type="secondary">仅影响专注模式；预览模式默认在右侧。</Typography.Text></div>
+            <Radio.Group type="button" size="small" value={outlineSide} onChange={(value) => setOutlineSide(value as OutlineSide)} aria-label="专注模式大纲位置">
+              <Radio value="left">左侧</Radio>
+              <Radio value="right">右侧</Radio>
+            </Radio.Group>
+          </div>
+          <div className="settings-row">
+            <div><Typography.Text bold>交换笔记本页面与大纲位置</Typography.Text><br /><Typography.Text type="secondary">预览模式下将页面选择移到右侧，大纲移到左侧。</Typography.Text></div>
+            <Switch checked={notebookPanelsSwapped} onChange={setNotebookPanelsSwapped} aria-label="交换笔记本页面与大纲位置" />
           </div>
           <div className="settings-row">
             <div><Typography.Text bold>显示 AI 悬浮球</Typography.Text><br /><Typography.Text type="secondary">隐藏后仍可用快捷键或下方按钮打开。</Typography.Text></div>

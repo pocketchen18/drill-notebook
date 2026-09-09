@@ -8,6 +8,7 @@ import { PptxPreview } from './preview/PptxPreview';
 import { ArchiveBrowser } from './preview/ArchiveBrowser';
 import { typeIcons, fileCategory, formatBytes } from './preview/FileInfoPreview';
 import { attachmentContentUrl } from '../../lib/attachments';
+import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
 
 type View = 'preview' | 'download';
 
@@ -19,7 +20,7 @@ interface FileAttrs {
   view: View;
 }
 
-export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
+export function FileBlockNode({ node, updateAttributes, selected, view, getPos }: NodeViewProps): JSX.Element {
   const attrs = node.attrs as FileAttrs;
   const inlineOpen = attrs.view === 'preview';
   const [browserOpen, setBrowserOpen] = useState(false);
@@ -38,6 +39,7 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
     || attrs.mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
   const togglePreview = (): void => {
+    exitNodeSelection(view, getPos, node);
     if (isZip) { setBrowserOpen(true); return; }
     updateAttributes({ view: inlineOpen ? 'download' : 'preview' });
   };
@@ -59,6 +61,7 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
       contentEditable={false}
       data-file-block="true"
     >
+      <BlockDragHandle label="拖动附件块" />
       <div className="file-block-card">
         <div className="file-block-icon"><Icon size={26} strokeWidth={1.6} /></div>
         <div className="file-block-meta">
@@ -70,9 +73,11 @@ export function FileBlockNode({ node, updateAttributes, selected }: NodeViewProp
             type="button"
             className={`file-block-action${previewOpen ? ' is-active' : ''}`}
             title={previewOpen ? '收起预览' : '预览'}
+            aria-label={previewOpen ? '收起预览' : '预览'}
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={togglePreview}
           >{previewOpen ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-          <a className="file-block-action" title="下载" href={href} download={attrs.fileName}>
+          <a className="file-block-action" title="下载" aria-label={`下载 ${attrs.fileName}`} href={href} download={attrs.fileName} onMouseDown={(event) => event.stopPropagation()}>
             <Download size={17} />
           </a>
         </div>

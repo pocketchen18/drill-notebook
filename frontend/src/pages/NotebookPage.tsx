@@ -36,6 +36,7 @@ export function NotebookPage(): JSX.Element {
   );
   const queryClient = useQueryClient();
   const setNotebookFocusMode = useUiStore((state) => state.setNotebookFocusMode);
+  const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
   const cachedNotebooks = readPageSlice('notebooks');
   const [notebookId, setNotebookId] = useState<number | undefined>(cachedNotebooks.notebookId);
   const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery ?? cachedNotebooks.pageId);
@@ -409,7 +410,7 @@ export function NotebookPage(): JSX.Element {
         <ExportActions count={validSelectedPageIds.length} document={exportPages} />
       </Space>
     </div>}
-    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className={`route-workspace__body note-layout${focusMode ? ' is-focus' : ''}`}>
+    {notebooksQuery.isLoading ? <Spin /> : notebooksQuery.data?.length ? <div className={`route-workspace__body note-layout${focusMode ? ' is-focus' : ''}${!focusMode && notebookPanelsSwapped ? ' note-layout--panels-swapped' : ''}`}>
       <aside className="local-explorer local-explorer--notebook">
         <div className="local-explorer__header">
           <h2>页面</h2>
@@ -500,7 +501,14 @@ export function NotebookPage(): JSX.Element {
             />
             <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForPages([currentPage])}>加入计划</Button>
           </div>}
-          <NotebookEditor content={pendingContent ?? currentPage.content} onChange={setPendingContent} pageId={pageId} focusMode={focusMode} onFocusModeChange={setFocusMode} />
+          <NotebookEditor
+            content={pendingContent ?? currentPage.content}
+            onChange={setPendingContent}
+            pageId={pageId}
+            focusMode={focusMode}
+            onFocusModeChange={setFocusMode}
+            onNewPage={() => setNewPageVisible(true)}
+          />
         </> : <div className="panel"><div className="empty-state"><div><p>选择一个页面开始记录。</p></div></div></div>}
       </section>
     </div> : <Empty description="正在创建默认笔记本…" />}

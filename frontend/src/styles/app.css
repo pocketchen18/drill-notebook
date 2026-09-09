@@ -769,18 +769,146 @@ mark.kp-search-highlight.kp-search-highlight-active {
 }
 
 /* §8 编辑器与附件 ---------------------------------------------------------- */
-.editor-shell { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.editor-shell { container-type: inline-size; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-bg); transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
+.editor-shell:focus-within { border-color: var(--accent-border-2); box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm); }
 .editor-shell.is-focus { overflow: visible; border: none; border-radius: 0; background: transparent; }
-.editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
-.editor-toolbar.is-focus { position: fixed; top: 0; left: 224px; right: 0; z-index: 100; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 0; background: var(--panel-bg); box-shadow: var(--shadow-xs); }
-/* 工具栏按钮组：允许收缩并换行，避免窄窗口下按钮被 overflow:hidden 裁掉 */
-.editor-toolbar .arco-space { min-width: 0; flex-wrap: wrap; }
-.editor-content { min-height: 520px; padding: 24px 28px; }
-.editor-content .ProseMirror { min-height: 460px; outline: none; line-height: 1.75; }
-.editor-content .ProseMirror p { margin: 0 0 10px; }
-.editor-content .ProseMirror h1, .editor-content .ProseMirror h2, .editor-content .ProseMirror h3 { margin: 20px 0 10px; }
+.editor-shell.is-focus:focus-within { box-shadow: none; }
+.editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
+.editor-toolbar.is-focus { position: sticky; top: 0; z-index: 100; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 0; background: var(--panel-bg); box-shadow: var(--shadow-xs); }
+/* 工具栏按钮组：允许收缩并换行，避免窄窗口下按钮被 overflow:hidden 裁掉。 */
+.editor-toolbar__commands { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 3px; flex-wrap: wrap; }
+.editor-toolbar__group { display: inline-flex; min-width: 0; align-items: center; gap: 2px; }
+.editor-toolbar__separator { width: 1px; height: 22px; flex: 0 0 1px; margin: 0 3px; background: var(--line); }
+.editor-command-button { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; gap: 6px; padding: 0 7px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; line-height: 1; cursor: pointer; transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.editor-command-button:hover { background: var(--hover-bg); }
+.editor-command-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-command-button.is-active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
+.editor-command-button.is-primary { border-color: var(--accent-fill); background: var(--accent-fill); color: var(--accent-contrast); }
+.editor-command-button.is-primary:hover { border-color: var(--accent-fill-hover); background: var(--accent-fill-hover); }
+.editor-command-button:disabled { background: transparent; color: var(--muted); cursor: not-allowed; opacity: .55; }
+.editor-command-button.has-label { padding-inline: 8px; }
+.editor-command-label { overflow: hidden; max-width: 12em; white-space: nowrap; text-overflow: ellipsis; }
+.editor-toolbar .editor-hint { flex: 0 0 auto; max-width: 22em; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.editor-content { min-width: 0; min-height: 520px; padding: 24px 28px; }
+.editor-content .ProseMirror { min-height: 460px; min-width: 0; outline: none; line-height: 1.75; font-size: 16px; max-width: 760px; margin-inline: auto; overflow-wrap: anywhere; caret-color: var(--accent); }
+.editor-content .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--muted); pointer-events: none; }
+.editor-content .ProseMirror p { margin: 0 0 12px; }
+.editor-content .ProseMirror h1 { font-size: 28px; line-height: 1.3; margin: 28px 0 12px; }
+.editor-content .ProseMirror h2 { font-size: 22px; line-height: 1.35; margin: 24px 0 10px; }
+.editor-content .ProseMirror h3 { font-size: 18px; line-height: 1.4; margin: 20px 0 8px; }
+.editor-content .ProseMirror h1,
+.editor-content .ProseMirror h2,
+.editor-content .ProseMirror h3,
+.editor-content .ProseMirror h4,
+.editor-content .ProseMirror h5,
+.editor-content .ProseMirror h6 { scroll-margin-top: 64px; }
 .editor-content .ProseMirror code { padding: 2px 5px; border-radius: 4px; background: var(--subtle-bg); }
-.math-block, .mermaid-block, .markdown-block, .question-block, .file-block, .video-block { margin: 16px 0; padding: 14px 16px; border: 1px solid var(--block-border); border-radius: var(--radius-md); background: var(--block-bg); }
+.editor-content .ProseMirror ul,
+.editor-content .ProseMirror ol { margin: 0 0 12px; padding-left: 1.7em; }
+.editor-content .ProseMirror li > p { margin-bottom: 4px; }
+.editor-content .ProseMirror blockquote { margin: 16px 0; padding: 8px 16px; border-left: 3px solid var(--accent-border-2); background: var(--accent-soft-2); color: var(--muted); }
+.editor-content .ProseMirror pre { margin: 16px 0; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle-bg); color: var(--text); font: 13px/1.6 Consolas, monospace; }
+.editor-content .ProseMirror pre code { padding: 0; background: transparent; }
+.editor-content .ProseMirror hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line-strong); }
+
+/* 编辑器浮层：选区操作 + 可切换左右位置的文档大纲 */
+.editor-canvas { position: relative; }
+.editor-bubble { z-index: 110; display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-bg); box-shadow: var(--shadow-md); }
+.editor-bubble button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.editor-bubble button:hover { background: var(--hover-bg); }
+.editor-bubble button:focus-visible,
+.editor-outline__close:focus-visible,
+.editor-outline__item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-bubble button.is-active { background: var(--accent-soft); color: var(--accent); }
+.editor-bubble button.is-danger { color: var(--danger); }
+.editor-outline { position: absolute; top: 16px; bottom: 24px; z-index: 90; width: min(240px, calc(100% - 16px)); max-width: calc(100% - 16px); overflow: auto; padding: 12px 10px; background: var(--panel-bg); box-shadow: none; }
+.editor-outline--left { left: 0; border-right: 1px solid var(--line); }
+.editor-outline--right { right: 0; border-left: 1px solid var(--line); }
+.editor-outline--focus { position: fixed; top: 0; bottom: 0; width: 260px; max-width: min(260px, calc(100vw - 16px)); box-shadow: var(--shadow-md); }
+.editor-outline--focus.editor-outline--left { left: 224px; }
+.editor-outline--focus.editor-outline--right { right: 0; }
+.app-shell:has(.app-sider.arco-layout-sider-collapsed) .editor-outline--focus.editor-outline--left { left: 56px; }
+.app-shell:has(.app-sider-hidden) .editor-outline--focus.editor-outline--left { left: 0; }
+.editor-canvas--focus .editor-content .ProseMirror { max-width: 920px; }
+.editor-outline__head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 8px; font-size: 13px; font-weight: 700; color: var(--text-strong); }
+.editor-outline__close { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; }
+.editor-outline__close:hover { background: var(--hover-bg); color: var(--text); }
+.editor-outline__list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.editor-outline__item { display: block; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font-size: 13px; line-height: 1.4; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.editor-outline__item:hover { background: var(--hover-bg); }
+.editor-outline__item.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.editor-outline__item--h2 { padding-left: 20px; }
+.editor-outline__item--h3 { padding-left: 32px; }
+.editor-outline__item--h4, .editor-outline__item--h5, .editor-outline__item--h6 { padding-left: 44px; }
+.editor-outline__empty { padding: 8px 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.editor-statusbar { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 6px 12px; border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent); color: var(--muted); font-size: 11px; line-height: 1.3; }
+.editor-statusbar__uploading { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--accent); }
+.editor-statusbar__uploading svg { animation: editor-status-spin .9s linear infinite; }
+@keyframes editor-status-spin { to { transform: rotate(360deg); } }
+.editor-canvas.is-dragging-files::after { content: ''; position: absolute; inset: 6px; z-index: 105; border: 2px dashed var(--accent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-soft) 42%, transparent); pointer-events: none; }
+@container (max-width: 1120px) {
+  .editor-toolbar .editor-hint { display: none; }
+  .editor-command-button.has-label .editor-command-label { display: none; }
+  .editor-command-button.has-label { padding-inline: 7px; }
+}
+@media (max-width: 900px) {
+  .editor-toolbar .editor-hint { display: none; }
+  .editor-toolbar__separator { display: none; }
+  .editor-command-button.has-label .editor-command-label { display: none; }
+  .editor-command-button.has-label { padding-inline: 7px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-command-button,
+  .editor-bubble button { transition-duration: 1ms; }
+  .editor-statusbar__uploading svg { animation-duration: 1ms; }
+}
+@media (pointer: coarse) {
+  .editor-command-button { min-width: 44px; min-height: 44px; }
+  .editor-bubble button,
+  .editor-outline__close { width: 44px; height: 44px; }
+  .editor-outline__item { min-height: 44px; }
+}
+@media (max-width: 759px) {
+  /* The outline becomes a temporary drawer on narrow editor canvases; the
+     document keeps its readable width instead of being squeezed by the pane. */
+  .editor-canvas:has(.editor-outline:not(.editor-outline--focus)) { padding-left: 20px !important; padding-right: 20px !important; }
+  .editor-outline:not(.editor-outline--focus) { top: 0; bottom: 0; width: min(280px, calc(100% - 32px)); box-shadow: var(--shadow-md); }
+  .editor-outline--focus { width: min(280px, 100vw); }
+  .editor-outline--focus.editor-outline--left { left: 0; }
+}
+.math-block, .mermaid-block, .markdown-block, .question-block, .file-block, .video-block { position: relative; margin: 16px 0; padding: 14px 16px; border: 1px solid var(--block-border); border-radius: var(--radius-md); background: var(--block-bg); }
+.math-block, .mermaid-block { padding-inline: 46px; }
+.markdown-block, .question-block, .file-block, .video-block { padding-inline-start: 46px; }
+.editor-block-drag-handle { position: absolute; inset-inline-start: 8px; top: 10px; z-index: 3; display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: grab; opacity: 0; pointer-events: none; user-select: none; transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
+.editor-block-drag-handle:hover { border-color: var(--line); background: var(--hover-bg); color: var(--text); }
+.editor-block-drag-handle:active { cursor: grabbing; }
+.editor-block-drag-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.math-block:hover > .editor-block-drag-handle,
+.math-block:focus-within > .editor-block-drag-handle,
+.math-block.is-selected > .editor-block-drag-handle,
+.mermaid-block:hover > .editor-block-drag-handle,
+.mermaid-block:focus-within > .editor-block-drag-handle,
+.mermaid-block.is-selected > .editor-block-drag-handle,
+.markdown-block:hover > .editor-block-drag-handle,
+.markdown-block:focus-within > .editor-block-drag-handle,
+.markdown-block.is-selected > .editor-block-drag-handle,
+.question-block:hover > .editor-block-drag-handle,
+.question-block:focus-within > .editor-block-drag-handle,
+.question-block.is-selected > .editor-block-drag-handle,
+.file-block:hover > .editor-block-drag-handle,
+.file-block:focus-within > .editor-block-drag-handle,
+.file-block.is-selected > .editor-block-drag-handle,
+.video-block:hover > .editor-block-drag-handle,
+.video-block:focus-within > .editor-block-drag-handle,
+.video-block.is-selected > .editor-block-drag-handle { opacity: 1; pointer-events: auto; }
+@media (pointer: coarse) {
+  .editor-block-drag-handle { width: 36px; height: 36px; opacity: .82; pointer-events: auto; }
+}
+@media (max-width: 759px) {
+  /* Keep the gutter inside the block when the editor shell has no spare
+     horizontal margin for an outside handle. */
+  .editor-block-drag-handle { inset-inline-start: 6px; top: 8px; width: 30px; height: 32px; opacity: .82; pointer-events: auto; }
+}
 .math-block { overflow-x: auto; text-align: center; }
 .mermaid-block { overflow-x: auto; text-align: center; }
 .markdown-block { text-align: left; }
@@ -1572,6 +1700,11 @@ html[data-theme='dark'] .arco-tag {
 }
 .route-workspace__body { display: grid; gap: 16px; align-items: stretch; min-height: min(680px, calc(100vh - 156px)); grid-template-columns: 232px minmax(0, 1fr); }
 .route-workspace__body.is-focus { grid-template-columns: minmax(0, 1fr); }
+.route-workspace__body.note-layout { grid-template-areas: "explorer content"; }
+.route-workspace__body.note-layout--panels-swapped { grid-template-columns: minmax(0, 1fr) 232px; grid-template-areas: "content explorer"; }
+.route-workspace__body.note-layout.is-focus { grid-template-areas: "content"; }
+.note-layout > .local-explorer { grid-area: explorer; }
+.note-layout > .route-workspace__content { grid-area: content; }
 .local-explorer {
   display: flex;
   flex-direction: column;
@@ -1582,6 +1715,7 @@ html[data-theme='dark'] .arco-tag {
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--subtle-bg) 72%, var(--page-bg));
 }
+.note-layout--panels-swapped > .local-explorer { border-right: 0; border-left: 1px solid var(--line); }
 @media (min-width: 760px) {
   .route-workspace__body .local-explorer { position: sticky; top: 12px; }
   .route-workspace__body .local-explorer__list { overflow-y: auto; max-height: calc(100vh - 220px); }
@@ -1645,17 +1779,18 @@ html[data-theme='dark'] .arco-tag {
 .route-workspace .editor-toolbar { padding: 8px 10px; row-gap: 6px; background: var(--panel-bg); }
 .route-workspace .editor-content { padding: 20px 28px 28px; }
 
-/* 专注模式工具栏随全局侧栏状态移动，避免折叠/隐藏后悬空在错误位置。 */
-.app-shell:has(.app-sider.arco-layout-sider-collapsed) .editor-toolbar.is-focus { left: 56px; }
-.app-shell:has(.app-sider-hidden) .editor-toolbar.is-focus { left: 0; }
+/* 专注模式工具栏改用 position: sticky（见 .editor-toolbar.is-focus），随内容列自然定位，无需再按侧栏状态调 left。 */
 /* 中窄屏：先复位 legacy 210px 规则，再在 <760px 上下堆叠（顺序即优先级） */
 @media (max-width: 1180px) {
   .route-workspace__body { grid-template-columns: 232px minmax(0, 1fr); }
 }
 @media (max-width: 759px) {
   .route-workspace__body { grid-template-columns: minmax(0, 1fr); }
+  .route-workspace__body.note-layout,
+  .route-workspace__body.note-layout--panels-swapped { grid-template-columns: minmax(0, 1fr); grid-template-areas: "explorer" "content"; }
   .route-command-row__context .arco-select { width: 100%; }
-  .local-explorer { width: 100%; max-width: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
+  .local-explorer { width: 100%; max-width: 100%; border-right: 0; border-left: 0; border-bottom: 1px solid var(--line); }
+  .note-layout--panels-swapped > .local-explorer { border-left: 0; }
   .local-explorer__list { width: 100%; max-width: 240px; max-height: 240px; }
   .bank-content { padding-inline: 12px; }
   .bank-content .content-context-header { margin-inline: -12px; padding-inline: 12px; }

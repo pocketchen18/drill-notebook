@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
-import { MarkdownBlock, MathBlock, MathInline, MermaidBlock, QuestionBlockNode } from './extensions';
+import { FileBlock, MarkdownBlock, MathBlock, MathInline, MermaidBlock, QuestionBlockNode, VideoBlock } from './extensions';
 
 describe('notebook document serialization', () => {
   it('round-trips core custom nodes through TipTap JSON', () => {
@@ -17,6 +17,12 @@ describe('notebook document serialization', () => {
     };
     const editor = new Editor({ extensions: [StarterKit, MathBlock, MathInline, MermaidBlock, MarkdownBlock, QuestionBlockNode], content: document });
     expect(editor.getJSON()).toEqual(document);
+    editor.destroy();
+  });
+
+  it('marks atom blocks as draggable for the native TipTap block handle', () => {
+    const editor = new Editor({ extensions: [StarterKit, MathBlock, MathInline, MermaidBlock, MarkdownBlock, QuestionBlockNode, FileBlock, VideoBlock] });
+    expect(['mathBlock', 'mermaidBlock', 'markdownBlock', 'questionBlock', 'fileBlock', 'videoBlock'].map((name) => editor.schema.nodes[name]?.spec.draggable)).toEqual([true, true, true, true, true, true]);
     editor.destroy();
   });
 });

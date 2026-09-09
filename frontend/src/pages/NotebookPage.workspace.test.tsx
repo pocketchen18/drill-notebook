@@ -19,6 +19,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { NotePage, Notebook } from '../lib/types';
+import { useUiStore } from '../stores/uiStore';
 
 const { apiGet, apiPost, apiPut, apiDel } = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -45,6 +46,7 @@ const baseWindowApi = () => ({
 
 beforeEach(() => {
   (window as unknown as { api: Record<string, unknown> }).api = baseWindowApi() as Record<string, unknown>;
+  useUiStore.setState({ notebookPanelsSwapped: false });
   apiPut.mockResolvedValue({});
 });
 
@@ -521,6 +523,28 @@ describe('NotebookPage target structure — Phase 2+ redesign contract', () => {
     renderNotebookPage();
     await waitFor(() => expect(screen.getByText('页面-11')).toBeInTheDocument());
     expect(document.querySelector('.route-workspace__content')).toBeInTheDocument();
+  });
+
+  it('preview mode defaults the explorer left and exposes a swappable panel layout', async () => {
+    renderNotebookPage();
+    await waitFor(() => expect(screen.getByText('页面-11')).toBeInTheDocument());
+    const body = document.querySelector('.note-layout') as HTMLElement | null;
+    expect(body).toBeTruthy();
+    expect(body).not.toHaveClass('note-layout--panels-swapped');
+    expect(body?.querySelector('.local-explorer')).toBeTruthy();
+    useUiStore.getState().setNotebookPanelsSwapped(true);
+    await waitFor(() => expect(body).toHaveClass('note-layout--panels-swapped'));
+    expect(body?.querySelector('.route-workspace__content')).toBeTruthy();
+  });
+
+  it('keeps the preview panel swap out of focus mode', async () => {
+    useUiStore.getState().setNotebookPanelsSwapped(true);
+    renderNotebookPage();
+    await waitFor(() => expect(screen.getByTestId('notebook-editor')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'toggle-focus' }));
+    const body = document.querySelector('.note-layout') as HTMLElement | null;
+    await waitFor(() => expect(body).toHaveClass('is-focus'));
+    expect(body).not.toHaveClass('note-layout--panels-swapped');
   });
 
   it('editor host uses .editor-canvas', async () => {

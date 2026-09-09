@@ -56,7 +56,7 @@ function press(key: string, init?: KeyboardEventInit): void {
 
 beforeEach(() => {
   // store 为模块级单例，逐条用例复位到出厂状态
-  useUiStore.setState({ aiOpen: false, aiFabVisible: true, shortcutConfig: defaultShortcutConfig() });
+  useUiStore.setState({ aiOpen: false, aiFabVisible: true, shortcutConfig: defaultShortcutConfig(), outlineSide: 'left', notebookPanelsSwapped: false });
   useUiStore.getState().setThemeMode('light');
   window.location.hash = '';
   vi.restoreAllMocks();
@@ -101,6 +101,23 @@ describe('SettingsPage 常规分区', () => {
     fireEvent.click(toggle);
     expect(useUiStore.getState().aiFabVisible).toBe(false);
     expect(localStorage.getItem(LS_SHOW_AI_FAB)).toBe('false');
+  });
+
+  it('focus outline side and preview panel swap persist independently', () => {
+    renderPage();
+    const row = within(shortcutRow('专注模式大纲位置'));
+    expect(row.getByRole('radio', { name: '左侧' })).toBeChecked();
+    fireEvent.click(row.getByRole('radio', { name: '右侧' }));
+    expect(useUiStore.getState().outlineSide).toBe('right');
+    expect(localStorage.getItem('ui.outlineSide')).toBe('right');
+    fireEvent.click(row.getByRole('radio', { name: '左侧' }));
+    expect(useUiStore.getState().outlineSide).toBe('left');
+    expect(localStorage.getItem('ui.outlineSide')).toBe('left');
+    const swap = within(shortcutRow('交换笔记本页面与大纲位置')).getByRole('switch');
+    expect(swap).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(swap);
+    expect(useUiStore.getState().notebookPanelsSwapped).toBe(true);
+    expect(localStorage.getItem('ui.notebookPanelsSwapped')).toBe('true');
   });
 
   it('SET-4: recording appends bindings, persists them and enables reset controls', () => {

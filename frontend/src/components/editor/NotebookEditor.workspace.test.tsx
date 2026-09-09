@@ -13,7 +13,8 @@
  * Fixture IDs intentionally non-sequential (11, 37, 104) per the plan.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { useUiStore } from '../../stores/uiStore';
 
 const { uploadAttachment, attachmentContentUrl } = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
@@ -86,6 +87,7 @@ const baseWindowApi = (overrides: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  useUiStore.setState({ outlineSide: 'left', notebookPanelsSwapped: false });
   (window as unknown as { api: Record<string, unknown> }).api = baseWindowApi() as Record<string, unknown>;
   uploadAttachment.mockReset();
   // afterEach 的 restoreAllMocks 会清掉 vi.fn 的实现，这里逐个用例重新装好
@@ -260,6 +262,31 @@ describe('NotebookEditor behavior — baseline regression (Task 1)', () => {
       await new Promise((res) => setTimeout(res, 30));
       expect(uploadAttachment).not.toHaveBeenCalled();
     });
+
+    it('EDT-08 paste image: clipboard image uploads and inserts a file block', async () => {
+      const onChange = vi.fn();
+      uploadAttachment.mockResolvedValue({
+        id: 104, pageId: 11, fileName: 'pasted.png',
+        storagePath: 'fake', mimeType: 'image/png',
+        fileSize: 12, sha256: null, createdAt: ''
+      });
+      render(<NotebookEditor content={baseContent('start')} onChange={onChange} pageId={11} />);
+      const pm = document.querySelector('.notebook-prosemirror') as HTMLElement;
+      const file = new File(['png'], 'pasted.png', { type: 'image/png' });
+      fireEvent.paste(pm, {
+        clipboardData: {
+          files: [file],
+          items: [],
+          types: ['Files'],
+          getData: () => ''
+        }
+      });
+      await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(11, expect.any(File)));
+      await waitFor(() => {
+        const last = JSON.stringify(onChange.mock.calls.at(-1)?.[0] ?? {});
+        expect(last).toContain('fileBlock');
+      });
+    });
   });
 
   describe('Focus mode (EDT-10, NBK-17)', () => {
@@ -310,10 +337,17 @@ describe('NotebookEditor behavior — baseline regression (Task 1)', () => {
       render(<NotebookEditor content={baseContent('start')} onChange={vi.fn()} pageId={11} />);
       // Each command maps to a name consumed by the UI (routing/accessibility).
       // We assert the visible text/aria-label contract:
-      ['加粗', '斜体', '二级标题', '行内代码', '公式', '图表', 'Markdown', '添加文件', '添加视频', '专注模式']
+      ['加粗', '斜体', '二级标题', '行内代码', '删除线', '清除格式', '一级标题', '三级标题', '无序列表', '有序列表', '引用', '代码块', '分隔线', '正文', '减少缩进', '增加缩进', '公式', '图表', 'Markdown', '添加文件', '添加视频', '专注模式', '大纲']
         .forEach((label) => {
           expect(screen.getAllByRole('button', { name: label })[0]).toBeInTheDocument();
         });
+    });
+
+    it('exposes a textbox name and a factual document status line', () => {
+      render(<NotebookEditor content={baseContent('hello')} onChange={vi.fn()} pageId={11} />);
+      expect(screen.getByRole('textbox', { name: '笔记编辑器' })).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('5 字符');
+      expect(screen.getByRole('status')).toHaveTextContent('1 个块');
     });
   });
 });
@@ -343,6 +377,42 @@ function withinDialog(dialog: HTMLElement): {
 // =====================================================================
 
 describe('NotebookEditor target structure — Phase 2+ redesign contract', () => {
+  it('keeps new-page creation but removes the redundant rename command', () => {
+    const onNewPage = vi.fn();
+    render(<NotebookEditor content={baseContent('start')} pageId={11} onNewPage={onNewPage} />);
+    fireEvent.click(screen.getByRole('button', { name: '新建页面' }));
+    expect(onNewPage).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: /重命名/ })).toBeNull();
+  });
+
+  it.each([false, true])('uses the correct outline side for preview/focus mode (focusMode=%s)', (focusMode) => {
+    const { container } = render(<NotebookEditor content={baseContent('start')} pageId={11} focusMode={focusMode} />);
+    fireEvent.click(screen.getByRole('button', { name: '大纲' }));
+    const canvas = container.querySelector('.editor-canvas') as HTMLElement;
+    const outline = screen.getByRole('dialog', { name: '文档大纲' });
+    expect(outline).toHaveClass(focusMode ? 'editor-outline--left' : 'editor-outline--right');
+    expect(outline.classList.contains('editor-outline--focus')).toBe(focusMode);
+    expect(canvas.style.paddingLeft).toBe(focusMode ? '260px' : '20px');
+    expect(canvas.style.paddingRight).toBe(focusMode ? '0px' : '260px');
+    if (focusMode) {
+      act(() => useUiStore.getState().setOutlineSide('right'));
+      expect(outline).toHaveClass('editor-outline--right');
+      expect(outline).not.toHaveClass('editor-outline--left');
+      expect(canvas.style.paddingLeft).toBe('0px');
+      expect(canvas.style.paddingRight).toBe('260px');
+    } else {
+      act(() => useUiStore.getState().setNotebookPanelsSwapped(true));
+      expect(outline).toHaveClass('editor-outline--left');
+      expect(outline).not.toHaveClass('editor-outline--right');
+      expect(canvas.style.paddingLeft).toBe('260px');
+      expect(canvas.style.paddingRight).toBe('20px');
+    }
+    fireEvent.click(screen.getByRole('button', { name: '关闭大纲' }));
+    expect(screen.queryByRole('dialog', { name: '文档大纲' })).toBeNull();
+    expect(canvas.style.paddingLeft).toBe(focusMode ? '0px' : '20px');
+    expect(canvas.style.paddingRight).toBe(focusMode ? '0px' : '20px');
+  });
+
   it('editor mounts inside .editor-canvas host', () => {
     render(<NotebookEditor content={baseContent('start')} onChange={vi.fn()} pageId={11} />);
     const canvas = document.querySelector('.editor-canvas') as HTMLElement | null;

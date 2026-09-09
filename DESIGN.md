@@ -162,8 +162,44 @@ Spacing is based on 4px. The touched workspace uses:
 - **States**: default, saving silently, focus mode, empty block, long content,
   dark, reduced motion.
 - **Accessibility**: all formatting and insertion commands remain visible and
-  keyboard reachable; focus mode preserves its current semantics.
-- **Layout**: no nested content scroll; readable document flow.
+  keyboard reachable; focus mode preserves its current semantics. Selection
+  actions expose accessible names and keep compact desktop targets at least
+  32px.
+- **Selection actions**: a zero-dependency fixed toolbar appears for a
+  non-empty text or node selection. It supports bold, italic, inline code,
+  heading level 2, clear formatting, and destructive deletion; deletion stays
+  undoable through the editor history.
+- **Outline**: the toolbar can toggle a heading outline. In focus mode the
+  outline has a persisted left/right preference and is fixed to the viewport
+  edge. In preview mode it is right-aligned beside the page explorer by
+  default; a separate persisted switch can exchange the explorer and outline
+  positions. The canvas reserves 260px on the active side while it is open.
+- **Block editing**: Markdown and Mermaid text areas commit on blur as well as
+  their existing keyboard commands, so clicking outside an active block does
+  not discard the draft. Escape is a true cancel path; a blur caused by
+  removing the input cannot submit the cancelled draft. The same rule applies
+  to display and inline LaTeX blocks.
+- **Block movement**: atom blocks expose one shared drag handle on hover and
+  selection. The handle uses TipTap's native drag contract, keeps the block
+  content in a reserved gutter, and remains usable on coarse pointers and
+  narrow canvases without introducing another tab stop.
+- **Move selection cleanup**: an in-editor move collapses the resulting node or
+  range selection to the nearest text cursor. When a complete heading text
+  selection is moved, the empty source heading shell is normalized to a
+  paragraph; deleting characters until a heading is empty still preserves its
+  heading style.
+- **Mermaid errors**: previews render through an owned, hidden connected host;
+  syntax failures remain represented inside the block and must not append
+  error SVGs to the document body. The renderer also removes body-level
+  fallback nodes keyed by its own render ID while preserving unrelated nodes.
+- **Empty and responsive states**: an empty first paragraph exposes the
+  configured placeholder and uses the accent caret/focus treatment. At narrow
+  widths, an open outline becomes an overlay drawer so the readable document
+  measure is not squeezed; in normal mode toolbar labels collapse based on the
+  editor container width (1120px), while every command remains keyboard
+  reachable through its accessible name and title.
+- **Layout**: no nested content scroll; readable document flow with a 760px
+  normal-mode reading measure and a 920px focus-mode measure.
 
 ## 6. Motion & Interaction
 

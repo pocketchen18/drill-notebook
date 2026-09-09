@@ -5,8 +5,11 @@ import { LS_SHOW_AI_FAB, readBoolPref, writeBoolPref } from '../lib/sessionPrefs
 type Theme = 'light' | 'dark';
 /** 主题偏好：system = 跟随系统深浅色，其余为显式指定。 */
 export type ThemeMode = 'light' | 'dark' | 'system';
+export type OutlineSide = 'left' | 'right';
 
 const LS_THEME_MODE = 'ui.themeMode';
+const LS_OUTLINE_SIDE = 'ui.outlineSide';
+export const LS_NOTEBOOK_PANELS_SWAPPED = 'ui.notebookPanelsSwapped';
 
 export type AiContextKind = 'none' | 'quiz' | 'wrong' | 'note' | 'bank' | 'manual';
 
@@ -38,6 +41,10 @@ interface UiState {
   clearPageContext: () => void;
   notebookFocusMode: boolean;
   setNotebookFocusMode: (focus: boolean) => void;
+  outlineSide: OutlineSide;
+  setOutlineSide: (side: OutlineSide) => void;
+  notebookPanelsSwapped: boolean;
+  setNotebookPanelsSwapped: (swapped: boolean) => void;
 }
 
 const emptyContext: AiPageContext = { kind: 'none', title: '无页面上下文', markdown: '' };
@@ -74,6 +81,22 @@ function writeThemeMode(mode: ThemeMode): void {
 
 function resolveTheme(mode: ThemeMode): Theme {
   return mode === 'system' ? resolveSystemTheme() : mode;
+}
+
+function readOutlineSide(): OutlineSide {
+  try {
+    return localStorage.getItem(LS_OUTLINE_SIDE) === 'right' ? 'right' : 'left';
+  } catch {
+    return 'left';
+  }
+}
+
+function writeOutlineSide(side: OutlineSide): void {
+  try {
+    localStorage.setItem(LS_OUTLINE_SIDE, side);
+  } catch {
+    /* ignore */
+  }
 }
 
 const initialThemeMode = readThemeMode();
@@ -125,5 +148,15 @@ export const useUiStore = create<UiState>((set) => ({
   }),
   clearPageContext: () => set((state) => (state.pageContext.kind === 'none' ? state : { pageContext: emptyContext })),
   notebookFocusMode: false,
-  setNotebookFocusMode: (focus) => set({ notebookFocusMode: focus })
+  setNotebookFocusMode: (focus) => set({ notebookFocusMode: focus }),
+  outlineSide: readOutlineSide(),
+  setOutlineSide: (side) => {
+    writeOutlineSide(side);
+    set({ outlineSide: side });
+  },
+  notebookPanelsSwapped: readBoolPref(LS_NOTEBOOK_PANELS_SWAPPED, false),
+  setNotebookPanelsSwapped: (swapped) => {
+    writeBoolPref(LS_NOTEBOOK_PANELS_SWAPPED, swapped);
+    set({ notebookPanelsSwapped: swapped });
+  }
 }));

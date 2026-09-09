@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { MarkdownContent } from '../markdown/MarkdownRenderer';
+import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
 import { matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 
-export function MarkdownBlockNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
+export function MarkdownBlockNode({ node, updateAttributes, selected, view, getPos }: NodeViewProps): JSX.Element {
   const markdown = String(node.attrs.markdown ?? '');
   const [editing, setEditing] = useState(!markdown.trim());
   const [draft, setDraft] = useState(markdown);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const cancelBeforeBlurRef = useRef(false);
 
   useEffect(() => {
     if (!editing) setDraft(markdown);
@@ -18,27 +20,48 @@ export function MarkdownBlockNode({ node, updateAttributes, selected }: NodeView
   }, [editing]);
 
   const commit = (): void => {
+    if (cancelBeforeBlurRef.current) {
+      cancelBeforeBlurRef.current = false;
+      return;
+    }
     updateAttributes({ markdown: draft });
     setEditing(false);
+  };
+
+  const cancelEditing = (): void => {
+    // A native blur can follow Escape while the textarea is being removed.
+    // Mark the cancellation so that blur cannot submit the stale draft.
+    cancelBeforeBlurRef.current = true;
+    setDraft(markdown);
+    setEditing(false);
+  };
+
+  const startEditing = (): void => {
+    exitNodeSelection(view, getPos, node);
+    cancelBeforeBlurRef.current = false;
+    setEditing(true);
   };
 
   if (editing) {
     return (
       <NodeViewWrapper className={`markdown-block is-editing${selected ? ' is-selected' : ''}`} contentEditable={false} data-markdown-block="true">
+        <BlockDragHandle label="拖动 Markdown 块" />
         <div className="node-edit-toolbar">
           <span className="node-edit-label">编辑 Markdown</span>
-          <button type="button" className="node-chip-btn" onClick={commit}>完成</button>
+          <button type="button" className="node-chip-btn" onMouseDown={(event) => event.preventDefault()} onClick={commit}>完成</button>
         </div>
         <textarea
           ref={areaRef}
           className="markdown-block-input"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
           onKeyDown={(event) => {
             event.stopPropagation();
             if (event.key === 'Escape') {
-              setDraft(markdown);
-              setEditing(false);
+              event.preventDefault();
+              cancelEditing();
+              return;
             }
             if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
               event.preventDefault();
@@ -61,9 +84,19 @@ export function MarkdownBlockNode({ node, updateAttributes, selected }: NodeView
       className={`markdown-block is-preview${selected ? ' is-selected' : ''}`}
       contentEditable={false}
       data-markdown-block="true"
-      onClick={() => setEditing(true)}
+      onClick={startEditing}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          startEditing();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label="编辑 Markdown 块"
       title="点击编辑 Markdown"
     >
+      <BlockDragHandle label="拖动 Markdown 块" />
       {markdown.trim()
         ? <div className="markdown-block-preview"><MarkdownContent value={markdown} /></div>
         : <span className="node-placeholder">点击输入 Markdown</span>}
