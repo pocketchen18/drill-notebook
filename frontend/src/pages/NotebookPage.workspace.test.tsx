@@ -602,14 +602,15 @@ describe('NotebookPage target structure — Phase 2+ redesign contract', () => {
   });
 
   it('notebook prose block is left-anchored at a constant offset in every viewport / sider state', async () => {
-    // 用户契约：任何分辨率/窗口大小/折叠态，正文相对编辑框左缘恒定（48px），
-    // 工作区撑满不限宽；专注模式除外。几何由 CSS 承载，jsdom 锁 stylesheet 契约：
-    // 规则必须无条件（不被 media/container 包裹）。
+    // 用户契约：任何分辨率/窗口大小/折叠态（含专注模式），正文相对编辑框左缘
+    // 恒定（48px），工作区撑满不限宽。几何由 CSS 承载，jsdom 锁 stylesheet 契约：
+    // 规则必须无条件（不被 media/container 包裹，也不排除 is-focus）。
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
     const css = readFileSync(join(process.cwd(), 'src', 'styles', 'app.css'), 'utf8');
     expect(css).toContain('.route-workspace--notebook { max-width: none; }');
-    expect(css).toContain('.route-workspace--notebook .editor-shell:not(.is-focus) .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }');
+    expect(css).toContain('.route-workspace--notebook .editor-shell .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }');
+    expect(css).not.toContain('.editor-shell:not(.is-focus) .editor-content .ProseMirror');
     // 不允许再出现按视口/容器分档的旧门控
     expect(css).not.toContain('min-width: 1600px');
     expect(css).not.toContain('min-width: 1080px');

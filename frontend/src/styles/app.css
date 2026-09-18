@@ -1673,9 +1673,9 @@ html[data-theme='dark'] .arco-tag {
 }
 /* 笔记本工作区：任何分辨率/窗口大小/折叠态都撑满可用宽度（不居中限宽留空白）；
    正文块恒定左对齐于编辑面板左侧（48px = 面板 28px + 20px），相对编辑框的
-   起始位置始终不变；专注模式保持居中沉浸版式。 */
+   起始位置始终不变；专注模式同样左锚定（保留 920px 阅读宽度）。 */
 .route-workspace--notebook { max-width: none; }
-.route-workspace--notebook .editor-shell:not(.is-focus) .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }
+.route-workspace--notebook .editor-shell .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }
 .route-command-row {
   display: flex;
   align-items: center;
