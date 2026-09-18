@@ -21,18 +21,20 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { NotePage, Notebook } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 
-const { apiGet, apiPost, apiPut, apiDel } = vi.hoisted(() => ({
+const { apiGet, apiPost, apiPut, apiDel, apiFlush } = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPut: vi.fn(),
-  apiDel: vi.fn()
+  apiDel: vi.fn(),
+  apiFlush: vi.fn()
 }));
 
 vi.mock('../lib/api', () => ({
   get: (...args: unknown[]) => apiGet(...args),
   post: (...args: unknown[]) => apiPost(...args),
   put: (...args: unknown[]) => apiPut(...args),
-  del: (...args: unknown[]) => apiDel(...args)
+  del: (...args: unknown[]) => apiDel(...args),
+  flushRequest: (...args: unknown[]) => apiFlush(...args)
 }));
 
 const baseWindowApi = () => ({
@@ -56,6 +58,7 @@ afterEach(() => {
   apiPost.mockReset();
   apiPut.mockReset();
   apiDel.mockReset();
+  apiFlush.mockReset();
 });
 
 // The Notebook page depends on a render-stable tiptap editor. We stub it with a
@@ -402,43 +405,56 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
     });
   });
 
-  describe('Page-switch / autosave race characterization (Accepted debt)', () => {
+  describe('Notebook delete (regression: 笔记本可删除)', () => {
+    beforeEach(() => primeNotebookApi());
+
+    it('delete button confirms then calls DELETE /api/notebooks/{id}', async () => {
+      apiDel.mockResolvedValue(undefined);
+      renderNotebookPage();
+      const trigger = await screen.findByRole('button', { name: '删除笔记本' });
+      fireEvent.click(trigger);
+      const ok = await screen.findByText('确定');
+      fireEvent.click(ok);
+      await waitFor(() => expect(apiDel).toHaveBeenCalledWith('/api/notebooks/1'));
+    });
+  });
+
+  describe('Page-switch autosave binding (regression: 草稿绑定 pageId，禁止跨页串写)', () => {
     beforeEach(() => primeNotebookApi({ slowPage37: true }));
 
-    it('OBSERVATION: when pageId switches mid-typing, the 400ms PUT lands on the page captured AT SCHEDULE TIME', async () => {
+    it('typing into page 11 then switching to 37 writes A to page 11 only', async () => {
       // Real timers throughout. The slowPage37 mock resolves after 400ms via
-      // a real setTimeout, so we can drive the race deterministically by
-      // clicking 页面-37 immediately after typing into page 11 — page 37's
-      // fetch starts while page 11's debounce timer is still pending.
+      // a real setTimeout, so we can drive the switch window deterministically:
+      // type into page 11, click 页面-37 immediately, then let both timers land.
       renderNotebookPage();
       await waitFor(() => expect(screen.getByTestId('notebook-editor')).toBeInTheDocument());
-      // Confirm initial pageId.
       await waitFor(() => expect(screen.getByTestId('notebook-editor').getAttribute('data-page-id')).toBe('11'));
-
-      // Type into page 11 (schedules a 400ms PUT with pageId=11).
       fireEvent.click(screen.getByText('type-A'));
-      // Switch to page 37 IMMEDIATELY. The slow mock (400ms delay) means the
-      // editor's pageId prop will switch from 11 → 37 after the fetch resolves.
-      // The debounce timer set under pageId=11 keeps its original capture.
       fireEvent.click(screen.getByText('页面-37'));
-      // Wait long enough for: (a) 400ms autosave debounce to fire on page 11,
-      // (b) the slow page 37 fetch to resolve and update pageId to 37.
       await new Promise((res) => setTimeout(res, 800));
-      // The PUT must have fired (under pageId=11, since that was captured in
-      // pendingSaveRef at schedule time). We do not assert a "guaranteed
-      // prior-page flush" — only what the implementation produces today.
-      const putCalls = apiPut.mock.calls.filter((c) => c[0].startsWith('/api/note-pages/'));
-      expect(putCalls.length).toBeGreaterThanOrEqual(1);
-      // Record the observation sequence for the evidence report.
-      const sequence = putCalls.map((c) => ({ path: c[0] as string, bodyChars: JSON.stringify(c[1]).length }));
-      try {
-        const { writeFileSync, mkdirSync } = await import('node:fs');
-        const { join } = await import('node:path');
-        const dir = join(process.cwd(), '.omo', 'evidence', 'notebook-bank-workspace-redesign', 'task-1-baseline');
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, 'page-switch-race.observation.json'),
-          JSON.stringify({ sequence, capturedAt: new Date().toISOString() }, null, 2));
-      } catch { /* filesystem not available in vitest — best effort only */ }
+      const putCalls = apiPut.mock.calls.filter((c) => String(c[0]).startsWith('/api/note-pages/'));
+      const to11 = putCalls.filter((c) => c[0] === '/api/note-pages/11');
+      const to37 = putCalls.filter((c) => c[0] === '/api/note-pages/37');
+      expect(to11.length).toBeGreaterThanOrEqual(1);
+      expect(JSON.stringify(to11[0][1])).toContain('A');
+      // 关键回归：A 页草稿绝不能落到 37 页
+      for (const call of to37) expect(JSON.stringify(call[1])).not.toContain('"A"');
+    });
+
+    it('visibilitychange hidden during the switch window flushes the page-11 draft to page 11 only', async () => {
+      renderNotebookPage();
+      await waitFor(() => expect(screen.getByTestId('notebook-editor').getAttribute('data-page-id')).toBe('11'));
+      fireEvent.click(screen.getByText('type-A'));
+      fireEvent.click(screen.getByText('页面-37'));
+      // 切后台：keepalive 兜底冲刷，只能冲向草稿所属的 11 页
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      const flushCalls = apiFlush.mock.calls.filter((c) => String(c[0]).startsWith('/api/note-pages/'));
+      const to11 = flushCalls.filter((c) => c[0] === '/api/note-pages/11');
+      expect(to11.length).toBe(1);
+      expect(JSON.stringify(to11[0][1])).toContain('A');
+      expect(flushCalls.filter((c) => c[0] === '/api/note-pages/37').length).toBe(0);
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     });
   });
 
@@ -583,5 +599,20 @@ describe('NotebookPage target structure — Phase 2+ redesign contract', () => {
     expect(workspace, 'expected .route-workspace for padding check').toBeTruthy();
     expect(workspace).not.toHaveAttribute('style');
     expect(workspace).toHaveClass('route-workspace--notebook');
+  });
+
+  it('notebook prose block is left-anchored at a constant offset in every viewport / sider state', async () => {
+    // 用户契约：任何分辨率/窗口大小/折叠态，正文相对编辑框左缘恒定（48px），
+    // 工作区撑满不限宽；专注模式除外。几何由 CSS 承载，jsdom 锁 stylesheet 契约：
+    // 规则必须无条件（不被 media/container 包裹）。
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const css = readFileSync(join(process.cwd(), 'src', 'styles', 'app.css'), 'utf8');
+    expect(css).toContain('.route-workspace--notebook { max-width: none; }');
+    expect(css).toContain('.route-workspace--notebook .editor-shell:not(.is-focus) .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }');
+    // 不允许再出现按视口/容器分档的旧门控
+    expect(css).not.toContain('min-width: 1600px');
+    expect(css).not.toContain('min-width: 1080px');
+    expect(css).not.toContain('min-width: 1900px');
   });
 });

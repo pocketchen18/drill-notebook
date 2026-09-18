@@ -20,6 +20,7 @@ import { truncateTitle } from '../lib/studyPlan';
 import { useIdSwitchReset, usePersistSlice } from '../hooks/useViewState';
 import { readPageSlice } from '../lib/viewState';
 import { matchesAny } from '../lib/shortcuts';
+import { NoteAutosave } from '../lib/noteAutosave';
 
 /** 页面标题的两个改名入口：左侧列表行 vs 编辑区标题。任一时刻只有一个在编辑。 */
 type PageRenameSurface = 'list' | 'header';
@@ -44,8 +45,15 @@ export function NotebookPage(): JSX.Element {
   const [newPageTitle, setNewPageTitle] = useState('');
   const [newNotebookVisible, setNewNotebookVisible] = useState(false);
   const [newNotebookTitle, setNewNotebookTitle] = useState('');
-  const [pendingContent, setPendingContent] = useState<Record<string, unknown>>();
-  const pendingSaveRef = useRef<{ pageId: number; content: Record<string, unknown> } | null>(null);
+  // 草稿与 pageId 绑定：切页/切库/切后台都不会把 A 页内容写进 B 页（旧实现 pendingContent 无绑定，
+  // 切页窗口期会把旧页内容 PUT 到新页，切后台 flush 时尤其明显）。
+  const [draft, setDraft] = useState<{ pageId: number; content: Record<string, unknown> } | null>(null);
+  const draftsRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const autosaveRef = useRef<NoteAutosave | null>(null);
+  if (!autosaveRef.current) {
+    autosaveRef.current = new NoteAutosave((payload) => put(`/api/note-pages/${payload.pageId}`, { content: payload.content })
+      .catch((error: unknown) => Message.error(friendlyMessage(error, '笔记保存失败，请稍后重试'))));
+  }
   const [selectedPageIds, setSelectedPageIds] = useState<number[]>(() => cachedNotebooks.selectedPageIds ?? []);
   const [planVisible, setPlanVisible] = useState(false);
   const [planItems, setPlanItems] = useState<Array<{ resourceId: number; title: string }>>([]);
@@ -96,13 +104,30 @@ export function NotebookPage(): JSX.Element {
   });
   const deletePage = useMutation({
     mutationFn: (id: number) => del<void>(`/api/note-pages/${id}`),
-    onSuccess: () => {
+    onSuccess: (_result, id) => {
+      autosaveRef.current?.discard(id);
+      draftsRef.current.delete(id);
       setPageId(undefined);
       cancelPageRename();
       void queryClient.invalidateQueries({ queryKey: ['note-pages', notebookId] });
       Message.success('页面已删除');
     },
     onError: (error) => Message.error(friendlyMessage(error, '页面删除失败，请稍后重试'))
+  });
+  const deleteNotebook = useMutation({
+    mutationFn: (id: number) => del<void>(`/api/notebooks/${id}`),
+    onSuccess: (_result, id) => {
+      // 丢弃该本下所有页的待保存草稿，避免向已删除资源发 PUT
+      for (const page of pagesQuery.data ?? []) autosaveRef.current?.discard(page.id);
+      if (notebookId === id) {
+        setNotebookId(undefined);
+        setPageId(undefined);
+      }
+      cancelNotebookRename();
+      void queryClient.invalidateQueries({ queryKey: ['notebooks'] });
+      Message.success('笔记本已删除');
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '笔记本删除失败，请稍后重试'))
   });
 
   const renamePage = useMutation({
@@ -279,27 +304,30 @@ export function NotebookPage(): JSX.Element {
     }
     if (pageId === undefined) setPageId(pagesQuery.data[0].id);
   }, [pageId, pageIdFromQuery, pagesQuery.data]);
+  // 服务端快照到达：记基线并采纳为草稿；本页还有未落库编辑时保留草稿（服务端快照旧于它）。
   useEffect(() => {
-    if (!pageQuery.data) return;
-    setPendingContent(pageQuery.data.content);
+    const data = pageQuery.data;
+    if (!data) return;
+    const autosave = autosaveRef.current;
+    if (!autosave) return;
+    autosave.noteServer(data.id, data.content);
+    if (autosave.hasPendingFor(data.id)) return;
+    draftsRef.current.set(data.id, data.content);
+    setDraft({ pageId: data.id, content: data.content });
   }, [pageQuery.data]);
-  // 无感自动保存：内容变更即进入 400ms 防抖保存，无保存状态提示；退出前有 keepalive 兜底冲刷。
-  useEffect(() => {
-    if (!pageId || !pendingContent || pendingContent === pageQuery.data?.content) return;
-    pendingSaveRef.current = { pageId, content: pendingContent };
-    const timer = window.setTimeout(() => {
-      const payload = pendingSaveRef.current;
-      if (!payload) return;
-      void put(`/api/note-pages/${payload.pageId}`, { content: payload.content })
-        .then(() => { if (pendingSaveRef.current === payload) pendingSaveRef.current = null; })
-        .catch((error: unknown) => Message.error(friendlyMessage(error, '笔记保存失败，请稍后重试')));
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [pageId, pendingContent, pageQuery.data?.content]);
+  // 编辑器回传：草稿入 Map + 触发重渲染（AI 上下文/导出用），并交给协调器防抖落库。
+  const handleEditorChange = (content: Record<string, unknown>): void => {
+    if (pageId === undefined) return;
+    draftsRef.current.set(pageId, content);
+    setDraft({ pageId, content });
+    autosaveRef.current?.change(pageId, content);
+  };
+  // 无感自动保存：切走页面不取消计时；退出/切后台前 keepalive 兜底冲刷。
   useEffect(() => {
     const flush = (): void => {
-      const payload = pendingSaveRef.current;
-      if (payload) flushRequest(`/api/note-pages/${payload.pageId}`, { content: payload.content });
+      for (const payload of autosaveRef.current?.take() ?? []) {
+        flushRequest(`/api/note-pages/${payload.pageId}`, { content: payload.content });
+      }
     };
     const onVisibility = (): void => { if (document.visibilityState === 'hidden') flush(); };
     window.addEventListener('pagehide', flush);
@@ -341,9 +369,10 @@ export function NotebookPage(): JSX.Element {
 
   const exportPages = async (): Promise<ReturnType<typeof noteExportDocument>> => {
     const pages = await Promise.all(validSelectedPageIds.map((id) => get<NotePage>(`/api/note-pages/${id}`)));
-    if (currentPage && pendingContent && validSelectedPageIds.includes(currentPage.id)) {
+    const liveContent = currentPage && draft?.pageId === currentPage.id ? draft.content : undefined;
+    if (currentPage && liveContent && validSelectedPageIds.includes(currentPage.id)) {
       const index = pages.findIndex((page) => page.id === currentPage.id);
-      if (index >= 0) pages[index] = { ...pages[index], content: pendingContent };
+      if (index >= 0) pages[index] = { ...pages[index], content: liveContent };
     }
     return noteExportDocument(`${selectedNotebook?.title ?? '笔记本'} · 笔记`, pages);
   };
@@ -352,7 +381,7 @@ export function NotebookPage(): JSX.Element {
     if (!currentPage) {
       return { kind: 'note' as const, title: '笔记本', markdown: '', route: '/notebooks', notebookId, notePageId: pageId };
     }
-    const content = pendingContent ?? currentPage.content;
+    const content = (draft?.pageId === currentPage.id ? draft.content : undefined) ?? currentPage.content;
     return {
       kind: 'note' as const,
       title: `笔记 · ${currentPage.title}`,
@@ -361,7 +390,7 @@ export function NotebookPage(): JSX.Element {
       notebookId: currentPage.notebookId,
       notePageId: currentPage.id
     };
-  }, [currentPage, notebookId, pageId, pendingContent]);
+  }, [currentPage, notebookId, pageId, draft]);
 
   useRegisterPageContext(pageContext);
 
@@ -394,6 +423,15 @@ export function NotebookPage(): JSX.Element {
           </Select>
         )}
         {selectedNotebook && !renamingNotebook ? <Button type="text" icon={<Edit3 size={16} />} onClick={() => beginNotebookRename(selectedNotebook)} aria-label="重命名笔记本" title="重命名笔记本" /> : null}
+        {selectedNotebook && !renamingNotebook ? (
+          <Popconfirm
+            title="删除这个笔记本"
+            content={`「${selectedNotebook.title}」内所有页面、AI 引用与计划关联将一并删除，且不可恢复。`}
+            onOk={() => deleteNotebook.mutate(selectedNotebook.id)}
+          >
+            <Button type="text" status="danger" icon={<Trash2 size={16} />} aria-label="删除笔记本" title="删除笔记本" />
+          </Popconfirm>
+        ) : null}
         <Button icon={<Plus size={16} />} onClick={() => setNewNotebookVisible(true)}>新建笔记本</Button>
       </div>
       <Space className="route-command-row__actions">
@@ -502,8 +540,9 @@ export function NotebookPage(): JSX.Element {
             <Button icon={<CalendarPlus size={16} />} onClick={() => openPlanForPages([currentPage])}>加入计划</Button>
           </div>}
           <NotebookEditor
-            content={pendingContent ?? currentPage.content}
-            onChange={setPendingContent}
+            key={pageId ?? 'none'}
+            content={(pageId !== undefined ? draftsRef.current.get(pageId) : undefined) ?? currentPage.content}
+            onChange={handleEditorChange}
             pageId={pageId}
             focusMode={focusMode}
             onFocusModeChange={setFocusMode}

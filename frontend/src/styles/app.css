@@ -769,7 +769,7 @@ mark.kp-search-highlight.kp-search-highlight-active {
 }
 
 /* §8 编辑器与附件 ---------------------------------------------------------- */
-.editor-shell { container-type: inline-size; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-bg); transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
+.editor-shell { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-bg); transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
 .editor-shell:focus-within { border-color: var(--accent-border-2); box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm); }
 .editor-shell.is-focus { overflow: visible; border: none; border-radius: 0; background: transparent; }
 .editor-shell.is-focus:focus-within { box-shadow: none; }
@@ -812,7 +812,7 @@ mark.kp-search-highlight.kp-search-highlight-active {
 .editor-content .ProseMirror hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line-strong); }
 
 /* 编辑器浮层：选区操作 + 可切换左右位置的文档大纲 */
-.editor-canvas { position: relative; }
+.editor-canvas { position: relative; container-type: inline-size; }
 .editor-bubble { z-index: 110; display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-bg); box-shadow: var(--shadow-md); }
 .editor-bubble button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .editor-bubble button:hover { background: var(--hover-bg); }
@@ -846,7 +846,7 @@ mark.kp-search-highlight.kp-search-highlight-active {
 .editor-statusbar__uploading svg { animation: editor-status-spin .9s linear infinite; }
 @keyframes editor-status-spin { to { transform: rotate(360deg); } }
 .editor-canvas.is-dragging-files::after { content: ''; position: absolute; inset: 6px; z-index: 105; border: 2px dashed var(--accent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-soft) 42%, transparent); pointer-events: none; }
-@container (max-width: 1120px) {
+@container (max-width: 1160px) {
   .editor-toolbar .editor-hint { display: none; }
   .editor-command-button.has-label .editor-command-label { display: none; }
   .editor-command-button.has-label { padding-inline: 7px; }
@@ -1671,6 +1671,11 @@ html[data-theme='dark'] .arco-tag {
 @media (min-width: 1440px) {
   .route-workspace { padding: 20px 24px 24px; }
 }
+/* 笔记本工作区：任何分辨率/窗口大小/折叠态都撑满可用宽度（不居中限宽留空白）；
+   正文块恒定左对齐于编辑面板左侧（48px = 面板 28px + 20px），相对编辑框的
+   起始位置始终不变；专注模式保持居中沉浸版式。 */
+.route-workspace--notebook { max-width: none; }
+.route-workspace--notebook .editor-shell:not(.is-focus) .editor-content .ProseMirror { margin-inline: 0 auto; padding-left: 20px; }
 .route-command-row {
   display: flex;
   align-items: center;
