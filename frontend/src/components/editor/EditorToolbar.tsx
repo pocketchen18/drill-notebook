@@ -1,51 +1,49 @@
-import type { ReactNode } from 'react';
+import { forwardRef, useRef, useState, type ReactNode } from 'react';
 import { useEditorState, type Editor } from '@tiptap/react';
 import {
   Bold,
+  ChevronDown,
   Code,
-  CodeXml,
   Expand,
-  FileCode2,
   FilePlus2,
-  Heading1,
-  Heading2,
-  Heading3,
-  IndentDecrease,
-  IndentIncrease,
+  Highlighter,
   Italic,
+  Link as LinkIcon,
   List,
   ListOrdered,
+  ListTodo,
   ListTree,
-  Minus,
+  Minimize2,
   Network,
   Paperclip,
-  Pilcrow,
-  Quote,
+  Plus,
   Redo2,
-  RemoveFormatting,
+  Search,
   Sigma,
   Strikethrough,
-  Undo2,
-  Video
+  Table,
+  Underline,
+  Undo2
 } from 'lucide-react';
+import { MenuPopover, type MenuSection } from './MenuPopover';
+import { BLOCK_KIND_LABEL, BLOCK_KIND_OPTIONS, INSERT_COMMANDS, type CommandContext } from './commandCatalog';
+import { currentBlockKind, turnInto, type BlockKind, type NotebookKeymapStorage } from './blockCommands';
 import { describeAccelerators } from '../../lib/shortcuts';
-
-type InsertBlockType = 'mathBlock' | 'mermaidBlock' | 'markdownBlock';
+import { useUiStore } from '../../stores/uiStore';
 
 export interface EditorToolbarProps {
   editor: Editor;
   focusMode?: boolean;
   onFocusModeChange?: (focus: boolean) => void;
   onNewPage?: () => void;
-  onInsertBlock: (type: InsertBlockType, attrs: Record<string, string>) => void;
-  onPickFiles: () => void;
-  onAddVideo: () => void;
+  commandContext: CommandContext;
   outlineOpen: boolean;
   onToggleOutline: () => void;
-  finishKeys: string[];
+  findOpen: boolean;
+  onToggleFind: () => void;
 }
 
-interface CommandButtonProps {
+interface ToolbarButtonProps {
   label: string;
   ariaLabel?: string;
   icon: ReactNode;
@@ -57,24 +55,60 @@ interface CommandButtonProps {
   text?: boolean;
   title?: string;
   shortcut?: string;
+  menu?: boolean;
+  expanded?: boolean;
+  trailing?: ReactNode;
+  /** 标签是唯一内容（块类型），窄宽度下也不收起。 */
+  keepLabel?: boolean;
 }
 
-function CommandButton({ label, ariaLabel = label, icon, onClick, active = false, toggle = false, primary = false, disabled = false, text = false, title, shortcut }: CommandButtonProps): JSX.Element {
+const ToolbarButton = forwardRef<HTMLButtonElement, ToolbarButtonProps>(function ToolbarButton(
+  { label, ariaLabel = label, icon, onClick, active = false, toggle = false, primary = false, disabled = false, text = false, title, shortcut, menu = false, expanded = false, trailing, keepLabel = false },
+  ref
+) {
   return (
     <button
+      ref={ref}
       type="button"
-      className={`editor-command-button${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}${text ? ' has-label' : ''}`}
+      className={`editor-command-button${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}${text ? ' has-label' : ''}${menu ? ' has-menu' : ''}${keepLabel ? ' keeps-label' : ''}`}
+      // 点击命令时保留编辑器选区。
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
       aria-pressed={toggle ? active : undefined}
+      aria-haspopup={menu ? 'menu' : undefined}
+      aria-expanded={menu ? expanded : undefined}
       aria-keyshortcuts={shortcut}
       title={shortcut ? `${title ?? label}（${shortcut}）` : (title ?? label)}
     >
       {icon}
       {text ? <span className="editor-command-label">{label}</span> : null}
+      {trailing}
     </button>
+  );
+});
+
+function ToolbarMenu({ label, ariaLabel, icon, text = false, keepLabel = false, title, sections }: { label: string; ariaLabel: string; icon: ReactNode; text?: boolean; keepLabel?: boolean; title?: string; sections: readonly MenuSection[] }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <ToolbarButton
+        ref={triggerRef}
+        label={label}
+        ariaLabel={ariaLabel}
+        icon={icon}
+        text={text}
+        keepLabel={keepLabel}
+        title={title}
+        menu
+        expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        trailing={<ChevronDown size={13} className="editor-command-caret" aria-hidden="true" />}
+      />
+      <MenuPopover open={open} onClose={() => setOpen(false)} getAnchor={() => triggerRef.current?.getBoundingClientRect() ?? null} sections={sections} ariaLabel={ariaLabel} triggerRef={triggerRef} />
+    </>
   );
 }
 
@@ -82,75 +116,120 @@ function CommandGroup({ label, children }: { label: string; children: ReactNode 
   return <div className="editor-toolbar__group" role="group" aria-label={label}>{children}</div>;
 }
 
+const Separator = (): JSX.Element => <span className="editor-toolbar__separator" aria-hidden="true" />;
+
+const TOOLBAR_BLOCK_KINDS: readonly BlockKind[] = ['paragraph', 'heading1', 'heading2', 'heading3', 'blockquote', 'codeBlock'];
+const INSERT_MENU: ReadonlyArray<{ id: string; label?: string }> = [
+  { id: 'markdownBlock' },
+  { id: 'divider' },
+  { id: 'mathInline' },
+  { id: 'video', label: '添加视频' }
+];
+
 export function EditorToolbar({
   editor,
   focusMode = false,
   onFocusModeChange,
   onNewPage,
-  onInsertBlock,
-  onPickFiles,
-  onAddVideo,
+  commandContext,
   outlineOpen,
   onToggleOutline,
-  finishKeys
+  findOpen,
+  onToggleFind
 }: EditorToolbarProps): JSX.Element {
-  // TipTap does not make a parent component re-render for every transaction by
-  // default. Subscribe to its transaction counter so active marks and history
-  // availability stay accurate while the cursor moves or text changes.
-  const transactionNumber = useEditorState({ editor, selector: ({ transactionNumber: number }) => number });
-  const finishHint = finishKeys.length ? `${describeAccelerators(finishKeys)} 完成` : '点「完成」结束编辑';
+  // 用选择器订阅，命令状态没变的事务不会触发工具栏重渲染。
+  const state = useEditorState({
+    editor,
+    selector: ({ editor: current }) => ({
+      canUndo: current.can().undo(),
+      canRedo: current.can().redo(),
+      blockKind: currentBlockKind(current),
+      bold: current.isActive('bold'),
+      italic: current.isActive('italic'),
+      underline: current.isActive('underline'),
+      strike: current.isActive('strike'),
+      code: current.isActive('code'),
+      highlight: current.isActive('highlight'),
+      link: current.isActive('link'),
+      bulletList: current.isActive('bulletList'),
+      orderedList: current.isActive('orderedList'),
+      taskList: current.isActive('taskList'),
+      inTable: current.isActive('table')
+    })
+  });
+  const findKeys = useUiStore((store) => store.shortcutConfig.editorFind);
+
+  const chain = () => editor.chain().focus();
+  const toggleList = (kind: 'bulletList' | 'orderedList' | 'taskList'): void => {
+    const toggled = kind === 'bulletList' ? chain().toggleBulletList().run()
+      : kind === 'orderedList' ? chain().toggleOrderedList().run()
+        : chain().toggleTaskList().run();
+    // 标题和代码块不能直接包进列表，改为转换。
+    if (!toggled) turnInto(editor, kind);
+  };
+  const openLinkEditor = (): void => {
+    (editor.storage.notebookKeymap as NotebookKeymapStorage | undefined)?.openLinkEditor?.();
+  };
+
+  const blockLabel = TOOLBAR_BLOCK_KINDS.includes(state.blockKind) ? BLOCK_KIND_LABEL[state.blockKind] : BLOCK_KIND_LABEL.paragraph;
+  const blockSections: MenuSection[] = [{
+    key: 'kinds',
+    items: BLOCK_KIND_OPTIONS.filter((option) => TOOLBAR_BLOCK_KINDS.includes(option.kind)).map((option) => ({
+      key: option.kind,
+      label: option.label,
+      icon: <option.icon size={16} />,
+      shortcut: option.shortcut,
+      active: option.kind === state.blockKind,
+      onSelect: () => { turnInto(editor, option.kind); }
+    }))
+  }];
+  const insertSections: MenuSection[] = [{
+    key: 'insert',
+    items: INSERT_MENU.flatMap(({ id, label }) => {
+      const command = INSERT_COMMANDS.find((entry) => entry.id === id);
+      return command ? [{ key: id, label: label ?? command.label, icon: <command.icon size={16} />, onSelect: () => command.run(editor, commandContext) }] : [];
+    })
+  }];
 
   return (
-    <div
-      className={`editor-toolbar${focusMode ? ' is-focus' : ''}`}
-      style={{ minHeight: 44 }}
-      role="toolbar"
-      aria-label="编辑器工具栏"
-      data-editor-transaction={transactionNumber}
-    >
+    <div className={`editor-toolbar${focusMode ? ' is-focus' : ''}`} style={{ minHeight: 44 }} role="toolbar" aria-label="编辑器工具栏">
       <div className="editor-toolbar__commands">
         <CommandGroup label="历史">
-          <CommandButton label="撤销" icon={<Undo2 size={16} />} onClick={() => editor.chain().focus().undo().run()} disabled={!editor.can().undo()} shortcut="Ctrl+Z" title="撤销" />
-          <CommandButton label="重做" icon={<Redo2 size={16} />} onClick={() => editor.chain().focus().redo().run()} disabled={!editor.can().redo()} shortcut="Ctrl+Shift+Z" title="重做" />
+          <ToolbarButton label="撤销" icon={<Undo2 size={16} />} onClick={() => chain().undo().run()} disabled={!state.canUndo} shortcut="Ctrl+Z" />
+          <ToolbarButton label="重做" icon={<Redo2 size={16} />} onClick={() => chain().redo().run()} disabled={!state.canRedo} shortcut="Ctrl+Shift+Z" />
         </CommandGroup>
-        <span className="editor-toolbar__separator" aria-hidden="true" />
-        <CommandGroup label="文字格式">
-          <CommandButton label="加粗" icon={<Bold size={16} />} active={editor.isActive('bold')} toggle shortcut="Ctrl+B" onClick={() => editor.chain().focus().toggleBold().run()} />
-          <CommandButton label="斜体" icon={<Italic size={16} />} active={editor.isActive('italic')} toggle shortcut="Ctrl+I" onClick={() => editor.chain().focus().toggleItalic().run()} />
-          <CommandButton label="行内代码" icon={<Code size={16} />} active={editor.isActive('code')} toggle onClick={() => editor.chain().focus().toggleCode().run()} />
-          <CommandButton label="删除线" icon={<Strikethrough size={16} />} active={editor.isActive('strike')} toggle onClick={() => editor.chain().focus().toggleStrike().run()} />
-          <CommandButton label="清除格式" icon={<RemoveFormatting size={16} />} onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()} />
-        </CommandGroup>
-        <span className="editor-toolbar__separator" aria-hidden="true" />
+        <Separator />
         <CommandGroup label="段落格式">
-          <CommandButton label="一级标题" icon={<Heading1 size={16} />} active={editor.isActive('heading', { level: 1 })} toggle onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} />
-          <CommandButton label="二级标题" icon={<Heading2 size={16} />} active={editor.isActive('heading', { level: 2 })} toggle onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} />
-          <CommandButton label="三级标题" icon={<Heading3 size={16} />} active={editor.isActive('heading', { level: 3 })} toggle onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} />
-          <CommandButton label="无序列表" icon={<List size={16} />} active={editor.isActive('bulletList')} toggle onClick={() => editor.chain().focus().toggleBulletList().run()} />
-          <CommandButton label="有序列表" icon={<ListOrdered size={16} />} active={editor.isActive('orderedList')} toggle onClick={() => editor.chain().focus().toggleOrderedList().run()} />
-          <CommandButton label="引用" icon={<Quote size={16} />} active={editor.isActive('blockquote')} toggle onClick={() => editor.chain().focus().toggleBlockquote().run()} />
-          <CommandButton label="代码块" icon={<CodeXml size={16} />} active={editor.isActive('codeBlock')} toggle onClick={() => editor.chain().focus().toggleCodeBlock().run()} />
-          <CommandButton label="分隔线" icon={<Minus size={16} />} onClick={() => editor.chain().focus().setHorizontalRule().run()} />
-          <CommandButton label="正文" icon={<Pilcrow size={16} />} active={editor.isActive('paragraph')} toggle onClick={() => editor.chain().focus().setParagraph().run()} />
-          <CommandButton label="减少缩进" icon={<IndentDecrease size={16} />} onClick={() => editor.chain().focus().liftListItem('listItem').run()} disabled={!editor.can().liftListItem('listItem')} />
-          <CommandButton label="增加缩进" icon={<IndentIncrease size={16} />} onClick={() => editor.chain().focus().sinkListItem('listItem').run()} disabled={!editor.can().sinkListItem('listItem')} />
+          <ToolbarMenu label={blockLabel} ariaLabel={`块类型：${blockLabel}`} icon={null} text keepLabel title="块类型" sections={blockSections} />
+          <ToolbarButton label="无序列表" icon={<List size={16} />} active={state.bulletList} toggle shortcut="Ctrl+Shift+8" onClick={() => toggleList('bulletList')} />
+          <ToolbarButton label="有序列表" icon={<ListOrdered size={16} />} active={state.orderedList} toggle shortcut="Ctrl+Shift+7" onClick={() => toggleList('orderedList')} />
+          <ToolbarButton label="待办清单" icon={<ListTodo size={16} />} active={state.taskList} toggle shortcut="Ctrl+Shift+9" onClick={() => toggleList('taskList')} />
         </CommandGroup>
-        <span className="editor-toolbar__separator" aria-hidden="true" />
+        <Separator />
+        <CommandGroup label="文字格式">
+          <ToolbarButton label="加粗" icon={<Bold size={16} />} active={state.bold} toggle shortcut="Ctrl+B" onClick={() => chain().toggleBold().run()} />
+          <ToolbarButton label="斜体" icon={<Italic size={16} />} active={state.italic} toggle shortcut="Ctrl+I" onClick={() => chain().toggleItalic().run()} />
+          <ToolbarButton label="下划线" icon={<Underline size={16} />} active={state.underline} toggle shortcut="Ctrl+U" onClick={() => chain().toggleUnderline().run()} />
+          <ToolbarButton label="删除线" icon={<Strikethrough size={16} />} active={state.strike} toggle shortcut="Ctrl+Shift+S" onClick={() => chain().toggleStrike().run()} />
+          <ToolbarButton label="行内代码" icon={<Code size={16} />} active={state.code} toggle shortcut="Ctrl+E" onClick={() => chain().toggleCode().run()} />
+          <ToolbarButton label="高亮" icon={<Highlighter size={16} />} active={state.highlight} toggle shortcut="Ctrl+Shift+H" onClick={() => chain().toggleHighlight().run()} />
+          <ToolbarButton label="链接" icon={<LinkIcon size={16} />} active={state.link} toggle shortcut="Ctrl+K" onClick={openLinkEditor} />
+        </CommandGroup>
+        <Separator />
         <CommandGroup label="插入内容">
-          <CommandButton label="公式" icon={<Sigma size={16} />} text onClick={() => onInsertBlock('mathBlock', { latex: '' })} />
-          <CommandButton label="图表" icon={<Network size={16} />} text onClick={() => onInsertBlock('mermaidBlock', { code: '' })} />
-          <CommandButton label="Markdown" icon={<FileCode2 size={16} />} text onClick={() => onInsertBlock('markdownBlock', { markdown: '' })} />
-          <CommandButton label="添加文件" icon={<Paperclip size={16} />} text onClick={onPickFiles} title="添加文件：支持拖拽或粘贴图片" />
-          <CommandButton label="添加视频" icon={<Video size={16} />} text onClick={onAddVideo} />
-        </CommandGroup>
-        <span className="editor-toolbar__separator" aria-hidden="true" />
-        <CommandGroup label="视图">
-          {onNewPage ? <CommandButton label="新建页面" icon={<FilePlus2 size={16} />} text onClick={onNewPage} /> : null}
-          <CommandButton label={focusMode ? '退出专注' : '专注模式'} ariaLabel="专注模式" icon={<Expand size={16} />} text active={focusMode} toggle primary={focusMode} onClick={() => onFocusModeChange?.(!focusMode)} title="专注模式" />
-          <CommandButton label="大纲" icon={<ListTree size={16} />} text active={outlineOpen} toggle onClick={onToggleOutline} title="大纲：展开/收起文档标题目录" />
+          <ToolbarButton label="公式" icon={<Sigma size={16} />} text onClick={() => commandContext.insertBlock('mathBlock', { latex: '' })} />
+          <ToolbarButton label="表格" icon={<Table size={16} />} text disabled={state.inTable} onClick={() => chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} />
+          <ToolbarButton label="图表" icon={<Network size={16} />} text onClick={() => commandContext.insertBlock('mermaidBlock', { code: '' })} />
+          <ToolbarButton label="文件" ariaLabel="添加文件" icon={<Paperclip size={16} />} text onClick={commandContext.pickFiles} title="添加文件：支持拖拽或粘贴图片" />
+          <ToolbarMenu label="插入" ariaLabel="插入" icon={<Plus size={16} />} text sections={insertSections} />
         </CommandGroup>
       </div>
-      {!focusMode ? <span className="editor-hint" title="块默认渲染，点击块即可编辑">{finishHint}</span> : null}
+      <div className="editor-toolbar__aside" role="group" aria-label="视图">
+        <ToolbarButton label="查找" icon={<Search size={16} />} active={findOpen} toggle shortcut={findKeys.length ? describeAccelerators(findKeys) : undefined} onClick={onToggleFind} />
+        <ToolbarButton label="大纲" icon={<ListTree size={16} />} text active={outlineOpen} toggle onClick={onToggleOutline} title="大纲：展开/收起文档标题目录" />
+        <ToolbarButton label={focusMode ? '退出专注' : '专注模式'} ariaLabel="专注模式" icon={focusMode ? <Minimize2 size={16} /> : <Expand size={16} />} text active={focusMode} toggle primary={focusMode} onClick={() => onFocusModeChange?.(!focusMode)} title="专注模式" />
+        {onNewPage ? <ToolbarButton label="新建页面" icon={<FilePlus2 size={16} />} text onClick={onNewPage} /> : null}
+      </div>
     </div>
   );
 }

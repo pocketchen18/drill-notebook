@@ -11,21 +11,33 @@ function countCharacters(value: string): number {
 }
 
 /**
- * A quiet, factual status line for long writing sessions. It deliberately
- * avoids claiming that a document is saved because persistence is owned by the
- * notebook page, not the editor component.
+ * 长时间写作用的安静、纯事实的状态栏。刻意不显示“已保存”，
+ * 因为保存由笔记页面负责，而不是编辑器组件。
  */
 export function EditorStatusBar({ editor, uploadingCount = 0 }: EditorStatusBarProps): JSX.Element {
-  const transactionNumber = useEditorState({ editor, selector: ({ transactionNumber: number }) => number });
-  const text = editor.getText();
-  const characters = countCharacters(text);
-  const blocks = editor.state.doc.childCount;
+  const { characters, blocks, selected } = useEditorState({
+    editor,
+    selector: ({ editor: current }) => {
+      const { doc, selection } = current.state;
+      return {
+        characters: countCharacters(current.getText()),
+        blocks: doc.childCount,
+        selected: selection.empty ? 0 : countCharacters(doc.textBetween(selection.from, selection.to, ' ', ' '))
+      };
+    }
+  });
 
   return (
-    <div className="editor-statusbar" role="status" aria-label="编辑器状态" aria-live={uploadingCount > 0 ? 'polite' : 'off'} data-editor-transaction={transactionNumber}>
+    <div className="editor-statusbar" role="status" aria-label="编辑器状态" aria-live={uploadingCount > 0 ? 'polite' : 'off'}>
       <span>{characters} 字符</span>
       <span aria-hidden="true">·</span>
       <span>{blocks} 个块</span>
+      {selected > 0 ? (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>已选 {selected} 字</span>
+        </>
+      ) : null}
       {uploadingCount > 0 ? (
         <span className="editor-statusbar__uploading">
           <LoaderCircle size={13} aria-hidden="true" />

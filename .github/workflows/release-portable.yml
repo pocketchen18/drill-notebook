@@ -2,7 +2,7 @@ name: Build portable pre-release
 
 # 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 两种触发方式：
-#   1) 打标签推送：git tag v0.6.1 && git push origin v0.6.1  → 自动编译并发布 v0.6.1 预发行版
+#   1) 打标签推送：git tag v0.6.2 && git push origin v0.6.2  → 自动编译并发布 v0.6.2 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
 # 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '预发行版本号（含 v 前缀），例如 v0.6.1'
+        description: '预发行版本号（含 v 前缀），例如 v0.6.2'
         required: true
-        default: 'v0.6.1'
+        default: 'v0.6.2'
       publish_release:
         description: '是否发布为 GitHub Pre-release（关闭则仅上传构建产物）'
         type: boolean
@@ -63,7 +63,7 @@ jobs:
       - name: 解析版本号
         id: ver
         env:
-          # 手动触发用输入值；标签推送用 tag 名（如 v0.6.1）
+          # 手动触发用输入值；标签推送用 tag 名（如 v0.6.2）
           RAW: ${{ inputs.version || github.ref_name }}
         run: |
           $tag = $env:RAW

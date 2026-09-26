@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { renderToString } from 'katex';
-import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
+import { FinishButton, exitNodeSelection, focusFieldSoon, insertSoftTab } from './EditorChrome';
 import { matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 
@@ -26,7 +26,8 @@ export function MathNode({ node, updateAttributes, selected, view, getPos }: Nod
     if (!editing) setDraft(latex);
   }, [editing, latex]);
   useEffect(() => {
-    if (editing) areaRef.current?.focus();
+    if (editing) return focusFieldSoon(() => areaRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {
@@ -53,10 +54,9 @@ export function MathNode({ node, updateAttributes, selected, view, getPos }: Nod
   if (editing) {
     return (
       <NodeViewWrapper className={`math-block is-editing${selected ? ' is-selected' : ''}`} contentEditable={false} data-math-block="true">
-        <BlockDragHandle label="拖动公式块" />
         <div className="node-edit-toolbar">
           <span className="node-edit-label">编辑 LaTeX</span>
-          <button type="button" className="node-chip-btn" onMouseDown={(event) => event.preventDefault()} onClick={commit}>完成</button>
+          <FinishButton onFinish={commit} />
         </div>
         <textarea
           ref={areaRef}
@@ -66,6 +66,7 @@ export function MathNode({ node, updateAttributes, selected, view, getPos }: Nod
           onBlur={commit}
           onKeyDown={(event) => {
             event.stopPropagation();
+            if (insertSoftTab(event, setDraft)) return;
             if (event.key === 'Escape') {
               event.preventDefault();
               cancelEditing();
@@ -104,7 +105,6 @@ export function MathNode({ node, updateAttributes, selected, view, getPos }: Nod
       aria-label="编辑公式块"
       title="点击编辑公式"
     >
-      <BlockDragHandle label="拖动公式块" />
       {latex.trim() ? <MathDisplay latex={latex} displayMode /> : <span className="node-placeholder">点击输入公式</span>}
     </NodeViewWrapper>
   );
@@ -121,7 +121,8 @@ export function MathInlineNode({ node, updateAttributes, selected, view, getPos 
     if (!editing) setDraft(latex);
   }, [editing, latex]);
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) return focusFieldSoon(() => inputRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {

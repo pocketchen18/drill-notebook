@@ -86,7 +86,9 @@ export const FileBlock = Node.create({
     fileName: { default: '' },
     mimeType: { default: 'application/octet-stream' },
     fileSize: { default: 0 },
-    view: { default: 'download' }
+    view: { default: 'download' },
+    // 仅图片块使用：显示宽度占正文栏的百分比；null 为原始尺寸。
+    width: { default: null }
   }),
   parseHTML: () => [{ tag: 'div[data-file-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-file-block': '' })],

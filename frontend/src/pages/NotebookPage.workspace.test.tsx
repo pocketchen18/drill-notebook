@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { Message } from '@arco-design/web-react';
 import type { NotePage, Notebook } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
 
@@ -59,6 +60,8 @@ afterEach(() => {
   apiPut.mockReset();
   apiDel.mockReset();
   apiFlush.mockReset();
+  // Arco Message closes itself on a timer; clear it so it can't fire after jsdom teardown.
+  Message.clear();
 });
 
 // The Notebook page depends on a render-stable tiptap editor. We stub it with a

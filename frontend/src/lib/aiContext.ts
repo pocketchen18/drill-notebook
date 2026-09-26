@@ -5,10 +5,31 @@ function childNodes(node: Record<string, unknown>): Record<string, unknown>[] {
   return Array.isArray(node.content) ? node.content.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : [];
 }
 
+function linkHref(node: Record<string, unknown>): string {
+  const marks = Array.isArray(node.marks) ? node.marks as Array<Record<string, unknown> | null> : [];
+  const link = marks.find((mark) => mark?.type === 'link');
+  const attrs = link?.attrs && typeof link.attrs === 'object' ? link.attrs as Record<string, unknown> : null;
+  return attrs ? String(attrs.href ?? '').trim() : '';
+}
+
 function inlineText(node: Record<string, unknown>): string {
-  if (node.type === 'text') return String(node.text ?? '');
+  if (node.type === 'text') {
+    const text = String(node.text ?? '');
+    const href = linkHref(node);
+    return href ? `[${text}](${href})` : text;
+  }
   if (node.type === 'hardBreak') return '\n';
   return childNodes(node).map(inlineText).join('');
+}
+
+// 表格按 GFM 输出：第一行作表头，单元格内的竖线转义、换行并成空格。
+function tableMarkdown(table: Record<string, unknown>): string {
+  const rows = childNodes(table).map((row) => childNodes(row).map((cell) => childNodes(cell).map(inlineText).join(' ').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ').trim()));
+  if (!rows.length) return '';
+  const width = Math.max(...rows.map((row) => row.length));
+  const line = (row: string[]): string => `| ${[...row, ...Array<string>(width - row.length).fill('')].join(' | ')} |`;
+  const [head, ...body] = rows;
+  return `${[line(head), `| ${Array<string>(width).fill('---').join(' | ')} |`, ...body.map(line)].join('\n')}\n\n`;
 }
 
 function questionMarkdown(question: Question): string {
@@ -47,6 +68,11 @@ function nodeMarkdown(node: Record<string, unknown>): string {
     }
     case 'bulletList': return `${children.map((item) => `- ${inlineText(item)}`).join('\n')}\n\n`;
     case 'orderedList': return `${children.map((item, index) => `${index + 1}. ${inlineText(item)}`).join('\n')}\n\n`;
+    case 'taskList': return `${children.map((item) => {
+      const itemAttrs = item.attrs && typeof item.attrs === 'object' ? item.attrs as Record<string, unknown> : {};
+      return `- [${itemAttrs.checked === true ? 'x' : ' '}] ${inlineText(item)}`;
+    }).join('\n')}\n\n`;
+    case 'table': return tableMarkdown(node);
     case 'blockquote': return `${children.map((item) => `> ${nodeMarkdown(item).trim()}`).join('\n')}\n\n`;
     case 'codeBlock': return `\`\`\`${String(attrs.language ?? '')}\n${children.map(inlineText).join('')}\n\`\`\`\n\n`;
     case 'mathInline': return `$${String(attrs.latex ?? '')}$`;

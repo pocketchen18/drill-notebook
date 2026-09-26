@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { MarkdownContent } from '../markdown/MarkdownRenderer';
-import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
+import { FinishButton, exitNodeSelection, focusFieldSoon, insertSoftTab } from './EditorChrome';
 import { matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 
@@ -16,7 +16,8 @@ export function MarkdownBlockNode({ node, updateAttributes, selected, view, getP
     if (!editing) setDraft(markdown);
   }, [editing, markdown]);
   useEffect(() => {
-    if (editing) areaRef.current?.focus();
+    if (editing) return focusFieldSoon(() => areaRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {
@@ -29,8 +30,7 @@ export function MarkdownBlockNode({ node, updateAttributes, selected, view, getP
   };
 
   const cancelEditing = (): void => {
-    // A native blur can follow Escape while the textarea is being removed.
-    // Mark the cancellation so that blur cannot submit the stale draft.
+    // 按 Esc 移除输入框时浏览器可能随后触发 blur，先记下“已取消”，避免 blur 提交旧草稿。
     cancelBeforeBlurRef.current = true;
     setDraft(markdown);
     setEditing(false);
@@ -45,35 +45,37 @@ export function MarkdownBlockNode({ node, updateAttributes, selected, view, getP
   if (editing) {
     return (
       <NodeViewWrapper className={`markdown-block is-editing${selected ? ' is-selected' : ''}`} contentEditable={false} data-markdown-block="true">
-        <BlockDragHandle label="拖动 Markdown 块" />
         <div className="node-edit-toolbar">
           <span className="node-edit-label">编辑 Markdown</span>
-          <button type="button" className="node-chip-btn" onMouseDown={(event) => event.preventDefault()} onClick={commit}>完成</button>
+          <FinishButton onFinish={commit} />
         </div>
-        <textarea
-          ref={areaRef}
-          className="markdown-block-input"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              cancelEditing();
-              return;
-            }
-            if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
-              event.preventDefault();
-              commit();
-            }
-          }}
-          aria-label="编辑 Markdown 内容"
-          spellCheck={false}
-          placeholder={'支持 **Markdown**、$E=mc^2$ 与 mermaid 代码块'}
-        />
-        <div className="node-live-preview markdown-block-preview">
-          <MarkdownContent value={draft} />
+        <div className="node-edit-body">
+          <textarea
+            ref={areaRef}
+            className="markdown-block-input"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (insertSoftTab(event, setDraft)) return;
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                cancelEditing();
+                return;
+              }
+              if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
+                event.preventDefault();
+                commit();
+              }
+            }}
+            aria-label="编辑 Markdown 内容"
+            spellCheck={false}
+            placeholder={'支持 **Markdown**、$E=mc^2$ 与 mermaid 代码块'}
+          />
+          <div className="node-live-preview markdown-block-preview">
+            <MarkdownContent value={draft} />
+          </div>
         </div>
       </NodeViewWrapper>
     );
@@ -96,7 +98,6 @@ export function MarkdownBlockNode({ node, updateAttributes, selected, view, getP
       aria-label="编辑 Markdown 块"
       title="点击编辑 Markdown"
     >
-      <BlockDragHandle label="拖动 Markdown 块" />
       {markdown.trim()
         ? <div className="markdown-block-preview"><MarkdownContent value={markdown} /></div>
         : <span className="node-placeholder">点击输入 Markdown</span>}

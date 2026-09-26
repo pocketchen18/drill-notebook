@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import DOMPurify from 'dompurify';
-import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
+import { FinishButton, exitNodeSelection, focusFieldSoon, insertSoftTab } from './EditorChrome';
 import { ensureMermaidTheme } from '../../lib/mermaidTheme';
 import { renderMermaid } from '../../lib/mermaidRender';
 import { matchesAny } from '../../lib/shortcuts';
@@ -46,7 +46,8 @@ export function MermaidNode({ node, updateAttributes, selected, view, getPos }: 
     if (!editing) setDraft(code);
   }, [code, editing]);
   useEffect(() => {
-    if (editing) areaRef.current?.focus();
+    if (editing) return focusFieldSoon(() => areaRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {
@@ -59,8 +60,7 @@ export function MermaidNode({ node, updateAttributes, selected, view, getPos }: 
   };
 
   const cancelEditing = (): void => {
-    // Escape removes the textarea; browsers may dispatch blur during that
-    // removal. Keep the cancelled draft from being submitted by that blur.
+    // Esc 会移除输入框，浏览器可能在移除时触发 blur；此处阻止该 blur 提交已取消的草稿。
     cancelBeforeBlurRef.current = true;
     setDraft(code);
     setEditing(false);
@@ -75,35 +75,37 @@ export function MermaidNode({ node, updateAttributes, selected, view, getPos }: 
   if (editing) {
     return (
       <NodeViewWrapper className={`mermaid-block is-editing${selected ? ' is-selected' : ''}`} contentEditable={false} data-mermaid-block="true">
-        <BlockDragHandle label="拖动 Mermaid 块" />
         <div className="node-edit-toolbar">
           <span className="node-edit-label">编辑 Mermaid</span>
-          <button type="button" className="node-chip-btn" onMouseDown={(event) => event.preventDefault()} onClick={commit}>完成</button>
+          <FinishButton onFinish={commit} />
         </div>
-        <textarea
-          ref={areaRef}
-          className="mermaid-editor-input"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              cancelEditing();
-              return;
-            }
-            if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
-              event.preventDefault();
-              commit();
-            }
-          }}
-          aria-label="编辑 Mermaid 图表代码"
-          spellCheck={false}
-          placeholder={'flowchart TD\n  A[开始] --> B[结束]'}
-        />
-        <div className="node-live-preview">
-          <MermaidPreview code={draft} />
+        <div className="node-edit-body">
+          <textarea
+            ref={areaRef}
+            className="mermaid-editor-input"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (insertSoftTab(event, setDraft)) return;
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                cancelEditing();
+                return;
+              }
+              if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
+                event.preventDefault();
+                commit();
+              }
+            }}
+            aria-label="编辑 Mermaid 图表代码"
+            spellCheck={false}
+            placeholder={'flowchart TD\n  A[开始] --> B[结束]'}
+          />
+          <div className="node-live-preview">
+            <MermaidPreview code={draft} />
+          </div>
         </div>
       </NodeViewWrapper>
     );
@@ -126,7 +128,6 @@ export function MermaidNode({ node, updateAttributes, selected, view, getPos }: 
       aria-label="编辑 Mermaid 块"
       title="点击编辑图表"
     >
-      <BlockDragHandle label="拖动 Mermaid 块" />
       {code.trim() ? <MermaidPreview code={code} /> : <span className="node-placeholder">点击输入 Mermaid 图表</span>}
     </NodeViewWrapper>
   );

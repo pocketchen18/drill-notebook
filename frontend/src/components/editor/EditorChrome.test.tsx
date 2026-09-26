@@ -7,7 +7,7 @@ import { BlockDragHandle, EditorBubbleMenu, EditorOutline } from './EditorChrome
 const selectionRect = { x: 200, y: 160, top: 160, left: 200, right: 320, bottom: 180, width: 120, height: 20, toJSON: () => ({}) } as DOMRect;
 const editors: Editor[] = [];
 
-// jsdom has selections but no layout. Keep real TipTap commands and history.
+// jsdom 有选区但没有布局；保留真实的 TipTap 命令与撤销历史。
 if (!Range.prototype.getBoundingClientRect) Range.prototype.getBoundingClientRect = () => selectionRect;
 if (!Range.prototype.getClientRects) Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 
@@ -56,29 +56,41 @@ describe('EditorBubbleMenu deletion', () => {
     expect(editor.getHTML()).toContain('<hr>');
   });
 
-  it('hides when the document scrolls or focus leaves the editor', async () => {
+  it('follows the selection while the page scrolls and hides when focus leaves the editor', async () => {
     vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(selectionRect);
     const editor = mountEditor('<p>selected text</p>');
     act(() => { editor.commands.setTextSelection({ from: 1, to: 5 }); });
     await screen.findByRole('toolbar', { name: '选中文本格式' });
     fireEvent.scroll(document);
-    expect(screen.queryByRole('toolbar')).toBeNull();
-    act(() => { editor.commands.setTextSelection({ from: 1, to: 6 }); });
-    await screen.findByRole('toolbar', { name: '选中文本格式' });
+    await act(async () => { await new Promise((resolve) => window.requestAnimationFrame(() => resolve(null))); });
+    expect(screen.getByRole('toolbar', { name: '选中文本格式' })).toBeInTheDocument();
     act(() => { editor.commands.blur(); });
     await waitFor(() => expect(screen.queryByRole('toolbar')).toBeNull());
+  });
+
+  it('hides once the selection has scrolled out of the viewport', async () => {
+    const rect = vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(selectionRect);
+    const editor = mountEditor('<p>selected text</p>');
+    act(() => { editor.commands.setTextSelection({ from: 1, to: 5 }); });
+    await screen.findByRole('toolbar', { name: '选中文本格式' });
+    rect.mockReturnValue({ ...selectionRect, top: -200, bottom: -180 } as DOMRect);
+    fireEvent.scroll(document);
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: '选中文本格式' })).toBeNull());
   });
 });
 
 describe('BlockDragHandle', () => {
-  it('exposes the native TipTap drag-handle contract without adding a tab stop', () => {
-    const { container } = render(<BlockDragHandle label="拖动测试块" />);
+  it('is a pointer-only grip: draggable, hidden from assistive tech and outside the tab order', () => {
+    const onClick = vi.fn();
+    const { container } = render(<BlockDragHandle label="拖动测试块" active onClick={onClick} />);
     const handle = container.querySelector('.editor-block-drag-handle') as HTMLElement;
-    expect(handle).toHaveAttribute('data-drag-handle', 'true');
     expect(handle).toHaveAttribute('draggable', 'true');
     expect(handle).toHaveAttribute('aria-hidden', 'true');
     expect(handle).toHaveAttribute('title', '拖动测试块');
     expect(handle).toHaveAttribute('tabindex', '-1');
+    expect(handle).toHaveClass('is-active');
+    fireEvent.click(handle);
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });
 

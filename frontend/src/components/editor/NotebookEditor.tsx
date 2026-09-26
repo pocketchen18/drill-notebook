@@ -1,15 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CSSProperties, DragEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Placeholder from '@tiptap/extension-placeholder';
+import type { ChainedCommands } from '@tiptap/core';
 import { Message, Modal, Radio, Input as ArcoInput } from '@arco-design/web-react';
-import { MarkdownBlock, MathBlock, MathInline, MermaidBlock, QuestionBlockNode, FileBlock, VideoBlock } from './extensions';
+import { notebookExtensions } from './editorExtensions';
 import { EditorBubbleMenu, EditorOutline } from './EditorChrome';
 import { EditorStatusBar } from './EditorStatusBar';
 import { EditorToolbar } from './EditorToolbar';
+import { EditorFindBar, type FindRequest } from './EditorFindBar';
+import { SlashMenu } from './SlashMenu';
+import { BlockHandle } from './BlockHandle';
+import { TableMenu } from './TableMenu';
+import type { CommandContext } from './commandCatalog';
+import { createPasteHandler, focusDocumentEnd, hasFileTransfer, isBelowLastBlock, transferFiles } from './editorInput';
 import { captureHeadingMoveSources, cleanupMovedHeadingSources, collapseMovedSelection, handleHeadingDrop, type HeadingMoveSource } from './headingDrag';
 import { uploadAttachment } from '../../lib/attachments';
+import { isShortcutRecording, matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 import type { NoteAttachment, Question } from '../../lib/types';
 
@@ -25,39 +31,16 @@ export interface NotebookEditorProps {
 }
 
 const emptyDocument = { type: 'doc', content: [{ type: 'paragraph' }] };
-const markdownPastePattern = /\$[^$\n]+\$|^\s*#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|```/m;
+// ProseMirror 滚动到光标时为吸顶工具栏预留的空间。
+const scrollInsets = { top: 88, bottom: 48, left: 8, right: 8 };
+const closedFind: FindRequest = { open: false, replace: false, seed: '', token: 0 };
 
 // 工作台几何契约（DESIGN.md）：编辑器画布 padding 与工具栏最小高度以内联
 // 承载（jsdom 契约测试可读），其余视觉层由 app.css 的 .editor-canvas 提供。
 const canvasPadding: CSSProperties = { paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 24 };
 const focusCanvasPadding: CSSProperties = { paddingTop: 0, paddingLeft: 0, paddingRight: 0, paddingBottom: 0 };
 
-function hasFileTransfer(dataTransfer: DataTransfer | null | undefined): boolean {
-  if (!dataTransfer) return false;
-  return (dataTransfer.files?.length ?? 0) > 0
-    || (dataTransfer.items?.length ?? 0) > 0
-    || Array.from(dataTransfer.types ?? []).includes('Files');
-}
-
-function transferFiles(dataTransfer: DataTransfer | null | undefined): File[] {
-  if (!dataTransfer) return [];
-  const files = Array.from(dataTransfer.files ?? []);
-  if (files.length) return files;
-  return Array.from(dataTransfer.items ?? [])
-    .filter((item) => item.kind === 'file')
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
-}
-
-function pastedImageFiles(dataTransfer: DataTransfer | null | undefined): File[] {
-  const files = transferFiles(dataTransfer).filter((file) => file.type.startsWith('image/'));
-  if (files.length) return files;
-  return [];
-}
-
 export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusModeChange, onNewPage }: NotebookEditorProps): JSX.Element {
-  // 「完成块编辑」当前绑定，提示文案跟随设置
-  const finishKeys = useUiStore((state) => state.shortcutConfig.editorFinishBlock);
   const focusOutlineSide = useUiStore((state) => state.outlineSide);
   const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
   const [videoModalVisible, setVideoModalVisible] = useState(false);
@@ -67,38 +50,52 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   const [uploadingCount, setUploadingCount] = useState(0);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [find, setFind] = useState<FindRequest>(closedFind);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
   const dragDepthRef = useRef(0);
   const pendingHeadingMoveRef = useRef<HeadingMoveSource[]>([]);
   const pendingMoveRef = useRef(false);
+  const plainPasteAtRef = useRef(0);
+  const handleFilesRef = useRef<(files: File[]) => void>(() => {});
+  // 编辑器经 onChange 发出的内容对象；父页面原样回传时据此识别为回声。
+  const emittedContentRef = useRef(new WeakSet<object>());
+  const [extensions] = useState(notebookExtensions);
+  const [handlePaste] = useState(() => createPasteHandler({
+    onImages: (files) => handleFilesRef.current(files),
+    isPlainPaste: () => Date.now() - plainPasteAtRef.current < 1000
+  }));
 
   // 在当前光标位置插入一个块节点，并在其后留一个空段落方便继续输入。
   // 不再使用 setContent 重写全文 —— 否则新块永远被追加到文档末尾，
   // 无视用户光标位置（这是「点添加文件却插到末尾」的根因）。
-  const insertBlockAtCursor = (type: string, attrs: Record<string, unknown>): void => {
+  const insertBlockAtCursor = (type: string, attrs: Record<string, unknown>, chain?: ChainedCommands): void => {
     if (!editor) return;
-    const pos = editor.state.selection.to;
+    // 位置取链内事务的当前选区：斜杠菜单的链已先删掉“/查询词”，外面读 editor.state 会错位。
     // 用 JSON 描述节点（而非 schema.create 出的 Node 实例），
     // insertContentAt 才能正确解析 atom 块（markdownBlock/fileBlock 等）。
-    editor
-      .chain()
-      .focus()
-      .insertContentAt(pos, [
+    (chain ?? editor.chain().focus())
+      .command(({ tr, commands }) => commands.insertContentAt(tr.selection.to, [
         { type, attrs },
         { type: 'paragraph' }
-      ])
+      ]))
       .run();
   };
 
   const insertFileBlock = (attachment: NoteAttachment): void => {
     if (!editor) return;
+    const image = attachment.mimeType.startsWith('image/');
     insertBlockAtCursor('fileBlock', {
       attachmentId: attachment.id,
       fileName: attachment.fileName,
       mimeType: attachment.mimeType,
-      fileSize: attachment.fileSize
+      fileSize: attachment.fileSize,
+      // 截图 / 图片直接显示；其它附件保持文件卡片。
+      view: image ? 'preview' : 'download'
     });
-    Message.success(`已添加文件：${attachment.fileName}`);
+    if (!image) Message.success(`已添加文件：${attachment.fileName}`);
   };
 
   const insertVideoBlock = (blockAttrs: Record<string, unknown>): void => {
@@ -137,6 +134,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       setUploadingCount((count) => Math.max(0, count - files.length));
     }
   };
+  handleFilesRef.current = (files) => { void handleFileObjects(files); };
 
   const handleBrowserFilePick = (event: React.ChangeEvent<HTMLInputElement>): void => {
     const files = event.target.files;
@@ -180,18 +178,10 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   };
 
   const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Placeholder.configure({ placeholder: '写下学习笔记… 工具栏可插入公式 / 图表 / Markdown 块，点击块即可编辑。' }),
-      MathBlock,
-      MathInline,
-      MermaidBlock,
-      MarkdownBlock,
-      QuestionBlockNode,
-      FileBlock,
-      VideoBlock
-    ],
+    extensions,
     content: content || emptyDocument,
+    // 工具栏、状态栏与各浮层各自订阅需要的状态，打字时不整树重渲染。
+    shouldRerenderOnTransaction: false,
     editorProps: {
       attributes: {
         class: 'notebook-prosemirror',
@@ -199,22 +189,19 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
         'aria-label': '笔记编辑器',
         'aria-multiline': 'true'
       },
-      handlePaste: (view, event) => {
-        const images = pastedImageFiles(event.clipboardData);
-        if (images.length) {
-          event.preventDefault();
-          void handleFileObjects(images);
-          return true;
-        }
-        const text = event.clipboardData?.getData('text/plain') ?? '';
-        if (!text.trim() || !markdownPastePattern.test(text)) return false;
-        const markdownNode = view.state.schema.nodes.markdownBlock?.create({ markdown: text });
-        if (!markdownNode) return false;
-        view.dispatch(view.state.tr.replaceSelectionWith(markdownNode).scrollIntoView());
+      scrollMargin: scrollInsets,
+      scrollThreshold: scrollInsets,
+      handleKeyDown: (_view, event) => {
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') plainPasteAtRef.current = Date.now();
+        return false;
+      },
+      handlePaste: (view, event) => handlePaste(view, event),
+      handleClick: (view, _position, event) => {
+        if (event.button !== 0 || !isBelowLastBlock(view, event.clientY)) return false;
+        focusDocumentEnd(view);
         return true;
       },
-      // Keep complete heading moves in one history transaction; other moves
-      // use ProseMirror's default drop path and only need selection cleanup.
+      // 完整标题的移动保持为一次历史事务；其它移动走 ProseMirror 默认的 drop 流程，只需收束选区。
       handleDrop: (view, event, _slice, moved) => {
         const transfer = event.dataTransfer;
         const files = transferFiles(transfer);
@@ -244,23 +231,71 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
         const normalizedHeading = sources.length > 0 ? cleanupMovedHeadingSources(current, transaction, sources) : false;
         if (moved && !normalizedHeading) collapseMovedSelection(current);
       }
-      onChange?.(current.getJSON() as Record<string, unknown>);
+      const json = current.getJSON() as Record<string, unknown>;
+      emittedContentRef.current.add(json);
+      onChange?.(json);
     }
   });
 
+  // 同步边界：父页面把编辑器自己发出的草稿原样回传只是“回声”，可能落后一笔事务
+  // （例如节点视图 flushSync 在插入事务中途触发父组件重渲染），绝不能反向 setContent 覆盖编辑器；
+  // 只有外部来的新内容（服务端快照等）才整篇替换。切页靠父组件 key 重建编辑器，不走这里。
   useEffect(() => {
-    if (!editor || !content) return;
+    if (!editor || !content || emittedContentRef.current.has(content)) return;
     const next = JSON.stringify(content);
     const current = JSON.stringify(editor.getJSON());
     if (next !== current) editor.commands.setContent(content);
   }, [content, editor]);
 
+  const openFind = useCallback((withReplace: boolean): void => {
+    if (!editor) return;
+    const { from, to, empty } = editor.state.selection;
+    const selected = empty ? '' : editor.state.doc.textBetween(from, to, '\n');
+    const seed = selected && !selected.includes('\n') && selected.length <= 120 ? selected : '';
+    setFind((previous) => ({ open: true, replace: withReplace || (previous.open && previous.replace), seed, token: previous.token + 1 }));
+  }, [editor]);
+
+  const closeFind = useCallback((): void => {
+    setFind((previous) => ({ ...previous, open: false, seed: '' }));
+    editor?.commands.focus();
+  }, [editor]);
+
+  // 查找 / 替换快捷键可在设置中修改（与知识卡片全屏的查找一致）；焦点在编辑器以外的输入框时不拦截。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || isShortcutRecording()) return;
+      const config = useUiStore.getState().shortcutConfig;
+      const replace = matchesAny(event, config.editorReplace);
+      if (!replace && !matchesAny(event, config.editorFind)) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const inCanvas = Boolean(target && canvasRef.current?.contains(target));
+      if (!inCanvas && target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+      event.preventDefault();
+      openFind(replace);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [openFind]);
+
+  // 工具栏换行时高度会变，把吸顶停靠区的实际高度交给 CSS（大纲吸顶位置据此避让）。
+  useEffect(() => {
+    const dock = dockRef.current;
+    const canvas = canvasRef.current;
+    if (!dock || !canvas || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      canvas.style.setProperty('--editor-dock-height', `${Math.round(dock.getBoundingClientRect().height)}px`);
+    });
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [editor, focusMode]);
+
   if (!editor) return <div className="editor-shell"><div className="empty-state">正在加载编辑器…</div></div>;
 
-  // 工具栏插入公式 / 图表 / Markdown 块时，也走 insertBlockAtCursor，
-  // 保证插入到当前光标位置而不是文档末尾。
-  const appendBlock = (type: 'mathBlock' | 'mermaidBlock' | 'markdownBlock', attrs: Record<string, string>): void => {
-    insertBlockAtCursor(type, attrs);
+  const commandContext: CommandContext = {
+    chain: () => editor.chain().focus(),
+    insertBlock: insertBlockAtCursor,
+    pickFiles: () => { void pickFilesFromDialog(); },
+    addVideo: () => setVideoModalVisible(true)
   };
 
   const closeVideoModal = (): void => {
@@ -318,14 +353,39 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
     setDraggingFiles(false);
   };
 
+  // 点击正文区域下方的留白：光标移到文末（必要时补一个空段落）。
+  const handleContentMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || event.target !== event.currentTarget || !isBelowLastBlock(editor.view, event.clientY)) return;
+    event.preventDefault();
+    focusDocumentEnd(editor.view);
+  };
+
   // 按偏好给大纲预留空间；普通模式的大纲限制在编辑器内，不覆盖全局导航。
   const outlineSide = focusMode ? focusOutlineSide : (notebookPanelsSwapped ? 'left' : 'right');
   const canvasStyle: CSSProperties = outlineOpen
     ? { ...(focusMode ? focusCanvasPadding : canvasPadding), [outlineSide === 'left' ? 'paddingLeft' : 'paddingRight']: 260 }
     : (focusMode ? focusCanvasPadding : canvasPadding);
 
+  const toolbar = (
+    <div ref={dockRef} className={`editor-toolbar-dock${focusMode ? ' is-focus' : ''}`}>
+      <EditorToolbar
+        editor={editor}
+        focusMode={Boolean(focusMode)}
+        onFocusModeChange={onFocusModeChange}
+        onNewPage={onNewPage}
+        commandContext={commandContext}
+        outlineOpen={outlineOpen}
+        onToggleOutline={() => setOutlineOpen((value) => !value)}
+        findOpen={find.open}
+        onToggleFind={() => (find.open ? closeFind() : openFind(false))}
+      />
+      <EditorFindBar editor={editor} request={find} onClose={closeFind} onToggleReplace={() => setFind((previous) => ({ ...previous, replace: !previous.replace }))} />
+    </div>
+  );
+
   return (
     <div
+      ref={canvasRef}
       className={`editor-canvas${focusMode ? ' editor-canvas--focus' : ''}${draggingFiles ? ' is-dragging-files' : ''}`}
       style={canvasStyle}
       aria-busy={uploadingCount > 0}
@@ -335,32 +395,35 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       onDrop={handleCanvasDrop}
       onDragEnd={handleDragEnd}
     >
-    {focusMode ? <EditorToolbar editor={editor} focusMode onFocusModeChange={onFocusModeChange} onNewPage={onNewPage} onInsertBlock={appendBlock} onPickFiles={pickFilesFromDialog} onAddVideo={() => setVideoModalVisible(true)} outlineOpen={outlineOpen} onToggleOutline={() => setOutlineOpen((value) => !value)} finishKeys={finishKeys} /> : null}
-    <div className={`editor-shell${focusMode ? ' is-focus' : ''}`}>
-      {focusMode ? null : <EditorToolbar editor={editor} onFocusModeChange={onFocusModeChange} onNewPage={onNewPage} onInsertBlock={appendBlock} onPickFiles={pickFilesFromDialog} onAddVideo={() => setVideoModalVisible(true)} outlineOpen={outlineOpen} onToggleOutline={() => setOutlineOpen((value) => !value)} finishKeys={finishKeys} />}
-      <div className="editor-content">
-        <EditorContent editor={editor} />
+      {focusMode ? toolbar : null}
+      <div className={`editor-shell${focusMode ? ' is-focus' : ''}`}>
+        {focusMode ? null : toolbar}
+        <div ref={contentRef} className="editor-content" onMouseDown={handleContentMouseDown}>
+          <EditorContent editor={editor} />
+          <BlockHandle editor={editor} containerRef={contentRef} />
+        </div>
+        <EditorStatusBar editor={editor} uploadingCount={uploadingCount} />
       </div>
-      <EditorStatusBar editor={editor} uploadingCount={uploadingCount} />
-    </div>
-    <EditorBubbleMenu editor={editor} />
-    <EditorOutline editor={editor} open={outlineOpen} onClose={() => setOutlineOpen(false)} focusMode={Boolean(focusMode)} side={outlineSide} />
-    <Modal
-      title="添加视频"
-      visible={videoModalVisible}
-      onCancel={closeVideoModal}
-      onOk={submitVideoModal}
-    >
-      <div style={{ display: 'grid', gap: 12 }}>
-        <Radio.Group value={videoModalType} onChange={(value) => setVideoModalType(value as 'url' | 'remote')}>
-          <Radio value="url">网址链接（B站/YouTube）</Radio>
-          <Radio value="remote">远程视频直链（mp4/webm URL）</Radio>
-        </Radio.Group>
-        <ArcoInput autoFocus placeholder="视频 URL" value={videoModalUrl} onChange={setVideoModalUrl} onPressEnter={submitVideoModal} />
-        <ArcoInput placeholder="标题（可选，网址视频用）" value={videoModalTitle} onChange={setVideoModalTitle} />
-      </div>
-    </Modal>
-    <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleBrowserFilePick} />
+      <EditorBubbleMenu editor={editor} />
+      <SlashMenu editor={editor} context={commandContext} />
+      <TableMenu editor={editor} />
+      <EditorOutline editor={editor} open={outlineOpen} onClose={() => setOutlineOpen(false)} focusMode={Boolean(focusMode)} side={outlineSide} />
+      <Modal
+        title="添加视频"
+        visible={videoModalVisible}
+        onCancel={closeVideoModal}
+        onOk={submitVideoModal}
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <Radio.Group value={videoModalType} onChange={(value) => setVideoModalType(value as 'url' | 'remote')}>
+            <Radio value="url">网址链接（B站/YouTube）</Radio>
+            <Radio value="remote">远程视频直链（mp4/webm URL）</Radio>
+          </Radio.Group>
+          <ArcoInput autoFocus placeholder="视频 URL" value={videoModalUrl} onChange={setVideoModalUrl} onPressEnter={submitVideoModal} />
+          <ArcoInput placeholder="标题（可选，网址视频用）" value={videoModalTitle} onChange={setVideoModalTitle} />
+        </div>
+      </Modal>
+      <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleBrowserFilePick} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { Message } from '@arco-design/web-react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { resolveEmbedUrl } from '../../lib/videoEmbed';
 import { attachmentContentUrl } from '../../lib/attachments';
-import { BlockDragHandle, exitNodeSelection } from './EditorChrome';
+import { exitNodeSelection } from './EditorChrome';
 
 type View = 'link' | 'title' | 'preview';
 type VideoType = 'url' | 'local' | 'remote';
@@ -316,7 +316,6 @@ export function VideoBlockNode({ node, updateAttributes, selected, view, getPos 
       contentEditable={false}
       data-video-block="true"
     >
-      <BlockDragHandle label="拖动视频块" />
       <div className="video-block-handle" ref={handleRef}>
         <button
           type="button"

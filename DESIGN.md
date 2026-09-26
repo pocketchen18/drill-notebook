@@ -158,17 +158,33 @@ Spacing is based on 4px. The touched workspace uses:
 
 ### Editor Canvas (`.editor-canvas`)
 
-- **Structure**: title/plan row, direct editor toolbar, document canvas.
+- **Structure**: title/plan row, editor toolbar docked to the top of the canvas
+  scroller, and the document canvas. The toolbar is grouped — history, block
+  types and lists, inline formatting, insertion commands — with find, outline,
+  focus mode, and new-page actions in an aside row. Formatting shortcuts are
+  handled inside the editor and are not user-configurable; find and replace are
+  configurable editor-scope actions.
 - **States**: default, saving silently, focus mode, empty block, long content,
   dark, reduced motion.
 - **Accessibility**: all formatting and insertion commands remain visible and
   keyboard reachable; focus mode preserves its current semantics. Selection
   actions expose accessible names and keep compact desktop targets at least
   32px.
-- **Selection actions**: a zero-dependency fixed toolbar appears for a
-  non-empty text or node selection. It supports bold, italic, inline code,
-  heading level 2, clear formatting, and destructive deletion; deletion stays
-  undoable through the editor history.
+- **Selection actions**: a zero-dependency floating toolbar appears for a
+  non-empty text or node selection above the selection, flips below it when the
+  sticky toolbar would cover it, hides while the mouse is still dragging, and
+  never appears inside a code block or a table cell selection. It exposes the
+  block type, bold, italic, underline, strike, inline code, link, text and
+  background color, superscript, subscript, conversion to inline LaTeX, clear
+  formatting, and destructive deletion; deletion stays undoable through the
+  editor history. A node selection exposes duplicate and delete instead. A
+  collapsed caret inside a link shows a link card (address, open, edit, remove);
+  the link editor opens from the toolbar, the card, or its shortcut, and
+  external links only ever open through the main process, which allows
+  http/https.
+- **Colors**: text and background colors are stored as semantic names
+  (`data-text-color` / `data-color`) resolving to light/dark token pairs. No
+  inline color is written, so colors pasted from outside are not preserved.
 - **Outline**: the toolbar can toggle a heading outline. In focus mode the
   outline has a persisted left/right preference and is fixed to the viewport
   edge. In preview mode it is right-aligned beside the page explorer by
@@ -179,15 +195,90 @@ Spacing is based on 4px. The touched workspace uses:
   not discard the draft. Escape is a true cancel path; a blur caused by
   removing the input cannot submit the cancelled draft. The same rule applies
   to display and inline LaTeX blocks.
-- **Block movement**: atom blocks expose one shared drag handle on hover and
-  selection. The handle uses TipTap's native drag contract, keeps the block
-  content in a reserved gutter, and remains usable on coarse pointers and
-  narrow canvases without introducing another tab stop.
+- **Block handle**: every top-level block and every list/task item shares one
+  hover handle in the reserved 48px gutter, aligned with the block's first line.
+  It uses TipTap's native drag contract (serialized slice on the transfer,
+  `view.dragging` set for the drop, block DOM as the drag image), remains usable
+  on coarse pointers — where it follows the caret — and on narrow canvases
+  without adding another tab stop. Its menu inserts a block below (which opens
+  the slash catalog), turns the block into any catalog type, duplicates (one
+  history step), moves it up/down, indents or outdents list items, and deletes.
+  Atom blocks keep only duplicate, move, and delete; their former inner handles
+  and reserved left padding are gone. Because no inner `data-drag-handle`
+  remains, a native drag starting inside a block's non-editable body is
+  cancelled — otherwise a slightly moving click in a source field drags the
+  whole block away. While a block is dragged, pointing within 72px of the
+  dock's bottom edge or the viewport's bottom edge scrolls the canvas, faster
+  the deeper the pointer goes, so a block can move beyond the visible area; the
+  handle finishes its drag state on document-level drop/dragend because the
+  moved source node (and the handle with it) unmounts before its own dragend.
+- **Content sync**: the editor owns the document while mounted. Content objects
+  it emitted through `onChange` and the page hands back are echoes and never
+  reset the document — an echo can lag one transaction behind and, applied with
+  `setContent` in the middle of a node-view render, would swallow the block
+  being inserted. Only a foreign object (a server snapshot) replaces the
+  document; switching pages remounts the editor by key.
 - **Move selection cleanup**: an in-editor move collapses the resulting node or
   range selection to the nearest text cursor. When a complete heading text
   selection is moved, the empty source heading shell is normalized to a
   paragraph; deleting characters until a heading is empty still preserves its
   heading style.
+- **Slash menu**: `/` or `／` opens the block catalog at the start of a block or
+  after whitespace, and `、` at the start of a block only; it never opens inside
+  a code block, from a paste or drop, when the caret merely moves into older
+  text, or while the IME is composing. Filtering matches the Chinese label, the
+  English alias, and pinyin initials or full spelling, with prefix matches
+  first. Arrow keys cycle, Enter or Tab runs the command after removing the
+  typed query, Escape closes it for that trigger. Removing the query and the
+  command itself form one transaction (one undo step; no half-done document is
+  emitted); file and video commands, which insert later, commit the removal
+  first. A newly inserted source block receives focus in its source field once
+  its DOM is attached. The menu portals to the body,
+  opens under the caret, flips above when there is no room, and keeps the active
+  item scrolled into view.
+- **Content types**: links (typed, pasted over a selection, or set from the link
+  editor), task lists (nested, `[ ]` / `[x]` input rules, dimmed when checked),
+  underline, highlight, superscript, subscript, tables inserted as 3×3 with a
+  header row, and code blocks with syntax highlighting — a common language set,
+  a language select that keeps unknown aliases as-is, and a copy button with a
+  check confirmation.
+- **Table affordances**: a floating row/column bar appears above the table the
+  caret is in, offering insert row above/below, insert column before/after,
+  header-row toggle, merge/split when available, and delete row, column, or
+  table behind a "more" menu.
+- **Markdown paste**: plain-text clipboard content that looks like Markdown, or
+  arrives from VS Code, becomes native rich text through the editor's own paste
+  path in a single undo step — headings, lists, task lists, tables, quotes,
+  fenced code with its language, `mermaid` fences, `$$` / `$` math under pandoc
+  boundary rules, and links, with images degrading to links. A code block, a
+  plain-text paste, or clipboard content carrying HTML keeps the literal paste,
+  and multi-line VS Code code becomes a code block. The Markdown block node
+  remains available from the catalog and insertion menu for whole-block source
+  editing.
+- **Images**: a pasted or dropped image uploads as an attachment and renders as
+  a figure at natural size capped to the content width, with a hover bar for the
+  small/medium/large/original width presets, download, and collapse back to a
+  card. Image blocks stored earlier keep their card form.
+- **Find and replace**: the canvas docks a search bar at its top right that
+  mirrors the knowledge-card search bar — same treatment, `N / M` or "no match"
+  count, the same accessible names for previous, next, and close, Enter and
+  Shift+Enter to step, Escape to close and return focus to the document, yellow
+  matches with an orange current match, unbolded so the text does not reflow. It
+  adds case sensitivity and a replace row (replace, replace all). Matches are
+  decorations rather than DOM marks, because marks inserted into an editable
+  region are observed as user edits; a replace-all stays a single undo step and
+  the count refreshes as the document changes. Its bindings are configurable
+  editor-scope shortcuts, listed on the settings page like the knowledge-card
+  ones.
+- **Floating surfaces**: every floating layer portals to `document.body`, since
+  the canvas is a size container that would otherwise become the containing
+  block for `position: fixed` descendants and clip them. A layer hides instead
+  of overlapping the sticky toolbar, using the dock's bottom edge as its visible
+  boundary, sits above the dock and below Arco overlays, and repositions on
+  scroll and resize with measurements taken after each render.
+- **Document end**: clicking the empty area below the last block moves the caret
+  to the end of the document and appends a paragraph only when the last block
+  cannot hold text. Opening an existing page never edits it.
 - **Mermaid errors**: previews render through an owned, hidden connected host;
   syntax failures remain represented inside the block and must not append
   error SVGs to the document body. The renderer also removes body-level
@@ -199,7 +290,12 @@ Spacing is based on 4px. The touched workspace uses:
   editor container width (1120px), while every command remains keyboard
   reachable through its accessible name and title.
 - **Layout**: no nested content scroll; readable document flow with a 760px
-  normal-mode reading measure and a 920px focus-mode measure.
+  normal-mode reading measure and a 920px focus-mode measure. The shell uses
+  `overflow: clip` so the rounded corner is preserved without blocking the
+  sticky toolbar, and the editor reserves the dock height as scroll margin and
+  threshold so scrolling to the caret never hides it under the toolbar.
+- **No new debt**: this round adds no accepted debt. Existing entries below are
+  unchanged.
 
 ## 6. Motion & Interaction
 

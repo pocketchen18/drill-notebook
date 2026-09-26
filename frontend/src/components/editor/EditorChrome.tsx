@@ -1,34 +1,54 @@
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useState, type CSSProperties, type DragEventHandler, type KeyboardEvent as ReactKeyboardEvent, type MouseEventHandler } from 'react';
 import type { Editor } from '@tiptap/react';
 import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Bold, Code, GripVertical, Heading2, Italic, RemoveFormatting, Trash2, X } from 'lucide-react';
-import type { OutlineSide } from '../../stores/uiStore';
+import { GripVertical, X } from 'lucide-react';
+import { describeAccelerators } from '../../lib/shortcuts';
+import { useUiStore, type OutlineSide } from '../../stores/uiStore';
+
+export { EditorBubbleMenu } from './EditorBubbleMenu';
+
+export interface BlockDragHandleProps {
+  label?: string;
+  className?: string;
+  style?: CSSProperties;
+  active?: boolean;
+  onClick?: MouseEventHandler<HTMLSpanElement>;
+  onDragStart?: DragEventHandler<HTMLSpanElement>;
+  onDragEnd?: DragEventHandler<HTMLSpanElement>;
+}
 
 /**
- * Native TipTap drag handle for atom blocks.  Keeping the handle in the
- * editor chrome gives every custom block the same interaction and makes the
- * affordance discoverable without adding another command menu.
+ * 块手柄。全编辑器只有一个实例跟随指针（见 BlockHandle）；每个块操作都有键盘快捷键，
+ * 因此手柄只服务指针操作，不增加 Tab 停靠点。
  */
-export function BlockDragHandle({ label = '拖动块' }: { label?: string }): JSX.Element {
+export const BlockDragHandle = forwardRef<HTMLSpanElement, BlockDragHandleProps>(function BlockDragHandle(
+  { label = '拖动块', className = '', style, active = false, onClick, onDragStart, onDragEnd },
+  ref
+) {
   return (
     <span
-      className="editor-block-drag-handle"
-      data-drag-handle="true"
+      ref={ref}
+      className={`editor-block-drag-handle${active ? ' is-active' : ''} ${className}`.trim()}
+      style={style}
       draggable="true"
       aria-hidden="true"
       tabIndex={-1}
-      aria-label={label}
       title={label}
-      onClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(event);
+      }}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
     >
       <GripVertical size={15} aria-hidden="true" />
     </span>
   );
-}
+});
 
-/** Clear a node selection before a custom block enters its own editor. */
+/** 自定义块进入自身编辑态前先退出节点选区。 */
 export function exitNodeSelection(view: EditorView | undefined, getPos: (() => number) | undefined, node: ProseMirrorNode): void {
   if (!view || !getPos || !(view.state.selection instanceof NodeSelection)) return;
   try {
@@ -37,83 +57,45 @@ export function exitNodeSelection(view: EditorView | undefined, getPos: (() => n
     const afterNode = Math.min(position + node.nodeSize, view.state.doc.content.size);
     view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(afterNode), 1)));
   } catch {
-    // A node can be removed between pointer down and click; leave selection handling to ProseMirror.
+    // 按下与点击之间节点可能已被删除，此时交给 ProseMirror 处理选区。
   }
 }
 
-interface BubbleState {
-  readonly visible: boolean;
-  readonly top: number;
-  readonly left: number;
-  readonly nodeSelection: boolean;
+/**
+ * 块进入编辑态后把焦点交给源码框。节点视图首次渲染时 DOM 还没挂进文档，同步 focus 无效；
+ * 插入命令里的 `chain().focus()` 又会在下一帧把焦点拉回正文，所以放到下一帧、排在它之后再聚焦。
+ * 只在正文持有焦点时接管（插入或点击块之后），打开页面时文档里原有的空块不抢焦点。
+ */
+export function focusFieldSoon(getField: () => HTMLElement | null): () => void {
+  const frame = window.requestAnimationFrame(() => {
+    const field = getField();
+    const editorRoot = field?.closest('.ProseMirror');
+    if (!field?.isConnected || !editorRoot?.contains(document.activeElement) || document.activeElement === field) return;
+    field.focus({ preventScroll: true });
+    field.scrollIntoView?.({ block: 'nearest' });
+  });
+  return () => window.cancelAnimationFrame(frame);
 }
 
-/**
- * 选中文字时浮出的格式工具栏（Obsidian 式）。
- * 不用 TipTap 自带 BubbleMenu（其依赖 tippy.js，需真实布局、jsdom 无法运行且增加体积），
- * 改为按选区矩形做 fixed 定位的零依赖浮层：选区为空或取不到矩形时隐藏。
- */
-export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | null {
-  const [bubble, setBubble] = useState<BubbleState>({ visible: false, top: 0, left: 0, nodeSelection: false });
+/** 源码编辑框里的 Tab 插入两个空格，而不是把焦点移走（移走会触发失焦提交）。 */
+export function insertSoftTab(event: ReactKeyboardEvent<HTMLTextAreaElement>, setDraft: (value: string) => void): boolean {
+  if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false;
+  event.preventDefault();
+  const area = event.currentTarget;
+  area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end');
+  setDraft(area.value);
+  return true;
+}
 
-  useEffect(() => {
-    const hide = (): void => setBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
-    const update = (): void => {
-      const { selection } = editor.state;
-      if (selection.empty || !editor.isFocused) { hide(); return; }
-      const nodeSelection = selection instanceof NodeSelection;
-      const selectedNode = nodeSelection ? editor.view.nodeDOM(selection.from) : null;
-      const sel = typeof window !== 'undefined' ? window.getSelection() : null;
-      const range = selectedNode instanceof HTMLElement
-        ? selectedNode.getBoundingClientRect()
-        : (sel && sel.rangeCount > 0 ? sel.getRangeAt(0).getBoundingClientRect?.() : null);
-      // jsdom 无布局，矩形恒为 0；生产环境据此定位浮层。
-      if (!range || (range.width === 0 && range.height === 0 && range.top === 0)) { hide(); return; }
-      const center = range.left + range.width / 2;
-      const left = typeof window !== 'undefined'
-        ? (() => {
-            const edge = Math.min(112, Math.max(8, window.innerWidth / 2 - 8));
-            return Math.max(edge, Math.min(window.innerWidth - edge, center));
-          })()
-        : center;
-      setBubble({ visible: true, top: range.top, left, nodeSelection });
-    };
-    editor.on('selectionUpdate', update);
-    editor.on('transaction', update);
-    editor.on('focus', update);
-    editor.on('blur', hide);
-    window.addEventListener('scroll', hide, true);
-    window.addEventListener('resize', hide);
-    return () => {
-      editor.off('selectionUpdate', update);
-      editor.off('transaction', update);
-      editor.off('focus', update);
-      editor.off('blur', hide);
-      window.removeEventListener('scroll', hide, true);
-      window.removeEventListener('resize', hide);
-    };
-  }, [editor]);
-
-  if (!bubble.visible) return null;
-
+/** 块编辑条上的「完成」按钮，同时提示当前绑定的快捷键。 */
+export function FinishButton({ onFinish }: { onFinish: () => void }): JSX.Element {
+  const keys = useUiStore((state) => state.shortcutConfig.editorFinishBlock);
+  const hint = keys.length ? describeAccelerators(keys) : '';
   return (
-    <div
-      className="editor-bubble"
-      role="toolbar"
-      aria-label={bubble.nodeSelection ? '选中块操作' : '选中文本格式'}
-      // 阻止按钮点击让编辑器失焦而清空选区
-      onMouseDown={(event) => event.preventDefault()}
-      style={{ position: 'fixed', top: Math.max(bubble.top - 44, 4), left: bubble.left, transform: 'translateX(-50%)' }}
-    >
-      {!bubble.nodeSelection && <>
-      <button type="button" className={editor.isActive('bold') ? 'is-active' : ''} onClick={() => editor.chain().focus().toggleBold().run()} aria-label="加粗" aria-pressed={editor.isActive('bold')} title="加粗"><Bold size={15} /></button>
-      <button type="button" className={editor.isActive('italic') ? 'is-active' : ''} onClick={() => editor.chain().focus().toggleItalic().run()} aria-label="斜体" aria-pressed={editor.isActive('italic')} title="斜体"><Italic size={15} /></button>
-      <button type="button" className={editor.isActive('code') ? 'is-active' : ''} onClick={() => editor.chain().focus().toggleCode().run()} aria-label="行内代码" aria-pressed={editor.isActive('code')} title="行内代码"><Code size={15} /></button>
-      <button type="button" className={editor.isActive('heading', { level: 2 }) ? 'is-active' : ''} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} aria-label="二级标题" aria-pressed={editor.isActive('heading', { level: 2 })} title="二级标题"><Heading2 size={15} /></button>
-      <button type="button" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()} aria-label="清除格式" title="清除格式"><RemoveFormatting size={15} /></button>
-      </>}
-      <button type="button" className="is-danger" onClick={() => editor.chain().focus().deleteSelection().run()} aria-label="删除" title={bubble.nodeSelection ? '删除选中块' : '删除选中内容'}><Trash2 size={15} /></button>
-    </div>
+    <button type="button" className="node-chip-btn" aria-label="完成" title={hint ? `完成（${hint}）` : '完成'} onMouseDown={(event) => event.preventDefault()} onClick={onFinish}>
+      完成
+      {hint ? <kbd className="node-chip-kbd">{hint}</kbd> : null}
+    </button>
   );
 }
 
@@ -151,9 +133,26 @@ function activeHeadingIndex(editor: Editor): number {
   return headingIndex;
 }
 
+// 越过这条线（吸顶工具栏加少许留白）的标题视为已读到。
+const SCROLL_SPY_OFFSET = 96;
+
+/** 顶部已越过阅读线的最后一个标题；没有则为 -1。 */
+function headingInView(editor: Editor, headings: readonly OutlineHeading[]): number {
+  let found = -1;
+  for (const heading of headings) {
+    const dom = editor.view.nodeDOM(heading.position);
+    if (!(dom instanceof HTMLElement)) continue;
+    const { top, height } = dom.getBoundingClientRect();
+    if (height === 0 && top === 0) return -2; // 没有布局（测试环境）：保持按光标计算的结果
+    if (top <= SCROLL_SPY_OFFSET) found = heading.index;
+    else break;
+  }
+  return found;
+}
+
 /**
- * 文档大纲：普通模式限于编辑器内，专注模式固定在窗口侧边，画布按同侧预留空间。
- * 点击条目按标题在文档中的顺序滚动定位。
+ * 文档大纲：普通模式限于编辑器内并随页面吸顶，专注模式固定在窗口侧边，画布按同侧预留空间。
+ * 当前章节跟随光标，也跟随滚动位置。
  */
 export function EditorOutline({ editor, open, onClose, focusMode = false, side = 'left' }: { editor: Editor; open: boolean; onClose: () => void; focusMode?: boolean; side?: OutlineSide }): JSX.Element | null {
   const [headings, setHeadings] = useState<OutlineHeading[]>(() => collectHeadings(editor));
@@ -178,9 +177,28 @@ export function EditorOutline({ editor, open, onClose, focusMode = false, side =
   }, [editor, open]);
 
   useEffect(() => {
+    if (!open || headings.length === 0) return undefined;
+    let frame = 0;
+    const onScroll = (): void => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const index = headingInView(editor, headings);
+        if (index !== -2) setActiveIndex(index);
+      });
+    };
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [editor, headings, open]);
+
+  useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose();
+      // 已被 “/” 菜单、链接输入框等处理过的 Esc 不再关闭大纲。
+      if (event.key === 'Escape' && !event.defaultPrevented) onClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -196,36 +214,38 @@ export function EditorOutline({ editor, open, onClose, focusMode = false, side =
       editor.view.dispatch(editor.state.tr.setSelection(selection));
       editor.view.focus();
     } catch {
-      // A concurrently updated document may invalidate the old heading position.
+      // 文档同时被更新时，旧的标题位置可能已失效。
     }
     if (dom instanceof HTMLElement) dom.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   return (
     <div className={`editor-outline editor-outline--${side}${focusMode ? ' editor-outline--focus' : ''}`} role="dialog" aria-label="文档大纲">
-      <div className="editor-outline__head">
-        <span>大纲</span>
-        <button type="button" className="editor-outline__close" onClick={onClose} aria-label="关闭大纲"><X size={14} /></button>
+      <div className="editor-outline__inner">
+        <div className="editor-outline__head">
+          <span>大纲</span>
+          <button type="button" className="editor-outline__close" onClick={onClose} aria-label="关闭大纲"><X size={14} /></button>
+        </div>
+        {headings.length > 0 ? (
+          <ul className="editor-outline__list" aria-label="文档标题">
+            {headings.map((heading) => (
+              <li key={heading.index}>
+                <button
+                  type="button"
+                  className={`editor-outline__item editor-outline__item--h${heading.level}${activeIndex === heading.index ? ' is-active' : ''}`}
+                  onClick={() => jumpTo(heading)}
+                  aria-current={activeIndex === heading.index ? 'location' : undefined}
+                  title={heading.text}
+                >
+                  {heading.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="editor-outline__empty">还没有标题。输入 “/” 选择标题，或输入 ## 加空格创建。</div>
+        )}
       </div>
-      {headings.length > 0 ? (
-        <ul className="editor-outline__list" aria-label="文档标题">
-          {headings.map((heading) => (
-            <li key={heading.index}>
-              <button
-                type="button"
-                className={`editor-outline__item editor-outline__item--h${heading.level}${activeIndex === heading.index ? ' is-active' : ''}`}
-                onClick={() => jumpTo(heading)}
-                aria-current={activeIndex === heading.index ? 'location' : undefined}
-                title={heading.text}
-              >
-                {heading.text}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="editor-outline__empty">还没有标题。用工具栏「二级标题」或输入 ## 加空格创建。</div>
-      )}
     </div>
   );
 }

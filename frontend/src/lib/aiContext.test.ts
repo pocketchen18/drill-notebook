@@ -21,4 +21,32 @@ describe('AI context helpers', () => {
     expect(content.content).toHaveLength(3);
     expect((content.content as unknown[])[1]).toEqual({ type: 'markdownBlock', attrs: { markdown: '**总结**' } });
   });
+
+  it('keeps task lists, tables and links as Markdown structure', () => {
+    const text = (value: string, marks?: unknown[]) => ({ type: 'text', text: value, ...(marks ? { marks } : {}) });
+    const cell = (type: string, value: string) => ({ type, content: [{ type: 'paragraph', content: [text(value)] }] });
+    const content = {
+      type: 'doc',
+      content: [
+        {
+          type: 'taskList',
+          content: [
+            { type: 'taskItem', attrs: { checked: true }, content: [{ type: 'paragraph', content: [text('完成')] }] },
+            { type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph', content: [text('待做')] }] }
+          ]
+        },
+        {
+          type: 'table',
+          content: [
+            { type: 'tableRow', content: [cell('tableHeader', '名称'), cell('tableHeader', '值')] },
+            { type: 'tableRow', content: [cell('tableCell', 'a|b'), cell('tableCell', '1')] }
+          ]
+        },
+        { type: 'paragraph', content: [text('见'), text('文档', [{ type: 'link', attrs: { href: 'https://example.com' } }])] }
+      ]
+    };
+    expect(notePageToMarkdown({ id: 1, notebookId: 1, title: '页', content })).toBe(
+      '- [x] 完成\n- [ ] 待做\n\n| 名称 | 值 |\n| --- | --- |\n| a\\|b | 1 |\n\n见[文档](https://example.com)'
+    );
+  });
 });
