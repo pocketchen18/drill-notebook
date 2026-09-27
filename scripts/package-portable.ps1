@@ -57,7 +57,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'Drill Notebook.exe'))) {
     throw "electron-builder completed but dist\win-unpacked\Drill Notebook.exe is missing."
 }
 
-$version = '0.6.1'
+$version = '0.6.2'
 $zip = Join-Path $workspace ("dist\Drill-Notebook-$version-win-x64-portable.zip")
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Invoke-Checked 'powershell' @('-NoLogo', '-NoProfile', '-Command', "Compress-Archive -Path 'dist\win-unpacked\*' -DestinationPath 'dist\Drill-Notebook-$version-win-x64-portable.zip' -CompressionLevel Optimal")

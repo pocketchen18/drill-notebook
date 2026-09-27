@@ -28,7 +28,7 @@ export const SHORTCUT_SCOPES: ShortcutScopeMeta[] = [
   { id: 'global', label: '全局', description: '任意页面生效。', plainKeys: false },
   { id: 'quiz', label: '刷题', description: '答题时生效；数字键选选项固定。', plainKeys: true },
   { id: 'knowledgeCard', label: '知识卡片全屏', description: '知识点全屏阅读时生效。', plainKeys: true },
-  { id: 'editor', label: '笔记编辑器', description: '编辑公式 / 图表 / Markdown 块时生效。', plainKeys: false },
+  { id: 'editor', label: '笔记编辑器', description: '笔记页面内生效。', plainKeys: false },
   { id: 'bank', label: '题库', description: '题库列表项选中时生效。', plainKeys: true },
   { id: 'notebook', label: '笔记本', description: '笔记页列表项选中时生效。', plainKeys: true },
   { id: 'ai', label: 'AI 助手', description: '侧栏输入框内生效。', plainKeys: true }
@@ -38,7 +38,7 @@ export type ShortcutAction =
   | 'toggleAi' | 'toggleTheme' | 'openSettings'
   | 'quizSubmit' | 'quizNext' | 'quizPrev'
   | 'kcSearch' | 'kcToggleOutline' | 'kcPrev' | 'kcNext' | 'kcExit'
-  | 'editorFinishBlock'
+  | 'editorFinishBlock' | 'editorFind' | 'editorReplace'
   | 'bankRename'
   | 'noteRename'
   | 'aiSend';
@@ -71,6 +71,8 @@ export const SHORTCUT_ACTIONS: ShortcutActionMeta[] = [
   { id: 'kcNext', scope: 'knowledgeCard', label: '下一张卡片', description: '', defaults: ['ArrowRight'] },
   { id: 'kcExit', scope: 'knowledgeCard', label: '退出全屏', description: '搜索框打开时先关闭搜索。', defaults: ['Escape'] },
   { id: 'editorFinishBlock', scope: 'editor', label: '完成块编辑', description: '公式 / 图表 / Markdown 块。', defaults: ['Ctrl+Enter'] },
+  { id: 'editorFind', scope: 'editor', label: '查找', description: '在当前页面正文中查找。', defaults: ['Ctrl+F'] },
+  { id: 'editorReplace', scope: 'editor', label: '查找并替换', description: '', defaults: ['Ctrl+H'] },
   { id: 'bankRename', scope: 'bank', label: '重命名题库', description: '', defaults: ['F2'] },
   { id: 'noteRename', scope: 'notebook', label: '重命名笔记页', description: '', defaults: ['F2'] },
   { id: 'aiSend', scope: 'ai', label: '发送消息', description: '其余 Enter 组合用于换行。', defaults: ['Enter'], mainKeys: ['Enter'] }

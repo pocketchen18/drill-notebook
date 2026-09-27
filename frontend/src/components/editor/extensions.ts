@@ -11,6 +11,7 @@ export const MathBlock = Node.create({
   name: 'mathBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({ latex: { default: 'E=mc^2' } }),
   parseHTML: () => [{ tag: 'div[data-math-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-math-block': '' })],
@@ -46,6 +47,7 @@ export const MermaidBlock = Node.create({
   name: 'mermaidBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({ code: { default: 'graph TD; A-->B' } }),
   parseHTML: () => [{ tag: 'div[data-mermaid-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-mermaid-block': '' })],
@@ -56,6 +58,7 @@ export const MarkdownBlock = Node.create({
   name: 'markdownBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({ markdown: { default: '# 学习记录\n\n在这里编辑 Markdown 和 $E=mc^2$。\n' } }),
   parseHTML: () => [{ tag: 'div[data-markdown-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-markdown-block': '' })],
@@ -66,6 +69,7 @@ export const QuestionBlockNode = Node.create({
   name: 'questionBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({ questionId: { default: null }, snapshot: { default: {} } }),
   parseHTML: () => [{ tag: 'div[data-question-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-question-block': '' })],
@@ -76,12 +80,15 @@ export const FileBlock = Node.create({
   name: 'fileBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({
     attachmentId: { default: null },
     fileName: { default: '' },
     mimeType: { default: 'application/octet-stream' },
     fileSize: { default: 0 },
-    view: { default: 'download' }
+    view: { default: 'download' },
+    // 仅图片块使用：显示宽度占正文栏的百分比；null 为原始尺寸。
+    width: { default: null }
   }),
   parseHTML: () => [{ tag: 'div[data-file-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-file-block': '' })],
@@ -92,6 +99,7 @@ export const VideoBlock = Node.create({
   name: 'videoBlock',
   group: 'block',
   atom: true,
+  draggable: true,
   addAttributes: () => ({
     videoType: { default: 'url' },
     url: { default: null },

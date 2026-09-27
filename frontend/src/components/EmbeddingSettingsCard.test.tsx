@@ -204,7 +204,7 @@ describe('EmbeddingSettingsCard', () => {
       ? resolve(process.cwd(), 'src/styles/app.css')
       : resolve(process.cwd(), 'frontend/src/styles/app.css');
     const css = readFileSync(cssPath, 'utf8');
-    const block = css.slice(css.indexOf('.embedding-model-item'), css.indexOf('/* AI floating assistant */'));
+    const block = css.slice(css.indexOf('.embedding-model-item'), css.indexOf('/* AI 悬浮助手 */'));
     expect(block).toContain('var(--line)');
     expect(block).toContain('var(--panel-bg)');
     expect(block).toContain('flex-wrap: wrap');
