@@ -299,6 +299,16 @@ describe('findShortcutConflicts 冲突检测', () => {
     for (const meta of SHORTCUT_ACTIONS) empty[meta.id] = [];
     expect(findShortcutConflicts(empty)).toEqual({});
   });
+
+  it('SHORTCUT-33: 笔记编辑器的查找 / 替换默认 Ctrl+F / Ctrl+H，与知识卡片全屏的 Ctrl+F 互不冲突', () => {
+    const config = defaultShortcutConfig();
+    expect(config.editorFind).toEqual(['Ctrl+F']);
+    expect(config.editorReplace).toEqual(['Ctrl+H']);
+    expect(config.kcSearch).toEqual(['Ctrl+F']);
+    expect(findShortcutConflicts(config)).toEqual({});
+    // 同在编辑器作用域内共用一组按键则冲突
+    expect(findShortcutConflicts({ ...config, editorReplace: ['Ctrl+F'] }).editorReplace).toBe('editorFind');
+  });
 });
 
 describe('isActionDefault', () => {

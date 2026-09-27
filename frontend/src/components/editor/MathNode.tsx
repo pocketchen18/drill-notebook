@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { renderToString } from 'katex';
+import { FinishButton, exitNodeSelection, focusFieldSoon, insertSoftTab } from './EditorChrome';
 import { matchesAny } from '../../lib/shortcuts';
 import { useUiStore } from '../../stores/uiStore';
 
@@ -14,22 +15,40 @@ function MathDisplay({ latex, displayMode }: { latex: string; displayMode: boole
   return <span className={displayMode ? 'math-rendered' : 'math-rendered math-rendered-inline'} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function MathNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
+export function MathNode({ node, updateAttributes, selected, view, getPos }: NodeViewProps): JSX.Element {
   const latex = String(node.attrs.latex ?? '');
   const [editing, setEditing] = useState(!latex.trim());
   const [draft, setDraft] = useState(latex);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const cancelBeforeBlurRef = useRef(false);
 
   useEffect(() => {
     if (!editing) setDraft(latex);
   }, [editing, latex]);
   useEffect(() => {
-    if (editing) areaRef.current?.focus();
+    if (editing) return focusFieldSoon(() => areaRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {
+    if (cancelBeforeBlurRef.current) {
+      cancelBeforeBlurRef.current = false;
+      return;
+    }
     updateAttributes({ latex: draft });
     setEditing(false);
+  };
+
+  const cancelEditing = (): void => {
+    cancelBeforeBlurRef.current = true;
+    setDraft(latex);
+    setEditing(false);
+  };
+
+  const startEditing = (): void => {
+    exitNodeSelection(view, getPos, node);
+    cancelBeforeBlurRef.current = false;
+    setEditing(true);
   };
 
   if (editing) {
@@ -37,7 +56,7 @@ export function MathNode({ node, updateAttributes, selected }: NodeViewProps): J
       <NodeViewWrapper className={`math-block is-editing${selected ? ' is-selected' : ''}`} contentEditable={false} data-math-block="true">
         <div className="node-edit-toolbar">
           <span className="node-edit-label">编辑 LaTeX</span>
-          <button type="button" className="node-chip-btn" onClick={commit}>完成</button>
+          <FinishButton onFinish={commit} />
         </div>
         <textarea
           ref={areaRef}
@@ -47,9 +66,11 @@ export function MathNode({ node, updateAttributes, selected }: NodeViewProps): J
           onBlur={commit}
           onKeyDown={(event) => {
             event.stopPropagation();
+            if (insertSoftTab(event, setDraft)) return;
             if (event.key === 'Escape') {
-              setDraft(latex);
-              setEditing(false);
+              event.preventDefault();
+              cancelEditing();
+              return;
             }
             if (matchesAny(event, useUiStore.getState().shortcutConfig.editorFinishBlock)) {
               event.preventDefault();
@@ -72,7 +93,16 @@ export function MathNode({ node, updateAttributes, selected }: NodeViewProps): J
       className={`math-block is-preview${selected ? ' is-selected' : ''}`}
       contentEditable={false}
       data-math-block="true"
-      onClick={() => setEditing(true)}
+      onClick={startEditing}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          startEditing();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label="编辑公式块"
       title="点击编辑公式"
     >
       {latex.trim() ? <MathDisplay latex={latex} displayMode /> : <span className="node-placeholder">点击输入公式</span>}
@@ -80,22 +110,40 @@ export function MathNode({ node, updateAttributes, selected }: NodeViewProps): J
   );
 }
 
-export function MathInlineNode({ node, updateAttributes, selected }: NodeViewProps): JSX.Element {
+export function MathInlineNode({ node, updateAttributes, selected, view, getPos }: NodeViewProps): JSX.Element {
   const latex = String(node.attrs.latex ?? '');
   const [editing, setEditing] = useState(!latex.trim());
   const [draft, setDraft] = useState(latex);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cancelBeforeBlurRef = useRef(false);
 
   useEffect(() => {
     if (!editing) setDraft(latex);
   }, [editing, latex]);
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) return focusFieldSoon(() => inputRef.current);
+    return undefined;
   }, [editing]);
 
   const commit = (): void => {
+    if (cancelBeforeBlurRef.current) {
+      cancelBeforeBlurRef.current = false;
+      return;
+    }
     updateAttributes({ latex: draft });
     setEditing(false);
+  };
+
+  const cancelEditing = (): void => {
+    cancelBeforeBlurRef.current = true;
+    setDraft(latex);
+    setEditing(false);
+  };
+
+  const startEditing = (): void => {
+    exitNodeSelection(view, getPos, node);
+    cancelBeforeBlurRef.current = false;
+    setEditing(true);
   };
 
   if (editing) {
@@ -111,7 +159,10 @@ export function MathInlineNode({ node, updateAttributes, selected }: NodeViewPro
             event.stopPropagation();
             if (event.key === 'Enter' || event.key === 'Escape') {
               event.preventDefault();
-              if (event.key === 'Escape') setDraft(latex);
+              if (event.key === 'Escape') {
+                cancelEditing();
+                return;
+              }
               commit();
             }
           }}
@@ -128,7 +179,16 @@ export function MathInlineNode({ node, updateAttributes, selected }: NodeViewPro
       className={`math-inline is-preview${selected ? ' is-selected' : ''}`}
       contentEditable={false}
       data-math-inline="true"
-      onClick={() => setEditing(true)}
+      onClick={startEditing}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          startEditing();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label="编辑行内公式"
       title="点击编辑行内公式"
     >
       {latex.trim() ? <MathDisplay latex={latex} displayMode={false} /> : <span className="node-placeholder">公式</span>}

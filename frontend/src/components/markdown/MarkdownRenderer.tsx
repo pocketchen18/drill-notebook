@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
-import mermaid from 'mermaid';
 import MarkdownIt from 'markdown-it';
 import { renderToString } from 'katex';
 import { ensureMermaidTheme, readDocumentTheme } from '../../lib/mermaidTheme';
+import { renderMermaid } from '../../lib/mermaidRender';
 import { useUiStore } from '../../stores/uiStore';
 
 const markdown = new MarkdownIt({
@@ -14,7 +14,6 @@ const markdown = new MarkdownIt({
 });
 
 const mathPattern = /(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^$\n]+?)\$|(?<!\\)\\\[([\s\S]+?)\\\]|(?<!\\)\\\(([^()\n]+?)\\\)/g;
-let mermaidReady = false;
 let mermaidId = 0;
 
 function renderMath(latex: string, displayMode: boolean): string {
@@ -46,21 +45,20 @@ export function renderMarkdownHtml(value: string): string {
 
 function renderMermaidBlocks(root: HTMLDivElement, appTheme: 'light' | 'dark'): () => void {
   ensureMermaidTheme(appTheme);
-  mermaidReady = true;
   let active = true;
   const blocks = Array.from(root.querySelectorAll('pre code.language-mermaid'));
   void Promise.all(blocks.map(async (codeBlock) => {
     const code = codeBlock.textContent ?? '';
     const id = `drill-markdown-mermaid-${mermaidId++}`;
     try {
-      const result = await mermaid.render(id, code);
+      const result = await renderMermaid(id, code);
       if (!active || !codeBlock.parentElement) return;
       const wrapper = document.createElement('div');
       wrapper.className = 'markdown-mermaid';
       wrapper.innerHTML = DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } });
       codeBlock.parentElement.replaceWith(wrapper);
     } catch {
-      codeBlock.parentElement?.classList.add('markdown-mermaid-error');
+      if (active) codeBlock.parentElement?.classList.add('markdown-mermaid-error');
     }
   }));
   return () => { active = false; };
