@@ -10,7 +10,7 @@
 /* §1 设计令牌 ---------------------------------------------------------- */
 :root {
   font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  font-synthesis: none;
+  /* 勿恢复 Vite 模板的 font-synthesis: none —— 本字体栈无中文斜体面，禁用合成会让编辑器斜体与正文完全一致 */
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   /* 中性色 */
