@@ -85,6 +85,7 @@ describe('转换结果进入编辑器', () => {
     expect(json).toContain('"type":"table"');
     expect(json).toContain('"type":"mathBlock","attrs":{"latex":"E=mc^2"}');
     expect(json).toContain('"type":"mermaidBlock","attrs":{"code":"graph TD; A-->B"}');
-    expect(json).toContain('"type":"codeBlock","attrs":{"language":"python"},"content":[{"type":"text","text":"print(1)"}]');
+    // 代码块 JSON 会带上未使用的公式来源位（默认 null），因为 ProseMirror 的 toJSON 输出全部属性。
+    expect(json).toContain('"type":"codeBlock","attrs":{"language":"python","mathSpans":null},"content":[{"type":"text","text":"print(1)"}]');
   });
 });

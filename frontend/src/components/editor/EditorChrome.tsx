@@ -49,11 +49,19 @@ export const BlockDragHandle = forwardRef<HTMLSpanElement, BlockDragHandleProps>
 });
 
 /** 自定义块进入自身编辑态前先退出节点选区。 */
+/**
+ * 进入编辑态前退出选中态。除了节点选区，还要处理"单击行内公式"留下的、
+ * 正好覆盖该节点的文本选区——否则编辑框会和两层选中轮廓叠在一起。
+ */
 export function exitNodeSelection(view: EditorView | undefined, getPos: (() => number) | undefined, node: ProseMirrorNode): void {
-  if (!view || !getPos || !(view.state.selection instanceof NodeSelection)) return;
+  if (!view || !getPos) return;
+  const { selection } = view.state;
+  const selected = selection instanceof NodeSelection
+    || (selection instanceof TextSelection && selection.from === selection.to - node.nodeSize);
+  if (!selected) return;
   try {
     const position = getPos();
-    if (view.state.selection.from !== position) return;
+    if (selection.from !== position) return;
     const afterNode = Math.min(position + node.nodeSize, view.state.doc.content.size);
     view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(afterNode), 1)));
   } catch {
@@ -66,12 +74,17 @@ export function exitNodeSelection(view: EditorView | undefined, getPos: (() => n
  * 插入命令里的 `chain().focus()` 又会在下一帧把焦点拉回正文，所以放到下一帧、排在它之后再聚焦。
  * 只在正文持有焦点时接管（插入或点击块之后），打开页面时文档里原有的空块不抢焦点。
  */
-export function focusFieldSoon(getField: () => HTMLElement | null): () => void {
+export function focusFieldSoon(getField: () => HTMLElement | null, options: { caretAtEnd?: boolean } = {}): () => void {
   const frame = window.requestAnimationFrame(() => {
     const field = getField();
     const editorRoot = field?.closest('.ProseMirror');
     if (!field?.isConnected || !editorRoot?.contains(document.activeElement) || document.activeElement === field) return;
     field.focus({ preventScroll: true });
+    // 只在首次接管焦点时定位；用户已经点进输入框时不覆盖其手选的光标位置。
+    if (options.caretAtEnd && document.activeElement === field
+      && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
     field.scrollIntoView?.({ block: 'nearest' });
   });
   return () => window.cancelAnimationFrame(frame);

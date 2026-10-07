@@ -85,7 +85,16 @@ export function NotebookPage(): JSX.Element {
 
   const createPage = useMutation({
     mutationFn: (title: string) => post<NotePage>(`/api/notebooks/${notebookId}/pages`, { title, content: { type: 'doc', content: [{ type: 'paragraph' }] } }),
-    onSuccess: (page) => { setPageId(page.id); setNewPageVisible(false); setNewPageTitle(''); refresh(); Message.success('页面已创建'); },
+    onSuccess: (page) => {
+      // 先发布新页与列表缓存，再切换选择；否则旧列表会把新 pageId 当成无效项退回首页。
+      queryClient.setQueryData<NotePage[]>(['note-pages', page.notebookId], (current) => [...(current ?? []).filter((item) => item.id !== page.id), page]);
+      queryClient.setQueryData(['note-page', page.id], page);
+      setPageId(page.id);
+      setNewPageVisible(false);
+      setNewPageTitle('');
+      refresh();
+      Message.success('页面已创建');
+    },
     onError: (error) => Message.error(friendlyMessage(error, '页面创建失败，请稍后重试'))
   });
   const createNotebook = useMutation({

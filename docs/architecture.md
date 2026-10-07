@@ -55,6 +55,17 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 - **开关**：`sessionPrefs` 的 `ui.rememberViewState`（默认开）；关闭时读写全部 no-op，且设置页会立即 `clearViewState()`。  
 - **落点**：`App.tsx` 的 `/` 与 `*` 重定向到 `readLastRoute() ?? '/notebooks'`；各页遵循「URL/深链 > 记忆 > 默认首项」的优先级，删除实体后由各页既有的剪枝 effect 回落。
 
+### 2.4 笔记编辑器稳定性（v0.6.3）
+
+仍使用 TipTap 2.27，交互契约见 [DESIGN.md](../DESIGN.md) §5，回归映射见 [QA 清单](testing/QA_CHECKLIST.md)模块十二。
+
+- `blockCommands.ts` 统一工具栏、块菜单与快捷键转换，事务内摊平公式并映射选区；`CodeBlockView.tsx` 的 `mathSpans` 只进入 JSON。单块来源完全匹配才恢复，多块只保留源码，手打 `$…$` 不猜测转换。
+- `extensions.ts` 的公式 `renderText` 同时供 TipTap 默认剪贴板与 `getText()` 使用；状态栏复用 schema 序列化器，去空白并按 Unicode 码点计数。无需额外 `MathLeafText` 插件，软换行保持换行。
+- `MathNode.tsx` 管理编辑 / 预览、草稿与退出防重入；`EditorChrome.focusFieldSoon` 仅在主动交接时定位源码末尾。块公式浮窗通过事务元数据请求编辑，不修改文档；提交恢复正文焦点，取消恢复预览或行内公式后的光标，blur 不抢焦点。
+- `fileDropTarget.ts` 捕获上传前落点并跟随文档事务映射，`literalSearchQuery.ts` 保证替换文字的美元符号不被解释。
+- 文件拖放先区分内部拖动与外部上传：`NotebookEditor` 的 `moved` / `view.dragging` 优先于文件载荷，内部移动与 Ctrl 复制都交回 ProseMirror、不重复上传。`NodeViewDragGuard` 在编辑器 DOM 的捕获阶段阻止不可编辑预览本体拖动，避免被 TipTap `stopEvent` 截断；销毁时移除监听，不影响外侧手柄或正文选区拖动。
+- `NotebookEditor` 忽略自己发出的草稿回声；`NotebookPage` 先填充新页列表 / 详情缓存再切选中页，`NoteAutosave` 按 pageId 管理保存，避免旧列表回跳与跨页串写。
+
 ## 3. 后端领域（概念）
 
 | 域 | 内容 |
@@ -99,5 +110,7 @@ Schema 以 `backend/src/main/resources/schema.sql` 为准。
 | v0.5 | 背知识点 UI 重构（库/卡片/全屏视图、标题 Tooltip 气泡提示、大纲视口自适应双向滚动与统一缩进）、AI 总结知识点（双角色快照 + 三条总结路径）、健康端点加固、冒烟与种子脚本 |
 | v0.5.1 | 会话内短周期记忆曲线（多轮循环出场、错题重复策略、背诵设置弹窗与预设）、背知识点独立选材（只背叶子）、题库选题继承、会话→日历联动（终值评分 + 顽固项加练，后端零改动）、日历实时「今天」 |
 | v0.5.2 | 界面状态记忆：启动回到上次停留页面 + 各页选择/切换/筛选持久化（单一 localStorage key、容错归一、防抖写入、开关与清除） |
+| v0.6.2 | TipTap 编辑器现代化、斜杠 / 块手柄 / 浮层；草稿回传与按页自动保存加固 |
+| v0.6.3 | 编辑器稳定性：公式转换 / 复制 / 焦点 / 浮窗、统一统计、字面替换、文件落点、新建页面回跳与斜体修复 |
 
 更细提交说明用：`git log --oneline`。

@@ -1,4 +1,4 @@
-import { Extension, type ChainedCommands, type Editor } from '@tiptap/core';
+import { Extension, type ChainedCommands, type Command, type Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model';
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
@@ -10,6 +10,16 @@ export interface BlockTarget {
 }
 
 export type BlockKind = 'paragraph' | 'heading1' | 'heading2' | 'heading3' | 'bulletList' | 'orderedList' | 'taskList' | 'blockquote' | 'codeBlock';
+
+/** 浮窗请求节点视图打开公式源码；仅传事务元数据，不修改文档或撤销历史。 */
+export const EDIT_MATH_BLOCK_META = 'notebookEditMathBlock';
+
+export function editSelectedMathBlock(editor: Editor): boolean {
+  const { selection } = editor.state;
+  if (!editor.isEditable || !(selection instanceof NodeSelection) || selection.node.type.name !== 'mathBlock') return false;
+  editor.view.dispatch(editor.state.tr.setMeta(EDIT_MATH_BLOCK_META, selection.from));
+  return true;
+}
 
 const LIST_ITEM_TYPES = new Set(['listItem', 'taskItem']);
 
@@ -71,8 +81,144 @@ export function currentBlockKind(editor: Editor): BlockKind {
   return 'paragraph';
 }
 
+/** 代码块内 `$…$` 片段的位置（相对块内文本），转回正文时据此精确重建公式节点。 */
+export interface MathSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly latex: string;
+}
+
+const FLATTEN_META = 'notebookMathFlatten';
+const RESTORE_META = 'notebookMathRestore';
+
+interface SelectedTextblock {
+  readonly start: number;
+  readonly end: number;
+  readonly node: ProseMirrorNode;
+}
+
+/** 块转换处理完整文本块，不能只扫描文字选区；同时兼容 AllSelection / NodeSelection。 */
+function selectedTextblocks(tr: Transaction): SelectedTextblock[] {
+  const blocks = new Map<number, SelectedTextblock>();
+  for (const { $from, $to } of tr.selection.ranges) {
+    tr.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+      if (!node.isTextblock) return;
+      blocks.set(pos, { start: pos + 1, end: pos + 1 + node.content.size, node });
+      return false;
+    });
+  }
+  return [...blocks.values()];
+}
+
+/** 是否只涉及一个文本块取决于实际内容，而不是选区端点的深度。 */
+function singleTextblock(tr: Transaction): SelectedTextblock | null {
+  const blocks = selectedTextblocks(tr);
+  return blocks.length === 1 ? blocks[0] : null;
+}
+
+/**
+ * 代码块只收纯文本，而行内公式的源码存在 attrs.latex 里：不先摊成 `$…$` 文字，
+ * 转换时公式节点会被 schema 直接丢弃。片段位置随事务交给下一步写进 codeBlock 属性。
+ * 这些命令一律返回 true，否则 TipTap 链条会在没有公式的段落上断掉。
+ */
+const flattenMathToText: Command = ({ tr, dispatch }) => {
+  const mathType = tr.doc.type.schema.nodes.mathInline;
+  if (!mathType || !dispatch) return true;
+  const blocks = selectedTextblocks(tr);
+  const block = blocks.length === 1 ? blocks[0] : null;
+  const hits: { from: number; to: number; text: string }[] = [];
+  for (const target of blocks) {
+    target.node.forEach((node, offset) => {
+      if (node.type !== mathType) return;
+      const pos = target.start + offset;
+      hits.push({ from: pos, to: pos + node.nodeSize, text: `$${String(node.attrs.latex ?? '')}$` });
+    });
+  }
+  if (!hits.length) return true;
+  // 只使用本阶段的映射：clearNodes / 斜杠删除已经改变过位置，不能重复映射。
+  const bookmark = tr.selection.getBookmark();
+  const mapFrom = tr.mapping.maps.length;
+  for (const hit of hits.reverse()) tr.insertText(hit.text, hit.from, hit.to);
+  tr.setSelection(bookmark.map(tr.mapping.slice(mapFrom)).resolve(tr.doc));
+  // 只有整段落在同一个文本块里才记来源：跨块转换会拆成多个代码块，位置对不上，宁可不恢复也不猜。
+  if (!block) return true;
+  const spans: MathSpan[] = [];
+  let text = '';
+  block.node.content.forEach((child) => {
+    if (child.type === mathType) {
+      const latex = String(child.attrs.latex ?? '');
+      const piece = `$${latex}$`;
+      spans.push({ start: text.length, end: text.length + piece.length, latex });
+      text += piece;
+    } else if (child.isText) {
+      text += child.text ?? '';
+    } else if (child.type.name === 'hardBreak') {
+      text += '\n';
+    }
+  });
+  if (spans.length) tr.setMeta(FLATTEN_META, { spans, text });
+  return true;
+};
+
+/** `setCodeBlock` 之后把来源写进属性；块内文本与预期不一致就说明转换结果变了，宁可不记。 */
+const applyMathSpansToCodeBlock: Command = ({ tr, dispatch }) => {
+  const recorded = tr.getMeta(FLATTEN_META) as { spans: MathSpan[]; text: string } | undefined;
+  const codeType = tr.doc.type.schema.nodes.codeBlock;
+  if (!recorded || !codeType) return true;
+  const block = singleTextblock(tr);
+  if (block?.node.type === codeType && block.node.textContent === recorded.text && dispatch) {
+    tr.setNodeMarkup(block.start - 1, undefined, { ...block.node.attrs, mathSpans: recorded.spans });
+  }
+  return true;
+};
+
+/** 转回正文前先取出来源：`clearNodes` 会把 codeBlock 的属性一起清掉。 */
+const captureCodeBlockMath: Command = ({ tr }) => {
+  const block = singleTextblock(tr);
+  if (block?.node.type.name === 'codeBlock') tr.setMeta(RESTORE_META, block.node.attrs.mathSpans);
+  return true;
+};
+
+/**
+ * 保守恢复：每个片段的位置和字面 `$latex$` 必须原样还在，改过就不猜边界、也不用旧内容覆盖新内容。
+ * 用户手打的 `$x^2$` 没有来源记录，因此往返后仍是普通文字。
+ */
+const restoreMathSpans: Command = ({ tr, dispatch }) => {
+  const spans: unknown = tr.getMeta(RESTORE_META);
+  const mathType = tr.doc.type.schema.nodes.mathInline;
+  const block = singleTextblock(tr);
+  if (!Array.isArray(spans) || !spans.length || !mathType || !block) return true;
+  const text = block.node.textContent;
+  // 来源会从 JSON 读回；形状、顺序和边界异常时只保留当前文字，不猜测或抛错。
+  let previousEnd = 0;
+  for (const span of spans) {
+    if (!span || typeof span.latex !== 'string' || !Number.isInteger(span.start) || !Number.isInteger(span.end)
+      || span.start < previousEnd || span.end <= span.start || span.end > text.length
+      || text.slice(span.start, span.end) !== `$${span.latex}$`) return true;
+    previousEnd = span.end;
+  }
+  const pieces: ProseMirrorNode[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    if (span.start > cursor) pieces.push(tr.doc.type.schema.text(text.slice(cursor, span.start))!);
+    pieces.push(mathType.create({ latex: span.latex }));
+    cursor = span.end;
+  }
+  if (cursor < text.length) pieces.push(tr.doc.type.schema.text(text.slice(cursor))!);
+  if (dispatch) {
+    const bookmark = tr.selection.getBookmark();
+    const mapFrom = tr.mapping.maps.length;
+    tr.replaceWith(block.start, block.end, pieces);
+    tr.setSelection(bookmark.map(tr.mapping.slice(mapFrom)).resolve(tr.doc));
+  }
+  return true;
+};
+
 const TURN_INTO: Record<BlockKind, (chain: ChainedCommands) => ChainedCommands> = {
-  paragraph: (chain) => chain.clearNodes().setParagraph(),
+  paragraph: (chain) => chain.command(captureCodeBlockMath).clearNodes().command(({ tr, commands }) => {
+    // clearNodes 通常已转成正文；再次 setParagraph 会返回 false，让快捷键误以为未处理。
+    return selectedTextblocks(tr).every((block) => block.node.type.name === 'paragraph') || commands.setParagraph();
+  }).command(restoreMathSpans),
   heading1: (chain) => chain.clearNodes().setHeading({ level: 1 }),
   heading2: (chain) => chain.clearNodes().setHeading({ level: 2 }),
   heading3: (chain) => chain.clearNodes().setHeading({ level: 3 }),
@@ -80,7 +226,7 @@ const TURN_INTO: Record<BlockKind, (chain: ChainedCommands) => ChainedCommands> 
   orderedList: (chain) => chain.clearNodes().toggleOrderedList(),
   taskList: (chain) => chain.clearNodes().toggleTaskList(),
   blockquote: (chain) => chain.clearNodes().toggleBlockquote(),
-  codeBlock: (chain) => chain.clearNodes().setCodeBlock()
+  codeBlock: (chain) => chain.clearNodes().command(flattenMathToText).setCodeBlock().command(applyMathSpansToCodeBlock)
 };
 
 /**
@@ -260,11 +406,16 @@ export interface NotebookKeymapStorage {
 
 export const BlockKeymap = Extension.create<Record<string, never>, NotebookKeymapStorage>({
   name: 'notebookKeymap',
+  // 优先于 Paragraph 自带的快捷键，返回正文时才能恢复公式来源。
+  priority: 1100,
   addStorage() {
     return { openLinkEditor: null };
   },
   addKeyboardShortcuts() {
     return {
+      // 复制副本 / 键盘选中后焦点可能在正文根节点，仍与公式预览的 Enter 使用同一入口。
+      Enter: () => editSelectedMathBlock(this.editor),
+      'Mod-Alt-0': () => turnInto(this.editor, 'paragraph'),
       'Mod-k': () => {
         const open = this.storage.openLinkEditor;
         if (!open) return false;

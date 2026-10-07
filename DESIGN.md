@@ -177,7 +177,10 @@ Spacing is based on 4px. The touched workspace uses:
   block type, bold, italic, underline, strike, inline code, link, text and
   background color, superscript, subscript, conversion to inline LaTeX, clear
   formatting, and destructive deletion; deletion stays undoable through the
-  editor history. A node selection exposes duplicate and delete instead. A
+  editor history. A node selection exposes duplicate and delete instead; a
+  display-formula selection also exposes edit, including while its preview or
+  the floating tools hold focus. Source fields and outside focus hide these
+  formula tools. A
   collapsed caret inside a link shows a link card (address, open, edit, remove);
   the link editor opens from the toolbar, the card, or its shortcut, and
   external links only ever open through the main process, which allows
@@ -195,6 +198,29 @@ Spacing is based on 4px. The touched workspace uses:
   not discard the draft. Escape is a true cancel path; a blur caused by
   removing the input cannot submit the cancelled draft. The same rule applies
   to display and inline LaTeX blocks.
+- **Formula interaction**: one click selects a formula; a double-click edits
+  its source. A focused display-formula preview also opens with Enter/Space,
+  transferring focus into its source field. Newly inserted empty formulas
+  open directly in edit mode; edit mode does not retain selection outlines.
+  On entry, display and inline source fields place the caret at the end of the
+  source, including the last line of multiline LaTeX. This runs only when
+  handing focus to the field, never overriding subsequent manual selection.
+  Explicit completion of a display formula moves the caret into the following
+  text block, inserting a paragraph immediately after the formula when needed
+  in the same undo transaction as the source update. Escape restores selection
+  and focus to its preview without changing content. Inline Enter and Escape
+  both return the caret after the formula; Escape discards the draft. Blur
+  saves without moving focus or inserting a paragraph.
+- **Formula/code round trips**: toolbar and keyboard block conversion preserve
+  inline formulas as `$latex$` text across every affected text block. A single
+  block records source spans in JSON (not HTML) and restores them on returning
+  to a paragraph only if every recorded span still matches exactly. Multi-block
+  conversion preserves source text without promising node restoration; typed
+  dollar-delimited text is never guessed to be a formula. Conversion is one
+  undo step, including when the selection is a whole document or block.
+- **Character counts**: total and selected counts use the same copyable text
+  serializers, including formula source; whitespace is excluded and Unicode
+  code points are counted. Clipboard serialization still preserves soft breaks.
 - **Block handle**: every top-level block and every list/task item shares one
   hover handle in the reserved 48px gutter, aligned with the block's first line.
   It uses TipTap's native drag contract (serialized slice on the transfer,
@@ -206,7 +232,8 @@ Spacing is based on 4px. The touched workspace uses:
   Atom blocks keep only duplicate, move, and delete; their former inner handles
   and reserved left padding are gone. Because no inner `data-drag-handle`
   remains, a native drag starting inside a block's non-editable body is
-  cancelled — otherwise a slightly moving click in a source field drags the
+  cancelled in the capture phase, before a node view can swallow the event —
+  otherwise a slightly moving click in a source field drags the
   whole block away. While a block is dragged, pointing within 72px of the
   dock's bottom edge or the viewport's bottom edge scrolls the canvas, faster
   the deeper the pointer goes, so a block can move beyond the visible area; the
@@ -259,12 +286,22 @@ Spacing is based on 4px. The touched workspace uses:
   a figure at natural size capped to the content width, with a hover bar for the
   small/medium/large/original width presets, download, and collapse back to a
   card. Image blocks stored earlier keep their card form.
+  File drops capture the pointer's document position before upload and map it
+  through subsequent edits; moving the caret does not change the insertion
+  target. Multiple files retain their order, and a destroyed editor receives
+  no late insertion. An in-editor drag takes precedence over file-transfer
+  detection: moving an uploaded image must move the existing node, not upload
+  it again or show the external-upload overlay. Ctrl-drag can copy the node
+  without uploading again; cancelling a handle drag must still allow the next
+  external file upload.
 - **Find and replace**: the canvas docks a search bar at its top right that
   mirrors the knowledge-card search bar — same treatment, `N / M` or "no match"
   count, the same accessible names for previous, next, and close, Enter and
   Shift+Enter to step, Escape to close and return focus to the document, yellow
   matches with an orange current match, unbolded so the text does not reflow. It
-  adds case sensitivity and a replace row (replace, replace all). Matches are
+  adds case sensitivity and a replace row (replace, replace all). Search and
+  replacement use literal text; dollar signs are never expanded as capture
+  groups or other replacement tokens. Matches are
   decorations rather than DOM marks, because marks inserted into an editable
   region are observed as user edits; a replace-all stays a single undo step and
   the count refreshes as the document changes. Its bindings are configurable
@@ -279,6 +316,9 @@ Spacing is based on 4px. The touched workspace uses:
 - **Document end**: clicking the empty area below the last block moves the caret
   to the end of the document and appends a paragraph only when the last block
   cannot hold text. Opening an existing page never edits it.
+- **New-page selection**: a successful creation seeds both the page-list and
+  page-detail caches before selecting the new page, so a stale list cannot
+  reset selection to the previous page.
 - **Mermaid errors**: previews render through an owned, hidden connected host;
   syntax failures remain represented inside the block and must not append
   error SVGs to the document body. The renderer also removes body-level
@@ -294,8 +334,8 @@ Spacing is based on 4px. The touched workspace uses:
   `overflow: clip` so the rounded corner is preserved without blocking the
   sticky toolbar, and the editor reserves the dock height as scroll margin and
   threshold so scrolling to the caret never hides it under the toolbar.
-- **No new debt**: this round adds no accepted debt. Existing entries below are
-  unchanged.
+- **No new debt**: this round adds no accepted debt. The former page-switch
+  autosave race is resolved by the per-page draft ownership described above.
 
 ## 6. Motion & Interaction
 
@@ -346,7 +386,6 @@ Strategy: **tonal shift with whisper dividers**.
 
 | Item | Location | Why accepted | Exit condition |
 |---|---|---|---|
-| Page-switch autosave race | `frontend/src/pages/NotebookPage.tsx` | Current observable behavior is explicitly locked: a switch inside the 400ms debounce PUTs the captured prior page id with latest pending content. The owner did not authorize behavior change in this visual task. | Separate behavior task with explicit owner approval and migration test |
 | Existing global raw color values | `frontend/src/styles/app.css` outside workspace selectors | v0.6 moved page styles onto the shared tokens; the remaining raw values are intentional (search-hit marks, brand gradient on the icon / AI fab, PowerPoint brand orange, `#000` video backdrop). | Future design-system consolidation |
 
 No new design debt may be added silently. Critical accessibility or command

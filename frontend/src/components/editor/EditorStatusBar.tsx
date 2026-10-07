@@ -1,4 +1,5 @@
 import { useEditorState, type Editor } from '@tiptap/react';
+import { getTextBetween, getTextSerializersFromSchema } from '@tiptap/core';
 import { LoaderCircle } from 'lucide-react';
 
 export interface EditorStatusBarProps {
@@ -22,7 +23,10 @@ export function EditorStatusBar({ editor, uploadingCount = 0 }: EditorStatusBarP
       return {
         characters: countCharacters(current.getText()),
         blocks: doc.childCount,
-        selected: selection.empty ? 0 : countCharacters(doc.textBetween(selection.from, selection.to, ' ', ' '))
+        // 与总数 / 剪贴板共用 schema 的 renderText，公式和软换行不会被叶子节点兜底吞掉。
+        selected: selection.empty ? 0 : countCharacters(getTextBetween(doc, selection, {
+          textSerializers: getTextSerializersFromSchema(current.schema)
+        }))
       };
     }
   });
