@@ -85,7 +85,8 @@ jobs:
         run: npm run test:frontend
 
       - name: 后端全量测试
-        run: npm run test:backend
+        # 使用 runner 预装 Maven，不经本地 wrapper 再下载 Maven 发行包；日志保留实际工具版本。
+        run: mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml test
 
       - name: 生成内嵌 JRE（docs/jlink.md 的模块清单）
         # 精简 JRE 必须覆盖 Spring Boot 3 + 内嵌 Tomcat 启动的全部依赖模块，否则后端在启动早期即退出、
@@ -106,7 +107,7 @@ jobs:
 
       # 上方已单独执行测试门禁，此处只构建，避免重复运行。
       - name: 构建后端 jar（测试已通过，产物名固定为 drill-notebook-backend-0.1.0.jar）
-        run: ./mvnw.cmd -f backend/pom.xml -DskipTests package
+        run: mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml -DskipTests package
 
       # 目录模式打包：绿色便携以「zip 解压即用」的文件夹分发（data/logs/runtime 固定写在 exe 旁）。
       # 不用单文件 portable——它会自解压到 %TEMP%，数据写进临时目录、退出即丢，且在部分机器上

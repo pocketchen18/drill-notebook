@@ -17,6 +17,7 @@ const job = workflow.jobs['build-windows'];
 const steps = job.steps;
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.replace(/^v/, '');
+const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
   assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.6.3');
@@ -30,7 +31,7 @@ test('锁文件安装及前后端测试必须成功后才可打包发布', () =>
   const install = steps.findIndex(step => step.run === 'npm ci');
   const build = steps.findIndex(step => step.run === 'npm run build');
   assert.ok(install >= 0 && build > install);
-  for (const command of ['node --test scripts/test-release-config.mjs', 'npm run test:frontend', 'npm run test:backend']) {
+  for (const command of ['node --test scripts/test-release-config.mjs', 'npm run test:frontend', `${mavenCommand} test`]) {
     const index = steps.findIndex(step => step.run === command);
     assert.ok(index > install && index < build, `${command} 必须在安装后、构建前`);
     assert.equal(steps[index]['continue-on-error'], undefined);
@@ -42,6 +43,23 @@ test('锁文件安装及前后端测试必须成功后才可打包发布', () =>
   assert.ok(pack > build && release > pack);
   assert.match(steps[pack].run, /--publish never --config\.extraMetadata\.version=/);
   assert.equal(steps[release].if, "github.event_name == 'push' || inputs.publish_release == true");
+});
+
+test('云端后端使用预装 Maven，保留测试门禁、Java 17 和 JAR 产物路径', () => {
+  const backendTest = steps.findIndex(step => step.name === '后端全量测试');
+  const backendBuild = steps.findIndex(step => step.name.startsWith('构建后端 jar'));
+  const pack = steps.findIndex(step => step.run?.includes('npx electron-builder'));
+  assert.ok(backendTest >= 0 && backendBuild > backendTest && pack > backendBuild);
+  assert.equal(steps[backendTest].run, `${mavenCommand} test`);
+  assert.equal(steps[backendBuild].run, `${mavenCommand} -DskipTests package`);
+  assert.equal(steps[backendBuild]['continue-on-error'], undefined);
+  assert.equal(steps[backendBuild].if, undefined);
+  assert.doesNotMatch(steps.map(step => step.run ?? '').join('\n'), /\bmvnw(?:\.cmd)?\b|npm run (?:test|build):backend/);
+  assert.equal(steps.find(step => step.uses?.startsWith('actions/setup-java@')).with['java-version'], '17');
+  assert.equal(packageJson.scripts['test:backend'], 'mvnw.cmd -f backend/pom.xml test');
+  assert.deepEqual(packageJson.build.extraResources.find(resource => resource.to === 'backend/app.jar'), {
+    from: 'backend/target/drill-notebook-backend-0.1.0.jar', to: 'backend/app.jar',
+  });
 });
 
 const cacheRoot = join(root, 'cache');
