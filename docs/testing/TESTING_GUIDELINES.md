@@ -50,6 +50,8 @@ npm run test:backend
 
 另外执行 `git diff --check` 检查差异格式。最新版本的已执行范围、测试数量和未验收项记录在 [QA_CHECKLIST.md](QA_CHECKLIST.md)，不能把“前端通过”写成“全端门禁通过”。
 
+Electron 主进程有改动时，执行 `npm run test:electron` 和 `npm run build:electron`。入口回归在内存中执行真实 `electron/main.ts`，隔离 Electron / 后端 API；已接入根目录 `npm test`。另用 `npm run test:electron:native` 在 Windows 桌面会话中验证原生单实例锁和窗口恢复：加载重构建后的真实入口 / 路径模块，使用独立工作区 `tmp/` 和后端桩，结束后清理；不运行真实 Java 或发行打包。原生测试不并入默认无桌面测试流程。
+
 发布配置或打包脚本有改动时，额外执行 `node --test scripts/test-release-config.mjs`（Windows + PowerShell 7）。该测试用假打包器验证版本注入、ZIP 命名、非法输入及失败退出，不生成真实发行包。GitHub 发布工作流在 `npm ci` 后执行此测试及前后端全量测试，全部通过才构建、打包、发布；本地 `package:portable` 仍由调用者先完成门禁。
 
 ---
