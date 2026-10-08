@@ -8,9 +8,24 @@ import { startBackend, stopBackend, type BackendHandle } from './java-bridge';
 let portablePaths: PortablePaths;
 let backend: BackendHandle | undefined;
 let mainWindow: BrowserWindow | undefined;
+let pendingActivation = false;
 
 // This must run before ready so Electron never initializes a system profile first.
 portablePaths = setupPortablePaths();
+// 必须先重定向 userData，再申请锁：同一便携目录只允许一套窗口和后端。
+const ownsSingleInstanceLock = app.requestSingleInstanceLock();
+
+function activateMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    // 后端仍在异步启动时，等主窗口创建后再兑现唤起请求。
+    pendingActivation = true;
+    return;
+  }
+  pendingActivation = false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+}
 
 function rendererEntry(): string {
   const devUrl = process.env.ELECTRON_RENDERER_URL;
@@ -61,6 +76,9 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault();
   });
+  mainWindow.on('closed', () => {
+    mainWindow = undefined;
+  });
 
   const entry = rendererEntry();
   if (/^https?:\/\//.test(entry)) {
@@ -68,6 +86,7 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(entry);
   }
+  if (pendingActivation) activateMainWindow();
 }
 
 function isTrustedRendererUrl(url: string): boolean {
@@ -236,7 +255,8 @@ ipcMain.handle('video:fetch-title', async (event, url: string) => {
   return fetchVideoTitle(url.trim());
 });
 
-app.whenReady().then(async () => {
+async function startPrimaryInstance(): Promise<void> {
+  await app.whenReady();
   // 开发模式（加载 vite dev server）下不注入 CSP：@vitejs/plugin-react 的 preamble 内联脚本会被拦截导致白屏
   const devMode = /^https?:\/\//.test(rendererEntry());
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -284,13 +304,19 @@ app.whenReady().then(async () => {
     });
   }
   createWindow();
-});
+}
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-
-app.on('before-quit', () => {
-  stopBackend(backend);
-  clearPortableTemp(getPortablePaths(portablePaths.root));
-});
+if (ownsSingleInstanceLock) {
+  app.on('second-instance', activateMainWindow);
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+  app.on('before-quit', () => {
+    stopBackend(backend);
+    clearPortableTemp(getPortablePaths(portablePaths.root));
+  });
+  void startPrimaryInstance();
+} else {
+  // 不注册退出清理，否则重复实例可能删除正在运行的主实例的临时文件。
+  app.quit();
+}
