@@ -417,6 +417,8 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 GitHub 的 `release-portable.yml` 使用 `npm ci`，发布配置回归、前后端全量测试通过后才构建打包。推送 `v0.6.3` 标签自动发布 **Pre-release**；手动触发默认版本 `v0.6.3`、仅上传产物，需勾选 `publish_release` 才发布。未改为正式 Release 渠道。
 
+云端后端测试与 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
+
 ### 4.4 建议自测清单
 
 1. 导入 `resources/sample-bank.md` → 刷题 → 故意答错 → 错题出现。  
