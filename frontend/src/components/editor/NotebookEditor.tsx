@@ -13,6 +13,7 @@ import { BlockHandle } from './BlockHandle';
 import { TableMenu } from './TableMenu';
 import type { CommandContext } from './commandCatalog';
 import { createPasteHandler, focusDocumentEnd, hasFileTransfer, isBelowLastBlock, transferFiles } from './editorInput';
+import { captureFileDropTarget, type FileDropTarget } from './fileDropTarget';
 import { captureHeadingMoveSources, cleanupMovedHeadingSources, collapseMovedSelection, handleHeadingDrop, type HeadingMoveSource } from './headingDrag';
 import { uploadAttachment } from '../../lib/attachments';
 import { isShortcutRecording, matchesAny } from '../../lib/shortcuts';
@@ -84,10 +85,10 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       .run();
   };
 
-  const insertFileBlock = (attachment: NoteAttachment): void => {
+  const insertFileBlock = (attachment: NoteAttachment, target?: FileDropTarget): void => {
     if (!editor) return;
     const image = attachment.mimeType.startsWith('image/');
-    insertBlockAtCursor('fileBlock', {
+    (target?.insertBlock ?? insertBlockAtCursor)('fileBlock', {
       attachmentId: attachment.id,
       fileName: attachment.fileName,
       mimeType: attachment.mimeType,
@@ -98,14 +99,15 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
     if (!image) Message.success(`已添加文件：${attachment.fileName}`);
   };
 
-  const insertVideoBlock = (blockAttrs: Record<string, unknown>): void => {
+  const insertVideoBlock = (blockAttrs: Record<string, unknown>, target?: FileDropTarget): void => {
     if (!editor) return;
-    insertBlockAtCursor('videoBlock', blockAttrs);
+    (target?.insertBlock ?? insertBlockAtCursor)('videoBlock', blockAttrs);
   };
 
-  const handleFileObjects = async (files: File[]): Promise<void> => {
-    if (!files.length) return;
+  const handleFileObjects = async (files: File[], target?: FileDropTarget): Promise<void> => {
+    if (!files.length) { target?.dispose(); return; }
     if (pageId === undefined) {
+      target?.dispose();
       Message.error('请先保存页面后再添加文件');
       return;
     }
@@ -114,6 +116,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       for (const file of files) {
         try {
           const attachment = await uploadAttachment(pageId, file);
+          if (editor?.isDestroyed) break;
           if (attachment.mimeType.startsWith('video/')) {
             insertVideoBlock({
               videoType: 'local',
@@ -121,9 +124,9 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
               attachmentId: attachment.id,
               title: attachment.fileName,
               view: 'preview'
-            });
+            }, target);
           } else {
-            insertFileBlock(attachment);
+            insertFileBlock(attachment, target);
           }
         } catch (error) {
           console.error('[file] upload failed', error);
@@ -131,6 +134,7 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
         }
       }
     } finally {
+      target?.dispose();
       setUploadingCount((count) => Math.max(0, count - files.length));
     }
   };
@@ -204,7 +208,9 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
       // 完整标题的移动保持为一次历史事务；其它移动走 ProseMirror 默认的 drop 流程，只需收束选区。
       handleDrop: (view, event, _slice, moved) => {
         const transfer = event.dataTransfer;
-        const files = transferFiles(transfer);
+        // 内部拖动可能仍携带图片文件项，必须先交回原生移动 / 复制，不能再次上传。
+        // Ctrl 拖动时 moved=false，但 view.dragging 仍记录内部来源。
+        const files = moved || view.dragging ? [] : transferFiles(transfer);
         if (files.length === 0) {
           pendingMoveRef.current = false;
           pendingHeadingMoveRef.current = [];
@@ -215,10 +221,12 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
         }
         pendingMoveRef.current = false;
         pendingHeadingMoveRef.current = [];
+        // 先 preventDefault：落点算不出来时若交给浏览器，整页会导航到拖入的文件。
         event.preventDefault();
         dragDepthRef.current = 0;
         setDraggingFiles(false);
-        void handleFileObjects(files);
+        const target = editor ? captureFileDropTarget(editor, { left: event.clientX, top: event.clientY }) : null;
+        void handleFileObjects(files, target ?? undefined);
         return true;
       }
     },
@@ -323,14 +331,14 @@ export function NotebookEditor({ content, onChange, pageId, focusMode, onFocusMo
   };
 
   const handleDragEnter = (event: DragEvent<HTMLDivElement>): void => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
+    if (editor.view.dragging || !hasFileTransfer(event.dataTransfer)) return;
     event.preventDefault();
     dragDepthRef.current += 1;
     setDraggingFiles(true);
   };
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
+    if (editor.view.dragging || !hasFileTransfer(event.dataTransfer)) return;
     event.preventDefault();
     setDraggingFiles(true);
   };

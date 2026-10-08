@@ -3,8 +3,9 @@ import { Button, Input } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
 import { useEditorState, type Editor } from '@tiptap/react';
 import { TextSelection } from '@tiptap/pm/state';
-import { SearchQuery, findNext, findPrev, getMatchHighlights, getSearchState, replaceAll, replaceNext, setSearchState } from 'prosemirror-search';
+import { findNext, findPrev, getMatchHighlights, getSearchState, replaceAll, replaceNext, setSearchState } from 'prosemirror-search';
 import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, X } from 'lucide-react';
+import { LiteralSearchQuery } from './literalSearchQuery';
 
 export interface FindRequest {
   readonly open: boolean;
@@ -24,7 +25,7 @@ export interface EditorFindBarProps {
 
 function clearSearch(editor: Editor): void {
   if (editor.isDestroyed || !getSearchState(editor.state)?.query.search) return;
-  editor.view.dispatch(setSearchState(editor.state.tr, new SearchQuery({ search: '' })));
+  editor.view.dispatch(setSearchState(editor.state.tr, new LiteralSearchQuery({ search: '' })));
 }
 
 /**
@@ -60,7 +61,7 @@ export function EditorFindBar({ editor, request, onClose, onToggleReplace }: Edi
   useEffect(() => {
     if (!request.open || editor.isDestroyed) return;
     const { state, view } = editor;
-    const searchQuery = new SearchQuery({ search: query, caseSensitive, literal: true, replace: replacement });
+    const searchQuery = new LiteralSearchQuery({ search: query, caseSensitive, replace: replacement });
     const tr = setSearchState(state.tr, searchQuery);
     if (searchQuery.valid) {
       const match = searchQuery.findNext(state, state.selection.from) ?? searchQuery.findNext(state, 0);
@@ -72,7 +73,7 @@ export function EditorFindBar({ editor, request, onClose, onToggleReplace }: Edi
 
   useEffect(() => {
     if (!request.open || editor.isDestroyed) return;
-    editor.view.dispatch(setSearchState(editor.state.tr, new SearchQuery({ search: query, caseSensitive, literal: true, replace: replacement })));
+    editor.view.dispatch(setSearchState(editor.state.tr, new LiteralSearchQuery({ search: query, caseSensitive, replace: replacement })));
   }, [replacement]);
 
   useEffect(() => {

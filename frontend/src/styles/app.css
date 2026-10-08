@@ -891,6 +891,7 @@ html[data-theme='dark'] {
 .code-block .hljs-strong { font-weight: 700; }
 /* 节点选区、块菜单作用对象、查找匹配 */
 .editor-content .ProseMirror .ProseMirror-selectednode { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; border-radius: var(--radius-xs); }
+.editor-content .ProseMirror .ProseMirror-selectednode:has(> :is(.math-block, .math-inline).is-editing) { outline: none; }
 .editor-content .ProseMirror hr.ProseMirror-selectednode { outline-offset: 6px; }
 .editor-content .ProseMirror .is-block-targeted { border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent); }
 .editor-content .ProseMirror .ProseMirror-search-match { border-radius: 2px; background: var(--search-match); }
@@ -1065,7 +1066,7 @@ html[data-theme='dark'] {
 .math-rendered-inline { display: inline-block; vertical-align: middle; padding: 0 2px; }
 .math-inline { display: inline-flex; align-items: center; vertical-align: middle; cursor: pointer; border-radius: 4px; }
 .math-inline.is-preview:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.math-inline-input { min-width: 4em; max-width: 100%; margin: 0 2px; padding: 2px 5px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--panel-bg); color: inherit; font: 12px Consolas, monospace; field-sizing: content; }
+.math-inline-input { min-width: 12em; max-width: min(420px, 60vw); margin: 0 2px; padding: 2px 6px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--panel-bg); color: inherit; font: 15px/1.6 Consolas, "Courier New", monospace; field-sizing: content; }
 .mermaid-rendered { overflow-x: auto; padding-top: 4px; }
 .mermaid-fallback { text-align: left; white-space: pre-wrap; }
 .markdown-block-preview { text-align: left; }

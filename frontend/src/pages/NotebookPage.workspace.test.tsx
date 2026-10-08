@@ -124,11 +124,11 @@ const page104: NotePage = {
 
 const basePages: NotePage[] = [page11, page37, page104];
 
-function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean } = {}): void {
+function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean; createdPages?: NotePage[] } = {}): void {
   apiGet.mockImplementation((path: string) => {
     if (path === '/api/notebooks') return Promise.resolve(baseNotebooks);
     if (path === '/api/note-pages') return Promise.reject(new Error('deprecated'));
-    if (path === '/api/notebooks/1/pages') return Promise.resolve(basePages);
+    if (path === '/api/notebooks/1/pages') return Promise.resolve([...basePages, ...(opts.createdPages ?? [])]);
     // 其他笔记本（如 NBK-14 新建后切换到的）没有页面
     if (/^\/api\/notebooks\/\d+\/pages$/.test(path)) return Promise.resolve([]);
     if (path === '/api/note-pages/11') {
@@ -140,6 +140,8 @@ function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean } = 
       return Promise.resolve(page37);
     }
     if (path === '/api/note-pages/104') return Promise.resolve(page104);
+    const created = opts.createdPages?.find((page) => path === `/api/note-pages/${page.id}`);
+    if (created) return Promise.resolve(created);
     return Promise.resolve({});
   });
 }
@@ -279,9 +281,15 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
   });
 
   describe('New page modal (NBK-13)', () => {
+    const createdPage: NotePage = { id: 100, notebookId: 1, title: '我的新页面', content: { type: 'doc', content: [{ type: 'paragraph' }] } };
     beforeEach(() => {
-      primeNotebookApi();
-      apiPost.mockResolvedValue({ id: 100, notebookId: 1, title: '新页面', content: { type: 'doc', content: [{ type: 'paragraph' }] } });
+      // 创建成功后页面会请求详情，不能让这个请求落到 {} 兜底后在异步渲染中报错。
+      const createdPages: NotePage[] = [];
+      primeNotebookApi({ createdPages });
+      apiPost.mockImplementation(async () => {
+        createdPages.push(createdPage);
+        return createdPage;
+      });
     });
 
     it('NBK-13: 新建页面 modal POSTs to /api/notebooks/{notebookId}/pages with title', async () => {
@@ -292,6 +300,8 @@ describe('NotebookPage behavior — baseline regression (Task 1)', () => {
       fireEvent.change(input, { target: { value: '我的新页面' } });
       fireEvent.click(screen.getByRole('button', { name: '确定' }));
       await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/notebooks/1/pages', expect.objectContaining({ title: '我的新页面' })));
+      await waitFor(() => expect(screen.getByRole('textbox', { name: '重命名当前页面' })).toHaveValue('我的新页面'));
+      expect(screen.getByTestId('notebook-editor')).toHaveAttribute('data-page-id', '100');
     });
 
     it('NBK-13: blank title rejected (warns 请输入页面标题, no POST)', async () => {

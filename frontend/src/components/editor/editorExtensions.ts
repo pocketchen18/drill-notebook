@@ -53,16 +53,16 @@ const NodeViewDragGuard = Extension.create({
   addProseMirrorPlugins() {
     return [
       new Plugin({
-        props: {
-          handleDOMEvents: {
-            dragstart(view, event) {
-              const target = event.target instanceof Element ? event.target : null;
-              const island = target?.closest('[contenteditable="false"]');
-              if (!island || !view.dom.contains(island)) return false;
-              event.preventDefault();
-              return true;
-            }
-          }
+        view(view) {
+          // 节点视图的 stopEvent 会吞掉图片等子元素的 dragstart，插件的冒泡处理收不到。
+          // 捕获阶段先阻止原生拖动；正文外手柄和可编辑正文不在拦截范围内。
+          const onDragStart = (event: DragEvent): void => {
+            const target = event.target instanceof Element ? event.target : null;
+            const island = target?.closest('[contenteditable="false"]');
+            if (island && view.dom.contains(island)) event.preventDefault();
+          };
+          view.dom.addEventListener('dragstart', onDragStart, true);
+          return { destroy: () => view.dom.removeEventListener('dragstart', onDragStart, true) };
         }
       })
     ];
