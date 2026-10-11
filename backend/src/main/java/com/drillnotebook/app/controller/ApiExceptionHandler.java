@@ -36,6 +36,21 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(error.getStatusCode()).body(body("request_failed", message));
     }
 
+    /**
+     * 轮次拒绝：容量、并发、幂等或存储降级各有各的状态码，
+     * 前端要能区分"清历史"、"等上一轮"和"稍后重试"，不能都当参数错误。
+     */
+    @ExceptionHandler(com.drillnotebook.app.service.ChatTurnRejectException.class)
+    public ResponseEntity<Map<String, Object>> chatTurnReject(com.drillnotebook.app.service.ChatTurnRejectException error) {
+        log.warn("轮次拒绝 status={} code={} message={}", error.status(), error.code(), error.getMessage());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("error", error.code());
+        payload.put("errorCode", error.code());
+        payload.put("message", error.getMessage());
+        payload.putAll(error.details());
+        return ResponseEntity.status(error.status()).body(payload);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> badRequest(IllegalArgumentException error) {
         // 旧路径：服务层直接抛 IllegalArgumentException 的场景。message 已是简要文案。

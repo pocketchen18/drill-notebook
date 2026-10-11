@@ -215,6 +215,26 @@ class ChatSessionMetadataRepositoryTest {
         assertEquals("NOTEBOOK", state.memoryScopeType(), "遗忘只换代，不改作用域");
     }
 
+    @Test
+    void bulkWatermarkAdvanceIsForwardOnlyAndPerSession() throws Exception {
+        insertTurn(sessionId, ChatTurnRepository.STATUS_COMPLETED);
+        insertTurn(sessionId, ChatTurnRepository.STATUS_COMPLETED);
+        long other = 991L;
+        jdbc.update("INSERT INTO ai_chat_session(id, title) VALUES (?, '第二个会话')", other);
+        insertTurn(other, ChatTurnRepository.STATUS_COMPLETED);
+        jdbc.update("UPDATE ai_chat_session SET memory_scan_after_turn = 999 WHERE id = ?", other);
+
+        int advanced = metadata.advanceAllScanWatermarks(ScanKind.MEMORY);
+
+        assertEquals(1, advanced, "只有落后的那个会话被推进");
+        assertEquals(101L, metadata.read(sessionId).orElseThrow().memoryScanAfterTurn());
+        assertEquals(999L, metadata.read(other).orElseThrow().memoryScanAfterTurn(), "领先的水位不被回拨");
+        assertEquals(0L, metadata.read(other).orElseThrow().summaryScanAfterTurn(), "另一种水位不受影响");
+        assertEquals(0, metadata.advanceAllScanWatermarks(ScanKind.MEMORY), "重跑没有变化");
+        assertEquals(jdbc.queryForObject("SELECT MAX(id) FROM ai_chat_turn", Long.class),
+                metadata.globalMaxTurnId());
+    }
+
     // ---- helpers ----
 
     private interface InConnection {

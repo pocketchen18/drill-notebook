@@ -518,12 +518,15 @@ class HybridRetrievalServiceTest {
         });
         server.start();
         capturedBodies.clear();
+        ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         AiService service = new AiService(
                 new AiConfigRepository(jdbc),
-                ChatLegacyWiring.sessions(dataSource, jdbc),
+                wiring.sessions(),
                 new ApiKeyEncryptor(),
                 mapper,
-                lexical);
+                lexical,
+                wiring.turnService(),
+                wiring.cipher());
         service.saveConfig(Map.of(
                 "provider", "custom",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort(),

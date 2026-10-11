@@ -150,10 +150,10 @@ class MemoryProposalRepositoryTest {
     @Test
     void expiredProposalsAreInvisibleImmediately() throws Exception {
         String target = newFact();
-        proposals.submit(new ProposalDraft(VAULT, sessionId, null, null, target, 1, "REPLACE_PROPOSAL", "p", "{}",
-                "dedup-live", NOW, "2026-10-20T00:00:00.000Z"));
-        proposals.submit(new ProposalDraft(VAULT, sessionId, null, null, target, 1, "RETRACT_PROPOSAL", "q", "{}",
-                "dedup-expired", NOW, "2026-10-05T00:00:00.000Z"));
+        proposals.submit(new ProposalDraft("prop-live", VAULT, sessionId, null, null, target, 1, "REPLACE_PROPOSAL",
+                "p", "{}", "dedup-live", NOW, "2026-10-20T00:00:00.000Z"));
+        proposals.submit(new ProposalDraft("prop-expired", VAULT, sessionId, null, null, target, 1, "RETRACT_PROPOSAL",
+                "q", "{}", "dedup-expired", NOW, "2026-10-05T00:00:00.000Z"));
 
         List<ProposalRow> visible = proposals.findPending(VAULT, "2026-10-11T00:00:00.000Z");
 
@@ -166,8 +166,8 @@ class MemoryProposalRepositoryTest {
         String target = newFact();
         String other = newFact();
         proposals.submit(draft("dedup-1", target));
-        proposals.submit(new ProposalDraft(VAULT, sessionId, null, null, other, 1, "RETRACT_PROPOSAL", "q", "{}",
-                "dedup-2", NOW, EXPIRES));
+        proposals.submit(new ProposalDraft("prop-session", VAULT, sessionId, null, null, other, 1, "RETRACT_PROPOSAL",
+                "q", "{}", "dedup-2", NOW, EXPIRES));
 
         assertEquals(1, proposals.markStaleForTarget(VAULT, target), "目标更新使指向它的建议 STALE");
         assertEquals(1, proposals.markStaleForSession(sessionId), "作用域/会话变化使该会话剩下的建议 STALE");
@@ -189,23 +189,24 @@ class MemoryProposalRepositoryTest {
 
     @Test
     void illegalOperationIsRefusedBeforeWriting() {
-        assertThrows(SQLException.class, () -> proposals.submit(new ProposalDraft(VAULT, sessionId, null, null,
-                "mem", 1, "DELETE_ALL", "p", "{}", "dedup-bad", NOW, EXPIRES)));
+        assertThrows(SQLException.class, () -> proposals.submit(new ProposalDraft("prop-bad", VAULT, sessionId,
+                null, null, "mem", 1, "DELETE_ALL", "p", "{}", "dedup-bad", NOW, EXPIRES)));
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal"));
     }
 
     // ---- helpers ----
 
     private String newFact() throws SQLException {
-        var added = facts.add(new MemoryRepository.NewMemory(VAULT, "GLOBAL", 0, "PREFERENCE", "p", "f-"
-                + System.nanoTime(), "v", MemoryRepository.STATUS_ACTIVE, "payload", "{}", "MANUAL", true, false,
+        String family = "f-" + System.nanoTime();
+        var added = facts.add(new MemoryRepository.NewMemory("row-" + family, VAULT, "GLOBAL", 0, "PREFERENCE",
+                "p", family, "v", MemoryRepository.STATUS_ACTIVE, "payload", "{}", "MANUAL", true, false,
                 null, null, NOW, NOW, NOW));
         return added.memoryId();
     }
 
     private ProposalDraft draft(String dedupHmac, String targetMemoryId) {
-        return new ProposalDraft(VAULT, sessionId, null, null, targetMemoryId, 1, "REPLACE_PROPOSAL", "payload",
-                "{}", dedupHmac, NOW, EXPIRES);
+        return new ProposalDraft("prop-" + dedupHmac, VAULT, sessionId, null, null, targetMemoryId, 1,
+                "REPLACE_PROPOSAL", "payload", "{}", dedupHmac, NOW, EXPIRES);
     }
 
     private int count(String sql) {

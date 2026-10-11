@@ -216,16 +216,20 @@ class MemoryRepositoryTest {
 
     @Test
     void scopeAndOriginViolationsAreRefusedBeforeWriting() {
-        assertThrows(SQLException.class, () -> memory.add(new NewMemory(VAULT, "NOTEBOOK", 0, "GOAL", "p", "f1", "v",
-                MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
-        assertThrows(SQLException.class, () -> memory.add(new NewMemory(VAULT, "GLOBAL", 7, "GOAL", "p", "f2", "v",
-                MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
-        assertThrows(SQLException.class, () -> memory.add(new NewMemory(VAULT, "GLOBAL", 0, "GOAL", "p", "f3", "v",
-                "ARCHIVED", "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
-        assertThrows(SQLException.class, () -> memory.add(new NewMemory(VAULT, "GLOBAL", 0, "GOAL", "p", "f4", "v",
-                MemoryRepository.STATUS_ACTIVE, "x", "{}", "MODEL", false, false, null, null, NOW, NOW, NOW)));
-        assertThrows(SQLException.class, () -> memory.add(new NewMemory("missing-vault", "GLOBAL", 0, "GOAL", "p",
-                "f5", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory("row-1", VAULT, "NOTEBOOK", 0, "GOAL", "p",
+                "f1", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory("row-2", VAULT, "GLOBAL", 7, "GOAL", "p",
+                "f2", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory("row-3", VAULT, "GLOBAL", 0, "GOAL", "p",
+                "f3", "v", "ARCHIVED", "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory("row-4", VAULT, "GLOBAL", 0, "GOAL", "p",
+                "f4", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "MODEL", false, false, null, null, NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory("row-5", "missing-vault", "GLOBAL", 0, "GOAL",
+                "p", "f5", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null,
+                NOW, NOW, NOW)));
+        assertThrows(SQLException.class, () -> memory.add(new NewMemory(null, VAULT, "GLOBAL", 0, "GOAL", "p",
+                "f6", "v", MemoryRepository.STATUS_ACTIVE, "x", "{}", "AUTO", false, false, null, null, NOW, NOW, NOW)),
+                "rowId 必须由持有钥匙的调用方先生成，否则密文无法绑定行身份");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item"));
     }
 
@@ -249,12 +253,21 @@ class MemoryRepositoryTest {
                 memory.setStatus(VAULT, added.memoryId(), 99, MemoryRepository.STATUS_ACTIVE, "DISABLED"));
         assertEquals(CasOutcome.APPLIED,
                 memory.setStatus(VAULT, added.memoryId(), 1, MemoryRepository.STATUS_ACTIVE, "DISABLED"));
-        assertEquals(CasOutcome.NOT_FOUND,
+        // 已经停用的这一版还在，只是状态前提不成立：这是 CAS 失手，不是"找不到记忆"
+        assertEquals(CasOutcome.VERSION_CONFLICT,
                 memory.setStatus(VAULT, added.memoryId(), 1, MemoryRepository.STATUS_ACTIVE, "DISABLED"));
+        assertEquals(CasOutcome.NOT_FOUND, memory.setStatus(VAULT, "mem-不存在", 1,
+                MemoryRepository.STATUS_ACTIVE, "DISABLED"));
 
         assertEquals("DISABLED", jdbc.queryForObject(
                 "SELECT status FROM ai_memory_item WHERE row_id = ?", String.class, added.rowId()));
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"), "停用只改状态，不删版本也不造新版");
+
+        assertEquals(CasOutcome.APPLIED,
+                memory.setStatus(VAULT, added.memoryId(), 1, "DISABLED", MemoryRepository.STATUS_ACTIVE),
+                "重新启用走同一原语：此刻并没有 ACTIVE 版本，不能因此说找不到");
+        assertEquals(MemoryRepository.STATUS_ACTIVE, jdbc.queryForObject(
+                "SELECT status FROM ai_memory_item WHERE row_id = ?", String.class, added.rowId()));
     }
 
     @Test
@@ -381,15 +394,89 @@ class MemoryRepositoryTest {
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"));
     }
 
+    @Test
+    void deletingLastVersionDropsUnreferencedEvidenceAndWritesSuppressions() throws Exception {
+        long turnOne = insertTurn();
+        long turnTwo = insertTurn();
+        String memoryId = attachFact("f-language", "v-1", turnOne, turnTwo);
+        long epochBefore = vault().epoch();
+        String sharedEvidence = evidenceIdOf(turnOne, "f-language");
+        String otherMemoryId = attachFact("f-other", "v-9", turnOne);
+        insertProposal("prop-target", evidenceIdOf(turnTwo, "f-language"), memoryId);
+        insertProposal("prop-evidence", sharedEvidence, otherMemoryId);
+
+        var result = memory.deleteVersionsByMemoryId(VAULT, memoryId, 1);
+
+        assertTrue(result.deleted());
+        assertEquals(1, result.versionsDeleted());
+        assertEquals(2, result.evidenceDeleted(), "两条证据都只被这条记忆引用，删干净");
+        assertEquals(2, result.proposalsStaled(), "指向被删记忆的证据链建议都置 STALE");
+        assertEquals(4, result.suppressionsAdded(), "family + predicate + 两个来源");
+        assertEquals(epochBefore + 1, result.vault().epoch(), "遗忘边界推 epoch");
+        assertEquals(epochBefore + 1, vault().epoch());
+
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item WHERE memory_id = '" + memoryId + "'"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_evidence WHERE session_id = " + sessionId
+                + " AND source_hmac IN ('hmac-turn-" + turnOne + "-f-language','hmac-turn-" + turnTwo
+                + "-f-language')"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item_evidence"), "另一条记忆的关联还在");
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE status = 'STALE'"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE status = 'PENDING'"));
+        assertEquals(List.of("f-language", "predicate-f-language"),
+                jdbc.queryForList("SELECT key_hmac FROM ai_memory_suppression WHERE suppression_kind IN"
+                        + " ('FAMILY','PREDICATE') ORDER BY CASE suppression_kind WHEN 'FAMILY' THEN 0 ELSE 1 END",
+                        String.class));
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_memory_suppression WHERE suppression_kind = 'EVIDENCE'"));
+    }
+
+    @Test
+    void deleteKeepsEvidenceStillReferencedByOtherVersions() throws Exception {
+        var first = memory.add(memory("f-shared", "v-a", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+        memory.attachEvidence(evidence("hmac-shared", "共用的原话"), first.rowId());
+        var second = memory.replace(VAULT, first.memoryId(), 1,
+                memory("f-shared", "v-b", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+        memory.attachEvidence(evidence("hmac-shared", "共用的原话"), second.rowId());
+        var other = memory.add(memory("f-holder", "v-c", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+        memory.attachEvidence(evidence("hmac-shared", "共用的原话"), other.rowId());
+
+        var result = memory.deleteVersionsByMemoryId(VAULT, first.memoryId(), 2);
+
+        assertTrue(result.deleted());
+        assertEquals(2, result.versionsDeleted(), "ACTIVE 与它下面的 SUPERSEDED 版本一起删");
+        assertEquals(0, result.evidenceDeleted(), "别的记忆还在引用，原话不能删");
+        assertEquals(2, result.suppressionsAdded(), "来源没变成孤儿，只写 family/predicate 两条抑制");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_evidence WHERE source_hmac = 'hmac-shared'"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item_evidence"), "只剩另一条记忆的关联");
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item WHERE memory_id = '" + first.memoryId() + "'"));
+    }
+
+    @Test
+    void deleteRefusesWrongVersionAndMissingMemory() throws Exception {
+        String memoryId = attachFact("f-language", "v-1", insertTurn());
+
+        var conflict = memory.deleteVersionsByMemoryId(VAULT, memoryId, 99);
+        assertEquals(MemoryRepository.DeleteOutcome.VERSION_CONFLICT, conflict.outcome());
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE memory_id = '" + memoryId + "'"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_evidence"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_suppression"));
+        assertEquals(1L, vault().epoch(), "冲突不推 epoch");
+
+        var missing = memory.deleteVersionsByMemoryId(VAULT, "mem-不存在", 1);
+        assertEquals(MemoryRepository.DeleteOutcome.NOT_FOUND, missing.outcome());
+        assertFalse(missing.deleted());
+    }
+
     // ---- helpers ----
 
     private NewMemory memory(String family, String valueHmac, String status, String origin) {
-        return new NewMemory(VAULT, "GLOBAL", 0, "PREFERENCE", "predicate-" + family, family, valueHmac, status,
+        return new NewMemory("row-" + family + "-" + valueHmac, VAULT, "GLOBAL", 0, "PREFERENCE",
+                "predicate-" + family, family, valueHmac, status,
                 "payload-" + valueHmac, "{}", origin, "MANUAL".equals(origin), false, null, null, NOW, NOW, NOW);
     }
 
     private EvidenceDraft evidence(String sourceHmac, String quoteCipher) {
-        return new EvidenceDraft(VAULT, sessionId, null, null, "u0", sourceHmac, quoteCipher, "{}", NOW);
+        return new EvidenceDraft("ev-" + sourceHmac, VAULT, sessionId, null, null, "u0", sourceHmac, quoteCipher,
+                "{}", NOW);
     }
 
     /** 给一条自动事实挂上若干来源，返回它的 memoryId。 */
@@ -408,7 +495,7 @@ class MemoryRepositoryTest {
     }
 
     private EvidenceDraft evidenceFor(long turnId, String family) {
-        return new EvidenceDraft(VAULT, sessionId, turnId, null, "u0",
+        return new EvidenceDraft("ev-turn-" + turnId + "-" + family, VAULT, sessionId, turnId, null, "u0",
                 "hmac-turn-" + turnId + "-" + family, "原话-" + turnId, "{}", NOW);
     }
 

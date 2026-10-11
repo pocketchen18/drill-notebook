@@ -5,6 +5,8 @@ import com.drillnotebook.app.model.RetrievalHit;
 import com.drillnotebook.app.model.RetrievalQuery;
 import com.drillnotebook.app.repository.AiChatSessionRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
+import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
+import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,7 +29,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class AiService {
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
-    private static final int MAX_MESSAGES_PER_SESSION = 500;
     private static final CallOptions DEFAULT_CALL = new CallOptions(180, 4096, false);
     /** 结构化解析（PDF/知识点 JSON）：关闭 thinking，给足输出与超时。 */
     private static final CallOptions STRUCTURED_CALL = new CallOptions(300, 32000, true);
@@ -39,6 +40,10 @@ public class AiService {
     private final ApiKeyEncryptor encryptor;
     private final ObjectMapper mapper;
     private final RetrievalService retrieval;
+    /** 轮次生命周期：所有新聊天一律走它，不再有绕过容量账本的明文写路径（§7.2）。 */
+    private final ChatTurnService chatTurns;
+    /** 聊天正文的加解密：读取旧消息与轮次元数据共用同一套材料与哨兵文案。 */
+    private final ChatMessageCipher contentCipher;
     /** Task 11 起由 Spring 注入的 hybrid 检索；手工构造（旧测试）时为 null → BM25-only。 */
     private volatile HybridRetrievalService hybridRetrieval;
     /** Task 12 起由 Spring 注入的 embedding 配置；手工构造（旧测试）时为 null。 */
@@ -74,12 +79,16 @@ public class AiService {
         }
     }
 
-    public AiService(AiConfigRepository configs, AiChatSessionRepository sessions, ApiKeyEncryptor encryptor, ObjectMapper mapper, RetrievalService retrieval) {
+    public AiService(AiConfigRepository configs, AiChatSessionRepository sessions, ApiKeyEncryptor encryptor,
+                     ObjectMapper mapper, RetrievalService retrieval, ChatTurnService chatTurns,
+                     ChatMessageCipher contentCipher) {
         this.configs = configs;
         this.sessions = sessions;
         this.encryptor = encryptor;
         this.mapper = mapper;
         this.retrieval = retrieval;
+        this.chatTurns = chatTurns;
+        this.contentCipher = contentCipher;
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -95,9 +104,11 @@ public class AiService {
     public Map<String, Object> redactedConfig() {
         Map<String, Object> chat = redactedSlot(configs.findChat());
         Map<String, Object> importSlot = redactedSlot(configs.findImport());
+        Map<String, Object> memorySlot = redactedSlot(configs.findMemory());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("chat", chat);
         result.put("import", importSlot);
+        result.put("memory", memorySlot);
         if (embeddingConfig != null) result.put("embedding", embeddingConfig.redactedEmbedding());
         // 兼容旧前端：顶层字段 = 主模型（对话）
         result.put("provider", chat.get("provider"));
@@ -131,7 +142,8 @@ public class AiService {
     }
 
     /**
-     * 保存模型配置。body.purpose: "chat"（默认，主模型）、"import"（导入兜底）
+     * 保存模型配置。body.purpose: "chat"（默认，主模型）、"import"（导入兜底）、
+     * "memory"（记忆维护专用槽位，§5.1 的 maintenanceModelMode=dedicated）
      * 或 "embedding"（笔记本向量索引，Task 12 起委托给 EmbeddingConfigService）。
      * 各套配置独立存储密钥与 endpoint。
      */
@@ -141,8 +153,9 @@ public class AiService {
             if (embeddingConfig == null) throw new IllegalArgumentException("embedding 配置暂不可用");
             return embeddingConfig.saveConfig(body);
         }
-        if (!AiConfigRepository.PURPOSE_CHAT.equals(purpose) && !AiConfigRepository.PURPOSE_IMPORT.equals(purpose)) {
-            throw new IllegalArgumentException("purpose 必须是 chat、import 或 embedding");
+        if (!AiConfigRepository.PURPOSE_CHAT.equals(purpose) && !AiConfigRepository.PURPOSE_IMPORT.equals(purpose)
+                && !AiConfigRepository.PURPOSE_MEMORY.equals(purpose)) {
+            throw new IllegalArgumentException("purpose 必须是 chat、import、memory 或 embedding");
         }
         String provider = string(body, "provider", "custom");
         String endpoint = string(body, "endpoint", "");
@@ -267,81 +280,222 @@ public class AiService {
         return payload;
     }
 
+    /** 归一化后的本轮输入：协议版本、请求身份、会话、正文与要发给模型的消息列表。 */
+    private record TurnRequest(int protocolVersion, String requestId, long sessionId, String userText,
+                               String masterPassword, List<Map<String, Object>> modelMessages,
+                               Map<String, Object> requestOptions) {
+        ChatTurnService.BeginInput beginInput() {
+            return new ChatTurnService.BeginInput(requestId, protocolVersion, sessionId, userText, masterPassword,
+                    List.of(), requestOptions);
+        }
+    }
+
     public Map<String, Object> chat(Map<String, Object> body) {
         AiConfigRepository.ConfigRow config = requireChatConfig();
-        List<Map<String, Object>> messages = messages(body.get("messages"));
-        if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
+        TurnRequest request = turnRequest(body);
+        ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
+        if (begun.replayed()) {
+            // 同 ID 已完成：直接回已存结果，绝不再次外发、绝不重复落库（§7.2 第 7 条）
+            return chatResponse(request, begun.replayReply(), null, begun.replayStatus(), "saved", true);
+        }
+        ChatTurnService.Lease lease = begun.lease();
+        RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), request.modelMessages());
+        AiUpstreamClient.Result result;
+        try {
+            result = chatUpstream(config, withContext(request.modelMessages(), outcome), request.masterPassword());
+        } catch (RuntimeException error) {
+            chatTurns.abandon(lease, "upstream_failed");
+            throw error;
+        }
+        ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                new ChatTurnService.UpstreamReply(result.text(), result.reasoning(), result.finishReason(), false),
+                retrievalAudit(outcome));
+        maybeAutoTitle(request.sessionId(), request.userText());
+        reportLegacyFailure(request.protocolVersion(), done.status(), result);
+        return chatResponse(request, done.reply(), outcome, done.status(), done.persistenceStatus(), false);
+    }
+
+    /** 流式聊天结果：完整正文 + 思考链 + 本轮终态与落库情况（done 事件据此裁决）。 */
+    public record ChatResult(String text, String reasoning, String status, String persistenceStatus,
+                             boolean stateDurable) {
+        public ChatResult {
+            if (status == null) status = ChatTurnRepository.STATUS_COMPLETED;
+            if (persistenceStatus == null) persistenceStatus = "saved";
+        }
+    }
+
+    /**
+     * 流式聊天：每收到一个增量（text|reasoning）回调 listener，结束后由本轮事务落库。
+     * 与 {@link #chat} 共用同一套开始/收尾语义，mock 端点也一样走轮次，不能提前返回绕过记账。
+     */
+    public ChatResult chatStream(Map<String, Object> body, AiUpstreamClient.StreamListener listener) {
+        TurnRequest request = turnRequest(body);
+        ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
+        if (begun.replayed()) {
+            return new ChatResult(begun.replayReply(), null, begun.replayStatus(), "saved", true);
+        }
+        ChatTurnService.Lease lease = begun.lease();
+        UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
+        if (upstream == null) {
+            // mock://local：一次性吐出整段正文，模拟流式
+            String reply = mockReply(request.modelMessages());
+            if (listener != null) listener.onDelta("text", reply);
+            ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                    new ChatTurnService.UpstreamReply(reply, null, "stop", false), null);
+            maybeAutoTitle(request.sessionId(), request.userText());
+            return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
+                    done.stateDurable());
+        }
+        RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), request.modelMessages());
+        AiUpstreamClient.Result result;
+        try {
+            AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
+                    upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
+                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
+            result = upstream().call(target, withContext(request.modelMessages(), outcome), true, listener,
+                    DEFAULT_CALL.timeoutSeconds());
+        } catch (RuntimeException error) {
+            chatTurns.abandon(lease, "upstream_failed");
+            throw error;
+        }
+        // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
+        ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                new ChatTurnService.UpstreamReply(result.text(), result.reasoning(), result.finishReason(), false),
+                retrievalAudit(outcome));
+        maybeAutoTitle(request.sessionId(), request.userText());
+        if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
+            throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
+        }
+        return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
+                done.stateDurable());
+    }
+
+    /** v1/v2 归一：v2 只接受 input.userText，v1 继续吃旧 messages 列表（一个版本周期，§7.1）。 */
+    private TurnRequest turnRequest(Map<String, Object> body) {
         long sessionId = resolveSessionId(body);
         String masterPassword = string(body, "masterPassword", "");
-        RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), messages);
-        List<Map<String, Object>> modelMessages = messages;
-        if (outcome.contextMessage() != null) {
-            List<Map<String, Object>> withContext = new ArrayList<>(messages.size() + 1);
-            withContext.add(outcome.contextMessage());
-            withContext.addAll(messages);
-            modelMessages = withContext;
+        int protocolVersion = (int) longValue(body.get("protocolVersion"), 1);
+        if (protocolVersion == 2) {
+            Map<String, Object> input = mapValue(body.get("input"));
+            String userText = string(input, "userText", "");
+            if (!string(input, "content", "").isBlank()) {
+                throw new ChatTurnRejectException(422, "INPUT_FIELDS_CONFLICT",
+                        "v2 只接受 input.userText，不能与旧 content 同时出现或互相替代", Map.of());
+            }
+            return new TurnRequest(2, string(body, "requestId", ""), sessionId, userText, masterPassword,
+                    List.of(Map.of("role", "user", "content", userText)), requestOptions(body));
         }
-        String reply = call(config, modelMessages, masterPassword, DEFAULT_CALL);
+        List<Map<String, Object>> messages = messages(body.get("messages"));
+        if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
         Map<String, Object> lastUser = messages.get(messages.size() - 1);
-        persistEncrypted(sessionId, String.valueOf(lastUser.get("role")), contentText(lastUser.get("content")), masterPassword);
-        persistEncrypted(sessionId, "assistant", reply, masterPassword);
-        maybeAutoTitle(sessionId, lastUser.get("content"));
-        // 检索关闭时响应与旧契约完全一致（只有 reply/sessionId）。
-        if (!outcome.enabled()) return Map.of("reply", reply, "sessionId", sessionId);
+        return new TurnRequest(1, null, sessionId, contentText(lastUser.get("content")), masterPassword,
+                messages, requestOptions(body));
+    }
+
+    /** 进 request_meta 的只有选项标识：页面正文与 RAG 片段一律不进元数据（contracts §2.2）。 */
+    private static Map<String, Object> requestOptions(Map<String, Object> body) {
+        Map<String, Object> options = new LinkedHashMap<>();
+        options.put("retrieval", onlyKeys(mapValue(body.get("retrievalOptions")), "enabled", "scope", "notebookId"));
+        options.put("page", onlyKeys(mapValue(body.get("pageContext")), "kind", "pageId"));
+        options.put("memory", onlyKeys(mapValue(body.get("memoryOptions")), "use"));
+        return options;
+    }
+
+    private static Map<String, Object> onlyKeys(Map<String, Object> source, String... allowed) {
+        Map<String, Object> picked = new java.util.TreeMap<>();
+        for (String key : allowed) if (source.containsKey(key)) picked.put(key, source.get(key));
+        return picked;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> mapValue(Object value) {
+        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+    }
+
+    private static List<Map<String, Object>> withContext(List<Map<String, Object>> messages,
+                                                         RetrievalOutcome outcome) {
+        if (outcome.contextMessage() == null) return messages;
+        List<Map<String, Object>> merged = new ArrayList<>(messages.size() + 1);
+        merged.add(outcome.contextMessage());
+        merged.addAll(messages);
+        return merged;
+    }
+
+    /** 有界 ContextAudit 的最小版：只记实际注入的片段数量与降级码，正文一律不入元数据。 */
+    private static Map<String, Object> retrievalAudit(RetrievalOutcome outcome) {
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("schemaVersion", 1);
+        audit.put("retrievalEnabled", outcome.enabled());
+        audit.put("citationCount", outcome.citations().size());
+        if (outcome.notice() != null) audit.put("noticeCode", outcome.notice().get("code"));
+        return audit;
+    }
+
+    /**
+     * v1 的旧契约里"空回复/被截断"是 400，客户端据此提示用户；轮次层把它们当终态落库。
+     * 这里在落库之后维持旧响应语义，v2 则原样返回结构化终态。
+     */
+    private static void reportLegacyFailure(int protocolVersion, String status, AiUpstreamClient.Result result) {
+        if (protocolVersion == 2) return;
+        if (ChatTurnRepository.STATUS_TRUNCATED.equals(status)) {
+            throw new IllegalArgumentException("AI 返回被 max_tokens 截断，请缩短输入或提高模型输出上限");
+        }
+        if (ChatTurnRepository.STATUS_FAILED.equals(status)) {
+            throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
+        }
+        if (result == null) throw new IllegalArgumentException("AI 服务暂时不可用，请稍后重试");
+    }
+
+    private Map<String, Object> chatResponse(TurnRequest request, String reply, RetrievalOutcome outcome,
+                                             String status, String persistenceStatus, boolean replayed) {
+        if (request.protocolVersion() != 2) {
+            // 检索关闭时 v1 响应与旧契约完全一致（只有 reply/sessionId）。
+            if (outcome == null || !outcome.enabled()) return Map.of("reply", reply, "sessionId", request.sessionId());
+            Map<String, Object> legacy = new LinkedHashMap<>();
+            legacy.put("reply", reply);
+            legacy.put("sessionId", request.sessionId());
+            legacy.put("citations", outcome.citations());
+            if (outcome.notice() != null) legacy.put("retrievalNotice", outcome.notice());
+            return legacy;
+        }
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("protocolVersion", 2);
+        result.put("requestId", request.requestId());
+        result.put("sessionId", request.sessionId());
+        result.put("status", status);
+        result.put("stateDurable", true);
+        result.put("persistenceStatus", persistenceStatus);
+        result.put("replayed", replayed);
         result.put("reply", reply);
-        result.put("sessionId", sessionId);
-        result.put("citations", outcome.citations());
-        if (outcome.notice() != null) result.put("retrievalNotice", outcome.notice());
+        if (outcome != null) {
+            result.put("citations", outcome.citations());
+            if (outcome.notice() != null) result.put("retrievalNotice", outcome.notice());
+        }
         return result;
     }
 
-    /** 流式聊天结果：完整正文 + 思考链（可为 null）。 */
-    public record ChatResult(String text, String reasoning) {}
-
-    /**
-     * 流式聊天：每收到一个增量（text|reasoning）回调 listener，返回完整正文。
-     * 本方法不落库——controller 在 SSE 结束前调用 persistChatResult。
-     */
-    public ChatResult chatStream(Map<String, Object> body, AiUpstreamClient.StreamListener listener) {
-        List<Map<String, Object>> messages = messages(body.get("messages"));
-        if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
-        UpstreamConfig upstream = decryptedChatUpstream(string(body, "masterPassword", ""));
-        if (upstream == null) {
-            // mock://local：一次性吐出整段正文，模拟流式
-            String reply = mockReply(messages);
-            if (listener != null) listener.onDelta("text", reply);
-            return new ChatResult(reply, null);
+    /** 聊天专用的非流式调用：返回原始 Result，终态由轮次层裁决，不在这里伪造"正常结束"。 */
+    private AiUpstreamClient.Result chatUpstream(AiConfigRepository.ConfigRow config,
+                                                  List<Map<String, Object>> messages, String masterPassword) {
+        if (config.endpoint().equalsIgnoreCase("mock://local")) {
+            return new AiUpstreamClient.Result(mockReply(messages), null, "stop");
         }
-        RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), messages);
-        List<Map<String, Object>> modelMessages = messages;
-        if (outcome.contextMessage() != null) {
-            List<Map<String, Object>> withContext = new ArrayList<>(messages.size() + 1);
-            withContext.add(outcome.contextMessage());
-            withContext.addAll(messages);
-            modelMessages = withContext;
+        String apiKey = decryptApiKey(config, masterPassword);
+        try {
+            long start = System.currentTimeMillis();
+            AiUpstreamClient.Result result = upstream().call(new AiUpstreamClient.Upstream(
+                    config.endpoint(), apiKey, config.model(), apiFormatOf(config),
+                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking()), messages, false, null,
+                    DEFAULT_CALL.timeoutSeconds());
+            log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={}",
+                    System.currentTimeMillis() - start,
+                    result.text() == null ? 0 : result.text().length(),
+                    result.reasoning() == null ? 0 : result.reasoning().length(),
+                    result.finishReason());
+            return result;
+        } finally {
+            apiKey = null;
         }
-        AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
-                upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
-                DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
-        AiUpstreamClient.Result result = upstream().call(target, modelMessages, true, listener, DEFAULT_CALL.timeoutSeconds());
-        // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也是有效结果，照常落库。
-        if ((result.text() == null || result.text().isBlank()) && (result.reasoning() == null || result.reasoning().isBlank())) {
-            throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
-        }
-        return new ChatResult(result.text(), result.reasoning());
-    }
-
-    /** 流式完成后落库与自动标题；由 controller 在 SSE 结束前调用。 */
-    public void persistChatResult(Map<String, Object> body, ChatResult result) {
-        List<Map<String, Object>> messages = messages(body.get("messages"));
-        if (messages.isEmpty()) return;
-        long sessionId = resolveSessionId(body);
-        String masterPassword = string(body, "masterPassword", "");
-        Map<String, Object> lastUser = messages.get(messages.size() - 1);
-        persistEncrypted(sessionId, String.valueOf(lastUser.get("role")), contentText(lastUser.get("content")), masterPassword);
-        persistEncrypted(sessionId, "assistant", result.text(), masterPassword, result.reasoning());
-        maybeAutoTitle(sessionId, lastUser.get("content"));
     }
 
     /**
@@ -917,51 +1071,6 @@ public class AiService {
         }
     }
 
-    private void persistEncrypted(long sessionId, String role, String content, String masterPassword) {
-        persistEncrypted(sessionId, role, content, masterPassword, null);
-    }
-
-    private void persistEncrypted(long sessionId, String role, String content, String masterPassword, String reasoning) {
-        if (role == null || content == null) return;
-        try {
-            String material = contentMaterial(masterPassword);
-            String mode = masterPassword == null || masterPassword.isBlank() ? "fingerprint" : "password";
-            ApiKeyEncryptor.EncryptedValue encrypted = encryptor.encrypt(content, material, mode);
-            String meta = mapper.writeValueAsString(Map.of(
-                    "salt", encrypted.salt(),
-                    "iv", encrypted.iv(),
-                    "kdf", "Argon2id",
-                    "algorithm", "AES-256-GCM",
-                    "mode", encrypted.mode(),
-                    "version", 1
-            ));
-            String reasoningCipher = null;
-            String reasoningMeta = null;
-            if (reasoning != null && !reasoning.isBlank()) {
-                ApiKeyEncryptor.EncryptedValue encReasoning = encryptor.encrypt(reasoning, material, mode);
-                reasoningMeta = mapper.writeValueAsString(Map.of(
-                        "salt", encReasoning.salt(),
-                        "iv", encReasoning.iv(),
-                        "kdf", "Argon2id",
-                        "algorithm", "AES-256-GCM",
-                        "mode", encReasoning.mode(),
-                        "version", 1
-                ));
-                reasoningCipher = encReasoning.encrypted();
-            }
-            sessions.insertMessage(sessionId, role, "", encrypted.encrypted(), meta, reasoningCipher, reasoningMeta);
-            pruneSession(sessionId);
-        } catch (Exception error) {
-            // Fall back to plaintext only if encryption fails unexpectedly so chat still works.
-            sessions.insertMessage(sessionId, role, content, null, null);
-            pruneSession(sessionId);
-        }
-    }
-
-    private void pruneSession(long sessionId) {
-        sessions.pruneToNewest(sessionId, MAX_MESSAGES_PER_SESSION);
-    }
-
     private void maybeAutoTitle(long sessionId, Object content) {
         try {
             Map<String, Object> session = sessions.find(sessionId);
@@ -977,33 +1086,17 @@ public class AiService {
     }
 
     private String decryptMessage(AiChatSessionRepository.MessageRow row, String masterPassword) {
-        return decryptCipher(row.content(), row.contentCipher(), row.contentMeta(), masterPassword);
+        // 解密口径与写入共用一个类：旧明文行仍按原文返回，v8 遗留消息照常可读
+        return contentCipher.readLegacy(row.content(), row.contentCipher(), row.contentMeta(), masterPassword)
+                .orSentinel();
     }
 
     /** 解密思考链；空或不可解密时返回 null（前端隐藏 CoT 区块）。 */
     private String decryptReasoning(AiChatSessionRepository.MessageRow row, String masterPassword) {
-        String value = decryptCipher(null, row.reasoningCipher(), row.reasoningMeta(), masterPassword);
+        ChatMessageCipher.Read read = contentCipher.read(row.reasoningCipher(), row.reasoningMeta(), masterPassword);
+        if (read.status() == ChatMessageCipher.ReadStatus.EMPTY) return null;
+        String value = read.orSentinel();
         return value == null || value.isBlank() ? null : value;
-    }
-
-    private String decryptCipher(String plaintext, String cipher, String metaJson, String masterPassword) {
-        if (cipher != null && !cipher.isBlank() && metaJson != null && !metaJson.isBlank()) {
-            try {
-                Map<String, Object> meta = mapper.readValue(metaJson, new TypeReference<>() {});
-                String mode = String.valueOf(meta.getOrDefault("mode", "fingerprint"));
-                String material = "password".equals(mode) ? masterPassword : encryptor.fingerprintMaterial();
-                if (material == null || material.isBlank()) return "[加密消息：需要主密码]";
-                return encryptor.decrypt(cipher, String.valueOf(meta.get("salt")), String.valueOf(meta.get("iv")), material);
-            } catch (Exception error) {
-                return "[加密消息：无法解密]";
-            }
-        }
-        return plaintext == null ? "" : plaintext;
-    }
-
-    private String contentMaterial(String masterPassword) {
-        if (masterPassword != null && !masterPassword.isBlank()) return masterPassword;
-        return encryptor.fingerprintMaterial();
     }
 
     private AiConfigRepository.ConfigRow requireChatConfig() {
@@ -1081,7 +1174,7 @@ public class AiService {
     }
 
     /** 读 params.apiFormat；缺省/损坏时回退 chat_completions。 */
-    static String apiFormatOf(AiConfigRepository.ConfigRow config) {
+    public static String apiFormatOf(AiConfigRepository.ConfigRow config) {
         if (config.params() == null || config.params().isBlank()) return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
         try {
             Map<String, Object> parsed = new ObjectMapper().readValue(config.params(), new TypeReference<Map<String, Object>>() {});

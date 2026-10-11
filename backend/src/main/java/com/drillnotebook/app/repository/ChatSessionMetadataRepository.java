@@ -129,6 +129,31 @@ public class ChatSessionMetadataRepository {
     }
 
     /**
+     * 全库最大轮次 ID：全局遗忘边界（{@code memory_history_floor}）要推到的位置。
+     * 没有轮次时返回 0。
+     */
+    public long globalMaxTurnId() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT COALESCE(MAX(id), 0) FROM ai_chat_turn");
+             ResultSet result = statement.executeQuery()) {
+            return result.next() ? result.getLong(1) : 0L;
+        }
+    }
+
+    /** 全库遗忘边界（§4.4 deleteMemory 的"advance all session floors to current boundaries"）：
+     * 把每个会话的扫描水位推到它当前的最大轮次，旧来源从此不再被自动补记。仍只前进，不回退。
+     */
+    public int advanceAllScanWatermarks(ScanKind kind) throws SQLException {
+        String boundary = "(SELECT COALESCE(MAX(t.id), 0) FROM ai_chat_turn t WHERE t.session_id = s.id)";
+        return immediate.execute(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE ai_chat_session AS s SET "
+                    + kind.column + " = " + boundary + " WHERE " + kind.column + " < " + boundary)) {
+                return statement.executeUpdate();
+            }
+        });
+    }
+
+    /**
      * 摘要尝试记录：在实际发送 SESSION_SUMMARY 之前写，失败同样计入冷却（§2.4）。
      * 属于原 SUMMARY 尝试链的格式修复也更新这里，不伪造新的来源触发。
      */

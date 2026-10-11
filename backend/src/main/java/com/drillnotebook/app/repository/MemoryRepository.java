@@ -38,17 +38,25 @@ public class MemoryRepository {
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_SUPERSEDED = "SUPERSEDED";
 
-    /** 新增一条事实的版本内容；{@code memoryId}/{@code rowId} 由服务端生成，不接受外部传入。 */
-    public record NewMemory(String vaultId, String scopeType, long scopeId, String kind,
+    /**
+     * 新增一条事实的版本内容。{@code rowId} 必须由持有钥匙的调用方先生成——
+     * 密文的 AAD 绑定 {@code vault|table|rowId|version}，仓储内部造 ID 会让上层没法预加密（§6.1.1）；
+     * {@code memoryId} 仍然只在新增时由服务端生成，替换走已有链路。
+     */
+    public record NewMemory(String rowId, String vaultId, String scopeType, long scopeId, String kind,
                             String predicateKeyHmac, String familyKeyHmac, String valueHmac,
                             String status, String payloadCipher, String cryptoMeta, String origin,
                             boolean manualProtected, boolean pinned, String validFrom, String validUntil,
                             String observedAt, String recordedAt, String lastConfirmedAt) {
     }
 
-    /** 一条证据的落库材料；{@code sourceHmac} 是 (vault, source_hmac) 去重键，重复提交复用同一行。 */
-    public record EvidenceDraft(String vaultId, Long sessionId, Long turnId, Long messageId, String sourceBlockId,
-                                String sourceHmac, String quoteCipher, String cryptoMeta, String sourceCreatedAt) {
+    /**
+     * 一条证据的落库材料；{@code evidenceId} 同样由调用方先生成（quote 的 AAD 绑它），
+     * {@code sourceHmac} 是 (vault, source_hmac) 去重键，重复提交复用同一行。
+     */
+    public record EvidenceDraft(String evidenceId, String vaultId, Long sessionId, Long turnId, Long messageId,
+                                String sourceBlockId, String sourceHmac, String quoteCipher, String cryptoMeta,
+                                String sourceCreatedAt) {
         public EvidenceDraft {
             int codePoints = quoteCipher == null ? 0 : quoteCipher.codePointCount(0, quoteCipher.length());
             if (codePoints > MAX_QUOTE_CIPHER_CODE_POINTS) {
@@ -146,6 +154,92 @@ public class MemoryRepository {
         return immediate.execute(connection -> updateVault(connection, vaultId, advanceEpoch));
     }
 
+    /** 单例行的包装信息：只有 wrapped DEK 与其元数据，绝不包含主材料明文。 */
+    public record VaultEnvelope(String vaultId, String wrappedDek, String wrapMeta, String mode, long epoch,
+                                long revision, String createdAt) {
+    }
+
+    /** 重置记忆库时各类派生行的删除计数。 */
+    public record VaultPurgeResult(int factsDeleted, int evidenceDeleted, int proposalsDeleted,
+                                   int suppressionsDeleted, int jobsDeleted, int contextsDeleted) {
+    }
+
+    /** 读当前唯一的记忆库（本应用只有一个库，ID 由创建时随机生成）。 */
+    public Optional<VaultEnvelope> readEnvelope() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT id, wrapped_dek, wrap_meta, mode,"
+                     + " epoch, revision, created_at FROM ai_memory_vault WHERE singleton = 1")) {
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new VaultEnvelope(result.getString("id"), result.getString("wrapped_dek"),
+                        result.getString("wrap_meta"), result.getString("mode"), result.getLong("epoch"),
+                        result.getLong("revision"), result.getString("created_at")));
+            }
+        }
+    }
+
+    /**
+     * 创建唯一记忆库行。已有库时返回 false 且<b>不覆盖</b>旧 DEK（§3 405 行：不能以错误密码自动覆盖旧库）。
+     */
+    public boolean createVault(String vaultId, String wrappedDek, String wrapMeta, String mode, String createdAt)
+            throws SQLException {
+        return Boolean.TRUE.equals(immediate.execute(connection -> {
+            if (count(connection, "SELECT COUNT(*) FROM ai_memory_vault WHERE singleton = 1") > 0) {
+                return false;
+            }
+            execute(connection, "INSERT INTO ai_memory_vault(id, singleton, wrapped_dek, wrap_meta, mode, created_at)"
+                    + " VALUES (?, 1, ?, ?, ?, ?)", vaultId, wrappedDek, wrapMeta, mode, createdAt);
+            return true;
+        }));
+    }
+
+    /** 换密码只做重包装：DEK 不变，事实与计数一行都不动（§6.1.8）。 */
+    public void updateVaultWrapper(String vaultId, String wrappedDek, String wrapMeta, String mode)
+            throws SQLException {
+        immediate.execute(connection -> {
+            if (execute(connection, "UPDATE ai_memory_vault SET wrapped_dek = ?, wrap_meta = ?, mode = ? WHERE id = ?",
+                    wrappedDek, wrapMeta, mode, vaultId) != 1) {
+                throw new SQLException("记忆库包装更新未命中单行: " + vaultId);
+            }
+            return null;
+        });
+    }
+
+    /**
+     * 重置不可解锁的记忆库：同一事务里删掉旧库的全部派生记录、旧库行，再装入新 ID 与新包装。
+     *
+     * <p>作业与摘要检查点没有 vault_id 列，但内容是用旧 DEK 封的、且按 epoch 绑定，重置后必然读不出来，
+     * 所以一并清空；{@code ai_memory_operation} 只有动作去重元数据，留在库里以保证 operationId 幂等。</p>
+     */
+    public ResetResult resetVault(String oldVaultId, String newVaultId, String wrappedDek, String wrapMeta,
+                                  String mode, String createdAt) throws SQLException {
+        return immediate.execute(connection -> {
+            execute(connection, "DELETE FROM ai_memory_item_evidence WHERE item_row_id IN"
+                    + " (SELECT row_id FROM ai_memory_item WHERE vault_id = ?)", oldVaultId);
+            int facts = execute(connection, "DELETE FROM ai_memory_item WHERE vault_id = ?", oldVaultId);
+            execute(connection, "DELETE FROM ai_memory_item_evidence WHERE evidence_id IN"
+                    + " (SELECT id FROM ai_memory_evidence WHERE vault_id = ?)", oldVaultId);
+            int evidence = execute(connection, "DELETE FROM ai_memory_evidence WHERE vault_id = ?", oldVaultId);
+            int proposals = execute(connection, "DELETE FROM ai_memory_proposal WHERE vault_id = ?", oldVaultId);
+            int suppressions = execute(connection, "DELETE FROM ai_memory_suppression WHERE vault_id = ?", oldVaultId);
+            int jobs = execute(connection, "DELETE FROM ai_memory_job");
+            int contexts = execute(connection, "DELETE FROM ai_session_context");
+            if (execute(connection, "DELETE FROM ai_memory_vault WHERE id = ?", oldVaultId) != 1) {
+                throw new SQLException("待重置的记忆库行不存在: " + oldVaultId);
+            }
+            execute(connection, "INSERT INTO ai_memory_vault(id, singleton, wrapped_dek, wrap_meta, mode, created_at)"
+                    + " VALUES (?, 1, ?, ?, ?, ?)", newVaultId, wrappedDek, wrapMeta, mode, createdAt);
+            return new ResetResult(new VaultPurgeResult(facts, evidence, proposals, suppressions, jobs, contexts),
+                    new VaultState(newVaultId, 1, 1));
+        });
+    }
+
+    /** 重置结果：派生行计数 + 新库状态。 */
+    public record ResetResult(VaultPurgeResult purged, VaultState vault) {
+    }
+
     // ---- 事实 ----
 
     /**
@@ -163,9 +257,8 @@ public class MemoryRepository {
                 return AddResult.of(AddOutcome.FAMILY_CONFLICT);
             }
             String memoryId = UUID.randomUUID().toString();
-            String rowId = UUID.randomUUID().toString();
-            insertFact(connection, draft, memoryId, rowId, 1);
-            return new AddResult(AddOutcome.ADDED, memoryId, rowId, 1,
+            insertFact(connection, draft, memoryId, draft.rowId(), 1);
+            return new AddResult(AddOutcome.ADDED, memoryId, draft.rowId(), 1,
                     updateVault(connection, draft.vaultId(), false).revision());
         });
     }
@@ -193,7 +286,7 @@ public class MemoryRepository {
             if (updated != 1) {
                 return ReplaceResult.conflict(memoryId, findCurrent(connection, vaultId, memoryId).orElse(active));
             }
-            String rowId = UUID.randomUUID().toString();
+            String rowId = draft.rowId();
             insertFact(connection, draft, memoryId, rowId, expectedVersion + 1);
             return new ReplaceResult(ReplaceOutcome.REPLACED, memoryId, rowId, expectedVersion + 1,
                     updateVault(connection, vaultId, false).revision(), null);
@@ -220,7 +313,9 @@ public class MemoryRepository {
                                String newStatus) throws SQLException {
         return immediate.execute(connection -> {
             requireVault(connection, vaultId);
-            if (findCurrent(connection, vaultId, memoryId).isEmpty()) {
+            // 存在性按"这条记忆还有没有版本"判：重新启用停用中的版本时它正是没有 ACTIVE 行的那一刻
+            if (count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
+                    vaultId, memoryId) == 0) {
                 return CasOutcome.NOT_FOUND;
             }
             int updated = execute(connection, "UPDATE ai_memory_item SET status = ?"
@@ -234,10 +329,123 @@ public class MemoryRepository {
         });
     }
 
+    /** 删除结果：{@code DELETED} 才带抑制所需的键，冲突或缺失时计数为零。 */
+    public enum DeleteOutcome { DELETED, VERSION_CONFLICT, NOT_FOUND }
+
+    public record DeleteResult(DeleteOutcome outcome, String scopeType, long scopeId, String familyKeyHmac,
+                               String predicateKeyHmac, int versionsDeleted, int evidenceDeleted,
+                               int proposalsStaled, int suppressionsAdded, VaultState vault) {
+        public static DeleteResult of(DeleteOutcome outcome) {
+            return new DeleteResult(outcome, null, 0, null, null, 0, 0, 0, 0, null);
+        }
+
+        public boolean deleted() {
+            return outcome == DeleteOutcome.DELETED;
+        }
+    }
+
+    /**
+     * 按 memoryId 删掉整条版本链（§4.4 deleteMemory 的仓储半边）：
+     * CAS 指定的那一版 → 写 family/predicate 抑制 → 删所有版本 → 删因此失去引用的证据并写来源抑制 →
+     * 相关 PENDING 建议置 STALE → epoch 与 revision 一起推进（遗忘边界）。全程同一事务，冲突时一行都不动。
+     *
+     * <p>指定的版本可以是 ACTIVE 也可以是被停用的那版（停用后再删是正常路径），
+     * 但不能拿一个 SUPERSEDED 版本号来删——那说明客户端看的是旧页面。</p>
+     */
+    public DeleteResult deleteVersionsByMemoryId(String vaultId, String memoryId, int expectedVersion)
+            throws SQLException {
+        return immediate.execute(connection -> {
+            requireVault(connection, vaultId);
+            if (count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
+                    vaultId, memoryId) == 0) {
+                return DeleteResult.of(DeleteOutcome.NOT_FOUND);
+            }
+            Optional<FactRow> victimRow = findVersion(connection, vaultId, memoryId, expectedVersion);
+            if (victimRow.isEmpty() || STATUS_SUPERSEDED.equals(victimRow.get().status())) {
+                FactRow victim = victimRow.orElse(null);
+                return new DeleteResult(DeleteOutcome.VERSION_CONFLICT,
+                        victim == null ? null : victim.scopeType(), victim == null ? 0 : victim.scopeId(),
+                        victim == null ? null : victim.familyKeyHmac(),
+                        victim == null ? null : victim.predicateKeyHmac(), 0, 0, 0, 0, null);
+            }
+            FactRow victim = victimRow.get();
+            List<String> rowIds = ids(connection, "SELECT row_id FROM ai_memory_item WHERE vault_id = ?"
+                    + " AND memory_id = ?", vaultId, memoryId);
+            List<String> linkedEvidence = rowIds.isEmpty() ? List.of() : ids(connection,
+                    "SELECT DISTINCT evidence_id FROM ai_memory_item_evidence WHERE item_row_id IN ("
+                            + placeholders(rowIds.size()) + ")", rowIds.toArray());
+            int suppressions = insertSuppression(connection, vaultId, victim,
+                    MemorySuppressionRepository.KIND_FAMILY, victim.familyKeyHmac())
+                    + insertSuppression(connection, vaultId, victim,
+                    MemorySuppressionRepository.KIND_PREDICATE, victim.predicateKeyHmac());
+            int versions = execute(connection, "DELETE FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
+                    vaultId, memoryId);
+            List<String> orphans = linkedEvidence.isEmpty() ? List.of() : ids(connection,
+                    "SELECT id FROM ai_memory_evidence WHERE id IN (" + placeholders(linkedEvidence.size()) + ")"
+                            + " AND NOT EXISTS (SELECT 1 FROM ai_memory_item_evidence link WHERE link.evidence_id"
+                            + " = ai_memory_evidence.id)", linkedEvidence.toArray());
+            if (!orphans.isEmpty()) {
+                List<String> orphanHmacs = ids(connection, "SELECT source_hmac FROM ai_memory_evidence WHERE id IN ("
+                        + placeholders(orphans.size()) + ")", orphans.toArray());
+                for (String sourceHmac : orphanHmacs) {
+                    suppressions += insertSuppression(connection, vaultId, victim,
+                            MemorySuppressionRepository.KIND_EVIDENCE, sourceHmac);
+                }
+            }
+            // 先置 STALE 再删证据：evidence_id 的外键是 ON DELETE SET NULL，删完就找不到该建议了
+            int staled = execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
+                    + " AND status = 'PENDING' AND target_memory_id = ?", vaultId, memoryId);
+            if (!linkedEvidence.isEmpty()) {
+                staled += execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
+                                + " AND status = 'PENDING' AND evidence_id IN ("
+                                + placeholders(linkedEvidence.size()) + ")",
+                        concat(vaultId, linkedEvidence).toArray());
+            }
+            int evidence = orphans.isEmpty() ? 0 : execute(connection,
+                    "DELETE FROM ai_memory_evidence WHERE id IN (" + placeholders(orphans.size()) + ")",
+                    orphans.toArray());
+            VaultState vault = updateVault(connection, vaultId, true);
+            return new DeleteResult(DeleteOutcome.DELETED, victim.scopeType(), victim.scopeId(),
+                    victim.familyKeyHmac(), victim.predicateKeyHmac(), versions, evidence, staled, suppressions,
+                    vault);
+        });
+    }
+
+    /** 遗忘后旧摘要检查点不可信：按 epoch 清掉快照（§4.4 invalidate session contexts）。 */
+    public int invalidateSessionContextsBelowEpoch(long vaultEpoch) throws SQLException {
+        return immediate.execute(connection -> execute(connection,
+                "DELETE FROM ai_session_context WHERE vault_epoch < ?", vaultEpoch));
+    }
+
+    private static int insertSuppression(Connection connection, String vaultId, FactRow source, String kind,
+                                         String keyHmac) throws SQLException {
+        return execute(connection, "INSERT OR IGNORE INTO ai_memory_suppression(vault_id, scope_type, scope_id,"
+                        + " suppression_kind, key_hmac, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                vaultId, source.scopeType(), source.scopeId(), kind, keyHmac, source.recordedAt());
+    }
+
     /** 当前 ACTIVE 版本（供 GET 与 409 响应带最新 metadata）。 */
     public Optional<FactRow> findCurrent(String vaultId, String memoryId) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
             return findCurrent(connection, vaultId, memoryId);
+        }
+    }
+
+    /** 按版本号读某一版（状态改写与冲突 metadata 用，不限于当前 ACTIVE）。 */
+    public Optional<FactRow> findVersion(String vaultId, String memoryId, int version) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return findVersion(connection, vaultId, memoryId, version);
+        }
+    }
+
+    private static Optional<FactRow> findVersion(Connection connection, String vaultId, String memoryId, int version)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS
+                + " FROM ai_memory_item WHERE vault_id = ? AND memory_id = ? AND version = ?")) {
+            statement.setString(1, vaultId);
+            statement.setString(2, memoryId);
+            statement.setInt(3, version);
+            return first(statement.executeQuery());
         }
     }
 
@@ -259,6 +467,80 @@ public class MemoryRepository {
     public long pendingCount(String vaultId) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
             return pendingCount(connection, vaultId);
+        }
+    }
+
+    /** ACTIVE 事实条数（§6.2 的 2,000 上限判定用；不含被替换/停用/过期的历史版本）。 */
+    public long activeCount(String vaultId) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ? AND status = '"
+                    + STATUS_ACTIVE + "'", vaultId);
+        }
+    }
+
+    /**
+     * 管理页分页读：按 {@code (recorded_at, row_id)} 倒序 keyset 翻页，多取一条用于判断还有没有下一页。
+     * {@code scopeType} 为空表示不按作用域过滤；游标是上一页最后一行的时间+行号，翻页期间数据变更不做补齐。
+     */
+    public List<FactRow> findPage(String vaultId, String status, String scopeType, Long scopeId,
+                                  String beforeRecordedAt, String beforeRowId, int limit) throws SQLException {
+        StringBuilder sql = new StringBuilder("SELECT ").append(FACT_COLUMNS).append(" FROM ai_memory_item")
+                .append(" WHERE vault_id = ? AND status = ?");
+        List<Object> args = new ArrayList<>();
+        args.add(vaultId);
+        args.add(status);
+        if (scopeType != null) {
+            sql.append(" AND scope_type = ? AND scope_id = ?");
+            args.add(scopeType);
+            args.add(scopeId);
+        }
+        if (beforeRecordedAt != null && beforeRowId != null) {
+            sql.append(" AND (recorded_at < ? OR (recorded_at = ? AND row_id < ?))");
+            args.add(beforeRecordedAt);
+            args.add(beforeRecordedAt);
+            args.add(beforeRowId);
+        }
+        sql.append(" ORDER BY recorded_at DESC, row_id DESC LIMIT ?");
+        args.add(Math.max(1, limit));
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            bind(statement, args.toArray());
+            return collect(statement.executeQuery());
+        }
+    }
+
+    /** 一条事实版本的来源证据（含密文，解密由上层决定）。 */
+    public record EvidenceRow(String evidenceId, Long sessionId, Long turnId, Long messageId, String sourceBlockId,
+                             String sourceHmac, String quoteCipher, String cryptoMeta, String sourceCreatedAt) {
+    }
+
+    /** 读回某一行（某个版本）关联的证据，按来源时间倒序。 */
+    public List<EvidenceRow> evidenceForItem(String itemRowId) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return evidenceForItem(connection, itemRowId);
+        }
+    }
+
+    private static List<EvidenceRow> evidenceForItem(Connection connection, String itemRowId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT e.id, e.session_id, e.turn_id,"
+                + " e.message_id, e.source_block_id, e.source_hmac, e.quote_cipher, e.crypto_meta,"
+                + " e.source_created_at FROM ai_memory_evidence e JOIN ai_memory_item_evidence link"
+                + " ON link.evidence_id = e.id WHERE link.item_row_id = ?"
+                + " ORDER BY e.source_created_at DESC, e.id")) {
+            statement.setString(1, itemRowId);
+            try (ResultSet result = statement.executeQuery()) {
+                List<EvidenceRow> rows = new ArrayList<>();
+                while (result.next()) {
+                    Long session = nullableLong(result, "session_id");
+                    Long turn = nullableLong(result, "turn_id");
+                    Long message = nullableLong(result, "message_id");
+                    rows.add(new EvidenceRow(result.getString("id"), session, turn, message,
+                            result.getString("source_block_id"), result.getString("source_hmac"),
+                            result.getString("quote_cipher"), result.getString("crypto_meta"),
+                            result.getString("source_created_at")));
+                }
+                return rows;
+            }
         }
     }
 
@@ -376,7 +658,10 @@ public class MemoryRepository {
         if (existing.isPresent()) {
             return new EvidenceResult(existing.get(), true);
         }
-        String evidenceId = UUID.randomUUID().toString();
+        String evidenceId = draft.evidenceId();
+        if (evidenceId == null || evidenceId.isBlank()) {
+            throw new SQLException("evidenceId 必须由调用方先生成：原话密文的 AAD 绑定它");
+        }
         execute(connection, "INSERT INTO ai_memory_evidence(id, vault_id, session_id, turn_id, message_id,"
                         + " source_block_id, source_hmac, quote_cipher, crypto_meta, source_created_at)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -536,6 +821,12 @@ public class MemoryRepository {
         }
     }
 
+    /** SQLite 的 {@code getLong} 对 NULL 返回 0，可空外键必须靠 wasNull 区分"没有"和"0 号"。 */
+    private static Long nullableLong(ResultSet result, String column) throws SQLException {
+        long value = result.getLong(column);
+        return result.wasNull() ? null : value;
+    }
+
     private static Optional<String> optionalString(Connection connection, String sql, Object... args)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -575,6 +866,9 @@ public class MemoryRepository {
     }
 
     private static void scopeContract(NewMemory draft) throws SQLException {
+        if (draft.rowId() == null || draft.rowId().isBlank()) {
+            throw new SQLException("rowId 必须由调用方先生成：密文 AAD 绑定行身份，仓储不能事后补");
+        }
         if (!"GLOBAL".equals(draft.scopeType()) && !"NOTEBOOK".equals(draft.scopeType())) {
             throw new SQLException("非法的记忆作用域: " + draft.scopeType());
         }

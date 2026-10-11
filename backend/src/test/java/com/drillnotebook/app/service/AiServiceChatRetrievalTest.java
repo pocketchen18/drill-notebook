@@ -246,12 +246,15 @@ class AiServiceChatRetrievalTest {
     }
 
     private AiService newService(RetrievalService retrievalService) {
+        ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         return new AiService(
                 new AiConfigRepository(jdbc),
-                ChatLegacyWiring.sessions(dataSource, jdbc),
+                wiring.sessions(),
                 new ApiKeyEncryptor(),
                 new ObjectMapper(),
-                retrievalService);
+                retrievalService,
+                wiring.turnService(),
+                wiring.cipher());
     }
 
     @SuppressWarnings("unchecked")

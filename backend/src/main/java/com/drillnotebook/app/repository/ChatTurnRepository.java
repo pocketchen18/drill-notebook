@@ -80,9 +80,22 @@ public class ChatTurnRepository {
                           String finishedAt) {
     }
 
-    public record StartResult(StartOutcome outcome, long turnId, long userMessageId, long historyRevision) {
+    /**
+     * 开始轮次的结果。{@code historyRevision} 只有一个含义：本事务提交后的会话 history_revision，
+     * 没写任何东西时（额度不足/会话忙）为 0；重复请求也带回当前值，供调用方直接比对快照。
+     * {@code turn} 在 DUPLICATE_REQUEST 时是已存在的那一行，其余为 null。
+     */
+    public record StartResult(StartOutcome outcome, TurnRow turn, long historyRevision) {
         public static StartResult of(StartOutcome outcome) {
-            return new StartResult(outcome, 0, 0, 0);
+            return new StartResult(outcome, null, 0);
+        }
+
+        public long turnId() {
+            return turn == null ? 0 : turn.id();
+        }
+
+        public long userMessageId() {
+            return turn == null ? 0 : orZero(turn.userMessageId());
         }
     }
 
@@ -115,9 +128,9 @@ public class ChatTurnRepository {
         return immediate.execute(connection -> {
             Optional<TurnRow> existing = findByRequestId(connection, draft.requestId());
             if (existing.isPresent()) {
-                TurnRow row = existing.get();
-                return new StartResult(StartOutcome.DUPLICATE_REQUEST, row.id(), orZero(row.userMessageId()),
-                        row.sourceRevision());
+                return new StartResult(StartOutcome.DUPLICATE_REQUEST, existing.get(),
+                        ChatSessionMetadataRepository.read(connection, draft.sessionId())
+                                .orElseThrow().historyRevision());
             }
             if (findRunning(connection, draft.sessionId()).isPresent()) {
                 return StartResult.of(StartOutcome.RUNNING_EXISTS);
@@ -146,7 +159,9 @@ public class ChatTurnRepository {
             for (AttachmentPayload attachment : draft.attachments()) {
                 insertAttachment(connection, turnId, attachment, draft.startedAt());
             }
-            return new StartResult(StartOutcome.STARTED, turnId, userMessageId, bumpSession(connection, draft.sessionId()));
+            long revision = bumpSession(connection, draft.sessionId());
+            return new StartResult(StartOutcome.STARTED,
+                    findByRequestId(connection, draft.requestId()).orElseThrow(), revision);
         });
     }
 
@@ -186,7 +201,8 @@ public class ChatTurnRepository {
                     UPDATE ai_chat_turn
                        SET status = ?, assistant_message_id = ?, result_meta_cipher = ?, result_meta_crypto = ?,
                            finish_reason = ?, persistence_status = ?, finished_at = ?, stored_history_bytes = ?,
-                           reserved_history_bytes = 0, source_revision = source_revision + 1
+                           reserved_history_bytes = 0, source_revision = source_revision + 1,
+                           memory_eligible = CASE WHEN ? = 'COMPLETED' THEN memory_eligible ELSE 0 END
                      WHERE id = ? AND status = 'RUNNING'
                     """)) {
                 statement.setString(1, terminal.status());
@@ -198,7 +214,9 @@ public class ChatTurnRepository {
                 statement.setString(6, terminal.persistenceStatus());
                 statement.setString(7, terminal.finishedAt());
                 statement.setLong(8, newStored);
-                statement.setLong(9, turn.id());
+                // 只有 COMPLETED 才保留可学习资格：中止/截断/失败都不进摘要与提取（§7.2 第 5 条、§7.4 第 3 条）
+                statement.setString(9, terminal.status());
+                statement.setLong(10, turn.id());
                 requireOneRow(statement.executeUpdate(), "轮次终态 CAS");
             }
 
@@ -281,7 +299,105 @@ public class ChatTurnRepository {
         }
     }
 
-    // ---- 事务内原语 ----
+    /**
+     * 收尾事务失败后的兜底裁决（§7.2.1）：只按 request ID 把 RUNNING 置成终态，
+     * 不写任何需要加密的正文，因此正文加密失败、预留超出、DB 慢都能落到这个分支。
+     *
+     * <p>已经不是 RUNNING（CAS 失手或先前已写）说明这一轮早被别人收尾：带回既有状态，
+     * <b>不重复释放预留</b>（§2.7「释放磁盘预留只一次」）。</p>
+     */
+    public TerminalOutcome failFinalization(String requestId, String finishReason, String finishedAt)
+            throws SQLException {
+        return terminalWithoutContent(requestId, STATUS_FAILED, finishReason, "failed", finishedAt);
+    }
+
+    /** 进程重启或句柄消失后的孤儿裁决：RUNNING → INTERRUPTED，同样一次释放本轮预留。 */
+    public TerminalOutcome markInterrupted(String requestId, String finishedAt) throws SQLException {
+        return terminalWithoutContent(requestId, STATUS_INTERRUPTED, "interrupted", "failed", finishedAt);
+    }
+
+    private TerminalOutcome terminalWithoutContent(String requestId, String status, String finishReason,
+                                                   String persistenceStatus, String finishedAt) throws SQLException {
+        return immediate.execute(connection -> {
+            TurnRow turn = findByRequestId(connection, requestId)
+                    .orElseThrow(() -> new SQLException("轮次不存在: " + requestId));
+            if (!STATUS_RUNNING.equals(turn.status())) {
+                return new TerminalOutcome(false, true, turn.status(), turn.storedHistoryBytes(), 0);
+            }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE ai_chat_turn
+                       SET status = ?, finish_reason = ?, persistence_status = ?, memory_eligible = 0,
+                           reserved_history_bytes = 0, source_revision = source_revision + 1, finished_at = ?
+                     WHERE id = ? AND status = 'RUNNING'
+                    """)) {
+                statement.setString(1, status);
+                statement.setString(2, finishReason);
+                statement.setString(3, persistenceStatus);
+                statement.setString(4, finishedAt);
+                statement.setLong(5, turn.id());
+                if (statement.executeUpdate() != 1) {
+                    TurnRow raced = findByRequestId(connection, requestId).orElseThrow();
+                    return new TerminalOutcome(false, true, raced.status(), raced.storedHistoryBytes(), 0);
+                }
+            }
+            // 预留归零与账本扣减同事务，账本不会记着一笔永远不会结算的预留
+            ledger.releaseReservation(connection, turn.reservedHistoryBytes());
+            return new TerminalOutcome(true, false, status, turn.storedHistoryBytes(),
+                    bumpSession(connection, turn.sessionId()));
+        });
+    }
+
+    /** 仍在 RUNNING 的全部轮次：孤儿清扫按「本进程有没有活跃句柄」再过滤（不按年龄清，§7.2.2）。 */
+    public List<TurnRow> findRunningTurns() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     TURN_SELECT + " WHERE status = 'RUNNING' ORDER BY id")) {
+            List<TurnRow> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) rows.add(row(result));
+            }
+            return rows;
+        }
+    }
+
+    /** 按消息 ID 取落库列（不解密）：幂等重放据此取回已存回复。 */
+    public Optional<MessageColumns> findMessage(long messageId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT id, role, content, content_cipher, content_meta, reasoning_cipher, reasoning_meta"
+                             + " FROM ai_chat_message WHERE id = ?")) {
+            statement.setLong(1, messageId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new MessageColumns(result.getLong("id"), result.getString("role"),
+                        result.getString("content"), result.getString("content_cipher"),
+                        result.getString("content_meta"), result.getString("reasoning_cipher"),
+                        result.getString("reasoning_meta")));
+            }
+        }
+    }
+
+    /** 消息行的存储列，加解密由服务层完成（仓储层不持有加密材料）。 */
+    public record MessageColumns(long id, String role, String content, String contentCipher, String contentMeta,
+                                 String reasoningCipher, String reasoningMeta) {
+    }
+
+    /** 幂等判定要比对的两列请求元数据（不解密）。 */
+    public Optional<MetaColumns> findRequestMeta(String requestId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT request_meta_cipher, request_meta_crypto FROM ai_chat_turn WHERE request_id = ?")) {
+            statement.setString(1, requestId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new MetaColumns(result.getString("request_meta_cipher"),
+                        result.getString("request_meta_crypto")));
+            }
+        }
+    }
+
+    public record MetaColumns(String cipher, String crypto) {
+    }
 
     private static Optional<TurnRow> findByRequestId(Connection connection, String requestId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(TURN_SELECT + " WHERE request_id = ?")) {
@@ -301,16 +417,20 @@ public class ChatTurnRepository {
     private static Optional<TurnRow> first(PreparedStatement statement) throws SQLException {
         try (ResultSet result = statement.executeQuery()) {
             if (!result.next()) return Optional.empty();
-            return Optional.of(new TurnRow(result.getLong("id"), result.getString("request_id"),
-                    result.getLong("session_id"), result.getString("status"),
-                    nullableLong(result, "user_message_id"), nullableLong(result, "assistant_message_id"),
-                    result.getLong("context_generation"), result.getString("source_scope_type"),
-                    result.getLong("source_scope_id"), result.getLong("source_revision"),
-                    result.getLong("stored_history_bytes"), result.getLong("reserved_history_bytes"),
-                    result.getString("content_deleted_at"), result.getString("persistence_status"),
-                    result.getString("finish_reason"), result.getString("started_at"),
-                    result.getString("finished_at")));
+            return Optional.of(row(result));
         }
+    }
+
+    private static TurnRow row(ResultSet result) throws SQLException {
+        return new TurnRow(result.getLong("id"), result.getString("request_id"),
+                result.getLong("session_id"), result.getString("status"),
+                nullableLong(result, "user_message_id"), nullableLong(result, "assistant_message_id"),
+                result.getLong("context_generation"), result.getString("source_scope_type"),
+                result.getLong("source_scope_id"), result.getLong("source_revision"),
+                result.getLong("stored_history_bytes"), result.getLong("reserved_history_bytes"),
+                result.getString("content_deleted_at"), result.getString("persistence_status"),
+                result.getString("finish_reason"), result.getString("started_at"),
+                result.getString("finished_at"));
     }
 
     private long insertTurn(Connection connection, Draft draft, long storedBytes) throws SQLException {

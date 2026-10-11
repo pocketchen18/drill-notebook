@@ -159,6 +159,17 @@ public class MemoryJobRepository {
                         + " lease_until = NULL WHERE vault_epoch < ? AND " + ACTIVE_STATUSES, vaultEpoch));
     }
 
+    /**
+     * 授权或设置变更后作废旧任务：只打 {@code policy_revision < } 新版本的未终态行（§5.1 撤销要取消相关任务）。
+     * 已按新版本重新入队的任务不受影响；被取消的范围不会被记为"已扫描"，恢复授权后由水位重新入队。
+     */
+    public int supersedeBelowPolicyRevision(long policyRevision, String asOf) throws SQLException {
+        return immediate.execute(connection -> execute(connection,
+                "UPDATE ai_memory_job SET status = '" + STATUS_SUPERSEDED + "', lease_token = NULL,"
+                        + " lease_until = NULL, updated_at = ? WHERE policy_revision < ? AND " + ACTIVE_STATUSES,
+                asOf, policyRevision));
+    }
+
     /** 会话归档或删除：该会话未终态的任务一律作废（归档取消 job/lease 但保留水位，§2.1）。 */
     public int supersedeForSession(long sessionId) throws SQLException {
         return immediate.execute(connection -> execute(connection,

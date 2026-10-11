@@ -146,23 +146,25 @@ public class AiChatSessionRepository {
         ), sessionId);
     }
 
-    public void insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta) {
-        insertMessage(sessionId, role, content, contentCipher, contentMeta, null, null);
+    /** 返回真实消息 ID：轮次回填、导出与来源绑定都要用，不能再靠"最后一条"猜。 */
+    public long insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta) {
+        return insertMessage(sessionId, role, content, contentCipher, contentMeta, null, null);
     }
 
-    public void insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta,
+    public long insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta,
                               String reasoningCipher, String reasoningMeta) {
         String storedContent = content == null ? "" : content;
         long newBytes = ChatStorageSizer.storedBytes(storedContent, contentCipher, contentMeta,
                 reasoningCipher, reasoningMeta);
         try {
             ledger.ensureRebuiltInProcess();
-            immediate.execute(connection -> {
+            return immediate.execute(connection -> {
+                long messageId;
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO ai_chat_message(session_id, role, content, content_cipher, content_meta,
                             reasoning_cipher, reasoning_meta)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """)) {
+                        """, Statement.RETURN_GENERATED_KEYS)) {
                     statement.setLong(1, sessionId);
                     statement.setString(2, role);
                     statement.setString(3, storedContent);
@@ -173,38 +175,17 @@ public class AiChatSessionRepository {
                     if (statement.executeUpdate() != 1) {
                         throw new SQLException("旧聊天消息写入未命中单行");
                     }
+                    try (ResultSet keys = statement.getGeneratedKeys()) {
+                        if (!keys.next()) throw new SQLException("消息写入后没有取回自增主键");
+                        messageId = keys.getLong(1);
+                    }
                 }
                 ledger.addStoredHistory(connection, newBytes);
                 metadata.bumpHistoryRevision(connection, sessionId);
-                return null;
+                return messageId;
             });
         } catch (SQLException error) {
             throw new UncategorizedSQLException("写入聊天消息", null, error);
-        }
-    }
-
-    /**
-     * 保留最新 {@code keep} 条消息。带轮次的消息由轮次侧的显式清理（墓碑）负责，
-     * 这里只裁掉 legacy 消息，避免把轮次正文裁成账本对不上的孤儿。
-     */
-    public void pruneToNewest(long sessionId, int keep) {
-        if (keep < 1) return;
-        String scope = " WHERE session_id = ? AND turn_id IS NULL AND id NOT IN ("
-                + "SELECT id FROM ai_chat_message WHERE session_id = ? ORDER BY id DESC LIMIT ?)";
-        try {
-            ledger.ensureRebuiltInProcess();
-            immediate.execute(connection -> {
-                long removedBytes = scalar(connection, "SELECT COALESCE(SUM(" + ChatStorageSizer.MESSAGE_BYTES_SQL
-                        + "), 0) FROM ai_chat_message" + scope, sessionId, sessionId, keep);
-                int removed = execute(connection, "DELETE FROM ai_chat_message" + scope, sessionId, sessionId, keep);
-                if (removed > 0) {
-                    ledger.releaseStorage(connection, removedBytes, 0);
-                    metadata.bumpHistoryRevision(connection, sessionId);
-                }
-                return removed;
-            });
-        } catch (SQLException error) {
-            throw new UncategorizedSQLException("裁剪聊天消息", null, error);
         }
     }
 

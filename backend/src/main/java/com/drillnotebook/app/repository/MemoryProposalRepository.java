@@ -39,9 +39,13 @@ public class MemoryProposalRepository {
         this.immediate = immediate;
     }
 
-    /** 建议的落库材料；payload 已由调用方加密，{@code dedupHmac} 含源 block/quote、operation、目标与新值。 */
-    public record ProposalDraft(String vaultId, long sessionId, Long sourceTurnId, String evidenceId,
-                                String targetMemoryId, int targetVersion, String operation,
+    /**
+     * 建议的落库材料；payload 已由调用方加密，{@code dedupHmac} 含源 block/quote、operation、目标与新值。
+     * {@code proposalId} 由调用方先生成——payload 的 AAD 绑定 {@code vault|table|rowId|version}，
+     * 仓储内部造 ID 会让持有钥匙的上层无法预加密（§6.1.1）。
+     */
+    public record ProposalDraft(String proposalId, String vaultId, long sessionId, Long sourceTurnId,
+                                String evidenceId, String targetMemoryId, int targetVersion, String operation,
                                 String payloadCipher, String cryptoMeta, String dedupHmac,
                                 String createdAt, String expiresAt) {
     }
@@ -72,6 +76,9 @@ public class MemoryProposalRepository {
         if (!List.of("REPLACE_PROPOSAL", "RETRACT_PROPOSAL").contains(draft.operation())) {
             throw new SQLException("非法的建议动作: " + draft.operation());
         }
+        if (draft.proposalId() == null || draft.proposalId().isBlank()) {
+            throw new SQLException("proposalId 必须由调用方先生成：建议 payload 的 AAD 绑定它");
+        }
         return immediate.execute(connection -> {
             Optional<ProposalRow> existing = byDedupKey(connection, draft.vaultId(), draft.dedupHmac());
             if (existing.isPresent()) {
@@ -83,7 +90,7 @@ public class MemoryProposalRepository {
             if (pending >= MemoryRepository.PENDING_QUOTA) {
                 return SubmitResult.refused(SubmitOutcome.PENDING_QUOTA_FULL);
             }
-            String id = UUID.randomUUID().toString();
+            String id = draft.proposalId();
             execute(connection, "INSERT INTO ai_memory_proposal(id, vault_id, session_id, source_turn_id, evidence_id,"
                             + " target_memory_id, target_version, operation, status, version, payload_cipher,"
                             + " crypto_meta, dedup_hmac, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?,"
