@@ -3,7 +3,6 @@ package com.drillnotebook.app.config;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -30,16 +29,22 @@ public class DatabaseInitializer {
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC);
     private final DataSource dataSource;
     private final PortablePathResolver paths;
+    private final SnapshotService snapshots;
 
     /** 测试与旧调用点用：升级前快照落到当前 app.root 解析出的 backups 目录。 */
     public DatabaseInitializer(DataSource dataSource) {
         this(dataSource, new PortablePathResolver());
     }
 
-    @Autowired
     public DatabaseInitializer(DataSource dataSource, PortablePathResolver paths) {
+        this(dataSource, paths, new SnapshotService(dataSource));
+    }
+
+    @Autowired
+    public DatabaseInitializer(DataSource dataSource, PortablePathResolver paths, SnapshotService snapshots) {
         this.dataSource = dataSource;
         this.paths = paths;
+        this.snapshots = snapshots;
     }
 
     @PostConstruct
@@ -149,25 +154,19 @@ public class DatabaseInitializer {
     }
 
     /**
-     * 跨版本升级前留一份一致性 v(n) 快照：VACUUM INTO 读单个事务快照，不复制活跃 WAL 库。
-     * 失败即停升级，避免在无可回退副本的情况下改动用户数据。
+     * 跨版本升级前留一份一致性 v(n) 快照（§11.4：独立 autocommit 连接 + VACUUM INTO，
+     * 不直接 copy 活跃 WAL 库）。失败即停升级，避免在无可回退副本的情况下改动用户数据。
+     *
+     * <p>这里不删文件：目标已存在时 SnapshotService 会拒绝覆盖，此时那个文件是上一次的唯一回退证据；
+     * 半成品清理由创建它的 SnapshotService 负责。</p>
      */
     private void snapshotBeforeMigration(int currentVersion) {
-        Path dir = paths.root().resolve("backups");
-        Path target = dir.resolve("pre-schema" + SCHEMA_VERSION + "-from-v" + currentVersion
-                + "-" + SNAPSHOT_STAMP.format(ZonedDateTime.now(ZoneOffset.UTC)) + "-study.db");
+        Path target = paths.root().resolve("backups").resolve("pre-schema" + SCHEMA_VERSION + "-from-v"
+                + currentVersion + "-" + SNAPSHOT_STAMP.format(ZonedDateTime.now(ZoneOffset.UTC)) + "-study.db");
         try {
-            Files.createDirectories(dir);
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-                statement.execute("VACUUM INTO '" + target.toString().replace("'", "''") + "'");
-            }
+            snapshots.vacuumInto(target);
             log.info("schema {} -> {} 升级前快照: {}", currentVersion, SCHEMA_VERSION, target);
         } catch (IOException | SQLException error) {
-            try {
-                Files.deleteIfExists(target);
-            } catch (IOException ignored) {
-                /* 清理半成品 */
-            }
             throw new IllegalStateException("升级前快照失败，已停止 schema 迁移：" + error.getMessage(), error);
         }
     }
