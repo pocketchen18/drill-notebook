@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.config.PortablePathResolver;
+import com.drillnotebook.app.config.SnapshotService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -10,9 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.sql.Connection;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -26,7 +25,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
-import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -52,13 +50,13 @@ public class DataBackupService {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneId.systemDefault());
 
     private final PortablePathResolver paths;
-    private final DataSource dataSource;
+    private final SnapshotService snapshots;
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    public DataBackupService(PortablePathResolver paths, DataSource dataSource, ObjectMapper mapper) {
+    public DataBackupService(PortablePathResolver paths, SnapshotService snapshots, ObjectMapper mapper) {
         this.paths = paths;
-        this.dataSource = dataSource;
+        this.snapshots = snapshots;
         this.mapper = mapper;
     }
 
@@ -199,7 +197,8 @@ public class DataBackupService {
         Path snapshot = paths.data().resolve("backup-snapshot.db");
         try {
             Files.createDirectories(target.getParent());
-            vacuumeInto(snapshot);
+            Files.deleteIfExists(snapshot);
+            snapshots.vacuumInto(snapshot);
             try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(target))) {
                 putManifest(zip, lite);
                 putFile(zip, DB_ZIP_ENTRY, snapshot);
@@ -218,15 +217,6 @@ public class DataBackupService {
         } finally {
             try { Files.deleteIfExists(snapshot); } catch (IOException ignored) { /* 清理快照 */ }
             running.set(false);
-        }
-    }
-
-    /** SQLite 在线一致性快照：VACUUM INTO 读取的是单个事务快照，不受 WAL 影响。 */
-    private void vacuumeInto(Path snapshot) throws SQLException, IOException {
-        Files.deleteIfExists(snapshot);
-        String literal = snapshot.toString().replace("'", "''");
-        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            statement.execute("VACUUM INTO '" + literal + "'");
         }
     }
 

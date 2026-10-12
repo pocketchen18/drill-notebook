@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.repository.AiChatSessionRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
+import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.RetrievalIndexRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,10 +28,11 @@ class AiChatSessionServiceTest {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         ObjectMapper mapper = new ObjectMapper();
         AiConfigRepository configs = new AiConfigRepository(jdbc);
-        AiChatSessionRepository sessions = new AiChatSessionRepository(jdbc);
+        ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         RetrievalService retrieval = new RetrievalService(
                 new RetrievalIndexRepository(jdbc), new NotebookRepository(jdbc, mapper));
-        AiService service = new AiService(configs, sessions, new ApiKeyEncryptor(), mapper, retrieval);
+        AiService service = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), mapper, retrieval,
+                wiring.turnService(), wiring.cipher());
 
         service.saveConfig(Map.of(
                 "provider", "mock",

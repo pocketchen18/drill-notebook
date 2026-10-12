@@ -9,6 +9,8 @@ public class AiConfigRepository {
     public static final String PURPOSE_CHAT = "chat";
     public static final String PURPOSE_IMPORT = "import";
     public static final String PURPOSE_EMBEDDING = "embedding";
+    /** 记忆维护专用槽位（§5.1 的 maintenanceModelMode=dedicated）。 */
+    public static final String PURPOSE_MEMORY = "memory";
 
     private final JdbcTemplate jdbc;
 
@@ -29,6 +31,11 @@ public class AiConfigRepository {
     /** Embedding：笔记本向量索引（独立于 chat/import 配置）。 */
     public ConfigRow findEmbedding() {
         return find(PURPOSE_EMBEDDING);
+    }
+
+    /** 记忆维护专用配置行；未配置时返回 null，dedicated 模式据此拒绝外发。 */
+    public ConfigRow findMemory() {
+        return find(PURPOSE_MEMORY);
     }
 
     public ConfigRow find(String purpose) {

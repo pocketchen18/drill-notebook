@@ -15,7 +15,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AiServiceStructuredCallTest {
-    private final AiService service = new AiService(null, null, null, new ObjectMapper(), null);
+    private final AiService service = new AiService(null, null, null, new ObjectMapper(), null, null, null);
 
     @Test
     void structuredCallDisablesThinkingForQwenDashScope() {
@@ -101,7 +101,8 @@ class AiServiceStructuredCallTest {
     void parseKnowledgePointsFromTextForwardsLevelFromJsonReply() throws Exception {
         AiConfigRepository configs = mock(AiConfigRepository.class);
         ApiKeyEncryptor encryptor = mock(ApiKeyEncryptor.class);
-        AiService ai = new AiService(configs, null, encryptor, new ObjectMapper(), mock(RetrievalService.class));
+        AiService ai = new AiService(configs, null, encryptor, new ObjectMapper(), mock(RetrievalService.class),
+                null, null);
         when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(new AiConfigRepository.ConfigRow(
                 "custom",
                 "mock://local",

@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.model.RetrievalHit;
 import com.drillnotebook.app.model.RetrievalQuery;
-import com.drillnotebook.app.repository.AiChatSessionRepository;
+import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.RetrievalIndexRepository;
@@ -37,6 +37,7 @@ import org.sqlite.SQLiteDataSource;
  * messages sent to the chat model.
  */
 class AiServiceChatRetrievalTest {
+    private SQLiteDataSource dataSource;
     private JdbcTemplate jdbc;
     private NotebookRepository notebooks;
     private RetrievalService retrieval;
@@ -49,7 +50,7 @@ class AiServiceChatRetrievalTest {
     @BeforeEach
     void setUp() throws Exception {
         var root = Files.createTempDirectory("ai-chat-retrieval-test");
-        SQLiteDataSource dataSource = new SQLiteDataSource();
+        dataSource = new SQLiteDataSource();
         dataSource.setUrl("jdbc:sqlite:" + root.resolve("study.db"));
         new DatabaseInitializer(dataSource).initialize();
         jdbc = new JdbcTemplate(dataSource);
@@ -245,12 +246,15 @@ class AiServiceChatRetrievalTest {
     }
 
     private AiService newService(RetrievalService retrievalService) {
+        ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         return new AiService(
                 new AiConfigRepository(jdbc),
-                new AiChatSessionRepository(jdbc),
+                wiring.sessions(),
                 new ApiKeyEncryptor(),
                 new ObjectMapper(),
-                retrievalService);
+                retrievalService,
+                wiring.turnService(),
+                wiring.cipher());
     }
 
     @SuppressWarnings("unchecked")

@@ -96,12 +96,15 @@ public class AiController {
                         return false; // 下游断开，中止上游读取
                     }
                 });
-                ai.persistChatResult(body, result);
+                // done 必须在落库结算之后发；落库失败时如实带上 failed 与 stateDurable=false（§7.2 第 6 条）
                 java.util.Map<String, Object> donePayload = new java.util.LinkedHashMap<>();
                 donePayload.put("reply", result.text());
                 if (result.reasoning() != null && !result.reasoning().isBlank()) {
                     donePayload.put("reasoning", result.reasoning());
                 }
+                donePayload.put("status", result.status());
+                donePayload.put("persistenceStatus", result.persistenceStatus());
+                donePayload.put("stateDurable", result.stateDurable());
                 emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
                         .name("done")
                         .data(mapperValueToJson(donePayload)));
