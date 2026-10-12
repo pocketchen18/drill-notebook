@@ -7,6 +7,7 @@ import com.drillnotebook.app.repository.AiChatSessionRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
 import com.drillnotebook.app.repository.ChatTurnRepository;
+import com.drillnotebook.app.repository.UsageRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -280,13 +281,14 @@ public class AiService {
         return payload;
     }
 
-    /** 归一化后的本轮输入：协议版本、请求身份、会话、正文与要发给模型的消息列表。 */
+    /** 归一化后的本轮输入：协议版本、请求身份、会话、正文、附件与要发给模型的消息列表。 */
     private record TurnRequest(int protocolVersion, String requestId, long sessionId, String userText,
                                String masterPassword, List<Map<String, Object>> modelMessages,
-                               Map<String, Object> requestOptions) {
+                               Map<String, Object> requestOptions, List<Map<String, Object>> attachments,
+                               String retryOf) {
         ChatTurnService.BeginInput beginInput() {
             return new ChatTurnService.BeginInput(requestId, protocolVersion, sessionId, userText, masterPassword,
-                    List.of(), requestOptions);
+                    attachments, requestOptions, retryOf);
         }
     }
 
@@ -300,16 +302,20 @@ public class AiService {
         }
         ChatTurnService.Lease lease = begun.lease();
         RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), request.modelMessages());
+        String attempt = chatTurns.startUsage(lease, chatTarget(config));
         AiUpstreamClient.Result result;
         try {
-            result = chatUpstream(config, withContext(request.modelMessages(), outcome), request.masterPassword());
+            result = chatUpstream(config, withContext(request.modelMessages(), outcome),
+                    request.masterPassword(), lease.handle());
         } catch (RuntimeException error) {
+            // 外发已发生就按 unknown 结算：正文没保存，不撤销已经花掉的量（§7.2.1）
+            chatTurns.settleUsage(attempt, null);
             chatTurns.abandon(lease, "upstream_failed");
             throw error;
         }
+        chatTurns.settleUsage(attempt, result.usage());
         ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                new ChatTurnService.UpstreamReply(result.text(), result.reasoning(), result.finishReason(), false),
-                retrievalAudit(outcome));
+                ChatTurnService.UpstreamReply.of(result), retrievalAudit(outcome));
         maybeAutoTitle(request.sessionId(), request.userText());
         reportLegacyFailure(request.protocolVersion(), done.status(), result);
         return chatResponse(request, done.reply(), outcome, done.status(), done.persistenceStatus(), false);
@@ -337,31 +343,43 @@ public class AiService {
         ChatTurnService.Lease lease = begun.lease();
         UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
         if (upstream == null) {
-            // mock://local：一次性吐出整段正文，模拟流式
+            // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
+            String attempt = chatTurns.startUsage(lease, chatTarget(requireChatConfig()));
             String reply = mockReply(request.modelMessages());
-            if (listener != null) listener.onDelta("text", reply);
+            chatTurns.settleUsage(attempt, null);
+            if (listener != null && !listener.onDelta("text", reply)) {
+                // 前端已断：仍要把这一轮收成 ABORTED，不能留在 RUNNING
+                ChatTurnService.FinalResult stopped = chatTurns.finalizeTurn(lease,
+                        new ChatTurnService.UpstreamReply(reply, null, "aborted", false, false, true,
+                                AiUpstreamClient.Usage.unknown()), null);
+                return new ChatResult(stopped.reply(), stopped.reasoning(), stopped.status(),
+                        stopped.persistenceStatus(), stopped.stateDurable());
+            }
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                    new ChatTurnService.UpstreamReply(reply, null, "stop", false), null);
+                    ChatTurnService.UpstreamReply.of(new AiUpstreamClient.Result(reply, null, "stop")), null);
             maybeAutoTitle(request.sessionId(), request.userText());
             return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
                     done.stateDurable());
         }
         RetrievalOutcome outcome = maybeRetrieve(body.get("retrievalOptions"), request.modelMessages());
+        String attempt = chatTurns.startUsage(lease, UsageRepository.targetFingerprint(upstream.baseUrl(),
+                upstream.apiFormat(), upstream.model()));
         AiUpstreamClient.Result result;
         try {
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
             result = upstream().call(target, withContext(request.modelMessages(), outcome), true, listener,
-                    DEFAULT_CALL.timeoutSeconds());
+                    DEFAULT_CALL.timeoutSeconds(), lease.handle());
         } catch (RuntimeException error) {
+            chatTurns.settleUsage(attempt, null);
             chatTurns.abandon(lease, "upstream_failed");
             throw error;
         }
+        chatTurns.settleUsage(attempt, result.usage());
         // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
         ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                new ChatTurnService.UpstreamReply(result.text(), result.reasoning(), result.finishReason(), false),
-                retrievalAudit(outcome));
+                ChatTurnService.UpstreamReply.of(result), retrievalAudit(outcome));
         maybeAutoTitle(request.sessionId(), request.userText());
         if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
             throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
@@ -383,13 +401,44 @@ public class AiService {
                         "v2 只接受 input.userText，不能与旧 content 同时出现或互相替代", Map.of());
             }
             return new TurnRequest(2, string(body, "requestId", ""), sessionId, userText, masterPassword,
-                    List.of(Map.of("role", "user", "content", userText)), requestOptions(body));
+                    List.of(Map.of("role", "user", "content", userText)), requestOptions(body),
+                    attachmentItems(input.get("attachments")), nullIfBlank(string(body, "retryOf", "")));
         }
         List<Map<String, Object>> messages = messages(body.get("messages"));
         if (messages.isEmpty()) throw new IllegalArgumentException("消息不能为空");
+        // 旧客户端也明确拒绝这两条新通道，而不是静默丢弃：静默忽略会让调用方以为附件已经送出去了
+        if (body.get("attachments") != null) {
+            throw new ChatTurnRejectException(422, "ATTACHMENTS_REQUIRE_V2",
+                    "附件通道只在 protocolVersion=2 接受", Map.of());
+        }
+        if (nullIfBlank(string(body, "retryOf", "")) != null) {
+            throw new ChatTurnRejectException(422, "RETRY_OF_REQUIRES_V2",
+                    "retryOf 只在 protocolVersion=2 接受", Map.of());
+        }
         Map<String, Object> lastUser = messages.get(messages.size() - 1);
         return new TurnRequest(1, null, sessionId, contentText(lastUser.get("content")), masterPassword,
-                messages, requestOptions(body));
+                messages, requestOptions(body), List.of(), null);
+    }
+
+    private static String nullIfBlank(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    /** 附件只走独立的数组通道，具体有界校验与封装在轮次层做（contracts §4.3）。 */
+    private static List<Map<String, Object>> attachmentItems(Object raw) {
+        if (raw == null) return List.of();
+        if (!(raw instanceof List<?> list)) {
+            throw new ChatTurnRejectException(422, "ATTACHMENT_SHAPE_INVALID", "attachments 必须是数组", Map.of());
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Object element : list) {
+            if (!(element instanceof Map<?, ?>)) {
+                throw new ChatTurnRejectException(422, "ATTACHMENT_SHAPE_INVALID", "attachments 每一项必须是对象",
+                        Map.of());
+            }
+            items.add(mapValue(element));
+        }
+        return items;
     }
 
     /** 进 request_meta 的只有选项标识：页面正文与 RAG 片段一律不进元数据（contracts §2.2）。 */
@@ -474,9 +523,15 @@ public class AiService {
         return result;
     }
 
+    /** 用量表的 target 身份：切模型只换指纹，不重置跨 target 的每日总额（contracts §2.6）。 */
+    private String chatTarget(AiConfigRepository.ConfigRow config) {
+        return UsageRepository.targetFingerprint(config.endpoint(), apiFormatOf(config), config.model());
+    }
+
     /** 聊天专用的非流式调用：返回原始 Result，终态由轮次层裁决，不在这里伪造"正常结束"。 */
     private AiUpstreamClient.Result chatUpstream(AiConfigRepository.ConfigRow config,
-                                                  List<Map<String, Object>> messages, String masterPassword) {
+                                                  List<Map<String, Object>> messages, String masterPassword,
+                                                  ActiveTurnRegistry.Handle handle) {
         if (config.endpoint().equalsIgnoreCase("mock://local")) {
             return new AiUpstreamClient.Result(mockReply(messages), null, "stop");
         }
@@ -486,12 +541,12 @@ public class AiService {
             AiUpstreamClient.Result result = upstream().call(new AiUpstreamClient.Upstream(
                     config.endpoint(), apiKey, config.model(), apiFormatOf(config),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking()), messages, false, null,
-                    DEFAULT_CALL.timeoutSeconds());
-            log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={}",
+                    DEFAULT_CALL.timeoutSeconds(), handle);
+            log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={}",
                     System.currentTimeMillis() - start,
                     result.text() == null ? 0 : result.text().length(),
                     result.reasoning() == null ? 0 : result.reasoning().length(),
-                    result.finishReason());
+                    result.finishReason(), result.terminalObserved());
             return result;
         } finally {
             apiKey = null;

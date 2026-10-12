@@ -37,6 +37,12 @@ class AiServiceTurnPathTest {
             "model", "local-demo",
             "apiKey", "demo-key");
 
+    /** 只带合法 PNG 签名与 IHDR 宽高的最小图片：够过有界校验，不需要真像素。 */
+    private static final String PING_BASE64 = java.util.Base64.getEncoder().encodeToString(new byte[]{
+            (byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+            0, 0, 0, 13, 'I', 'H', 'D', 'R',
+            0, 0, 0, 2, 0, 0, 0, 2, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+
     private Path appRoot;
     private DataSource dataSource;
     private JdbcTemplate jdbc;
@@ -152,6 +158,82 @@ class AiServiceTurnPathTest {
     }
 
     @Test
+    void eachUpstreamDispatchMetersExactlyOneChatAttempt() {
+        String requestId = UuidV7.generate(System.currentTimeMillis());
+        Map<String, Object> body = Map.of("protocolVersion", 2, "requestId", requestId,
+                "sessionId", sessionId, "input", Map.of("userText", "计量一次就好"));
+        ai.chat(body);
+        ai.chat(body);
+
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_usage_attempt WHERE operation_id = '" + requestId + "'"),
+                "同 ID 重放不再外发，也就不该多出一次计量");
+        assertEquals("SETTLED", jdbc.queryForObject("SELECT state FROM ai_usage_attempt", String.class));
+        assertEquals("CHAT", jdbc.queryForObject("SELECT purpose FROM ai_usage_attempt", String.class));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_usage_daily WHERE purpose = 'CHAT' AND attempts = 1"
+                + " AND reserved_tokens = 0"), "聊天只计量，不占后台 20 次/30K 预留（§2.6）");
+
+        ai.chatStream(Map.of("protocolVersion", 2,
+                "requestId", UuidV7.generate(System.currentTimeMillis()),
+                "sessionId", sessionId, "input", Map.of("userText", "流式同样计量")),
+                (type, text) -> true);
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_usage_attempt WHERE state = 'SETTLED'"),
+                "两条路径共用同一套用量结算");
+    }
+
+    @Test
+    void v2AttachmentsPersistAsCiphertextThroughTheChatPath() throws Exception {
+        Map<String, Object> response = ai.chat(Map.of(
+                "protocolVersion", 2,
+                "requestId", UuidV7.generate(System.currentTimeMillis()),
+                "sessionId", sessionId,
+                "input", Map.of("userText", "看这张图", "attachments", List.of(Map.of(
+                        "clientId", "c1", "kind", "image", "name", "截图.png",
+                        "mimeType", "image/png", "dataBase64", PING_BASE64)))));
+
+        assertEquals(ChatTurnRepository.STATUS_COMPLETED, response.get("status"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_attachment"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE memory_eligible = 1"));
+        assertTrue(attachmentBytes() > 0, "附件密文进 attachment_bytes");
+        assertFalse(dbContains(PING_BASE64), "base64 原串不得落进库文件");
+        assertFalse(dbContains("截图.png"), "文件名也只在密文里");
+    }
+
+    @Test
+    void sameRequestIdAcrossBothPathsCreatesOneSourceTurn() {
+        Map<String, Object> body = Map.of("protocolVersion", 2,
+                "requestId", UuidV7.generate(System.currentTimeMillis()),
+                "sessionId", sessionId,
+                "input", Map.of("userText", "两条路径发同一个请求"));
+
+        ai.chat(body);
+        AiService.ChatResult replayed = ai.chatStream(body, (type, text) -> true);
+
+        assertEquals(ChatTurnRepository.STATUS_COMPLETED, replayed.status());
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE memory_eligible = 1"),
+                "P3 退出条件：普通与流式共用同一身份，不会重复创建记忆来源（§7.2-7）");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_message WHERE role = 'assistant'"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_usage_attempt"), "重放不再外发，也不再计量第二次");
+        assertEquals(0, ledgerReserved());
+    }
+
+    @Test
+    void v1ClientIsToldAttachmentsAndRetryAreV2Only() {
+        ChatTurnRejectException attachments = assertThrows(ChatTurnRejectException.class, () -> ai.chat(Map.of(
+                "sessionId", sessionId,
+                "attachments", List.of(Map.of("clientId", "c1", "kind", "text", "text", "旧通道附件")),
+                "messages", List.of(Map.of("role", "user", "content", "旧客户端带附件")))));
+        assertEquals(422, attachments.status());
+        assertEquals("ATTACHMENTS_REQUIRE_V2", attachments.code());
+
+        ChatTurnRejectException retry = assertThrows(ChatTurnRejectException.class, () -> ai.chat(Map.of(
+                "sessionId", sessionId, "retryOf", UuidV7.generate(System.currentTimeMillis()),
+                "messages", List.of(Map.of("role", "user", "content", "旧客户端带 retryOf")))));
+        assertEquals(422, retry.status());
+        assertEquals("RETRY_OF_REQUIRES_V2", retry.code());
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn"), "拒绝在开始之前，不留残轮");
+    }
+
+    @Test
     void missingModelConfigStopsBeforeStartingTurn() {
         jdbc.update("DELETE FROM ai_config WHERE purpose = 'chat'");
 
@@ -164,6 +246,10 @@ class AiServiceTurnPathTest {
 
     private long ledgerReserved() {
         return jdbc.queryForObject("SELECT reserved_history_bytes FROM ai_chat_storage WHERE id = 1", Long.class);
+    }
+
+    private long attachmentBytes() {
+        return jdbc.queryForObject("SELECT attachment_bytes FROM ai_chat_storage WHERE id = 1", Long.class);
     }
 
     private int count(String sql) {

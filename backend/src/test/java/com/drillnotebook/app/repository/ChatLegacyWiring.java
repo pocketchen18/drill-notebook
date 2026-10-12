@@ -3,6 +3,8 @@ package com.drillnotebook.app.repository;
 import com.drillnotebook.app.config.ImmediateTransaction;
 import com.drillnotebook.app.config.ProcessIdentity;
 import com.drillnotebook.app.service.ActiveTurnRegistry;
+import com.drillnotebook.app.service.ChatAttachmentCipher;
+import com.drillnotebook.app.service.ChatAttachmentService;
 import com.drillnotebook.app.service.ChatMessageCipher;
 import com.drillnotebook.app.service.ChatTurnService;
 import com.drillnotebook.app.service.ApiKeyEncryptor;
@@ -21,8 +23,9 @@ public final class ChatLegacyWiring {
     /** 一整套同源依赖，供 AiService/ChatTurnService 的手工装配复用。 */
     public record Wiring(ImmediateTransaction immediate, ChatStorageLedger ledger,
                          ChatSessionMetadataRepository metadata, MemoryRepository memory,
-                         AiChatSessionRepository sessions, ChatTurnRepository turns,
-                         ChatMessageCipher cipher, ActiveTurnRegistry handles, ChatTurnService turnService) {
+                         AiChatSessionRepository sessions, ChatTurnRepository turns, ChatMessageCipher cipher,
+                         ActiveTurnRegistry handles, UsageRepository usage, ChatAttachmentCipher attachmentCipher,
+                         ChatAttachmentService attachments, ChatTurnService turnService) {
     }
 
     public static Wiring wire(DataSource dataSource, JdbcTemplate jdbc) {
@@ -32,12 +35,16 @@ public final class ChatLegacyWiring {
         ChatSessionMetadataRepository metadata = new ChatSessionMetadataRepository(dataSource, immediate);
         MemoryRepository memory = new MemoryRepository(dataSource, immediate);
         ChatTurnRepository turns = new ChatTurnRepository(dataSource, immediate, ledger, metadata, memory);
+        UsageRepository usage = new UsageRepository(dataSource, immediate);
         ChatMessageCipher cipher = new ChatMessageCipher(new ApiKeyEncryptor(), mapper);
+        ChatAttachmentCipher attachmentCipher = new ChatAttachmentCipher(cipher, mapper);
+        ChatAttachmentService attachments = new ChatAttachmentService(attachmentCipher, mapper);
         ActiveTurnRegistry handles = new ActiveTurnRegistry();
         ChatTurnService turnService = new ChatTurnService(turns, metadata, cipher, handles, new ProcessIdentity(),
-                mapper);
+                mapper, usage, attachments);
         AiChatSessionRepository sessions = new AiChatSessionRepository(jdbc, immediate, ledger, metadata, memory);
-        return new Wiring(immediate, ledger, metadata, memory, sessions, turns, cipher, handles, turnService);
+        return new Wiring(immediate, ledger, metadata, memory, sessions, turns, cipher, handles, usage,
+                attachmentCipher, attachments, turnService);
     }
 
     public static AiChatSessionRepository sessions(DataSource dataSource, JdbcTemplate jdbc) {

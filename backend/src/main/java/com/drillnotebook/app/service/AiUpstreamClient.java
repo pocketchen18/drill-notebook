@@ -128,6 +128,11 @@ public class AiUpstreamClient {
         HttpRequest httpRequest = builder.build();
         Deadline deadline = new Deadline(Math.max(timeoutSeconds, 1) + 1L);
         if (handle != null) handle.bindAbortHook(deadline::expire);
+        if (stopped(handle, deadline)) {
+            // 排队期间用户已经点了停止：连一个字节都不必发出去（§7.3 服务端 token 与前端 abort 同效）
+            deadline.cancel();
+            return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+        }
         HttpResponse<InputStream> response;
         try {
             response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
@@ -206,7 +211,7 @@ public class AiUpstreamClient {
      * 总期限看门狗（§7.2.2）：到期就关闭已附上的响应体，让阻塞中的读取立刻失败。
      * 单线程守护调度器，一次调用一个任务，取消路径与 finally 都会撤销，不留悬空任务。
      */
-    private static final class Deadline {
+    static final class Deadline {
         private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "ai-upstream-deadline");
             thread.setDaemon(true);
@@ -462,8 +467,8 @@ public class AiUpstreamClient {
     }
 
     /** Chat Completions SSE：choices[0].delta.content / reasoning_content，data: [DONE] 结束。 */
-    private Result consumeChatCompletionStream(InputStream body, StreamListener listener,
-                                               ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
+    Result consumeChatCompletionStream(InputStream body, StreamListener listener,
+                                       ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
         Capture capture = new Capture();
         String[] finish = {""};
         Usage[] usage = {Usage.unknown()};
@@ -507,8 +512,8 @@ public class AiUpstreamClient {
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
-    private Result consumeAnthropicStream(InputStream body, StreamListener listener,
-                                          ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
+    Result consumeAnthropicStream(InputStream body, StreamListener listener,
+                                  ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
         Capture capture = new Capture();
         String[] finish = {""};
         Usage[] usage = {Usage.unknown()};
@@ -690,7 +695,7 @@ public class AiUpstreamClient {
     private static final long MAX_RAW_RESPONSE_BYTES = 8L * 1024 * 1024;
     private static final long MAX_ERROR_BODY_BYTES = 1024 * 1024;
 
-    private static String readBounded(InputStream body) throws IOException {
+    static String readBounded(InputStream body) throws IOException {
         byte[] buffer = new byte[8192];
         java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
         long total = 0;
@@ -706,7 +711,7 @@ public class AiUpstreamClient {
     }
 
     /** 错误响应体只读到 1 MiB（文案后面还要压成 240 码点），不能为了拼错误信息而无限占内存。 */
-    private static String readForError(InputStream body) throws IOException {
+    static String readForError(InputStream body) throws IOException {
         byte[] buffer = new byte[8192];
         java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
         long total = 0;

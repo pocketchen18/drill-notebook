@@ -173,15 +173,34 @@ public class UsageRepository {
     }
 
     /** 卡在 SENT 的全部 attempt：恢复流程把它们按 UNKNOWN 消费（§7.2.1）。 */
-    public List<String> findSentAttemptIds() throws SQLException {
+    public List<AttemptRow> findUnsettled() throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(
-                     "SELECT id FROM ai_usage_attempt WHERE state = 'SENT' ORDER BY created_at")) {
+                     "SELECT id, operation_id, purpose, target_fingerprint, budget_date, budget_timezone, state,"
+                             + " reserved_tokens, usage_source, input_tokens, output_tokens, settled_at"
+                             + " FROM ai_usage_attempt WHERE state IN ('RESERVED','SENT') ORDER BY created_at")) {
             try (ResultSet result = statement.executeQuery()) {
-                List<String> ids = new java.util.ArrayList<>();
-                while (result.next()) ids.add(result.getString(1));
-                return ids;
+                List<AttemptRow> rows = new java.util.ArrayList<>();
+                while (result.next()) rows.add(row(result));
+                return rows;
             }
+        }
+    }
+
+    /**
+     * target 指纹：endpoint 归一化（小写、去尾斜杠）+ apiFormat + model 的摘要。
+     * 它与授权指纹分开——切模型会换 target，但跨 target 的每日维护总额不因此重置（§2.6）。
+     */
+    public static String targetFingerprint(String endpoint, String apiFormat, String model) {
+        String canonical = String.join("|",
+                endpoint == null ? "" : endpoint.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("/+$", ""),
+                apiFormat == null ? "" : apiFormat.trim().toLowerCase(java.util.Locale.ROOT),
+                model == null ? "" : model.trim().toLowerCase(java.util.Locale.ROOT));
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 不可用", error);
         }
     }
 
@@ -195,15 +214,18 @@ public class UsageRepository {
                 """)) {
             statement.setString(1, attemptId);
             try (ResultSet result = statement.executeQuery()) {
-                if (!result.next()) return Optional.empty();
-                return Optional.of(new AttemptRow(result.getString("id"), result.getString("operation_id"),
-                        result.getString("purpose"), result.getString("target_fingerprint"),
-                        result.getString("budget_date"), result.getString("budget_timezone"),
-                        result.getString("state"), result.getInt("reserved_tokens"),
-                        result.getString("usage_source"), nullableInt(result, "input_tokens"),
-                        nullableInt(result, "output_tokens"), result.getString("settled_at")));
+                return result.next() ? Optional.of(row(result)) : Optional.empty();
             }
         }
+    }
+
+    private static AttemptRow row(ResultSet result) throws SQLException {
+        return new AttemptRow(result.getString("id"), result.getString("operation_id"),
+                result.getString("purpose"), result.getString("target_fingerprint"),
+                result.getString("budget_date"), result.getString("budget_timezone"),
+                result.getString("state"), result.getInt("reserved_tokens"),
+                result.getString("usage_source"), nullableInt(result, "input_tokens"),
+                nullableInt(result, "output_tokens"), result.getString("settled_at"));
     }
 
     /**

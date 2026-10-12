@@ -51,9 +51,20 @@ public class ChatTurnRepository {
                         long sourceScopeId, String sourceTimezone, String runtimeGeneration, boolean memoryEligible,
                         Long memoryPolicyRevision, String requestMetaCipher, String requestMetaCrypto,
                         String userContent, String userContentCipher, String userContentMeta,
-                        List<AttachmentPayload> attachments, String startedAt) {
+                        List<AttachmentPayload> attachments, String startedAt, String retryOf) {
         public Draft {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        }
+
+        /** 不带 retryOf 的旧形态：不是"重新生成"的发言走这里。 */
+        public Draft(String requestId, long sessionId, long contextGeneration, String sourceScopeType,
+                     long sourceScopeId, String sourceTimezone, String runtimeGeneration, boolean memoryEligible,
+                     Long memoryPolicyRevision, String requestMetaCipher, String requestMetaCrypto,
+                     String userContent, String userContentCipher, String userContentMeta,
+                     List<AttachmentPayload> attachments, String startedAt) {
+            this(requestId, sessionId, contextGeneration, sourceScopeType, sourceScopeId, sourceTimezone,
+                    runtimeGeneration, memoryEligible, memoryPolicyRevision, requestMetaCipher, requestMetaCrypto,
+                    userContent, userContentCipher, userContentMeta, attachments, startedAt, null);
         }
     }
 
@@ -77,7 +88,7 @@ public class ChatTurnRepository {
                           Long assistantMessageId, long contextGeneration, String sourceScopeType, long sourceScopeId,
                           long sourceRevision, long storedHistoryBytes, long reservedHistoryBytes,
                           String contentDeletedAt, String persistenceStatus, String finishReason, String startedAt,
-                          String finishedAt) {
+                          String finishedAt, String retryOf) {
     }
 
     /**
@@ -102,7 +113,7 @@ public class ChatTurnRepository {
     private static final String TURN_SELECT = "SELECT id, request_id, session_id, status, user_message_id,"
             + " assistant_message_id, context_generation, source_scope_type, source_scope_id, source_revision,"
             + " stored_history_bytes, reserved_history_bytes, content_deleted_at, persistence_status, finish_reason,"
-            + " started_at, finished_at FROM ai_chat_turn";
+            + " started_at, finished_at, retry_of FROM ai_chat_turn";
 
     private final DataSource dataSource;
     private final ImmediateTransaction immediate;
@@ -382,6 +393,31 @@ public class ChatTurnRepository {
                                  String reasoningCipher, String reasoningMeta) {
     }
 
+    /** 附件行的存储列：密文与封装材料原样交回，解密与 AAD 校验由服务层做。 */
+    public record AttachmentRow(String id, String blockId, String kind, byte[] payloadCipher, String cryptoMeta,
+                                long byteLength, String createdAt) {
+    }
+
+    /** 本轮附件，按落库顺序（block_id 是 a10 排在 a2 前的字典序，所以按 rowid 取回请求顺序）。 */
+    public List<AttachmentRow> findAttachments(long turnId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT id, block_id, kind, payload_cipher, crypto_meta, byte_length, created_at"
+                             + " FROM ai_chat_attachment WHERE turn_id = ? ORDER BY rowid")) {
+            statement.setLong(1, turnId);
+            List<AttachmentRow> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new AttachmentRow(result.getString("id"), result.getString("block_id"),
+                            result.getString("kind"), result.getBytes("payload_cipher"),
+                            result.getString("crypto_meta"), result.getLong("byte_length"),
+                            result.getString("created_at")));
+                }
+            }
+            return rows;
+        }
+    }
+
     /** 幂等判定要比对的两列请求元数据（不解密）。 */
     public Optional<MetaColumns> findRequestMeta(String requestId) throws SQLException {
         try (Connection connection = dataSource.getConnection();
@@ -430,31 +466,32 @@ public class ChatTurnRepository {
                 result.getLong("stored_history_bytes"), result.getLong("reserved_history_bytes"),
                 result.getString("content_deleted_at"), result.getString("persistence_status"),
                 result.getString("finish_reason"), result.getString("started_at"),
-                result.getString("finished_at"));
+                result.getString("finished_at"), result.getString("retry_of"));
     }
 
     private long insertTurn(Connection connection, Draft draft, long storedBytes) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO ai_chat_turn(request_id, session_id, status, request_meta_cipher, request_meta_crypto,
-                    context_generation, source_scope_type, source_scope_id, source_timezone, runtime_generation,
-                    memory_eligible, memory_policy_revision, source_revision, stored_history_bytes,
-                    reserved_history_bytes, persistence_status, started_at)
-                VALUES (?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)
+                INSERT INTO ai_chat_turn(request_id, session_id, retry_of, status, request_meta_cipher,
+                    request_meta_crypto, context_generation, source_scope_type, source_scope_id, source_timezone,
+                    runtime_generation, memory_eligible, memory_policy_revision, source_revision,
+                    stored_history_bytes, reserved_history_bytes, persistence_status, started_at)
+                VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)
                 """, Statement.RETURN_GENERATED_KEYS)) {
             statement.setString(1, draft.requestId());
             statement.setLong(2, draft.sessionId());
-            statement.setString(3, draft.requestMetaCipher());
-            statement.setString(4, draft.requestMetaCrypto());
-            statement.setLong(5, draft.contextGeneration());
-            statement.setString(6, draft.sourceScopeType());
-            statement.setLong(7, draft.sourceScopeId());
-            statement.setString(8, draft.sourceTimezone());
-            statement.setString(9, draft.runtimeGeneration());
-            statement.setInt(10, draft.memoryEligible() ? 1 : 0);
-            statement.setObject(11, draft.memoryPolicyRevision());
-            statement.setLong(12, storedBytes);
-            statement.setLong(13, ChatStorageSizer.REPLY_RESERVATION_BYTES);
-            statement.setString(14, draft.startedAt());
+            statement.setString(3, draft.retryOf());
+            statement.setString(4, draft.requestMetaCipher());
+            statement.setString(5, draft.requestMetaCrypto());
+            statement.setLong(6, draft.contextGeneration());
+            statement.setString(7, draft.sourceScopeType());
+            statement.setLong(8, draft.sourceScopeId());
+            statement.setString(9, draft.sourceTimezone());
+            statement.setString(10, draft.runtimeGeneration());
+            statement.setInt(11, draft.memoryEligible() ? 1 : 0);
+            statement.setObject(12, draft.memoryPolicyRevision());
+            statement.setLong(13, storedBytes);
+            statement.setLong(14, ChatStorageSizer.REPLY_RESERVATION_BYTES);
+            statement.setString(15, draft.startedAt());
             requireOneRow(statement.executeUpdate(), "轮次写入");
             return generatedKey(statement);
         }

@@ -125,31 +125,6 @@ class ChatStorageSizerTest {
     }
 
     @Test
-    void captureLimitStopsAtCodePointBoundaryWithoutSplittingUtf8() {
-        long cap = ChatStorageSizer.OUTPUT_CAPTURE_RAW_BYTES;
-        String base = "中".repeat((int) (cap / 3));           // 3 字节码点填到底 → 1,048,575 字节
-        assertEquals(cap - 1, base.getBytes(StandardCharsets.UTF_8).length);
-
-        // 余下 1 字节：再来一个 3 字节汉字放不下，必须整体不进，而不是切半个 UTF-8 序列
-        assertEquals(base, ChatStorageSizer.appendWithinCaptureLimit(base, "中"));
-        // 换成 1 字节正好填满上限，填满之后连 ASCII 也不再加
-        String full = ChatStorageSizer.appendWithinCaptureLimit(base, "A");
-        assertEquals(cap, full.getBytes(StandardCharsets.UTF_8).length);
-        assertEquals(full, ChatStorageSizer.appendWithinCaptureLimit(full, "B"));
-        assertEquals(full, ChatStorageSizer.appendWithinCaptureLimit(full, "🍀"));
-        assertEquals(full, new String(full.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
-                "截断结果必须仍是完整码点序列");
-    }
-
-    @Test
-    void captureLimitKeepsWholeCodePointsThatStillFit() {
-        String prefix = "a".repeat((int) ChatStorageSizer.OUTPUT_CAPTURE_RAW_BYTES - 12);
-        String kept = ChatStorageSizer.appendWithinCaptureLimit(prefix, "🍀🍀🍀🍀🍀");
-        assertEquals(ChatStorageSizer.OUTPUT_CAPTURE_RAW_BYTES, kept.getBytes(StandardCharsets.UTF_8).length);
-        assertEquals(3, kept.codePoints().filter(point -> point == 0x1F340).count(), "12 字节余量只放得下 3 个 emoji");
-    }
-
-    @Test
     void reserveRefusesHistoryAndAttachmentSeparately() throws Exception {
         // 正文侧只留"999 字节 + 一份 2 MiB 回复预留"，附件留 1000 字节
         jdbc.update("UPDATE ai_chat_storage SET history_limit_bytes = history_bytes + reserved_history_bytes + ? + ?,"

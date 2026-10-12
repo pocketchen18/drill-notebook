@@ -10,12 +10,17 @@ import com.drillnotebook.app.repository.ChatTurnRepository.StartResult;
 import com.drillnotebook.app.repository.ChatTurnRepository.Terminal;
 import com.drillnotebook.app.repository.ChatTurnRepository.TerminalOutcome;
 import com.drillnotebook.app.repository.ChatTurnRepository.TurnRow;
+import com.drillnotebook.app.repository.UsageRepository;
+import com.drillnotebook.app.repository.UsageRepository.ActualUsage;
+import com.drillnotebook.app.repository.UsageRepository.Attempt;
+import com.drillnotebook.app.repository.UsageRepository.AttemptRow;
 import com.drillnotebook.app.service.memory.MemoryTimes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,14 +50,23 @@ public class ChatTurnService {
     private static final Logger log = LoggerFactory.getLogger(ChatTurnService.class);
     /** result_meta 明文上限（contracts §2.7）：超限只留终态，不冒险写无界 JSON。 */
     static final int MAX_RESULT_META_BYTES = 16 * 1024;
+    /** 规范化选项只留标识字段（§2.2）；这个天花板是本包自定的，挡的是"拿元数据当垃圾场"。 */
+    static final int MAX_REQUEST_OPTIONS_BYTES = 4 * 1024;
 
     /** 开始轮次所需的最小输入：正文必须已由调用方按协议取定，附件在 P3c 接入。 */
     public record BeginInput(String requestId, int protocolVersion, long sessionId, String userText,
                              String masterPassword, List<Map<String, Object>> attachments,
-                             Map<String, Object> requestOptions) {
+                             Map<String, Object> requestOptions, String retryOf) {
         public BeginInput {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
             requestOptions = requestOptions == null ? Map.of() : Map.copyOf(requestOptions);
+        }
+
+        /** 不带 retryOf 的旧形态：普通发言与 v1 都走这里。 */
+        public BeginInput(String requestId, int protocolVersion, long sessionId, String userText,
+                          String masterPassword, List<Map<String, Object>> attachments,
+                          Map<String, Object> requestOptions) {
+            this(requestId, protocolVersion, sessionId, userText, masterPassword, attachments, requestOptions, null);
         }
     }
 
@@ -73,10 +87,25 @@ public class ChatTurnService {
         }
     }
 
-    /** 上游回来的材料：正文、思考链、厂商停止原因、是否触及捕获上限。 */
-    public record UpstreamReply(String text, String reasoning, String finishReason, boolean captureLimited) {
+    /**
+     * 上游回来的材料（§7.2 第 4 条要求的统一形态）：正文、思考链、厂商停止原因、是否触及捕获上限、
+     * 是否看到终止帧、前端是否已断、厂商用量。
+     */
+    public record UpstreamReply(String text, String reasoning, String finishReason, boolean captureLimited,
+                                boolean terminalObserved, boolean downstreamGone, AiUpstreamClient.Usage usage) {
+        /** 旧的四参形态：按"上游正常结束、无用量信息"补齐，供结构化调用与测试沿用。 */
+        public UpstreamReply(String text, String reasoning, String finishReason, boolean captureLimited) {
+            this(text, reasoning, finishReason, captureLimited, true, false, AiUpstreamClient.Usage.unknown());
+        }
+
         public static UpstreamReply of(String text, String reasoning, String finishReason) {
             return new UpstreamReply(text, reasoning, finishReason, false);
+        }
+
+        /** 把上游结果原样搬进轮次层，终态裁决只在 {@link #classify} 一处发生。 */
+        public static UpstreamReply of(AiUpstreamClient.Result result) {
+            return new UpstreamReply(result.text(), result.reasoning(), result.finishReason(),
+                    result.captureLimited(), result.terminalObserved(), result.downstreamGone(), result.usage());
         }
     }
 
@@ -91,19 +120,23 @@ public class ChatTurnService {
     private final ActiveTurnRegistry registry;
     private final ProcessIdentity process;
     private final ObjectMapper mapper;
+    private final UsageRepository usage;
+    private final ChatAttachmentService attachments;
     /** 存储降级门闩：DB 连失败收尾都写不进时置位，新轮次一律 503，探测恢复后自动解除。 */
     private final AtomicBoolean storageDegraded = new AtomicBoolean();
     private final AtomicLong degradedSinceMillis = new AtomicLong();
 
     public ChatTurnService(ChatTurnRepository turns, ChatSessionMetadataRepository sessions,
                            ChatMessageCipher cipher, ActiveTurnRegistry registry, ProcessIdentity process,
-                           ObjectMapper mapper) {
+                           ObjectMapper mapper, UsageRepository usage, ChatAttachmentService attachments) {
         this.turns = turns;
         this.sessions = sessions;
         this.cipher = cipher;
         this.registry = registry;
         this.process = process;
         this.mapper = mapper;
+        this.usage = usage;
+        this.attachments = attachments;
     }
 
     /** 开始一轮：校验身份 → 幂等判定 → 登记句柄 → 预留容量并落库 RUNNING + 用户消息。 */
@@ -112,6 +145,9 @@ public class ChatTurnService {
         if (input.protocolVersion() == 2) {
             require(UuidV7.isCanonical(input.requestId()), 400, "REQUEST_ID_INVALID",
                     "requestId 必须是小写规范形 UUIDv7");
+        } else if (!input.attachments().isEmpty()) {
+            // 附件的 AAD 绑 requestId，而 v1 的 ID 是服务端后生成的：旧通道不接附件（§4.3/§7.1）
+            throw reject(422, "ATTACHMENTS_REQUIRE_V2", "附件通道只在 protocolVersion=2 接受", Map.of());
         }
         if (storageDegraded.get()) {
             throw reject(503, "STORAGE_UNAVAILABLE", "存储暂时不可用，聊天入口已暂停",
@@ -135,17 +171,29 @@ public class ChatTurnService {
             }
         }
         sweepSessionOrphan(input.sessionId());
+        String retryOf = resolveRetryOf(input);
 
-        String metaJson = requestMeta(input, state, fingerprint);
+        // 附件必须在开始事务之前就有界校验并封装完：turn/user/附件同事务写入，失败一个都不留（§4.3）
+        ChatAttachmentCipher.TurnKey turnKey = attachments.newTurnKey();
+        ChatAttachmentService.Prepared prepared;
         ChatMessageCipher.Encrypted metaCipher;
         ChatMessageCipher.Encrypted userCipher;
         try {
-            metaCipher = cipher.encrypt(metaJson, input.masterPassword());
+            prepared = attachments.prepare(turnKey, requestId, input.attachments());
+            ChatMessageCipher.Encrypted attachmentKey = prepared.payloads().isEmpty()
+                    ? null : attachments.wrapKey(turnKey, input.masterPassword());
+            metaCipher = cipher.encrypt(requestMeta(input, state, fingerprint, prepared.blocks(), attachmentKey),
+                    input.masterPassword());
             userCipher = cipher.encrypt(input.userText(), input.masterPassword());
+        } catch (ChatTurnRejectException error) {
+            throw error;
         } catch (ChatCryptoException error) {
             // 加密失败就地停止：宁可不开始，也绝不把原话写成明文（§4 不变量）
             log.error("开始轮次时加密失败，未写入任何内容 requestId={}", requestId, error);
             throw reject(500, "CHAT_ENCRYPTION_FAILED", "本地加密不可用，聊天已暂停", Map.of());
+        } finally {
+            // 轮密钥只在封装期间存在，包装完立刻销毁；密文已经带上 AAD 身份，落库不需要明文密钥
+            turnKey.zero();
         }
         Draft draft = new Draft(requestId, input.sessionId(), state.contextGeneration(),
                 state.memoryScopeType(), state.memoryNotebookId() == null ? 0L : state.memoryNotebookId(),
@@ -153,7 +201,7 @@ public class ChatTurnService {
                 // v1 明确不做自动提取（§7.1）：只有 v2 且会话开了学习才可能成为记忆来源
                 input.protocolVersion() == 2 && state.learnEnabled(), null,
                 metaCipher.cipher(), metaCipher.meta(),
-                "", userCipher.cipher(), userCipher.meta(), List.of(), MemoryTimes.now());
+                "", userCipher.cipher(), userCipher.meta(), prepared.payloads(), MemoryTimes.now(), retryOf);
         // 句柄必须在 RUNNING 落库之前登记：反过来会留下「已提交 RUNNING 但查不到句柄」的窗口，
         // 孤儿清扫正好会在这个窗口里误杀正常请求（§7.2.1）。
         ActiveTurnRegistry.Handle handle = registry.acquire(requestId, input.sessionId())
@@ -240,6 +288,70 @@ public class ChatTurnService {
         }
     }
 
+    // ---------- 用量独立结算（contracts §2.6、执行方案 §7.2.1） ----------
+
+    /**
+     * 外发之前登记 attempt 并置 SENT：CHAT 只计量、不占后台 20 次/30K 限额，所以预留为 0。
+     *
+     * <p>记账失败绝不拦住用户的聊天——回复比统计表重要；此时返回 null，后续结算静默跳过。</p>
+     *
+     * @return attempt ID，登记不可用时为 null
+     */
+    public String startUsage(Lease lease, String targetFingerprint) {
+        ZoneId zone = ZoneId.systemDefault();
+        Attempt attempt = new Attempt(UuidV7.generate(System.currentTimeMillis()), lease.requestId(),
+                UsageRepository.PURPOSE_CHAT, targetFingerprint, LocalDate.now(zone).toString(), zone.getId(),
+                0, MemoryTimes.now());
+        try {
+            if (!usage.reserve(attempt)) return null;
+            usage.markSent(attempt.id());
+            return attempt.id();
+        } catch (SQLException error) {
+            log.warn("用量登记失败，本轮不计量 requestId={}", lease.requestId(), error);
+            return null;
+        }
+    }
+
+    /** 上游返回后按 attempt 幂等结算：正文保存失败不撤销已发生的用量，写失败也不回滚回复。 */
+    public void settleUsage(String attemptId, AiUpstreamClient.Usage observed) {
+        settle(attemptId, actual(observed));
+    }
+
+    private void settle(String attemptId, ActualUsage actual) {
+        if (attemptId == null) return;
+        try {
+            usage.settle(attemptId, actual, MemoryTimes.now());
+        } catch (SQLException error) {
+            log.warn("用量结算失败 attemptId={}", attemptId, error);
+        }
+    }
+
+    /** 只有厂商明确回了数字才算 provider；缺字段一律按 unknown 结算，不拿估算冒充当过的钱。 */
+    private static ActualUsage actual(AiUpstreamClient.Usage observed) {
+        if (observed == null || !observed.reported()) return ActualUsage.unknown();
+        return new ActualUsage("provider", observed.inputTokens(), observed.outputTokens(),
+                observed.cacheReadTokens(), observed.cacheWriteTokens());
+    }
+
+    /**
+     * 崩溃遗留的未结算 attempt（§7.2.1）：仍有活跃句柄的一律不碰，
+     * 停在 RESERVED 的可证明未发出 → 释放；停在 SENT 的 → 按 UNKNOWN 消费预留。
+     *
+     * @return 处理的行数
+     */
+    public int cleanupUnsettledUsage() throws SQLException {
+        int handled = 0;
+        for (AttemptRow row : usage.findUnsettled()) {
+            if (registry.isActive(row.operationId())) continue;
+            if ("RESERVED".equals(row.state())) {
+                if (usage.releaseUnsent(row.id(), MemoryTimes.now())) handled++;
+            } else if (usage.markUnknown(row.id(), MemoryTimes.now())) {
+                handled++;
+            }
+        }
+        return handled;
+    }
+
     /** 状态查询：只读，绝不触发重新生成或重新提取。 */
     public Map<String, Object> status(String requestId) {
         TurnRow turn = readTurn(requestId);
@@ -253,6 +365,7 @@ public class ChatTurnService {
         body.put("startedAt", turn.startedAt());
         body.put("finishedAt", turn.finishedAt());
         body.put("active", registry.isActive(requestId));
+        body.put("retryOf", turn.retryOf());
         body.put("contentDeleted", turn.contentDeletedAt() != null);
         return body;
     }
@@ -288,6 +401,12 @@ public class ChatTurnService {
             }
         }
         if (swept > 0) log.info("孤儿轮次已置 INTERRUPTED: {}", swept);
+        try {
+            int settled = cleanupUnsettledUsage();
+            if (settled > 0) log.info("未结算用量已按状态收尾: {}", settled);
+        } catch (SQLException error) {
+            degrade(error);
+        }
         return swept;
     }
 
@@ -295,7 +414,7 @@ public class ChatTurnService {
         return storageDegraded.get();
     }
 
-    /** 有界探测：只在降级期间跑；先清掉无句柄的孤儿轮次再解除门闩，恢复后仍不自动外发。 */
+    /** 有界探测：只在降级期间跑；先清掉无句柄的孤儿轮次与未知用量再解除门闩，恢复后仍不自动外发。 */
     @Scheduled(fixedDelay = 5_000, initialDelay = 5_000)
     public void probeStorage() {
         if (!storageDegraded.get()) return;
@@ -304,6 +423,7 @@ public class ChatTurnService {
                 if (registry.isActive(turn.requestId())) continue;
                 turns.markInterrupted(turn.requestId(), MemoryTimes.now());
             }
+            cleanupUnsettledUsage();
             storageDegraded.set(false);
             degradedSinceMillis.set(0);
             log.info("存储探测恢复，孤儿轮次已收尾，聊天写入口解除降级");
@@ -400,6 +520,31 @@ public class ChatTurnService {
     }
 
     /**
+     * "重新生成"必须指向同一会话里的一条既有终态轮次（§7.2-7）：查不到给 400，跨会话或还在跑给 409，
+     * 绝不把它当成一次普通发言静默忽略——否则前端的中断续接提示会被错误地清掉。
+     */
+    private String resolveRetryOf(BeginInput input) {
+        if (input.retryOf() == null || input.retryOf().isBlank()) return null;
+        if (input.protocolVersion() != 2) {
+            throw reject(422, "RETRY_OF_REQUIRES_V2", "retryOf 只在 protocolVersion=2 接受", Map.of());
+        }
+        if (!UuidV7.isCanonical(input.retryOf())) {
+            throw reject(400, "RETRY_ID_INVALID", "retryOf 必须是小写规范形 UUIDv7", Map.of());
+        }
+        TurnRow target = findTurnQuietly(input.retryOf())
+                .orElseThrow(() -> reject(400, "RETRY_TARGET_UNKNOWN", "要重新生成的轮次不存在", Map.of()));
+        if (target.sessionId() != input.sessionId()) {
+            throw reject(409, "RETRY_TARGET_FOREIGN", "要重新生成的轮次属于另一个会话",
+                    Map.of("sessionId", target.sessionId()));
+        }
+        if (ChatTurnRepository.STATUS_RUNNING.equals(target.status())) {
+            throw reject(409, "RETRY_TARGET_ACTIVE", "上一轮还在进行，不能同时开两轮",
+                    Map.of("statusUrl", statusUrl(target.requestId())));
+        }
+        return target.requestId();
+    }
+
+    /**
      * 每个新请求都做一次孤儿检查（§7.2.1）：本会话有 RUNNING 却没有活跃句柄，说明上一个进程或
      * 已退出的线程把它丢下了，先置 INTERRUPTED 再开始，否则唯一索引会一直 SESSION_BUSY。
      */
@@ -467,20 +612,31 @@ public class ChatTurnService {
         }
     }
 
+    /**
+     * 终态裁决（§7.2 第 4 条）：只有"看到终止帧 + 正文非空"才算 COMPLETED；
+     * 用户停止或前端断开算 ABORTED；无终止帧/读流失败算 FAILED；触达捕获上限算 TRUNCATED。
+     * 晚到的正文不能让被取消的结果重新 COMPLETED，也不能进入学习（§7.2.2）。
+     */
     private static String classify(Lease lease, UpstreamReply reply) {
         boolean hasText = reply.text() != null && !reply.text().isBlank();
-        if (lease.handle().cancelRequested()) return ChatTurnRepository.STATUS_ABORTED;
+        if (lease.handle().cancelRequested() || reply.downstreamGone()) {
+            return ChatTurnRepository.STATUS_ABORTED;
+        }
         if (reply.captureLimited() || "length".equals(reply.finishReason())) {
             return ChatTurnRepository.STATUS_TRUNCATED;
         }
-        return hasText ? ChatTurnRepository.STATUS_COMPLETED : ChatTurnRepository.STATUS_FAILED;
+        if (!reply.terminalObserved() || !hasText) return ChatTurnRepository.STATUS_FAILED;
+        return ChatTurnRepository.STATUS_COMPLETED;
     }
 
     private static String finishReasonOf(String status, UpstreamReply reply) {
         if (ChatTurnRepository.STATUS_TRUNCATED.equals(status)) {
             return reply.captureLimited() ? "OUTPUT_CAPTURE_LIMIT" : reply.finishReason();
         }
-        if (ChatTurnRepository.STATUS_FAILED.equals(status)) return "empty_response";
+        if (ChatTurnRepository.STATUS_FAILED.equals(status)) {
+            // 无终止帧/读流失败要留下可诊断的原因，不能一律写成 empty_response
+            return reply.terminalObserved() ? "empty_response" : reply.finishReason();
+        }
         return reply.finishReason();
     }
 
@@ -490,11 +646,21 @@ public class ChatTurnService {
         meta.put("status", status);
         meta.put("finishReason", reply.finishReason());
         meta.put("captureLimited", reply.captureLimited);
+        meta.put("terminalObserved", reply.terminalObserved);
+        meta.put("downstreamGone", reply.downstreamGone);
+        meta.put("usage", Map.of(
+                "source", reply.usage() == null ? "unknown" : reply.usage().source(),
+                "inputTokens", reply.usage() == null || reply.usage().inputTokens() == null
+                        ? 0 : reply.usage().inputTokens(),
+                "outputTokens", reply.usage() == null || reply.usage().outputTokens() == null
+                        ? 0 : reply.usage().outputTokens()));
         if (audit != null) meta.put("audit", audit);
         return bounded(meta);
     }
 
-    private String requestMeta(BeginInput input, ChatSessionMetadataRepository.State state, String fingerprint) {
+    private String requestMeta(BeginInput input, ChatSessionMetadataRepository.State state, String fingerprint,
+                               List<Map<String, Object>> attachmentBlocks,
+                               ChatMessageCipher.Encrypted attachmentKey) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("schemaVersion", 2);
         meta.put("protocolVersion", input.protocolVersion());
@@ -502,9 +668,44 @@ public class ChatTurnService {
         meta.put("contextGeneration", state.contextGeneration());
         meta.put("sourceScopeType", state.memoryScopeType());
         meta.put("sourceScopeId", state.memoryNotebookId() == null ? 0L : state.memoryNotebookId());
-        meta.put("options", input.requestOptions());
+        meta.put("options", validatedOptions(input.requestOptions()));
         meta.put("attachmentCount", input.attachments().size());
-        return bounded(meta);
+        // 块身份是 v2 重放与 quote 绑定的权威来源（§2.2/§4.3）：u0 自带正文，附件只带 ID 与内容指纹
+        meta.put("sourceBlocks", ChatAttachmentService.orderedBlocks(input.userText(), attachmentBlocks));
+        if (attachmentKey != null) {
+            meta.put("attachmentKey", Map.of("cipher", attachmentKey.cipher(), "meta", attachmentKey.meta()));
+        }
+        return serializeRequestMeta(meta);
+    }
+
+    /**
+     * 进元数据的选项只留标识/版本/指纹（§2.2），客户端塞进来的超长值要挡住：
+     * 否则一条请求就能把用户的历史额度当垃圾场，而这份 blob 除了占地方没有任何消费者。
+     */
+    private Map<String, Object> validatedOptions(Map<String, Object> options) {
+        String json;
+        try {
+            json = mapper.writeValueAsString(options);
+        } catch (Exception error) {
+            throw reject(500, "CHAT_META_UNWRITABLE", "请求选项无法序列化", Map.of());
+        }
+        if (json.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_OPTIONS_BYTES) {
+            throw reject(413, "REQUEST_OPTIONS_TOO_LARGE", "规范化选项超过 4 KiB，请只传标识字段",
+                    Map.of("limitBytes", MAX_REQUEST_OPTIONS_BYTES));
+        }
+        return options;
+    }
+
+    /**
+     * request_meta 整体不设"截断"退路：它含 attachmentKey，压成最小 JSON 会让附件解不开却仍占容量，
+     * 等于把用户内容写成死数据。正文与附件各有自己的上限，超出由账本按 HISTORY_STORAGE_FULL 拒。
+     */
+    private String serializeRequestMeta(Map<String, Object> meta) {
+        try {
+            return mapper.writeValueAsString(meta);
+        } catch (Exception error) {
+            throw reject(500, "CHAT_META_UNWRITABLE", "请求元数据无法序列化", Map.of());
+        }
     }
 
     /** 输入指纹：覆盖有效请求字段而非仅用户文本，写进密文里，避免对短发言做字典猜测。 */
@@ -516,7 +717,7 @@ public class ChatTurnService {
                 .append(state.memoryNotebookId() == null ? 0L : state.memoryNotebookId()).append('|')
                 .append("text=").append(input.userText().codePointCount(0, input.userText().length())).append('|')
                 .append("text=").append(input.userText()).append('|')
-                .append("attachments=").append(input.attachments()).append('|')
+                .append("attachments=").append(ChatAttachmentService.identity(input.attachments())).append('|')
                 .append("options=").append(new TreeMap<>(input.requestOptions()));
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.toString().getBytes(StandardCharsets.UTF_8));

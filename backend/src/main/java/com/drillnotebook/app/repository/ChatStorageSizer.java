@@ -163,37 +163,6 @@ public final class ChatStorageSizer {
                 + encapsulatedBytes(RESULT_META_PLAIN_MAX_BYTES);
     }
 
-    /**
-     * 按码点边界把流式增量累加到捕获上限：整码点判断，绝不在 UTF-8 中间切断，
-     * 余量不足时整体停止并返回已保留部分（调用方据此给 TRUNCATED/OUTPUT_CAPTURE_LIMIT）。
-     */
-    public static String appendWithinCaptureLimit(String accumulated, String chunk) {
-        String base = accumulated == null ? "" : accumulated;
-        if (chunk == null || chunk.isEmpty()) {
-            return base;
-        }
-        long used = base.getBytes(StandardCharsets.UTF_8).length;
-        StringBuilder kept = new StringBuilder(base);
-        for (int offset = 0; offset < chunk.length();) {
-            int codePoint = chunk.codePointAt(offset);
-            long codePointBytes = utf8Length(codePoint);
-            if (used + codePointBytes > OUTPUT_CAPTURE_RAW_BYTES) {
-                break;
-            }
-            used += codePointBytes;
-            kept.appendCodePoint(codePoint);
-            offset += Character.charCount(codePoint);
-        }
-        return kept.toString();
-    }
-
-    private static long utf8Length(int codePoint) {
-        if (codePoint <= 0x7F) return 1;
-        if (codePoint <= 0x7FF) return 2;
-        if (codePoint <= 0xFFFF) return 3;
-        return 4;
-    }
-
     private static long singleScalar(Connection connection, String sql) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql);
              ResultSet result = statement.executeQuery()) {

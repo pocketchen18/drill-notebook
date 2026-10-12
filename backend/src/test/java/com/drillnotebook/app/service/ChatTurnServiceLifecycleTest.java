@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -226,6 +227,35 @@ class ChatTurnServiceLifecycleTest {
     }
 
     @Test
+    void missingTerminalFrameIsFailedEvenWithText() throws Exception {
+        // 上游断流后确实收到了正文，但没看到终止帧：不能算正常完成，也不能进学习（§7.2 第 4 条）
+        BeginResult begun = service.begin(input(sessionId, "流断在半路"));
+        FinalResult done = service.finalizeTurn(begun.lease(),
+                new UpstreamReply("半句就断了", null, "stream_error", false, false, false,
+                        AiUpstreamClient.Usage.unknown()), null);
+
+        assertEquals(ChatTurnRepository.STATUS_FAILED, done.status());
+        assertEquals("半句就断了", assistantText(begun.lease().requestId()), "部分回复仍要能展示");
+        assertEquals("stream_error", jdbc.queryForObject(
+                "SELECT finish_reason FROM ai_chat_turn WHERE request_id = ?", String.class,
+                begun.lease().requestId()));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'FAILED' AND memory_eligible = 1"));
+    }
+
+    @Test
+    void downstreamGoneIsAbortedInsteadOfCompleted() throws Exception {
+        // 前端断开（关页面/切会话）：等同于用户主动停止，按实际收到的部分收尾，不谎称完成（§7.3）
+        BeginResult begun = service.begin(input(sessionId, "页面被关掉了"));
+        FinalResult done = service.finalizeTurn(begun.lease(),
+                new UpstreamReply("已经写了一半", null, "aborted", false, false, true,
+                        AiUpstreamClient.Usage.unknown()), null);
+
+        assertEquals(ChatTurnRepository.STATUS_ABORTED, done.status());
+        assertEquals("已经写了一半", assistantText(begun.lease().requestId()));
+        assertEquals(0, ledger.read().reservedHistoryBytes());
+    }
+
+    @Test
     void replyOverReservationFallsBackToFailedTerminalAndReleasesOnce() throws Exception {
         BeginResult begun = service.begin(input(sessionId, "回复会超出预留"));
         service.finalizeTurn(begun.lease(), UpstreamReply.of("回".repeat(1_300_000), null, "stop"), null);
@@ -336,10 +366,142 @@ class ChatTurnServiceLifecycleTest {
         assertNotNull(service.begin(input(sessionId, "恢复后的请求")).lease());
     }
 
+    @Test
+    void retryOfLinksANewTurnToATerminalTarget() throws Exception {
+        BeginInput stopped = input("上一轮被打断");
+        BeginResult first = service.begin(stopped);
+        service.cancel(first.lease().requestId());
+        service.finalizeTurn(first.lease(), UpstreamReply.of("半句话", null, "aborted"), null);
+
+        BeginResult retry = service.begin(new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId,
+                "重新生成一次", "", List.of(), Map.of(), first.lease().requestId()));
+        assertEquals(first.lease().requestId(), jdbc.queryForObject(
+                "SELECT retry_of FROM ai_chat_turn WHERE request_id = ?", String.class, retry.lease().requestId()),
+                "重新生成必须显式留下 retryOf，前端才能去掉旧的中断续接提示（§7.2-7）");
+        assertEquals(first.lease().requestId(), status(first.lease().requestId()).get("requestId"));
+        service.finalizeTurn(retry.lease(), UpstreamReply.of("完整回复", null, "stop"), null);
+    }
+
+    @Test
+    void retryTargetMustBeKnownSameSessionAndAlreadyTerminal() throws Exception {
+        BeginResult live = service.begin(input("还在跑的一轮"));
+        ChatTurnRejectException active = assertThrows(ChatTurnRejectException.class, () -> service.begin(
+                new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId, "重试在跑的", "",
+                        List.of(), Map.of(), live.lease().requestId())));
+        assertEquals("RETRY_TARGET_ACTIVE", active.code());
+        service.finalizeTurn(live.lease(), UpstreamReply.of(REPLY, null, "stop"), null);
+
+        assertEquals("RETRY_TARGET_UNKNOWN", assertThrows(ChatTurnRejectException.class, () -> service.begin(
+                new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId, "重试不存在的", "",
+                        List.of(), Map.of(), UuidV7.generate(System.currentTimeMillis())))).code());
+        long other = newSession("另一个会话");
+        assertEquals("RETRY_TARGET_FOREIGN", assertThrows(ChatTurnRejectException.class, () -> service.begin(
+                new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, other, "跨会话重试", "",
+                        List.of(), Map.of(), live.lease().requestId()))).code());
+        assertEquals("RETRY_ID_INVALID", assertThrows(ChatTurnRejectException.class, () -> service.begin(
+                new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId, "写法不对", "",
+                        List.of(), Map.of(), "01A109CA-1100-7000-8000-000000000001"))).code());
+        assertEquals("RETRY_OF_REQUIRES_V2", assertThrows(ChatTurnRejectException.class, () -> service.begin(
+                new BeginInput(null, 1, other, "旧客户端带 retryOf", "", List.of(), Map.of(),
+                        live.lease().requestId()))).code());
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn"), "被拒的重试一个残轮都不留");
+    }
+
+    @Test
+    void switchingSessionsKeepsTheOldTurnAndResumesWithANewRequestId() throws Exception {
+        BeginResult first = service.begin(input("会话 A 的一轮"));
+        long other = newSession("会话 B");
+        BeginResult elsewhere = service.begin(input(other, "切到 B 也要能发言"));
+
+        // 切走不等于停止：A 仍在跑，句柄还在，孤儿判定不能动它
+        service.cancel(first.lease().requestId());
+        assertEquals(true, status(first.lease().requestId()).get("active"));
+        FinalResult stopped = service.finalizeTurn(first.lease(), UpstreamReply.of("切走前只说了一半", null, "aborted"),
+                null);
+        assertEquals(ChatTurnRepository.STATUS_ABORTED, stopped.status());
+
+        BeginResult resumed = service.begin(new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId,
+                "回到 A 重新生成", "", List.of(), Map.of(), first.lease().requestId()));
+        service.finalizeTurn(resumed.lease(), UpstreamReply.of("这次说完了", null, "stop"), null);
+        service.finalizeTurn(elsewhere.lease(), UpstreamReply.of("B 的回答", null, "stop"), null);
+
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'ABORTED' AND memory_eligible = 1"),
+                "被打断的旧轮不因重试行而被当成来源");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'COMPLETED' AND retry_of IS NOT NULL"));
+        assertEquals(0, ledger.read().reservedHistoryBytes(), "三个会话交错收尾后预留全部结算");
+    }
+
+    @Test
+    void chatUsageAttemptSettlesExactlyOnce() throws Exception {
+        BeginResult begun = service.begin(input(sessionId, "计量一次就好"));
+        Lease lease = begun.lease();
+        String attempt = service.startUsage(lease, "target-fp");
+        assertNotNull(attempt);
+        assertEquals("SENT", usageState(attempt), "外发之前就必须置 SENT（§2.6）");
+
+        service.settleUsage(attempt, new AiUpstreamClient.Usage("provider", 100, 40, 10, 0));
+        service.finalizeTurn(lease, UpstreamReply.of(REPLY, null, "stop"), null);
+        assertEquals("SETTLED", usageState(attempt));
+
+        // 迟到的重复结算不得把数字再加一遍：attempt 是结算依据，daily 只是可重建聚合
+        service.settleUsage(attempt, new AiUpstreamClient.Usage("provider", 900, 900, 900, 900));
+        Map<String, Object> daily = jdbc.queryForMap(
+                "SELECT attempts, charged_tokens, reserved_tokens, unknown_attempts FROM ai_usage_daily"
+                        + " WHERE purpose = 'CHAT'");
+        assertEquals(1, ((Number) daily.get("attempts")).intValue());
+        assertEquals(150, ((Number) daily.get("charged_tokens")).intValue());
+        assertEquals(0, ((Number) daily.get("reserved_tokens")).intValue(), "CHAT 只计量，不占后台预留");
+    }
+
+    @Test
+    void missingProviderUsageIsSettledAsUnknownNotEstimated() throws Exception {
+        BeginResult begun = service.begin(input(sessionId, "厂商没回用量"));
+        String attempt = service.startUsage(begun.lease(), "target-fp");
+        service.settleUsage(attempt, AiUpstreamClient.Usage.unknown());
+        service.finalizeTurn(begun.lease(), UpstreamReply.of(REPLY, null, "stop"), null);
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT state, usage_source, input_tokens, output_tokens FROM ai_usage_attempt WHERE id = ?", attempt);
+        assertEquals("SETTLED", row.get("state"));
+        assertEquals("unknown", row.get("usage_source"), "缺字段一律 unknown，绝不拿估算冒充当过的钱");
+        assertNull(row.get("input_tokens"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_usage_daily WHERE charged_tokens > 0"));
+    }
+
+    @Test
+    void recoveryConsumesSentLeftoversAndReleasesProvenUnsent() throws Exception {
+        BeginResult crashed = service.begin(input(sessionId, "发到一半进程没了"));
+        String sent = service.startUsage(crashed.lease(), "target-fp");
+        service.finalizeTurn(crashed.lease(), UpstreamReply.of(REPLY, null, "stop"), null);
+
+        BeginResult running = service.begin(input(newSession("另一个会话"), "还在读"));
+        String live = service.startUsage(running.lease(), "target-fp");
+
+        jdbc.update("INSERT INTO ai_usage_attempt(id, operation_id, purpose, target_fingerprint, budget_date,"
+                + " budget_timezone, reserved_tokens, usage_source, state, created_at) VALUES"
+                + " ('never-sent','op-never','CHAT','fp','2026-10-12','Asia/Shanghai',500,'unknown','RESERVED',"
+                + " '2026-10-12T00:00:00.000000Z')");
+
+        assertEquals(2, service.cleanupUnsettledUsage());
+        assertEquals("UNKNOWN", usageState(sent), "SENT 未结算按 UNKNOWN 消费预留");
+        assertEquals("RELEASED", usageState("never-sent"), "可证明未发出的 RESERVED 退回预留");
+        assertEquals("SENT", usageState(live), "仍有活跃句柄的请求不能被恢复流程清掉（§7.2.2）");
+        assertEquals(0, count("SELECT reserved_tokens FROM ai_usage_daily WHERE target_fingerprint = 'fp'"),
+                "释放后当天预留退回");
+    }
+
     // ---- 辅助 ----
+
+    private String usageState(String attemptId) {
+        return jdbc.queryForObject("SELECT state FROM ai_usage_attempt WHERE id = ?", String.class, attemptId);
+    }
 
     private BeginInput input(long session, String text) {
         return new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, session, text, "", List.of(), Map.of());
+    }
+
+    private BeginInput input(String text) {
+        return input(sessionId, text);
     }
 
     private static BeginInput sameId(BeginInput source) {
