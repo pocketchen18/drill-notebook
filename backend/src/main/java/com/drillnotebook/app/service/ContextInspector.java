@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.ChatHistoryRepository.TurnHistory;
+import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
 import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.drillnotebook.app.repository.ChatTurnRepository.MetaColumns;
 import com.drillnotebook.app.repository.ChatTurnRepository.TurnRow;
@@ -41,6 +42,7 @@ public class ContextInspector {
 
     private final ChatTurnRepository turns;
     private final ChatHistoryRepository history;
+    private final ChatSessionMetadataRepository sessions;
     private final ChatMessageCipher cipher;
     private final ChatAttachmentReader attachments;
     private final MemoryRepository memory;
@@ -52,12 +54,13 @@ public class ContextInspector {
     private final ObjectMapper mapper;
 
     public ContextInspector(ChatTurnRepository turns, ChatHistoryRepository history,
-                            ChatMessageCipher cipher,
+                            ChatSessionMetadataRepository sessions, ChatMessageCipher cipher,
                             ChatAttachmentReader attachments, MemoryRepository memory, MemoryCryptoService crypto,
                             MemoryVaultService vault, SessionContextRepository checkpoints,
                             RetrievalIndexRepository index, ObjectMapper mapper) {
         this.turns = turns;
         this.history = history;
+        this.sessions = sessions;
         this.cipher = cipher;
         this.attachments = attachments;
         this.memory = memory;
@@ -178,10 +181,12 @@ public class ContextInspector {
         if (row.isEmpty() || !MemoryRepository.STATUS_ACTIVE.equals(row.get().status())) {
             return placeholder("SOURCE_CHANGED");
         }
-        // 笔记作用域变了就不能再借旧计划读别的笔记本的事实（§4.5）
+        // 用会话的当前作用域比较，而不是旧轮次快照：切过 scope 后不能借旧计划读别的笔记本的事实（§5.2）
+        ChatSessionMetadataRepository.State state = sessions.read(audited.sessionId()).orElse(null);
+        if (state == null) return placeholder("SOURCE_DELETED");
         if ("NOTEBOOK".equals(row.get().scopeType())
-                && (row.get().scopeId() != audited.sourceScopeId()
-                || !"NOTEBOOK".equals(audited.sourceScopeType()))) {
+                && (!"NOTEBOOK".equals(state.memoryScopeType()) || state.memoryNotebookId() == null
+                || state.memoryNotebookId() != row.get().scopeId())) {
             return placeholder("OUTSIDE_SCOPE");
         }
         Map<String, Object> payload = decryptMemory(row.get());
@@ -201,8 +206,10 @@ public class ContextInspector {
     }
 
     private Map<String, Object> summaryPreview(long sessionId, ContextAudit.Selected item) throws SQLException {
+        // 版本在 selected.version；旧形态的账本把它记在 id 里，这里两种都能读
+        String auditedRevision = item.version() == null ? item.id() : item.version();
         Optional<SessionContextRepository.Checkpoint> checkpoint = checkpoints.read(sessionId);
-        if (checkpoint.isEmpty() || !String.valueOf(checkpoint.get().revision()).equals(item.version())) {
+        if (checkpoint.isEmpty() || !String.valueOf(checkpoint.get().revision()).equals(auditedRevision)) {
             // 检查点已被更新的摘要替换：历史版本的摘要不提供预览（§4.5）
             return placeholder("CHECKPOINT_REPLACED");
         }
@@ -268,16 +275,37 @@ public class ContextInspector {
     }
 
     private Map<String, Object> chunkPreview(ContextAudit.Selected item) {
-        long chunkId = Long.parseLong(item.version());
+        long chunkId = chunkIdOf(item.version());
+        String expectedHash = contentHashOf(item.version());
         List<RetrievalIndexRepository.LexicalRow> rows = index.findChunksByIds(List.of(chunkId));
         if (rows.isEmpty()) return placeholder("SOURCE_DELETED");
+        if (expectedHash != null && !expectedHash.equals(rows.get(0).contentHash())) {
+            // 片段还在但正文换过：不能把当前正文冒充成当时提供的片段（§4.5）
+            return placeholder("SOURCE_CHANGED");
+        }
         return text(rows.get(0).text());
+    }
+
+    /** RAG 版本形如 {@code chunkId@contentHash}；没有哈希时的旧账本只按存在性校验。 */
+    private static long chunkIdOf(String version) {
+        int at = version.indexOf('@');
+        return Long.parseLong(at < 0 ? version : version.substring(0, at));
+    }
+
+    private static String contentHashOf(String version) {
+        int at = version.indexOf('@');
+        return at < 0 || at + 1 >= version.length() ? null : version.substring(at + 1);
     }
 
     private Map<String, Object> pagePreview(ContextAudit.Selected item) throws SQLException {
         long pageId = Long.parseLong(item.id());
         Optional<String> content = history.pageContent(pageId);
         if (content.isEmpty()) return placeholder("SOURCE_DELETED");
+        Optional<String> currentHash = history.pageContentHash(pageId);
+        if (item.version() == null || !item.version().equals(currentHash.orElse(null))) {
+            // 页面改版（或当时没有可核验的版本）：当前正文不能冒充"当时提供的内容"（§4.5）
+            return placeholder("SOURCE_CHANGED");
+        }
         StringBuilder joined = new StringBuilder();
         for (var unit : normalizer.normalize(content.get())) {
             if (unit.text().isBlank()) continue;

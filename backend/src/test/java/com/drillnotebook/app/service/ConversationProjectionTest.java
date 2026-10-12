@@ -12,12 +12,17 @@ import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.model.ChatContextPlan;
 import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.repository.ChatHistoryRepository;
+import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.ChatTurnRepository;
+import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryOperationRepository;
+import com.drillnotebook.app.repository.MemorySettingsRepository;
+import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.memory.MemoryApiResult;
 import com.drillnotebook.app.service.memory.MemoryCryptoService;
+import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -47,6 +52,7 @@ class ConversationProjectionTest {
     private ChatLegacyWiring.Wiring wiring;
     private MemoryCryptoService crypto;
     private MemoryVaultService vault;
+    private MemoryPolicyService policy;
     private ConversationProjection projection;
     private String userCipher;
     private String userMeta;
@@ -66,9 +72,14 @@ class ConversationProjectionTest {
         crypto = new MemoryCryptoService(new ApiKeyEncryptor());
         vault = new MemoryVaultService(crypto, wiring.memory(),
                 new MemoryOperationRepository(dataSource, wiring.immediate()), wiring.metadata());
+        MemoryPolicyService policy = new MemoryPolicyService(
+                new MemorySettingsRepository(dataSource, wiring.immediate()), wiring.memory(),
+                new MemoryJobRepository(dataSource, wiring.immediate()), new AiConfigRepository(jdbc),
+                new NotebookRepository(jdbc, mapper), vault);
+        this.policy = policy;
         projection = new ConversationProjection(new ChatHistoryRepository(dataSource),
                 new SessionContextRepository(dataSource), wiring.metadata(), wiring.cipher(), wiring.memory(),
-                crypto, vault, estimator, mapper);
+                crypto, vault, policy, estimator, mapper);
         sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
         ChatMessageCipher.Encrypted user = wiring.cipher().encrypt(USER_TEXT, "");
         ChatMessageCipher.Encrypted reply = wiring.cipher().encrypt(REPLY_TEXT, "");
@@ -105,6 +116,7 @@ class ConversationProjectionTest {
         seedTurns(20);
         long current = insertRunningTurn();
         createVault();
+        enableSummaryAuthorization();
         // coverage 一路铺到"最近一条"之前：倒数第 1、2 轮仍要以原文保留（T02）
         checkpoint(1L, 20L, 1L, coverage(1, current - 1));
 
@@ -118,6 +130,8 @@ class ConversationProjectionTest {
         assertEquals(newest, result.candidates().get(1).turnId());
         assertEquals(newest - 1, result.candidates().get(0).turnId());
         assertEquals(Integer.valueOf(18), omission(audit, result, ContextAudit.Omission.COVERED_BY_SUMMARY, "TURN"));
+        assertEquals(18, result.coveredCandidates().size(), "被替掉的原文要留着：摘要被预算舍弃时回补用");
+        assertEquals(1L, result.observedSummaryRevision(), "观测版本与实际采用的摘要分开记（§4.5）");
         assertFalse(result.summary().audit().hasGaps(), "连续且无非完成轮次时不该报缺口");
     }
 
@@ -126,6 +140,7 @@ class ConversationProjectionTest {
         seedTurns(10);
         long current = insertRunningTurn();
         createVault();
+        enableSummaryAuthorization();
         // 中间留一个缺口：turn 5 不在任何 range 里，就不能按 through 整段排除
         checkpoint(1L, 10L, 1L, List.of(new long[]{1, 4}, new long[]{6, 10}));
 
@@ -142,6 +157,47 @@ class ConversationProjectionTest {
                 "10 轮全在扫描窗口内，没有范围外内容");
         // 被替掉的是 1–4 与 6–8：9、10 虽在 coverage 内，但最近两轮永远留原文（T02）
         assertEquals(Integer.valueOf(7), omission(audit, result, ContextAudit.Omission.COVERED_BY_SUMMARY, "TURN"));
+        assertEquals(7, result.coveredCandidates().size(), "回补素材与省略计数必须一致");
+    }
+
+    @Test
+    void withoutSummaryAuthorizationTheCheckpointIsNotEvenRead() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        checkpoint(1L, 6L, 1L, coverage(1, 6));
+
+        // compressSession 默认关：检查点存在也不能读密文、不能按 coverage 替历史（contracts §4.5）
+        ContextAudit.Builder off = new ContextAudit.Builder("plan-auth-1", TokenEstimator.VERSION);
+        ConversationProjection.Projection denied = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), off);
+        assertNull(denied.summary());
+        assertEquals(Integer.valueOf(1), omission(off, denied, ContextAudit.Omission.NOT_AUTHORIZED, "SUMMARY"));
+        assertTrue(denied.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
+        assertEquals(6, denied.candidates().size(), "没有授权就不能替掉原文，历史照常按原文参与");
+        assertEquals(1L, denied.observedSummaryRevision(), "观测版本照记：复核要能发现检查点真的被替换");
+
+        // 打开开关但没有维护授权：同样不读
+        new AiConfigRepository(jdbc).upsertChat("custom", "https://example.invalid/v1", "stub-model", "enc",
+                "{}", "{}");
+        long revision = policy.current().revision();
+        assertEquals(200, policy.update(revision, null, null, true, null, null).status());
+        ContextAudit.Builder noConsent = new ContextAudit.Builder("plan-auth-2", TokenEstimator.VERSION);
+        ConversationProjection.Projection stillDenied = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), noConsent);
+        assertNull(stillDenied.summary());
+        assertEquals(Integer.valueOf(1), omission(noConsent, stillDenied, ContextAudit.Omission.NOT_AUTHORIZED,
+                "SUMMARY"));
+
+        // 授权用完即撤也立即失效：许可的是"这次外发"，不是"曾经同意过"（§5.1）
+        enableSummaryAuthorization();
+        assertEquals(204, policy.revokeConsent(MemoryPolicyService.PURPOSE_MAINTENANCE).status());
+        ContextAudit.Builder revoked = new ContextAudit.Builder("plan-auth-3", TokenEstimator.VERSION);
+        ConversationProjection.Projection afterRevoke = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), revoked);
+        assertNull(afterRevoke.summary());
+        assertEquals(Integer.valueOf(1), omission(revoked, afterRevoke, ContextAudit.Omission.NOT_AUTHORIZED,
+                "SUMMARY"));
     }
 
     @Test
@@ -149,6 +205,7 @@ class ConversationProjectionTest {
         seedTurns(4);
         long current = insertRunningTurn();
         createVault();
+        enableSummaryAuthorization();
         checkpoint(1L, 4L, 1L, coverage(1, 4));
         MemoryApiResult locked = vault.lock();
 
@@ -161,6 +218,7 @@ class ConversationProjectionTest {
         assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.LOCKED, "SUMMARY"));
         assertTrue(result.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
         assertEquals(4, result.candidates().size(), "锁定只让摘要失效，不能顺手丢掉原文历史");
+        assertEquals(1L, result.observedSummaryRevision(), "降级为无摘要，但观测版本仍要留作复核依据");
     }
 
     @Test
@@ -184,6 +242,7 @@ class ConversationProjectionTest {
         jdbc.update("UPDATE ai_session_context SET context_generation = 2");
         String vaultId = jdbc.queryForObject("SELECT id FROM ai_memory_vault WHERE singleton = 1", String.class);
         wiring.memory().bumpEpoch(vaultId);
+        enableSummaryAuthorization();
 
         ContextAudit.Builder afterClear = new ContextAudit.Builder("plan-6", TokenEstimator.VERSION);
         ConversationProjection.Projection epochResult = projection.project(
@@ -314,6 +373,21 @@ class ConversationProjectionTest {
     private void createVault() throws SQLException {
         MemoryApiResult created = vault.create("fingerprint", "", "01a109ca-1100-7000-8000-000000000001");
         assertTrue(created.status() == 201 || created.status() == 200, "vault 创建应成功: " + created.body());
+    }
+
+    /**
+     * 摘要授权：compressSession 开关 + 维护用途外发授权 + 可解析的维护目标。
+     * 两者缺一，检查点"存在且解锁"也不足以读密文或按 coverage 替历史（contracts §4.5）。
+     */
+    private void enableSummaryAuthorization() throws SQLException {
+        new AiConfigRepository(jdbc).upsertChat("custom", "https://example.invalid/v1", "stub-model", "enc",
+                "{}", "{}");
+        long revision = policy.current().revision();
+        assertEquals(200, policy.update(revision, null, null, true, null, null).status(),
+                String.valueOf(policy.current().revision()));
+        MemoryPolicyService.Target target = policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE);
+        assertEquals(200, policy.grantConsent(MemoryPolicyService.PURPOSE_MAINTENANCE, target.fingerprint(),
+                MemoryPolicyService.POLICY_VERSION).status(), target.toString());
     }
 
     private void seedTurns(int count) {

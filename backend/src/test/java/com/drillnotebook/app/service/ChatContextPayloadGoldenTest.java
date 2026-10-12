@@ -26,9 +26,9 @@ class ChatContextPayloadGoldenTest {
     private static final String EXPECTED_ENVELOPE = """
             {"schemaVersion":1,"kind":"CONTEXT_DATA_V1","summary":null,\
             "memories":[{"sourceKind":"MEMORY","id":"m1","version":"1","text":"偏好：先看例子"}],\
-            "notebookExcerpts":[{"sourceKind":"NOTEBOOK_RAG","id":"9","version":"11",\
+            "notebookExcerpts":[{"sourceKind":"NOTEBOOK_RAG","id":"9","version":"11@chk-11",\
             "text":"[1] 标题9（章节）\\n片段正文"}],\
-            "page":{"sourceKind":"PAGE","id":"9","text":"页面正文"},\
+            "page":{"sourceKind":"PAGE","id":"9","version":"ph-9","text":"页面正文"},\
             "attachments":[{"sourceKind":"TEXT_ATTACHMENT","id":"t1","version":"b1","text":"附件正文"}],\
             "resumeState":null}\
             """;
@@ -119,14 +119,14 @@ class ChatContextPayloadGoldenTest {
         ConversationProjection.Projection projection = new ConversationProjection.Projection(
                 List.of(new ConversationProjection.Item(7L, "req-7", false, 70L, 71L, "上一轮问题", "上一轮回答",
                         List.of(), "2026-10-12T00:00:00.000Z", estimator.estimateText("上一轮问题上一轮回答"))),
-                new ContextAudit.Scan(7L, 7L, 1, false), null, null, List.of(), 42L);
+                new ContextAudit.Scan(7L, 7L, 1, false), null, null, List.of(), 42L, List.of(), null);
         ContextAudit.Builder audit = new ContextAudit.Builder("plan-golden", TokenEstimator.VERSION);
         ChatContextAssembler.Draft draft = assembler.assemble(
-                new ChatContextAssembler.Input(USER_TEXT, "", attachments, page(), true), projection,
+                new ChatContextAssembler.Input(USER_TEXT, "", attachments, page(), "ph-9", true), projection,
                 new ContextMemorySource.Selection(List.of(new ContextMemorySource.Fact("m1", 1, "PREFERENCE", "",
                         "偏好：先看例子", "GLOBAL", 0)), List.of(), 1, false),
                 List.of(new RetrievalHit(new Citation("NOTEBOOK", 3L, 9L, 11L, "标题9", "章节", "片段正文",
-                        List.of("bm25"), 1, null, null), "片段正文", 9L, 0)), audit);
+                        List.of("bm25"), 1, null, null), "片段正文", 9L, 0, "chk-11")), audit);
         return budgeter.fit(draft, projection,
                 new ContextBudgeter.Target("plan-golden", 1L, 2L, 42L, null, null, null, 6L, 32000, true), audit);
     }

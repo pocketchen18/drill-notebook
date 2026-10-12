@@ -86,10 +86,12 @@ public class ChatContextService {
 
         ChatContextAssembler.Draft draft = assembler.assemble(
                 new ChatContextAssembler.Input(userText, lease.masterPassword(), lease.attachments(), pageContext,
-                        allowed), projected, selection, hits, audit);
+                        pageVersion(pageContext), allowed), projected, selection, hits, audit);
         ContextBudgeter.Target target = new ContextBudgeter.Target(planId, lease.sessionId(),
                 state.contextGeneration(), projected.historyRevision(),
-                projected.summary() == null ? null : projected.summary().audit().revision(),
+                // 复核比的是"观测到的检查点版本"而不是"实际采用的摘要"：无效/锁定摘要降级后
+                // matches() 不该误报 CONTEXT_CHANGED，但检查点真的被替换时仍要发现（§4.5）
+                projected.observedSummaryRevision(),
                 envelope.map(MemoryRepository.VaultEnvelope::epoch).orElse(null),
                 envelope.map(MemoryRepository.VaultEnvelope::revision).orElse(null),
                 policyRevision, contextWindow, windowKnown);
@@ -155,6 +157,13 @@ public class ChatContextService {
             throw new ChatTurnRejectException(422, "PAGE_CONTEXT_MISMATCH",
                     "pageContext 与当前会话的记忆作用域不是同一本笔记本", Map.of());
         }
+    }
+
+    /** 页面正文的权威版本（note_page.content_hash），没有就给 null——检查器据此核验预览。 */
+    private String pageVersion(Map<String, Object> pageContext) throws SQLException {
+        if (pageContext == null || pageContext.get("pageId") == null) return null;
+        long pageId = Long.parseLong(String.valueOf(pageContext.get("pageId")));
+        return history.pageContentHash(pageId).orElse(null);
     }
 
     private long policyRevision() throws SQLException {

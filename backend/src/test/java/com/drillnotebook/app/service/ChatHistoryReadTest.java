@@ -225,6 +225,31 @@ class ChatHistoryReadTest {
         assertEquals("SOURCE_DELETED", row.get("reason"));
     }
 
+    @Test
+    void pagePreviewVerifiesTheVersionThatWasActuallyProvided() throws Exception {
+        jdbc.update("INSERT INTO notebook(id, title) VALUES (1, '笔记本')");
+        jdbc.update("INSERT INTO note_page(id, notebook_id, title, content, content_hash)"
+                        + " VALUES (41, 1, '页面', ?, 'ph-1')",
+                "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\","
+                        + "\"text\":\"页面正文\"}]}]}");
+        Map<String, Object> v2 = ai.chat(Map.of("protocolVersion", 2,
+                "requestId", UuidV7.generate(System.currentTimeMillis()),
+                "sessionId", sessionId,
+                "pageContext", Map.of("kind", "notebook", "pageId", 41, "markdown", "页面正文"),
+                "input", Map.of("userText", "结合页面回答")));
+        String requestId = (String) v2.get("requestId");
+        String pageKey = keyOf(selectedOf(requestId), "PAGE");
+
+        Map<String, Object> same = stack.inspector().preview(requestId, List.of(pageKey)).get(0);
+        assertEquals(true, same.get("available"), "版本没变就照常给片段：" + same);
+        assertTrue(String.valueOf(same.get("text")).contains("页面正文"));
+
+        jdbc.update("UPDATE note_page SET content_hash = 'ph-2' WHERE id = 41");
+        Map<String, Object> drifted = stack.inspector().preview(requestId, List.of(pageKey)).get(0);
+        assertEquals(false, drifted.get("available"), "页面改版后不能把新正文冒充当时提供的内容（§4.5）");
+        assertEquals("SOURCE_CHANGED", drifted.get("reason"));
+    }
+
     // ---------- 夹具 ----------
 
     private Map<String, Object> chat(String userText) {

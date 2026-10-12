@@ -10,6 +10,7 @@ import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.memory.MemoryCryptoService;
+import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -77,12 +78,15 @@ public class ConversationProjection {
 
     /** 投影结果：候选按时间升序，外加扫描范围、有效摘要、中断态与会话版本。 */
     public record Projection(List<Item> candidates, ContextAudit.Scan scan, SummaryView summary,
-                             ContextAudit.ResumeState resumeState, List<String> notices, long historyRevision) {
+                             ContextAudit.ResumeState resumeState, List<String> notices, long historyRevision,
+                             List<Item> coveredCandidates, Long observedSummaryRevision) {
     }
 
     /** 扫描中间态：候选 + 各类排除的计数，最后统一进审计。 */
     private static final class Scan {
         private final List<Item> newestFirst = new ArrayList<>();
+        /** 被摘要 coverage 排除的原文（新→旧）：摘要若被预算舍弃，按它做有界回补（§9.4）。 */
+        private final List<Item> coveredFirst = new ArrayList<>();
         private int wrongGeneration;
         private int tombstoned;
         private int unfinished;
@@ -101,13 +105,14 @@ public class ConversationProjection {
     private final MemoryRepository memory;
     private final MemoryCryptoService crypto;
     private final MemoryVaultService vault;
+    private final MemoryPolicyService policy;
     private final TokenEstimator estimator;
     private final ObjectMapper mapper;
 
     public ConversationProjection(ChatHistoryRepository history, SessionContextRepository checkpoints,
                                   ChatSessionMetadataRepository sessions, ChatMessageCipher cipher,
                                   MemoryRepository memory, MemoryCryptoService crypto, MemoryVaultService vault,
-                                  TokenEstimator estimator, ObjectMapper mapper) {
+                                  MemoryPolicyService policy, TokenEstimator estimator, ObjectMapper mapper) {
         this.history = history;
         this.checkpoints = checkpoints;
         this.sessions = sessions;
@@ -115,6 +120,7 @@ public class ConversationProjection {
         this.memory = memory;
         this.crypto = crypto;
         this.vault = vault;
+        this.policy = policy;
         this.estimator = estimator;
         this.mapper = mapper;
     }
@@ -127,7 +133,11 @@ public class ConversationProjection {
         List<String> notices = new ArrayList<>();
         long historyRevision = sessions.read(request.sessionId())
                 .map(ChatSessionMetadataRepository.State::historyRevision).orElse(0L);
-        SummaryView summaryView = readSummary(request, audit, notices);
+        // 观测到的检查点版本与实际采用的摘要分开记：无效/锁定摘要降级成"没有摘要"时，
+        // 发送前复核仍要能发现检查点真的被替换过（§4.5）
+        Optional<SessionContextRepository.Checkpoint> checkpoint = checkpoints.read(request.sessionId());
+        Long observedSummaryRevision = checkpoint.map(SessionContextRepository.Checkpoint::revision).orElse(null);
+        SummaryView summaryView = readSummary(request, checkpoint, audit, notices);
         ContextAudit.Summary covered = summaryView == null ? null : summaryView.audit();
 
         Scan scan = scanTurns(request, covered);
@@ -136,6 +146,8 @@ public class ConversationProjection {
         }
         List<Item> candidates = withAttachmentIdentities(scan.newestFirst);
         Collections.reverse(candidates);
+        List<Item> coveredCandidates = withAttachmentIdentities(scan.coveredFirst);
+        Collections.reverse(coveredCandidates);
 
         if (scan.wrongGeneration > 0) {
             audit.omit(ContextAudit.Omission.WRONG_GENERATION, "TURN", scan.wrongGeneration);
@@ -163,7 +175,7 @@ public class ConversationProjection {
         boolean hasOlder = hasOlder(request, scan);
         ContextAudit.Scan window = new ContextAudit.Scan(firstTurnId, lastTurnId, scan.rowsRead, hasOlder);
         return new Projection(List.copyOf(candidates), window, summaryView, resumeState(request),
-                List.copyOf(notices), historyRevision);
+                List.copyOf(notices), historyRevision, List.copyOf(coveredCandidates), observedSummaryRevision);
     }
 
     /** 倒序有界扫描：早停在"近期区已经填满"，而不是把所有历史读出来再挑。 */
@@ -213,17 +225,23 @@ public class ConversationProjection {
                 scan.completeSeen++;
                 // 最近两条完整轮次永远留原文：摘要替掉它们会让近期区凭空消失（T02）
                 if (isCovered(summary, row.turnId()) && scan.completeSeen > MIN_RECENT_TURNS) {
+                    // 先留一份原文：摘要被预算舍弃时 coverage 不再成立，要用它做有界回补（§9.4）
+                    scan.coveredFirst.add(itemOf(row, userText, assistantText));
                     scan.covered++;
                     continue;
                 }
-                scan.newestFirst.add(new Item(row.turnId(), row.requestId(), false, row.userMessageId(),
-                        row.assistantMessageId(), userText, assistantText, List.of(), row.startedAt(),
-                        estimator.estimateText(userText) + estimator.estimateText(assistantText)));
+                scan.newestFirst.add(itemOf(row, userText, assistantText));
             }
             if (batch.size() < limit) break;
             if (enough(scan.newestFirst, request.recentTokenBudget())) break;
         }
         return scan;
+    }
+
+    private Item itemOf(TurnHistory row, String userText, String assistantText) {
+        return new Item(row.turnId(), row.requestId(), false, row.userMessageId(),
+                row.assistantMessageId(), userText, assistantText, List.of(), row.startedAt(),
+                estimator.estimateText(userText) + estimator.estimateText(assistantText));
     }
 
     /** 只在初始 generation 补 legacy（§2.2：切过作用域后旧正文不再自动带入上下文）。 */
@@ -342,16 +360,21 @@ public class ConversationProjection {
     }
 
     /**
-     * 检查点合法性（§2.5 + T04）：generation、库 epoch、payload 尺寸与解析、coverage 段数都过了才用。
-     * 任何一条不过都只报"这份摘要不可用"——既不回退明文，也不按 through 整段排除历史。
+     * 检查点合法性（§2.5 + T04）：generation、摘要授权、库 epoch、payload 尺寸与解析、coverage 段数
+     * 都过了才用。任何一条不过都只报"这份摘要不可用"——既不回退明文，也不按 through 整段排除历史。
      */
-    private SummaryView readSummary(Request request, ContextAudit.Builder audit, List<String> notices)
-            throws SQLException {
-        Optional<SessionContextRepository.Checkpoint> row = checkpoints.read(request.sessionId());
+    private SummaryView readSummary(Request request, Optional<SessionContextRepository.Checkpoint> row,
+                                    ContextAudit.Builder audit, List<String> notices) throws SQLException {
         if (row.isEmpty()) return null;
         SessionContextRepository.Checkpoint checkpoint = row.get();
         if (checkpoint.contextGeneration() != request.contextGeneration()) {
             return unavailable(audit, notices, ContextAudit.Omission.WRONG_GENERATION, 1);
+        }
+        // §2.1/§4.5：摘要能不能读密文、能不能外发，取决于 compressSession 与维护授权；
+        // "库存在且解锁"只是本地保护状态，本身不是外发授权，不能拿它当通行证
+        MemoryPolicyService.Eligibility eligible = policy.summaryEligibility();
+        if (!eligible.allowed()) {
+            return unavailable(audit, notices, summaryOmission(eligible.gate()), 1);
         }
         Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
         if (envelope.isEmpty()) {
@@ -389,6 +412,12 @@ public class ConversationProjection {
         ContextAudit.Summary auditSummary = new ContextAudit.Summary(checkpoint.revision(),
                 checkpoint.throughTurnId(), hasGaps, List.copyOf(parsed.ranges()));
         return new SummaryView(auditSummary, parsed.modelSummary(), estimator.estimateText(parsed.modelSummary()));
+    }
+
+    /** 授权门不通过时的省略原因：锁定照实说，其余（开关关闭、无授权、目标变了）都算"没被授权"。 */
+    private static ContextAudit.Omission summaryOmission(MemoryPolicyService.Gate gate) {
+        return gate == MemoryPolicyService.Gate.LOCKED
+                ? ContextAudit.Omission.LOCKED : ContextAudit.Omission.NOT_AUTHORIZED;
     }
 
     private SummaryView unavailable(ContextAudit.Builder audit, List<String> notices,

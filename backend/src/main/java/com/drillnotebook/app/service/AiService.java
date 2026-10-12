@@ -307,26 +307,32 @@ public class AiService {
             return chatResponse(request, begun.replayReply(), null, null, null, begun.replayStatus(), "saved", true);
         }
         ChatTurnService.Lease lease = begun.lease();
-        Dispatch dispatch = prepare(body, request, lease, config);
-        requirePlanStillCurrent(dispatch, lease);
-        String attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
-        AiUpstreamClient.Result result;
+        String attempt = null;
+        boolean finalized = false;
         try {
-            result = chatUpstream(config, dispatch.messages(), request.masterPassword(), lease.handle());
+            Dispatch dispatch = prepare(body, request, lease, config);
+            requirePlanStillCurrent(dispatch, lease);
+            attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
+            AiUpstreamClient.Result result = chatUpstream(config, dispatch.messages(), request.masterPassword(),
+                    lease.handle());
+            chatTurns.settleUsage(attempt, result.usage());
+            ChatContextPlan sent = dispatch.markSent();
+            ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                    ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
+            finalized = true;
+            maybeAutoTitle(request.sessionId(), request.userText());
+            reportLegacyFailure(request.protocolVersion(), done.status(), result);
+            return chatResponse(request, done.reply(), dispatch.legacy(), sent, result.usage(), done.status(),
+                    done.persistenceStatus(), false);
         } catch (RuntimeException error) {
-            // 外发已发生就按 unknown 结算：正文没保存，不撤销已经花掉的量（§7.2.1）
-            chatTurns.settleUsage(attempt, null);
-            chatTurns.abandon(lease, "upstream_failed");
+            // begin() 成功之后，配置解密、检索、组装、发送任一失败都必须把这一轮收成终态并释放句柄，
+            // 否则孤儿清扫会因句柄仍在而跳过它，会话被一个永远不会完成的 RUNNING 永久占住（§7.2.1）
+            if (!finalized) {
+                chatTurns.settleUsage(attempt, null);
+                chatTurns.abandon(lease, "request_failed");
+            }
             throw error;
         }
-        chatTurns.settleUsage(attempt, result.usage());
-        ChatContextPlan sent = dispatch.markSent();
-        ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
-        maybeAutoTitle(request.sessionId(), request.userText());
-        reportLegacyFailure(request.protocolVersion(), done.status(), result);
-        return chatResponse(request, done.reply(), dispatch.legacy(), sent, result.usage(), done.status(),
-                done.persistenceStatus(), false);
     }
 
     /** 流式聊天结果：完整正文 + 思考链 + 本轮终态与落库情况，外加本轮实际发出的计划与用量。 */
@@ -358,58 +364,67 @@ public class AiService {
             return new ChatResult(begun.replayReply(), null, begun.replayStatus(), "saved", true, null, null);
         }
         ChatTurnService.Lease lease = begun.lease();
-        UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
-        if (upstream == null) {
-            // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
-            Dispatch dispatch = prepare(body, request, lease, requireChatConfig());
-            String attempt = chatTurns.startUsage(lease, chatTarget(requireChatConfig()), dispatch.planId());
-            emitMetadata(metadataSender, dispatch);
-            String reply = mockReply(dispatch.messages());
-            chatTurns.settleUsage(attempt, null);
-            if (listener != null && !listener.onDelta("text", reply)) {
-                // 前端已断：仍要把这一轮收成 ABORTED，不能留在 RUNNING
-                ChatTurnService.FinalResult stopped = chatTurns.finalizeTurn(lease,
-                        new ChatTurnService.UpstreamReply(reply, null, "aborted", false, false, true,
-                                AiUpstreamClient.Usage.unknown()), auditFor(dispatch.markSent(), dispatch.legacy()));
-                return new ChatResult(stopped.reply(), stopped.reasoning(), stopped.status(),
-                        stopped.persistenceStatus(), stopped.stateDurable(), dispatch.markSent(), null);
-            }
-            ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                    ChatTurnService.UpstreamReply.of(new AiUpstreamClient.Result(reply, null, "stop")),
-                    auditFor(dispatch.markSent(), dispatch.legacy()));
-            maybeAutoTitle(request.sessionId(), request.userText());
-            return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
-                    done.stateDurable(), dispatch.markSent(), AiUpstreamClient.Usage.unknown());
-        }
-        AiConfigRepository.ConfigRow config = requireChatConfig();
-        Dispatch dispatch = prepare(body, request, lease, config);
-        requirePlanStillCurrent(dispatch, lease);
-        String attempt = chatTurns.startUsage(lease, UsageRepository.targetFingerprint(upstream.baseUrl(),
-                upstream.apiFormat(), upstream.model()), dispatch.planId());
-        emitMetadata(metadataSender, dispatch);
-        AiUpstreamClient.Result result;
+        String attempt = null;
+        boolean finalized = false;
         try {
+            UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
+            if (upstream == null) {
+                // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
+                AiConfigRepository.ConfigRow config = requireChatConfig();
+                Dispatch dispatch = prepare(body, request, lease, config);
+                attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
+                emitMetadata(metadataSender, dispatch);
+                String reply = mockReply(dispatch.messages());
+                chatTurns.settleUsage(attempt, null);
+                if (listener != null && !listener.onDelta("text", reply)) {
+                    // 前端已断：仍要把这一轮收成 ABORTED，不能留在 RUNNING
+                    ChatTurnService.FinalResult stopped = chatTurns.finalizeTurn(lease,
+                            new ChatTurnService.UpstreamReply(reply, null, "aborted", false, false, true,
+                                    AiUpstreamClient.Usage.unknown()), auditFor(dispatch.markSent(), dispatch.legacy()));
+                    finalized = true;
+                    return new ChatResult(stopped.reply(), stopped.reasoning(), stopped.status(),
+                            stopped.persistenceStatus(), stopped.stateDurable(), dispatch.markSent(), null);
+                }
+                ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                        ChatTurnService.UpstreamReply.of(new AiUpstreamClient.Result(reply, null, "stop")),
+                        auditFor(dispatch.markSent(), dispatch.legacy()));
+                finalized = true;
+                maybeAutoTitle(request.sessionId(), request.userText());
+                return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
+                        done.stateDurable(), dispatch.markSent(), AiUpstreamClient.Usage.unknown());
+            }
+            AiConfigRepository.ConfigRow config = requireChatConfig();
+            Dispatch dispatch = prepare(body, request, lease, config);
+            requirePlanStillCurrent(dispatch, lease);
+            attempt = chatTurns.startUsage(lease, UsageRepository.targetFingerprint(upstream.baseUrl(),
+                    upstream.apiFormat(), upstream.model()), dispatch.planId());
+            emitMetadata(metadataSender, dispatch);
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
-            result = upstream().call(target, dispatch.messages(), true, listener, DEFAULT_CALL.timeoutSeconds(),
-                    lease.handle());
+            AiUpstreamClient.Result result = upstream().call(target, dispatch.messages(), true, listener,
+                    DEFAULT_CALL.timeoutSeconds(), lease.handle());
+            chatTurns.settleUsage(attempt, result.usage());
+            // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
+            ChatContextPlan sent = dispatch.markSent();
+            ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
+                    ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
+            finalized = true;
+            maybeAutoTitle(request.sessionId(), request.userText());
+            if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
+                throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
+            }
+            return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
+                    done.stateDurable(), sent, result.usage());
         } catch (RuntimeException error) {
-            chatTurns.settleUsage(attempt, null);
-            chatTurns.abandon(lease, "upstream_failed");
+            // 与普通路径同一收尾责任：begin() 之后（配置解密、组装、组装后复核、发送）任一失败都要
+            // 结算用量、把轮次收成 FAILED 并释放句柄，不能留下没人会放的活跃句柄（§7.2.1）
+            if (!finalized) {
+                chatTurns.settleUsage(attempt, null);
+                chatTurns.abandon(lease, "request_failed");
+            }
             throw error;
         }
-        chatTurns.settleUsage(attempt, result.usage());
-        // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
-        ChatContextPlan sent = dispatch.markSent();
-        ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
-                ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
-        maybeAutoTitle(request.sessionId(), request.userText());
-        if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
-            throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
-        }
-        return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
-                done.stateDurable(), sent, result.usage());
     }
 
     /** 一次派发所需的一切：v2 用统一计划，v1 保持客户端自带 messages 的旧语义（§7.1）。 */
@@ -528,11 +543,28 @@ public class AiService {
 
     /** 进 request_meta 的只有选项标识：页面正文与 RAG 片段一律不进元数据（contracts §2.2）。 */
     private static Map<String, Object> requestOptions(Map<String, Object> body) {
+        Map<String, Object> page = onlyKeys(mapValue(body.get("pageContext")), "kind", "pageId");
+        Object markdown = mapValue(body.get("pageContext")).get("markdown");
+        if (markdown != null && !String.valueOf(markdown).isBlank()) {
+            // §2.2：page 选项只留标识/版本/指纹——正文不进元数据，但指纹必须参与输入指纹，
+            // 否则同 requestId 换一份页面正文会被当成同一请求重放
+            page.put("contentHash", sha256Hex(String.valueOf(markdown)));
+        }
         Map<String, Object> options = new LinkedHashMap<>();
         options.put("retrieval", onlyKeys(mapValue(body.get("retrievalOptions")), "enabled", "scope", "notebookId"));
-        options.put("page", onlyKeys(mapValue(body.get("pageContext")), "kind", "pageId"));
+        options.put("page", page);
         options.put("memory", onlyKeys(mapValue(body.get("memoryOptions")), "use"));
         return options;
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 不可用", error);
+        }
     }
 
     private static Map<String, Object> onlyKeys(Map<String, Object> source, String... allowed) {

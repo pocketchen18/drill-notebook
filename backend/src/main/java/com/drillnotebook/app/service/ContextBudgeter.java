@@ -35,8 +35,6 @@ public class ContextBudgeter {
     public static final int MIN_SAFETY_MARGIN_TOKENS = 512;
     /** 本地 fit 上限（§4.5）：超过就拒绝，不做无限重组。 */
     public static final int MAX_FIT_ATTEMPTS = 3;
-    /** §9.2：近期区"尽可能保留最近至少 2 轮"，裁剪不能把它清空。 */
-    static final int MIN_RETAINED_TURNS = 2;
 
     private final TokenEstimator estimator;
     private final ObjectMapper mapper;
@@ -105,12 +103,22 @@ public class ContextBudgeter {
             throw tooLarge(List.of("USER_TEXT"), userTokens, allowedInput, kept);
         }
 
+        // 摘要没进这份计划（组装阶段就丢了）时 coverage 不再成立：先把被它替掉的原文有界回补（§9.4）
+        boolean coveredRestored = false;
+        if (kept.summary == null && !projection.coveredCandidates().isEmpty()) {
+            restoreCovered(kept, projection, audit);
+            coveredRestored = true;
+        }
+        if (capRecentTurns(kept, audit)) notices.add("CONTEXT_TRIMMED");
+
         int estimated = 0;
         int limit = 0;
         List<Map<String, Object>> messages = List.of();
         for (int attempt = 0; attempt <= MAX_FIT_ATTEMPTS; attempt++) {
             messages = serialize(draft, kept);
-            estimated = estimator.estimateSerialized(messages);
+            // 估算排除图像 base64：结构开销保留，编码字节不计（§4.3"不能把 base64 长度当收费 Token"），
+            // 图像成本已按每张 4,096 单独从窗口里扣除
+            estimated = estimator.estimateSerialized(countable(messages));
             limit = Math.min(ChatContextPlan.INPUT_BUDGET_TOKENS,
                     window - OUTPUT_RESERVE_TOKENS - margin - kept.imageTokens());
             if (estimated <= limit) break;
@@ -118,6 +126,12 @@ public class ContextBudgeter {
             if (!trim(kept, estimated - limit, audit)) {
                 // 已经没有可裁的东西：剩下的只有"当前图片 + 当前问题 + 固定规则"，直接拒绝
                 throw tooLarge(describeOverflow(kept), estimated, limit, kept);
+            }
+            // trim 可能把摘要丢掉了：coverage 随之失效，回补被它替代的原文并重新收敛近期区（§9.4）
+            if (kept.summary == null && !coveredRestored && !projection.coveredCandidates().isEmpty()) {
+                restoreCovered(kept, projection, audit);
+                capRecentTurns(kept, audit);
+                coveredRestored = true;
             }
             if (!notices.contains("CONTEXT_TRIMMED")) notices.add("CONTEXT_TRIMMED");
         }
@@ -131,7 +145,7 @@ public class ContextBudgeter {
                 target.historyRevision(), target.summaryRevision(), target.vaultEpoch(), target.vaultRevision(),
                 target.policyRevision(), messages, notices, citations,
                 audit.build(ContextAudit.DISPATCH_NOT_SENT, estimated, limit, projection.scan(),
-                        projection.summary() == null ? null : projection.summary().audit(),
+                        kept.summary == null ? null : projection.summary().audit(),
                         projection.resumeState()));
     }
 
@@ -214,10 +228,50 @@ public class ContextBudgeter {
         return saved;
     }
 
-    /** 从最早的开始丢，但永远保留最近 {@value #MIN_RETAINED_TURNS} 轮，也不切半句。 */
+    /**
+     * §9.2 的近期区上限：从最旧开始整轮舍弃，直到落回 2,400 以内或只剩最新一轮。
+     * 最新一轮不可再分（"不能切到半句改变否定语义"），单独就超上限时保留它，交给总预算处理；
+     * "尽可能保留最近至少 2 轮"是优先目标而不是硬保证——预算不够就继续按完整轮次舍弃历史。
+     */
+    private boolean capRecentTurns(Kept kept, ContextAudit.Builder audit) {
+        int total = 0;
+        for (Turn turn : kept.turns) total += turn.estimatedTokens();
+        int dropped = 0;
+        while (kept.turns.size() > 1 && total > ChatContextAssembler.RECENT_TURNS_BUDGET) {
+            total -= kept.turns.get(0).estimatedTokens();
+            kept.turns.remove(0);
+            dropped++;
+        }
+        if (dropped > 0) audit.omit(ContextAudit.Omission.BUDGET, "TURN", dropped);
+        return dropped > 0;
+    }
+
+    /**
+     * 摘要被舍弃后的一次有界回补（§9.4"只排除被有效 coverage 替代的原轮次"）：把扫描窗口内
+     * 已解密的被覆盖轮次按时间序并回候选，并撤销账本里的覆盖省略——原文回来了就不再算被替代。
+     * 回补范围受扫描窗口约束（一份最多 32 轮），不做全库重读。
+     */
+    private void restoreCovered(Kept kept, ConversationProjection.Projection projection,
+                                ContextAudit.Builder audit) {
+        for (ConversationProjection.Item item : projection.coveredCandidates()) {
+            Turn turn = new Turn(item.turnId(), false, item.userMessageId(), item.assistantMessageId(),
+                    item.userText(), item.assistantText(), List.of(),
+                    item.estimatedTokens() + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS);
+            int position = 0;
+            while (position < kept.turns.size()
+                    && (kept.turns.get(position).turnId() == null
+                    || kept.turns.get(position).turnId() < turn.turnId())) {
+                position++;
+            }
+            kept.turns.add(position, turn);
+        }
+        audit.clearOmission(ContextAudit.Omission.COVERED_BY_SUMMARY, "TURN");
+    }
+
+    /** 从最早的开始整轮丢；"最近两轮保底"在总预算这里同样只是优先目标，不是硬性下限。 */
     private int dropOldestTurns(Kept kept, int excess, ContextAudit.Builder audit) {
         int saved = 0;
-        while (kept.turns.size() > MIN_RETAINED_TURNS && saved < excess) {
+        while (!kept.turns.isEmpty() && saved < excess) {
             saved += kept.turns.get(0).estimatedTokens();
             kept.turns.remove(0);
         }
@@ -278,6 +332,51 @@ public class ContextBudgeter {
         return block;
     }
 
+    /**
+     * 估算视图：数据 URL 的 base64 载荷不计入文本 Token（§4.3"不能把 base64 长度当收费 Token"），
+     * 只保留结构与前缀开销；每张图的成本按 {@link TokenEstimator#IMAGE_UNKNOWN_ESTIMATED_TOKENS}
+     * 另行从窗口里扣除。纯文本消息原样参与估算。
+     */
+    private static List<Map<String, Object>> countable(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> view = new ArrayList<>(messages.size());
+        for (Map<String, Object> message : messages) {
+            if (!(message.get("content") instanceof List<?> blocks)) {
+                view.add(message);
+                continue;
+            }
+            List<Object> copied = new ArrayList<>(blocks.size());
+            boolean changed = false;
+            for (Object block : blocks) {
+                Object lean = stripDataUrl(block);
+                if (lean != block) changed = true;
+                copied.add(lean);
+            }
+            if (!changed) {
+                view.add(message);
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("role", message.get("role"));
+            row.put("content", copied);
+            view.add(row);
+        }
+        return view;
+    }
+
+    private static Object stripDataUrl(Object block) {
+        if (!(block instanceof Map<?, ?> map) || !"image_url".equals(map.get("type"))) return block;
+        if (!(map.get("image_url") instanceof Map<?, ?> url)) return block;
+        if (!(url.get("url") instanceof String dataUrl) || !dataUrl.startsWith("data:")) return block;
+        int comma = dataUrl.indexOf(',');
+        String prefix = comma < 0 ? dataUrl : dataUrl.substring(0, comma + 1);
+        Map<String, Object> leanUrl = new LinkedHashMap<>();
+        leanUrl.put("url", prefix);
+        Map<String, Object> lean = new LinkedHashMap<>();
+        lean.put("type", map.get("type"));
+        lean.put("image_url", leanUrl);
+        return lean;
+    }
+
     private String write(Map<String, Object> envelope) {
         try {
             return mapper.writeValueAsString(envelope);
@@ -320,7 +419,8 @@ public class ContextBudgeter {
         audit.region(ContextAudit.Region.IMAGE, kept.imageTokens(), kept.allImages().size());
 
         if (kept.summary != null) {
-            audit.select(selected("SUMMARY", kept.summary.id(), kept.summary.version(), null));
+            // 摘要的权威版本就是检查点 revision：放进 selected.version，检查器据此判断"是否已被替换"
+            audit.select(selected("SUMMARY", kept.summary.id(), kept.summary.id(), null));
         }
         if (kept.resumeState != null) {
             audit.select(selected("RESUME_STATE", kept.resumeState.id(), kept.resumeState.version(), null));

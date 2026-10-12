@@ -747,8 +747,10 @@ public class ChatTurnService {
                 .append(state.memoryNotebookId() == null ? 0L : state.memoryNotebookId()).append('|')
                 .append("text=").append(input.userText().codePointCount(0, input.userText().length())).append('|')
                 .append("text=").append(input.userText()).append('|')
+                // 重新生成来源也是有效输入：同 ID 换 retryOf 必须 409，不能悄悄重放原结果（§7.2 第 7 条）
+                .append("retryOf=").append(input.retryOf() == null ? "" : input.retryOf()).append('|')
                 .append("attachments=").append(ChatAttachmentService.identity(input.attachments())).append('|')
-                .append("options=").append(new TreeMap<>(input.requestOptions()));
+                .append("options=").append(canonicalOptions(input.requestOptions()));
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
             StringBuilder hex = new StringBuilder(digest.length * 2);
@@ -757,6 +759,32 @@ public class ChatTurnService {
         } catch (java.security.NoSuchAlgorithmException error) {
             throw new IllegalStateException("SHA-256 不可用", error);
         }
+    }
+
+    /**
+     * 选项的规范化序列化：等价输入必须得到同一串字节。递归排序嵌套 Map，不依赖 {@code Map.toString()}
+     * （迭代顺序与标量格式都跟实现走，客户端换一个等价写法就会误报 REQUEST_CONFLICT）。
+     */
+    private String canonicalOptions(Map<String, Object> options) {
+        try {
+            return mapper.writeValueAsString(sortDeep(options));
+        } catch (Exception error) {
+            throw reject(500, "CHAT_META_UNWRITABLE", "请求选项无法规范化", Map.of());
+        }
+    }
+
+    private static Object sortDeep(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            TreeMap<String, Object> sorted = new TreeMap<>();
+            map.forEach((key, item) -> sorted.put(String.valueOf(key), sortDeep(item)));
+            return sorted;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> rows = new java.util.ArrayList<>(list.size());
+            for (Object item : list) rows.add(sortDeep(item));
+            return rows;
+        }
+        return value;
     }
 
     private String bounded(Map<String, Object> meta) {

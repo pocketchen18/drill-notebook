@@ -216,6 +216,19 @@ public class ChatHistoryRepository {
         }
     }
 
+    /** 页面正文的内容版本（NoteNormalizer 维护的 content_hash）；检查器用它核验来源没被改版。 */
+    public Optional<String> pageContentHash(long pageId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT content_hash FROM note_page WHERE id = ?")) {
+            statement.setLong(1, pageId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.ofNullable(result.getString("content_hash"));
+            }
+        }
+    }
+
     private int count(String sql, long sessionId, long parameter) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {

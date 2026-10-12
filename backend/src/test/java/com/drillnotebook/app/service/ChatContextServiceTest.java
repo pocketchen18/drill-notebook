@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -205,6 +206,32 @@ class ChatContextServiceTest {
         ChatContextPlan rebuilt = plan("旧作用域的问题", Map.of("use", false));
         assertNotEquals(before.planId(), rebuilt.planId(), "重组一律换新 planId，绝不把旧 metadata 绑到新请求");
         assertEquals(after.contextGeneration(), rebuilt.contextGeneration());
+    }
+
+    @Test
+    void unusableCheckpointDowngradesWithoutBeingMistakenForAChange() throws Exception {
+        completeTurn("更早的一轮", "回答", null);
+        // 检查点行存在但没有摘要授权（compressSession 默认关）：采用不了，只能降级为近期历史
+        jdbc.update("INSERT INTO ai_session_context(session_id, revision, through_turn_id, context_generation,"
+                + " vault_epoch, payload_cipher, crypto_meta, estimated_tokens, updated_at)"
+                + " VALUES (?, 7, 1, 1, 0, 'x', 'y', 0, '2026-10-12T00:00:00.000Z')", sessionId);
+
+        ChatTurnService.Lease lease = beginTurn("这一轮的问题", null, PASSWORD);
+        ChatContextPlan plan = stack.contexts().plan(lease, "这一轮的问题", List.of(), Map.of(),
+                Map.of("use", false), 32000, true);
+        assertEquals(7L, plan.summaryRevision().longValue(), "观测到的检查点版本要进计划，复核才有比较依据");
+        assertNull(plan.audit().summary(), "没有摘要授权就不能采用，安静降级为无摘要");
+        assertTrue(stack.contexts().matches(plan), "不可用的摘要不是并发变化，不能误报 CONTEXT_CHANGED");
+        wiring.turnService().abandon(lease, "test-cleanup");
+
+        // 重建一份计划后再单独替换检查点：真正的并发变化仍要发现（§4.5）
+        ChatTurnService.Lease again = beginTurn("再问一句", null, PASSWORD);
+        ChatContextPlan rebuilt = stack.contexts().plan(again, "再问一句", List.of(), Map.of(),
+                Map.of("use", false), 32000, true);
+        assertTrue(stack.contexts().matches(rebuilt));
+        jdbc.update("UPDATE ai_session_context SET revision = revision + 1 WHERE session_id = ?", sessionId);
+        assertFalse(stack.contexts().matches(rebuilt), "检查点被替换 → 旧计划必须丢弃重建");
+        wiring.turnService().abandon(again, "test-cleanup");
     }
 
     // ---------- 夹具 ----------

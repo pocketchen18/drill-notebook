@@ -81,9 +81,9 @@ public class ChatContextAssembler {
                         String userText, List<String> notices) {
     }
 
-    /** 组装所需的本轮请求形态。 */
+    /** 组装所需的本轮请求形态；{@code pageVersion} 是页面正文的权威版本（content_hash）。 */
     public record Input(String userText, String masterPassword, List<ChatAttachmentService.Sourced> attachments,
-                        Map<String, Object> pageContext, boolean memoriesAllowed) {
+                        Map<String, Object> pageContext, String pageVersion, boolean memoriesAllowed) {
     }
 
     /**
@@ -239,8 +239,9 @@ public class ChatContextAssembler {
     private List<Item> buildPage(Input input, ContextAudit.Builder audit) {
         String markdown = text(input.pageContext().get("markdown"));
         if (markdown.isBlank()) return List.of();
-        List<Item> parts = paragraphItems("PAGE", text(input.pageContext().get("pageId")), null, markdown,
-                PAGE_BUDGET, audit, "PAGE");
+        // version 放页面 content_hash：检查器预览时据此判断"现在读到的正文"还是不是当时提供的那版（§4.5）
+        List<Item> parts = paragraphItems("PAGE", text(input.pageContext().get("pageId")), input.pageVersion(),
+                markdown, PAGE_BUDGET, audit, "PAGE");
         return List.copyOf(parts);
     }
 
@@ -266,8 +267,12 @@ public class ChatContextAssembler {
             }
             String text = "[" + (excerpts.size() + 1) + "] " + citation.title()
                     + (citation.headingPath().isBlank() ? "" : "（" + citation.headingPath() + "）") + "\n" + hit.text();
-            excerpts.add(new Item("NOTEBOOK_RAG", String.valueOf(citation.pageId()),
-                    String.valueOf(citation.chunkId()), null, text, estimator.estimateText(text)));
+            // version 带片段内容版本（chunkId@contentHash）：预览时核验"当时提供的片段"没被改版（§4.5）
+            String version = hit.contentHash() == null || hit.contentHash().isBlank()
+                    ? String.valueOf(citation.chunkId())
+                    : citation.chunkId() + "@" + hit.contentHash();
+            excerpts.add(new Item("NOTEBOOK_RAG", String.valueOf(citation.pageId()), version, null, text,
+                    estimator.estimateText(text)));
             chosen.add(hit);
         }
         if (duplicates > 0) audit.omit(ContextAudit.Omission.DUPLICATE, "NOTEBOOK_RAG", duplicates);

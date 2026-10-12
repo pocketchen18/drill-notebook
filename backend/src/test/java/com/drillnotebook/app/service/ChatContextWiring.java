@@ -48,15 +48,15 @@ public final class ChatContextWiring {
         ChatAttachmentReader attachmentReader = new ChatAttachmentReader(wiring.turns(), wiring.cipher(),
                 wiring.attachmentCipher(), mapper);
         ConversationProjection projection = new ConversationProjection(historyRepo, checkpoints, wiring.metadata(),
-                wiring.cipher(), wiring.memory(), crypto, vault, estimator, mapper);
+                wiring.cipher(), wiring.memory(), crypto, vault, policy, estimator, mapper);
         ChatContextAssembler assembler = new ChatContextAssembler(estimator, attachmentReader);
         ContextBudgeter budgeter = new ContextBudgeter(estimator, mapper);
         ManualMemorySource memories = new ManualMemorySource(wiring.memory(), vault, crypto, mapper);
         ChatContextService contexts = new ChatContextService(projection, assembler, budgeter, memories,
                 wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo);
         ChatHistoryService history = new ChatHistoryService(historyRepo, wiring.metadata(), wiring.cipher(), vault);
-        ContextInspector inspector = new ContextInspector(wiring.turns(), historyRepo, wiring.cipher(),
-                attachmentReader, wiring.memory(), crypto, vault, checkpoints,
+        ContextInspector inspector = new ContextInspector(wiring.turns(), historyRepo, wiring.metadata(),
+                wiring.cipher(), attachmentReader, wiring.memory(), crypto, vault, checkpoints,
                 new RetrievalIndexRepository(jdbc), mapper);
         return new Stack(contexts, history, inspector, estimator, projection, assembler, budgeter, memories,
                 crypto, vault, policy, historyRepo, checkpoints, attachmentReader);

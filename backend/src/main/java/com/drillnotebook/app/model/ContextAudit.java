@@ -200,6 +200,11 @@ public record ContextAudit(String planId, String dispatchState, int estimatedInp
             omissions.put(key, new OmissionGroup(reason, kind, existing.count() + count));
         }
 
+        /** 撤销一条省略记录（如摘要被舍弃后原文已回补）：账本不能再声称它被替代过。 */
+        public void clearOmission(Omission reason, String kind) {
+            omissions.remove(reason.name() + '|' + (kind == null ? "" : kind));
+        }
+
         public ContextAudit build(String dispatchState, int estimatedInputTokens, int inputBudget, Scan scan,
                                   Summary summary, ResumeState resumeState) {
             List<OmissionGroup> groups = new ArrayList<>(omissions.values());
