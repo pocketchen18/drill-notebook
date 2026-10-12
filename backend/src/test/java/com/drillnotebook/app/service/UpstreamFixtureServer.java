@@ -29,7 +29,9 @@ class UpstreamFixtureServer implements Closeable {
     private final CountDownLatch release = new CountDownLatch(1);
     private final AtomicBoolean hung = new AtomicBoolean();
     private final AtomicBoolean bodyWriteFailed = new AtomicBoolean();
-    private volatile boolean hangAfterFirstDelta;
+    private volatile Mode mode = Mode.NORMAL;
+
+    private enum Mode { NORMAL, HANG_AFTER_FIRST_DELTA, HANG_SILENTLY }
 
     UpstreamFixtureServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -49,7 +51,17 @@ class UpstreamFixtureServer implements Closeable {
 
     /** 下一次响应只发一段增量然后挂住，直到 {@link #close()}。 */
     void hangAfterFirstDelta() {
-        hangAfterFirstDelta = true;
+        mode = Mode.HANG_AFTER_FIRST_DELTA;
+    }
+
+    /** 下一次响应只发响应头、正文一个字节都不发（上游沉默），直到 {@link #close()} 或连接被取消。 */
+    void hangSilently() {
+        mode = Mode.HANG_SILENTLY;
+    }
+
+    /** 恢复为正常应答：取消之后想用同一个夹具继续发下一轮时调用。 */
+    void respondNormally() {
+        mode = Mode.NORMAL;
     }
 
     /** 客户端关闭之后，服务端往响应体里写会不会失败（证明连接真的被关掉）。 */
@@ -65,7 +77,29 @@ class UpstreamFixtureServer implements Closeable {
         try (InputStream in = exchange.getRequestBody()) {
             bodies.add(new String(in.readAllBytes(), StandardCharsets.UTF_8));
         }
-        if (!hangAfterFirstDelta) {
+        if (mode == Mode.HANG_SILENTLY) {
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, 0);
+            hung.set(true);
+            try (OutputStream out = exchange.getResponseBody()) {
+                // 头已发、正文一个字节都不发：只有取消或总期限才能让这次读取结束
+                release.await(20, TimeUnit.SECONDS);
+                for (int attempt = 0; attempt < 20 && !bodyWriteFailed.get(); attempt++) {
+                    out.write("data: {\"choices\":[{\"delta\":{\"content\":\"晚到的正文\"}}]}\n\n"
+                            .getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    Thread.sleep(100);
+                }
+            } catch (IOException closed) {
+                bodyWriteFailed.set(true);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+            return;
+        }
+        if (mode != Mode.HANG_AFTER_FIRST_DELTA) {
             byte[] payload = REPLY.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, payload.length);

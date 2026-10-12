@@ -373,7 +373,7 @@ public class AiService {
                 AiConfigRepository.ConfigRow config = requireChatConfig();
                 Dispatch dispatch = prepare(body, request, lease, config);
                 attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
-                emitMetadata(metadataSender, dispatch);
+                emitMetadata(metadataSender, dispatch, lease);
                 String reply = mockReply(dispatch.messages());
                 chatTurns.settleUsage(attempt, null);
                 if (listener != null && !listener.onDelta("text", reply)) {
@@ -398,7 +398,7 @@ public class AiService {
             requirePlanStillCurrent(dispatch, lease);
             attempt = chatTurns.startUsage(lease, UsageRepository.targetFingerprint(upstream.baseUrl(),
                     upstream.apiFormat(), upstream.model()), dispatch.planId());
-            emitMetadata(metadataSender, dispatch);
+            emitMetadata(metadataSender, dispatch, lease);
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
@@ -477,9 +477,21 @@ public class AiService {
                 Map.of("retryable", true));
     }
 
-    private void emitMetadata(java.util.function.Consumer<Map<String, Object>> sender, Dispatch dispatch) {
-        if (sender == null || dispatch.plan() == null) return;
-        sender.accept(dispatch.plan().metadataEvent());
+    private void emitMetadata(java.util.function.Consumer<Map<String, Object>> sender, Dispatch dispatch,
+                              ChatTurnService.Lease lease) {
+        if (sender == null) return;
+        if (dispatch.plan() != null) {
+            sender.accept(dispatch.plan().metadataEvent());
+            return;
+        }
+        // v1 没有计划，但流式轮次也必须先把 requestId 交给前端：没有它，用户"停止"只能断开本地 fetch，
+        // 后端要等下一次写 SSE 失败或总期限到期才能察觉——模型沉默时这一等就是整个 180 秒超时，
+        // 会话一直被"已有一轮正在进行"占住（§7.3；contracts §4.2 metadata 携带 requestId）。
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("requestId", lease.requestId());
+        event.put("sessionId", lease.sessionId());
+        event.put("status", "prepared");
+        sender.accept(event);
     }
 
     /** 有界 ContextAudit：v2 用计划产出的完整账本，v1 仍只记实际注入的片段数量。 */

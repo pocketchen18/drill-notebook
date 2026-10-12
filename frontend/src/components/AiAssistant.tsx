@@ -236,7 +236,9 @@ export function AiAssistant(): JSX.Element {
         };
       });
       const pending = localWithKeys.filter((m) => !consumed.has(m._key));
-      return [...pending, ...serverMessages];
+      // 本地未落库的消息是最新的一批：必须排在服务端消息之后。反过来（pending 在前）会让每次
+      // refetch（关闭再打开侧边栏、窗口聚焦）都把"流式进行中"的气泡顶到整段对话最前面。
+      return [...serverMessages, ...pending];
     });
   }, [messagesQuery.data]);
 
@@ -534,6 +536,8 @@ export function AiAssistant(): JSX.Element {
       ...(retrievalOptions ? { retrievalOptions } : {})
     };
     let aborted = false;
+    // 本轮的服务端 requestId（metadata 事件带回）：停止时要靠它调用取消接口。
+    let streamingRequestId: string | null = null;
     const finishStream = (): void => {
       // 任何出口都要：清状态 + 清 abort 句柄，避免 onError/重复 done 再次进入分支造成重复占位。
       setStreaming(false);
@@ -551,6 +555,11 @@ export function AiAssistant(): JSX.Element {
       if (aborted) return;
       aborted = true;
       abortFetch?.();
+      // 只断开前端连接时，后端要等下一次写 SSE 失败或 180 秒总期限才察觉——模型沉默期间会话会被
+      // "该会话已有一轮正在进行"占住（暂停后发不出去）。拿到 requestId 就主动取消，让轮次立刻收尾。
+      if (streamingRequestId) {
+        void post(`/api/ai/turns/${streamingRequestId}/cancel`, {}).catch(() => undefined);
+      }
       chatAbortRef.current = null;
       setStreaming(false);
       // 中断后刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为
@@ -585,6 +594,9 @@ export function AiAssistant(): JSX.Element {
       onReasoning: (delta) => {
         if (aborted) return;
         patchSessionMessage((prev: ChatMessage) => ({ ...prev, reasoning: (prev.reasoning ?? '') + delta }));
+      },
+      onMetadata: ({ requestId }) => {
+        if (!aborted) streamingRequestId = requestId;
       },
       onDone: ({ reply }) => {
         if (aborted) return;

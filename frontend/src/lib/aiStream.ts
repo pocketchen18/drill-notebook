@@ -11,6 +11,8 @@ export interface StreamDonePayload {
 export interface StreamCallbacks {
   onText: (delta: string) => void;
   onReasoning: (delta: string) => void;
+  /** 发送前的元数据（requestId 等）：拿到后前端才能在"停止"时调用取消接口。 */
+  onMetadata?: (payload: { requestId: string }) => void;
   onDone: (payload: StreamDonePayload) => void;
   onError: (message: string) => void;
 }
@@ -65,7 +67,12 @@ export async function streamChat(path: string, body: unknown, callbacks: StreamC
       const text = payload && typeof payload === 'object' && 'text' in payload ? String((payload as { text: unknown }).text) : '';
       if (eventName === 'text') callbacks.onText(text);
       else if (eventName === 'reasoning') callbacks.onReasoning(text);
-      else if (eventName === 'done') {
+      else if (eventName === 'metadata') {
+        const requestId = payload && typeof payload === 'object' && 'requestId' in payload
+          ? String((payload as { requestId: unknown }).requestId)
+          : '';
+        if (requestId) callbacks.onMetadata?.({ requestId });
+      } else if (eventName === 'done') {
         const reply = payload && typeof payload === 'object' && 'reply' in payload ? String((payload as { reply: unknown }).reply) : '';
         const reasoning = payload && typeof payload === 'object' && 'reasoning' in payload ? String((payload as { reasoning: unknown }).reasoning) : '';
         callbacks.onDone({ reply, reasoning });

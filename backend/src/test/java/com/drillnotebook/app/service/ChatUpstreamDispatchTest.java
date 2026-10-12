@@ -2,6 +2,7 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -156,6 +157,45 @@ class ChatUpstreamDispatchTest {
         ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key"));
         assertEquals("COMPLETED", ai.chat(v2("修好之后继续")).get("status"));
+    }
+
+    /**
+     * 模型沉默时用户点"停止"：前端只断 fetch 是不够的——后端要等下一次写 SSE 失败或总期限
+     * 到期才察觉，会话会被"该会话已有一轮正在进行"占住（实测等满 180 秒）。v1 流式必须先交出
+     * requestId，前端才能调用取消接口：句柄立刻释放、上游连接被关闭、会话随即可用。
+     */
+    @Test
+    void cancellingASilentV1StreamFreesTheSessionWithoutWaitingForTheDeadline() throws Exception {
+        server.hangSilently();
+        java.util.concurrent.LinkedBlockingQueue<Map<String, Object>> events =
+                new java.util.concurrent.LinkedBlockingQueue<>();
+        java.util.concurrent.CompletableFuture<AiService.ChatResult> streaming =
+                java.util.concurrent.CompletableFuture.supplyAsync(() -> ai.chatStream(
+                        Map.of("sessionId", sessionId,
+                                "messages", List.of(Map.of("role", "user", "content", "模型沉默的一问"))),
+                        (type, text) -> true, events::offer));
+
+        Map<String, Object> metadata = events.poll(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertNotNull(metadata, "v1 流式也要先给 metadata，否则前端无从取消");
+        String requestId = String.valueOf(metadata.get("requestId"));
+        assertEquals(sessionId, ((Number) metadata.get("sessionId")).longValue());
+        assertEquals("prepared", metadata.get("status"));
+        assertEquals("RUNNING", jdbc.queryForObject("SELECT status FROM ai_chat_turn WHERE request_id = ?",
+                String.class, requestId));
+
+        Map<String, Object> cancelled = wiring.turnService().cancel(requestId);
+        assertEquals(true, cancelled.get("cancelSignalled"), "取消必须命中活跃句柄（关闭上游响应体）");
+
+        // 不许等满总期限：取消后读取立刻失败，读取线程退出、句柄释放
+        AiService.ChatResult result = streaming.get(15, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals("ABORTED", result.status());
+        assertEquals("ABORTED", jdbc.queryForObject("SELECT status FROM ai_chat_turn WHERE request_id = ?",
+                String.class, requestId));
+        assertFalse(wiring.handles().isActive(requestId), "句柄必须已释放，新轮次才不被 SESSION_BUSY 挡住");
+
+        // 用户紧接着再发一条：不再遇到"已有一轮正在进行"
+        server.respondNormally();
+        assertEquals("COMPLETED", ai.chat(v2("继续")).get("status"));
     }
 
     @Test
