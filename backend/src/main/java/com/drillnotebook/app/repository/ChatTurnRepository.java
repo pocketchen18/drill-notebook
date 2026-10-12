@@ -420,14 +420,22 @@ public class ChatTurnRepository {
 
     /** 幂等判定要比对的两列请求元数据（不解密）。 */
     public Optional<MetaColumns> findRequestMeta(String requestId) throws SQLException {
+        return findMeta("request_meta_cipher, request_meta_crypto", requestId);
+    }
+
+    /** 收尾落库的结果元数据（不解密）：上下文检查器与重放响应据此只读已保存的审计。 */
+    public Optional<MetaColumns> findResultMeta(String requestId) throws SQLException {
+        return findMeta("result_meta_cipher, result_meta_crypto", requestId);
+    }
+
+    private Optional<MetaColumns> findMeta(String columns, String requestId) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(
-                     "SELECT request_meta_cipher, request_meta_crypto FROM ai_chat_turn WHERE request_id = ?")) {
+                     "SELECT " + columns + " FROM ai_chat_turn WHERE request_id = ?")) {
             statement.setString(1, requestId);
             try (ResultSet result = statement.executeQuery()) {
                 if (!result.next()) return Optional.empty();
-                return Optional.of(new MetaColumns(result.getString("request_meta_cipher"),
-                        result.getString("request_meta_crypto")));
+                return Optional.of(new MetaColumns(result.getString(1), result.getString(2)));
             }
         }
     }

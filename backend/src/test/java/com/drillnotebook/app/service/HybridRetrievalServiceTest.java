@@ -526,7 +526,8 @@ class HybridRetrievalServiceTest {
                 mapper,
                 lexical,
                 wiring.turnService(),
-                wiring.cipher());
+                wiring.cipher(),
+                null);
         service.saveConfig(Map.of(
                 "provider", "custom",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort(),

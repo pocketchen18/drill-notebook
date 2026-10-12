@@ -1,9 +1,11 @@
 package com.drillnotebook.app.controller;
 
 import com.drillnotebook.app.service.AiService;
+import com.drillnotebook.app.service.ChatHistoryService;
 import com.drillnotebook.app.service.RetrievalMaintenanceService;
 import com.drillnotebook.app.service.RetrievalStatusService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/ai")
 public class AiController {
     private final AiService ai;
+    private final ChatHistoryService history;
     private final RetrievalStatusService retrievalStatus;
     private final RetrievalMaintenanceService retrievalMaintenance;
     /** SSE 流式推送专用执行器：有界固定池（命名守护线程），避免裸 new Thread 绕过监控与资源回收。 */
@@ -35,10 +38,12 @@ public class AiController {
 
     public AiController(
             AiService ai,
+            ChatHistoryService history,
             RetrievalStatusService retrievalStatus,
             RetrievalMaintenanceService retrievalMaintenance,
             ObjectMapper mapper) {
         this.ai = ai;
+        this.history = history;
         this.retrievalStatus = retrievalStatus;
         this.retrievalMaintenance = retrievalMaintenance;
         this.mapper = mapper;
@@ -80,7 +85,7 @@ public class AiController {
         return ai.chat(body);
     }
 
-    /** 流式聊天（SSE）：event=text|reasoning|done|error，data 为 JSON。 */
+    /** 流式聊天（SSE）：event=metadata|text|reasoning|done|error，data 为 JSON。 */
     @PostMapping(value = "/chat/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter chatStream(@RequestBody Map<String, Object> body) {
         var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(300_000L);
@@ -95,6 +100,15 @@ public class AiController {
                     } catch (Exception sendError) {
                         return false; // 下游断开，中止上游读取
                     }
+                }, metadata -> {
+                    try {
+                        // 首个 metadata 只是 prepared/not_sent：发送状态与最终 planId 以后端结果为准（§4.2）
+                        emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                                .name("metadata")
+                                .data(mapperValueToJson(metadata)));
+                    } catch (Exception ignored) {
+                        // 推送失败不撤销本轮：前端断了由 onDelta 的 false 负责裁决
+                    }
                 });
                 // done 必须在落库结算之后发；落库失败时如实带上 failed 与 stateDurable=false（§7.2 第 6 条）
                 java.util.Map<String, Object> donePayload = new java.util.LinkedHashMap<>();
@@ -105,6 +119,17 @@ public class AiController {
                 donePayload.put("status", result.status());
                 donePayload.put("persistenceStatus", result.persistenceStatus());
                 donePayload.put("stateDurable", result.stateDurable());
+                if (result.plan() != null) {
+                    // v2 的引用/预算/记忆摘要都取自同一个计划，不再另算一套（§9.2）
+                    donePayload.put("citations", result.plan().citations());
+                    donePayload.put("memoryContext", result.plan().memoryContext());
+                    donePayload.put("contextUsage", result.plan().contextUsage());
+                    donePayload.put("contextAudit", Map.of("schemaVersion", 1, "planId", result.plan().planId(),
+                            "available", true));
+                }
+                if (result.usage() != null) {
+                    donePayload.put("usage", usageView(result.usage()));
+                }
                 emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
                         .name("done")
                         .data(mapperValueToJson(donePayload)));
@@ -121,6 +146,16 @@ public class AiController {
             }
         });
         return emitter;
+    }
+
+    private static Map<String, Object> usageView(com.drillnotebook.app.service.AiUpstreamClient.Usage usage) {
+        Map<String, Object> view = new java.util.LinkedHashMap<>();
+        view.put("source", usage.source());
+        view.put("inputTokens", usage.inputTokens());
+        view.put("outputTokens", usage.outputTokens());
+        view.put("cacheReadTokens", usage.cacheReadTokens());
+        view.put("cacheWriteTokens", usage.cacheWriteTokens());
+        return view;
     }
 
     private String mapperValueToJson(Map<String, Object> value) {
@@ -176,6 +211,18 @@ public class AiController {
     @GetMapping("/sessions/{id}/messages")
     public List<Map<String, Object>> sessionMessages(@PathVariable long id, @RequestParam(required = false) String masterPassword) {
         return ai.sessionMessages(id, masterPassword == null ? "" : masterPassword);
+    }
+
+    /**
+     * 只读历史分页（contracts §3）：按稳定 message ID seek，主密码只从进程内的会话解锁状态取，
+     * 不接受 query 里传密码——旧 {@code /messages} 入口仅保留给旧客户端。
+     */
+    @GetMapping("/sessions/{id}/history")
+    public Map<String, Object> sessionHistory(@PathVariable long id,
+                                              @RequestParam(required = false) Long beforeMessageId,
+                                              @RequestParam(required = false) Long afterMessageId,
+                                              @RequestParam(defaultValue = "50") int limit) throws SQLException {
+        return history.page(id, beforeMessageId, afterMessageId, limit);
     }
 
     @GetMapping("/sessions/{id}/export")

@@ -254,7 +254,9 @@ class AiServiceChatRetrievalTest {
                 new ObjectMapper(),
                 retrievalService,
                 wiring.turnService(),
-                wiring.cipher());
+                wiring.cipher(),
+                // v1 检索路径不该碰到上下文栈，传 null 让越界调用直接暴露
+                null);
     }
 
     @SuppressWarnings("unchecked")

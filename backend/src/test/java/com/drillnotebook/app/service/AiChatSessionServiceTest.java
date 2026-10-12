@@ -32,7 +32,7 @@ class AiChatSessionServiceTest {
         RetrievalService retrieval = new RetrievalService(
                 new RetrievalIndexRepository(jdbc), new NotebookRepository(jdbc, mapper));
         AiService service = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), mapper, retrieval,
-                wiring.turnService(), wiring.cipher());
+                wiring.turnService(), wiring.cipher(), null);
 
         service.saveConfig(Map.of(
                 "provider", "mock",

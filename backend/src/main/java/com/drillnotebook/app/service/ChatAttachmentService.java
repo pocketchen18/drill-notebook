@@ -27,8 +27,24 @@ public class ChatAttachmentService {
     private static final int MAX_CLIENT_ID_CODEPOINTS = 64;
     private static final int MAX_NAME_CODEPOINTS = 255;
 
-    /** 本轮附件的产出：落库材料，以及 {@code request_meta} 里按请求顺序排的块身份。 */
-    public record Prepared(List<AttachmentPayload> payloads, List<Map<String, Object>> blocks) {
+    /** 本轮附件的产出：落库材料、{@code request_meta} 里按请求顺序排的块身份，以及给组装器用的明文形态。 */
+    public record Prepared(List<AttachmentPayload> payloads, List<Map<String, Object>> blocks,
+                           List<Sourced> sourced) {
+        /** 不带组装视图的旧形态：只落库的调用方用它。 */
+        public Prepared(List<AttachmentPayload> payloads, List<Map<String, Object>> blocks) {
+            this(payloads, blocks, List.of());
+        }
+    }
+
+    /**
+     * 已校验、已封装但仍在内存里的本轮附件：组装器要的正是"这一份"，
+     * 让它回表再解密一次既慢又可能和请求指纹不一致（§4.3 当前轮次全部提供）。
+     */
+    public record Sourced(String attachmentId, String blockId, String kind, String name, String mimeType,
+                          String text, String base64) {
+        public boolean image() {
+            return "image".equals(kind);
+        }
     }
 
     private final ChatAttachmentCipher cipher;
@@ -62,6 +78,7 @@ public class ChatAttachmentService {
         }
         List<AttachmentPayload> payloads = new ArrayList<>();
         List<Map<String, Object>> blocks = new ArrayList<>();
+        List<Sourced> sourced = new ArrayList<>();
         long imageBytesTotal = 0;
         long textCodePoints = 0;
 
@@ -118,6 +135,9 @@ public class ChatAttachmentService {
             ChatAttachmentCipher.Sealed sealed = cipher.seal(key, requestId, attachmentId, blockId, plain);
             payloads.add(new AttachmentPayload(attachmentId, blockId, "image".equals(kind) ? "IMAGE" : "TEXT",
                     sealed.payloadCipher(), sealed.cryptoMeta()));
+            sourced.add(new Sourced(attachmentId, blockId, kind, name, mime,
+                    String.valueOf(envelope.getOrDefault("text", "")),
+                    String.valueOf(envelope.getOrDefault("data", ""))));
             Map<String, Object> block = new LinkedHashMap<>();
             block.put("blockId", blockId);
             // 契约用 origin 表达来源通道；附件永远拿不到 USER_AUTHORED（§4.3）
@@ -128,7 +148,7 @@ public class ChatAttachmentService {
             block.put("digest", digest);
             blocks.add(block);
         }
-        return new Prepared(payloads, blocks);
+        return new Prepared(payloads, blocks, sourced);
     }
 
     /**

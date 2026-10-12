@@ -22,9 +22,13 @@ public class UsageRepository {
     public static final String PURPOSE_CHAT = "CHAT";
     private static final List<String> OPEN_STATES = List.of("RESERVED", "SENT");
 
-    /** 一次外发的身份与预留；{@code reservedTokens=0} 表示只计量、不占额度（聊天就是这种）。 */
+    /**
+     * 一次外发的身份与预留；{@code reservedTokens=0} 表示只计量、不占额度（聊天就是这种）。
+     * {@code contextPlanId} 把 attempt 绑到实际发出的那份上下文计划（contracts §4.5）。
+     */
     public record Attempt(String id, String operationId, String purpose, String targetFingerprint,
-                          String budgetDate, String budgetTimezone, int reservedTokens, String createdAt) {
+                          String budgetDate, String budgetTimezone, int reservedTokens, String createdAt,
+                          String contextPlanId) {
     }
 
     /** 厂商回的实际用量；没有数字就是 unknown，绝不拿估算冒充当过的钱。 */
@@ -74,8 +78,8 @@ public class UsageRepository {
         return immediate.execute(connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO ai_usage_attempt(id, operation_id, purpose, target_fingerprint, budget_date,
-                        budget_timezone, reserved_tokens, usage_source, state, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 'RESERVED', ?)
+                        budget_timezone, reserved_tokens, usage_source, state, created_at, context_plan_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 'RESERVED', ?, ?)
                     ON CONFLICT(id) DO NOTHING
                     """)) {
                 statement.setString(1, attempt.id());
@@ -86,6 +90,7 @@ public class UsageRepository {
                 statement.setString(6, attempt.budgetTimezone());
                 statement.setInt(7, attempt.reservedTokens());
                 statement.setString(8, attempt.createdAt());
+                statement.setString(9, attempt.contextPlanId());
                 if (statement.executeUpdate() == 0) return false;
             }
             bumpDaily(connection, attempt.budgetDate(), attempt.budgetTimezone(), attempt.targetFingerprint(),
