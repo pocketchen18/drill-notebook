@@ -25,6 +25,7 @@ import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
@@ -86,6 +87,7 @@ class ChatContextServiceTest {
         enableUseConsent();
         assertEquals(201, items.add(new MemoryItemService.AddInput("GOAL", "GLOBAL", 0L, "考试安排", null, GOAL,
                 null, false, op("add"))).status(), "手动录入应落成为活跃事实");
+        indexReady();
 
         ChatContextPlan provided = plan("内存管理考试怎么复习", Map.of("use", true));
         assertEquals(1, regionCount(provided, ContextAudit.Region.MEMORY), "相关且已授权才注入（M05）");
@@ -118,6 +120,7 @@ class ChatContextServiceTest {
         wiring.metadata().changeScope(sessionId, "NOTEBOOK", 8L, completeTurn("定作用域", "回答", null).turnId());
         assertEquals(201, items.add(new MemoryItemService.AddInput("GOAL", "NOTEBOOK", 8L, "考试安排", null, GOAL,
                 null, false, op("add-notebook"))).status());
+        indexReady();
 
         ChatContextPlan own = plan("内存管理考试怎么复习", Map.of("use", true));
         assertEquals(1, regionCount(own, ContextAudit.Region.MEMORY), "NOTEBOOK 作用域读自身与全局");
@@ -277,6 +280,15 @@ class ChatContextServiceTest {
         assertEquals(201, created.status(), String.valueOf(created.body()));
         assertEquals(200, stack.vault().unlock(PASSWORD, List.of(new MemoryVaultService.SessionUnlock(sessionId,
                 PASSWORD))).status(), String.valueOf(stack.vault().status().body()));
+    }
+
+    /**
+     * 解锁后同步建一份检索快照（§9.1-1 的构建实现，只是不走后台线程）：
+     * P5 的读路径只查内存快照，测试等异步线程只会把断言变成轮询。
+     */
+    private void indexReady() throws SQLException {
+        var envelope = wiring.memory().readEnvelope().orElseThrow();
+        stack.indexes().buildNow(envelope.vaultId(), envelope.epoch(), envelope.revision());
     }
 
     /** 打开长期记忆开关并给 MEMORY_USE 授权：注入资格靠这两样，缺一个都不给。 */

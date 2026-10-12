@@ -271,6 +271,8 @@ class ChatUpstreamDispatchTest {
                 wiring.immediate()), wiring.metadata());
         assertEquals(201, items.add(new MemoryItemService.AddInput("GOAL", "NOTEBOOK", 7L, "考试安排", null,
                 "本周准备操作系统考试", null, false, "op-scope-add")).status());
+        var envelope = wiring.memory().readEnvelope().orElseThrow();
+        stack.indexes().buildNow(envelope.vaultId(), envelope.epoch(), envelope.revision());
 
         Map<String, Object> body = new java.util.LinkedHashMap<>(v2("操作系统考试怎么复习"));
         body.put("memoryOptions", Map.of("use", true));

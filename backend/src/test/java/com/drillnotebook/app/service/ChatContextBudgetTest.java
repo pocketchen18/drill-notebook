@@ -123,6 +123,25 @@ class ChatContextBudgetTest {
     }
 
     @Test
+    void aTooLongTopRankedFactDoesNotEvictTheOnesBehindIt() {
+        // P4 交接 C 项复核：排序质量上来后，"第一个装不下就整段停"会让一条超长的高分事实吃掉后面所有名额
+        List<ContextMemorySource.Fact> facts = List.of(
+                fact("m1", pad("最相关但超长 ", 400)),
+                fact("m2", "次相关的短事实"),
+                fact("m3", "第三相关的短事实"));
+        ChatContextPlan plan = fit(projection(List.of()), USER_TEXT,
+                new ContextMemorySource.Selection(facts, List.of(), 3, false), List.of(), Map.of(), List.of(), true,
+                32000, true);
+
+        assertEquals(2, regionItemCount(plan, ContextAudit.Region.MEMORY), "超长的跳过，后面的照常进（§9.1-5 的名次仍保留）");
+        assertTrue(hasOmission(plan, ContextAudit.Omission.BUDGET, "MEMORY"), "跳过的那条要如实记进省略");
+        String data = dataBlock(plan);
+        assertFalse(data.contains("最相关但超长"), "超长的确没进上下文");
+        assertTrue(data.contains("次相关的短事实") && data.contains("第三相关的短事实"), data);
+        assertTrue(data.indexOf("次相关的短事实") < data.indexOf("第三相关的短事实"), "名次顺序不能被装箱打乱");
+    }
+
+    @Test
     void refusesWhenTheWindowLeavesNoRoomForReserveAndMargin() {
         List<ConversationProjection.Item> candidates = List.of(turn(1, pad("问题一 ", 600), pad("回答一 ", 600)),
                 turn(2, pad("问题二 ", 600), pad("回答二 ", 600)), turn(3, pad("问题三 ", 600), pad("回答三 ", 600)));
@@ -308,7 +327,8 @@ class ChatContextBudgetTest {
                 new ContextMemorySource.Selection(facts, List.of(), 5, true), List.of(), Map.of(), List.of(),
                 true, 32000, true);
         assertEquals(0, regionItemCount(degraded, ContextAudit.Region.MEMORY));
-        assertTrue(degraded.notices().contains("MEMORY_UNAVAILABLE"), "超时按无记忆降级，不影响本轮聊天（§9.1-7）");
+        assertTrue(degraded.notices().contains("MEMORY_LOOKUP_TIMEOUT"),
+                "超时按无记忆降级，不影响本轮聊天（§9.1-7）");
 
         List<ContextMemorySource.Fact> many = new ArrayList<>();
         for (int index = 1; index <= 6; index++) {

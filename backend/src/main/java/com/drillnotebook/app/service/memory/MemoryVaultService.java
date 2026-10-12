@@ -66,6 +66,7 @@ public class MemoryVaultService {
     private volatile long lastUsedNanos;
     private final Map<Long, String> sessionMaterials = new ConcurrentHashMap<>();
     private final List<Runnable> lockHooks = new CopyOnWriteArrayList<>();
+    private final List<Runnable> unlockHooks = new CopyOnWriteArrayList<>();
 
     public MemoryVaultService(MemoryCryptoService crypto, MemoryRepository memory,
                               MemoryOperationRepository operations, ChatSessionMetadataRepository sessions) {
@@ -318,6 +319,14 @@ public class MemoryVaultService {
         lockHooks.add(hook);
     }
 
+    /**
+     * 拿到钥匙后的联动预热入口（§9.1-1：解锁后就该重建内存检索快照，而不是等第一条聊天）。
+     * 钩子必须自己保证不阻塞——它在解锁请求线程里跑，只做提交后台任务这一类工作。
+     */
+    public void onUnlock(Runnable hook) {
+        unlockHooks.add(hook);
+    }
+
     /** 定时 tick：闲置超时自动锁定（生产 60 秒一跳；测试用合成时间直接调 {@link #lockIfIdle(long)}）。 */
     @Scheduled(fixedDelay = 60_000, initialDelay = 60_000)
     public void lockIfIdle() {
@@ -334,12 +343,29 @@ public class MemoryVaultService {
 
     // ---- 内部 ----
 
-    private synchronized void publishKey(MemoryKey key) {
+    /** 换入新钥匙（旧钥匙立即作废），然后在监视器外通知预热钩子。 */
+    private void publishKey(MemoryKey key) {
+        swapKey(key);
+        notifyUnlocked();
+    }
+
+    private synchronized void swapKey(MemoryKey key) {
         MemoryKey previous = unlocked;
         unlocked = key;
         lastUsedNanos = System.nanoTime();
         if (previous != null) {
             previous.erase();
+        }
+    }
+
+    /** 预热钩子在监视器外跑：一个慢钩子不该把 {@code requireKey()} 一起锁住。 */
+    private void notifyUnlocked() {
+        for (Runnable hook : unlockHooks) {
+            try {
+                hook.run();
+            } catch (RuntimeException error) {
+                log.warn("解锁联动预热失败: {}", error.getClass().getSimpleName());
+            }
         }
     }
 

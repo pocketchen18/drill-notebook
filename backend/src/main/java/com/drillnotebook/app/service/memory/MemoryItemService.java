@@ -147,7 +147,7 @@ public class MemoryItemService {
             }
             Map<String, Object> body = itemBody(key, memory.findCurrent(key.vaultId(), added.memoryId()).orElseThrow(),
                     false);
-            recordSuccess(dedupeId, body);
+            recordSuccess(dedupeId, ledgerBody(body));
             log.info("手动新增记忆: memoryId={}, version={}", added.memoryId(), added.version());
             return MemoryApiResult.of(201, body);
         } catch (MemoryCryptoException | SQLException error) {
@@ -632,6 +632,19 @@ public class MemoryItemService {
         } catch (Exception error) {
             return Map.of();
         }
+    }
+
+    /**
+     * 幂等台账（{@code ai_memory_operation.result_meta}）只存元信息：这一列是明文 TEXT，
+     * 把 predicate/value 写进去等于绕过了整层加密（S12）。重放要的只是"这条操作当初成功了、 id 是这个"，
+     * 正文由调用方按 memoryId+version 重新解密读取。
+     */
+    private static Map<String, Object> ledgerBody(Map<String, Object> body) {
+        Map<String, Object> meta = new LinkedHashMap<>(body);
+        meta.remove("predicate");
+        meta.remove("value");
+        meta.remove("sources");
+        return meta;
     }
 
     private void recordSuccess(String operationId, Map<String, Object> body) throws SQLException {

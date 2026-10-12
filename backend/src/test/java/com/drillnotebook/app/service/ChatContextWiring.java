@@ -6,10 +6,12 @@ import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryOperationRepository;
 import com.drillnotebook.app.repository.MemorySettingsRepository;
+import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.RetrievalIndexRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.memory.MemoryCryptoService;
+import com.drillnotebook.app.service.memory.MemoryIndexService;
 import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,10 +29,10 @@ public final class ChatContextWiring {
     /** 一套可直接喂给 {@code new AiService(...)} 的上下文服务与只读入口。 */
     public record Stack(ChatContextService contexts, ChatHistoryService history, ContextInspector inspector,
                         TokenEstimator estimator, ConversationProjection projection,
-                        ChatContextAssembler assembler, ContextBudgeter budgeter, ManualMemorySource memories,
-                        MemoryCryptoService crypto, MemoryVaultService vault, MemoryPolicyService policy,
-                        ChatHistoryRepository historyRepo, SessionContextRepository checkpoints,
-                        ChatAttachmentReader attachmentReader) {
+                        ChatContextAssembler assembler, ContextBudgeter budgeter, IndexedMemorySource memories,
+                        MemoryIndexService indexes, MemoryCryptoService crypto, MemoryVaultService vault,
+                        MemoryPolicyService policy, ChatHistoryRepository historyRepo,
+                        SessionContextRepository checkpoints, ChatAttachmentReader attachmentReader) {
     }
 
     public static Stack wire(DataSource dataSource, JdbcTemplate jdbc, ChatLegacyWiring.Wiring wiring) {
@@ -51,7 +53,9 @@ public final class ChatContextWiring {
                 wiring.cipher(), wiring.memory(), crypto, vault, policy, estimator, mapper);
         ChatContextAssembler assembler = new ChatContextAssembler(estimator, attachmentReader);
         ContextBudgeter budgeter = new ContextBudgeter(estimator, mapper);
-        ManualMemorySource memories = new ManualMemorySource(wiring.memory(), vault, crypto, mapper);
+        MemorySuppressionRepository suppressions = new MemorySuppressionRepository(dataSource, wiring.immediate());
+        MemoryIndexService indexes = new MemoryIndexService(wiring.memory(), vault, crypto, suppressions, mapper);
+        IndexedMemorySource memories = new IndexedMemorySource(indexes, wiring.memory());
         ChatContextService contexts = new ChatContextService(projection, assembler, budgeter, memories,
                 wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo);
         ChatHistoryService history = new ChatHistoryService(historyRepo, wiring.metadata(), wiring.cipher(), vault);
@@ -59,6 +63,6 @@ public final class ChatContextWiring {
                 wiring.cipher(), attachmentReader, wiring.memory(), crypto, vault, checkpoints,
                 new RetrievalIndexRepository(jdbc), mapper);
         return new Stack(contexts, history, inspector, estimator, projection, assembler, budgeter, memories,
-                crypto, vault, policy, historyRepo, checkpoints, attachmentReader);
+                indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader);
     }
 }

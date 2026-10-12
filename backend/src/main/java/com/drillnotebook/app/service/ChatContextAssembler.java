@@ -142,8 +142,16 @@ public class ChatContextAssembler {
             return List.of();
         }
         if (selection.degradedByDeadline()) {
-            notices.add("MEMORY_UNAVAILABLE");
-            audit.omit(ContextAudit.Omission.LOCKED, "MEMORY", 1);
+            notices.add("MEMORY_LOOKUP_TIMEOUT");
+            audit.omit(ContextAudit.Omission.OUTSIDE_SCAN_WINDOW, "MEMORY", null);
+            return List.of();
+        }
+        if (selection.availability() != ContextMemorySource.Availability.READY) {
+            // §9.1-1"未就绪时本轮不使用记忆并给出状态"：状态进 notice，数量进审计，都不带正文
+            notices.add(selection.availability() == ContextMemorySource.Availability.BUILDING
+                    ? "MEMORY_INDEX_BUILDING" : "MEMORY_LOCKED");
+            audit.omit(selection.availability() == ContextMemorySource.Availability.BUILDING
+                    ? ContextAudit.Omission.OUTSIDE_SCAN_WINDOW : ContextAudit.Omission.LOCKED, "MEMORY", null);
             return List.of();
         }
         List<Item> items = new ArrayList<>();
@@ -153,17 +161,21 @@ public class ChatContextAssembler {
         for (ContextMemorySource.Fact fact : selection.style()) {
             items.add(memoryItem(fact));
         }
-        int kept = 0;
         int tokens = 0;
+        int omitted = 0;
         List<Item> bounded = new ArrayList<>();
+        // P5 复核（交接 C 项）：排序质量上来之后，按名次截断会让一条超长的高分事实把后面几条全都挤掉。
+        // 这里改成"装得下就留、装不下就跳过并如实记省略"，名次顺序仍然保持不变。
         for (Item item : items) {
             if (tokens + item.estimatedTokens() > MEMORY_BUDGET) {
-                audit.omit(ContextAudit.Omission.BUDGET, "MEMORY", items.size() - kept);
-                break;
+                omitted++;
+                continue;
             }
             bounded.add(item);
             tokens += item.estimatedTokens();
-            kept++;
+        }
+        if (omitted > 0) {
+            audit.omit(ContextAudit.Omission.BUDGET, "MEMORY", omitted);
         }
         return List.copyOf(bounded);
     }

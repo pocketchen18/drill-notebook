@@ -28,12 +28,38 @@ public interface ContextMemorySource {
     }
 
     /** 选择结果：入选事实 + 诊断（看了多少候选、是否因超时降级）。 */
-    record Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline) {
-        public static final Selection EMPTY = new Selection(List.of(), List.of(), 0, false);
+    record Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline,
+                     Availability availability) {
+        public static final Selection EMPTY = new Selection(List.of(), List.of(), 0, false, Availability.READY);
 
         public Selection {
             topical = topical == null ? List.of() : List.copyOf(topical);
             style = style == null ? List.of() : List.copyOf(style);
+            availability = availability == null ? Availability.READY : availability;
         }
+
+        /** P4 时期的四参数构造保持可用：没有快照概念的调用方默认"记忆区可用"。 */
+        public Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline) {
+            this(topical, style, candidatesSeen, degradedByDeadline, Availability.READY);
+        }
+
+        public static Selection unavailable(Availability availability) {
+            return new Selection(List.of(), List.of(), 0, availability == Availability.TIMEOUT, availability);
+        }
+    }
+
+    /**
+     * 记忆区本轮到底为什么是空的（§9.1-1"给出状态"）：
+     * 光看"没有记忆"分不出是锁着、快照还在建、还是没有相关候选，而客户端必须能说清。
+     */
+    enum Availability {
+        /** 快照就绪：空列表就是"没有相关事实"（§9.1-6）。 */
+        READY,
+        /** 解锁后快照还没建好或已过期正在重建：本轮不使用记忆。 */
+        BUILDING,
+        /** 记忆库未解锁或没有库。 */
+        LOCKED,
+        /** 检索超过总时限：本轮不使用记忆（§9.1-7）。 */
+        TIMEOUT
     }
 }
