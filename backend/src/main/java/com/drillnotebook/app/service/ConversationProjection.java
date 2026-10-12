@@ -403,6 +403,11 @@ public class ConversationProjection {
         if (parsed == null) {
             return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, 1);
         }
+        if (overrunsCheckedBound(parsed.ranges(), checkpoint.throughTurnId())) {
+            // coverage 声称覆盖到"已检查上界"之后：越界部分没被这份摘要整理过，一旦采用，
+            // 读侧会把那些轮次当"已被替代"而静默丢掉原文。整份拒收，宁可当没有摘要（§2.5）
+            return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, 1);
+        }
         if (parsed.ranges().size() > MAX_COVERAGE_RANGES) {
             // 段数爆表：旧检查点失效，只当"没摘要"用当前窗口重建（§2.5）
             return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, parsed.ranges().size());
@@ -462,6 +467,14 @@ public class ConversationProjection {
             expected = range.lastTurnId() + 1;
         }
         return expected > throughTurnId;
+    }
+
+    /** 任何一段 coverage 越过检查点自己声明的 through_turn_id 都算越界：那是没检查过的轮次。 */
+    private static boolean overrunsCheckedBound(List<ContextAudit.CoverageRange> ranges, long throughTurnId) {
+        for (ContextAudit.CoverageRange range : ranges) {
+            if (range.lastTurnId() > throughTurnId) return true;
+        }
+        return false;
     }
 
     private static boolean isCovered(ContextAudit.Summary summary, long turnId) {

@@ -31,7 +31,7 @@ class UpstreamFixtureServer implements Closeable {
     private final AtomicBoolean bodyWriteFailed = new AtomicBoolean();
     private volatile Mode mode = Mode.NORMAL;
 
-    private enum Mode { NORMAL, HANG_AFTER_FIRST_DELTA, HANG_SILENTLY }
+    private enum Mode { NORMAL, HANG_AFTER_FIRST_DELTA, HANG_SILENTLY, REASONING_ONLY }
 
     UpstreamFixtureServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -64,6 +64,11 @@ class UpstreamFixtureServer implements Closeable {
         mode = Mode.NORMAL;
     }
 
+    /** 下一次响应只回思考链、没有正文（模型只思考不回答）：走 finalize 成 FAILED 的那条链。 */
+    void respondReasoningOnly() {
+        mode = Mode.REASONING_ONLY;
+    }
+
     /** 客户端关闭之后，服务端往响应体里写会不会失败（证明连接真的被关掉）。 */
     boolean bodyWriteFailed() {
         return bodyWriteFailed.get();
@@ -76,6 +81,17 @@ class UpstreamFixtureServer implements Closeable {
     private void handle(HttpExchange exchange) throws IOException {
         try (InputStream in = exchange.getRequestBody()) {
             bodies.add(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        if (mode == Mode.REASONING_ONLY) {
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            byte[] payload = ("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"我在想要不要回答\"}}]}\n\n"
+                    + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                    + "data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, payload.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(payload);
+            }
+            return;
         }
         if (mode == Mode.HANG_SILENTLY) {
             exchange.getResponseHeaders().set("Content-Type", "text/event-stream");

@@ -120,4 +120,72 @@ describe('AiAssistant 流式会话状态', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument());
     expect(messageNodes().some((node) => node.textContent?.includes('第二问'))).toBe(false);
   });
+
+  it('已有部分正文后收到 error：绝不自动回退重发，保留已生成内容', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '第一问', createdAt: '2026-10-12T12:00:00.000Z' }];
+    renderAssistant();
+    await screen.findByText('第一问');
+
+    await send('第二问');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-11' }));
+    act(() => streamCallbacks!.onText('已经生成的半句'));
+    act(() => streamCallbacks!.onError('AI 响应读取失败：连接被重置'));
+
+    // 轮次已经真正开始：不得再发第二个请求（重复生成/计费）
+    expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
+    expect(await screen.findByText('已经生成的半句')).toBeInTheDocument();
+    expect(screen.getByText('第二问')).toBeInTheDocument();
+    expect(document.querySelector('.chat-stream-cursor')).toBeNull();
+    expect(await screen.findByText('AI 响应读取失败：连接被重置')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument());
+  });
+
+  it('只有 reasoning 后收到 error（finalize 后失败）：同样不自动回退', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '第一问', createdAt: '2026-10-12T12:00:00.000Z' }];
+    renderAssistant();
+    await screen.findByText('第一问');
+
+    await send('第二问');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-12' }));
+    act(() => streamCallbacks!.onReasoning('先在草稿里想了几步'));
+    act(() => streamCallbacks!.onError('AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）'));
+
+    expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
+    expect(await screen.findByText('先在草稿里想了几步')).toBeInTheDocument();
+    expect(screen.getByText('第二问')).toBeInTheDocument();
+  });
+
+  it('拿到 metadata 但零输出后收到 error：不自动回退，只提示并保留用户消息', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '第一问', createdAt: '2026-10-12T12:00:00.000Z' }];
+    renderAssistant();
+    await screen.findByText('第一问');
+
+    await send('第二问');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-13' }));
+    act(() => streamCallbacks!.onError('AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）'));
+
+    expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
+    expect(screen.getByText('第二问')).toBeInTheDocument();
+    expect(screen.queryByText('插入笔记')).toBeNull();
+  });
+
+  it('早期失败（没有任何 metadata 与增量）：仍回退非流式重发一次', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '第一问', createdAt: '2026-10-12T12:00:00.000Z' }];
+    apiPost.mockImplementation((url: string) => (url === '/api/ai/chat'
+      ? Promise.resolve({ reply: 'ANSWER', sessionId: 10 })
+      : Promise.resolve({})));
+    renderAssistant();
+    await screen.findByText('第一问');
+
+    await send('第二问');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    act(() => streamCallbacks!.onError('请求失败（404）'));
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/chat', expect.anything()));
+    expect(await screen.findByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('第二问')).toBeInTheDocument();
+  });
 });

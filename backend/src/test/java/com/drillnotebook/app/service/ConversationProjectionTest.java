@@ -161,6 +161,28 @@ class ConversationProjectionTest {
     }
 
     @Test
+    void coverageThatOverrunsTheCheckedBoundInvalidatesTheWholeCheckpoint() throws Exception {
+        seedTurns(12);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        // 检查点自己声明只检查到 turn 8，coverage 却铺到 12：越界部分从没被这份摘要整理过，
+        // 若采用，读侧会把 9–12 当"已被替代"静默丢掉原文。整份拒收，宁可当没有摘要（§2.5）
+        checkpoint(1L, 8L, 1L, List.of(new long[]{1, 4}, new long[]{5, 12}));
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-overrun", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary(), "越界 coverage 的检查点整份不可用，不能按越界范围替历史");
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+        assertTrue(result.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
+        assertEquals(12, result.candidates().size(), "越界范围内的原文必须全部回来");
+        assertEquals(0, result.coveredCandidates().size());
+        assertEquals(1L, result.observedSummaryRevision(), "观测版本照记：复核仍能发现检查点被替换");
+    }
+
+    @Test
     void withoutSummaryAuthorizationTheCheckpointIsNotEvenRead() throws Exception {
         seedTurns(6);
         long current = insertRunningTurn();

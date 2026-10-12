@@ -198,6 +198,32 @@ class ChatUpstreamDispatchTest {
         assertEquals("COMPLETED", ai.chat(v2("继续")).get("status"));
     }
 
+    /**
+     * 模型只回思考链：轮次先落 FAILED 终态（句柄与预留都已结算），随后才以异常上报（SSE error 事件）。
+     * 前端的新守卫依赖这个前提：拿到 metadata 后出错不再自动重发第二个请求，避免重复外发与重复计费。
+     */
+    @Test
+    void reasoningOnlyStreamIsFailedAndReportedOnlyAfterTheTurnIsFinalized() throws Exception {
+        server.respondReasoningOnly();
+        Map<String, Object> body = Map.of("sessionId", sessionId,
+                "messages", List.of(Map.of("role", "user", "content", "只思考不回答")));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> ai.chatStream(body, (type, text) -> true));
+        assertTrue(error.getMessage().contains("思考过程"), error.getMessage());
+
+        assertEquals("FAILED", jdbc.queryForObject(
+                "SELECT status FROM ai_chat_turn ORDER BY id DESC LIMIT 1", String.class),
+                "错误上报之前轮次已经收成终态，不是留在 RUNNING 等重试");
+        assertEquals(0, wiring.handles().size(), "finalize 已释放句柄，后续消息不会被 SESSION_BUSY 挡住");
+        assertEquals(0, jdbc.queryForObject("SELECT reserved_history_bytes FROM ai_chat_storage WHERE id = 1",
+                Long.class).longValue(), "预留随终态结算");
+
+        // 客户端不重发；用户手动重试时新的一轮可以立即开始
+        server.respondNormally();
+        assertEquals("COMPLETED", ai.chat(v2("手动重试")).get("status"));
+    }
+
     @Test
     void storedSummaryPreviewUsesTheCheckpointVersionRecordedWhenSent() throws Exception {
         ai.chat(v2("先正常聊一轮"));

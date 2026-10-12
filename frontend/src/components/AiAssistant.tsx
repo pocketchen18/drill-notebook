@@ -538,6 +538,9 @@ export function AiAssistant(): JSX.Element {
     let aborted = false;
     // 本轮的服务端 requestId（metadata 事件带回）：停止时要靠它调用取消接口。
     let streamingRequestId: string | null = null;
+    // 本轮是否已有增量落地。一旦拿到 metadata 或任何 text/reasoning，这一轮就可能已经外发/计费，
+    // 出错后绝不能自动重发第二个请求（execution §7.3：已收到输出后绝不自动回退）。
+    let sawDelta = false;
     const finishStream = (): void => {
       // 任何出口都要：清状态 + 清 abort 句柄，避免 onError/重复 done 再次进入分支造成重复占位。
       setStreaming(false);
@@ -589,10 +592,12 @@ export function AiAssistant(): JSX.Element {
     void streamChat('/api/ai/chat/stream', payload, {
       onText: (delta) => {
         if (aborted) return;
+        sawDelta = true;
         patchSessionMessage((prev: ChatMessage) => ({ ...prev, content: String(prev.content) + delta }));
       },
       onReasoning: (delta) => {
         if (aborted) return;
+        sawDelta = true;
         patchSessionMessage((prev: ChatMessage) => ({ ...prev, reasoning: (prev.reasoning ?? '') + delta }));
       },
       onMetadata: ({ requestId }) => {
@@ -617,7 +622,29 @@ export function AiAssistant(): JSX.Element {
         if (aborted) return;
         aborted = true;
         finishStream();
-        // 流式失败（未配置/后端不支持等）：移除占位与刚插入的 user 消息，回退非流式重发一次。
+        if (streamingRequestId !== null || sawDelta) {
+          // 轮次已经真正开始（后端已登记，可能已外发/计费，甚至已落库终态）：绝不自动重发第二个请求。
+          // 保留已累积的正文与思考链，把服务端错误如实提示给用户（execution §7.3、§7.2 第 6 条）。
+          setMessages((current) => {
+            if (sessionId !== streamingSessionId) return current;
+            const next = [...current];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant' && last.streaming) {
+              const text = typeof last.content === 'string' ? last.content : '';
+              const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
+              if (text.trim() || reasoning.trim()) {
+                next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
+              } else {
+                next.pop();
+              }
+            }
+            return next;
+          });
+          Message.error(streamError || '生成中断，请重试');
+          return;
+        }
+        // 早期失败（后端还没开始这一轮，如不支持流式/请求未被接受）：移除占位与刚插入的 user 消息，
+        // 回退非流式重发一次。
         setMessages((current) => {
           if (sessionId !== streamingSessionId) return current;
           const next = [...current];
