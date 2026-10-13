@@ -44,13 +44,18 @@ public class ChatHistoryRepository {
                              String turnRole, String turnStatus, boolean contentDeleted, boolean legacy) {
     }
 
-    private static final String TURN_COLUMNS = "SELECT t.id, t.request_id, t.status, t.context_generation,"
+    private static final String TURN_SELECT = "SELECT t.id, t.request_id, t.status, t.context_generation,"
             + " t.content_deleted_at, t.started_at, t.finished_at,"
             + " u.id AS u_id, u.content AS u_content, u.content_cipher AS u_cipher, u.content_meta AS u_meta,"
-            + " a.id AS a_id, a.content AS a_content, a.content_cipher AS a_cipher, a.content_meta AS a_meta"
-            + " FROM ai_chat_turn t"
+            + " a.id AS a_id, a.content AS a_content, a.content_cipher AS a_cipher, a.content_meta AS a_meta";
+    /** 轮次与成对消息的 FROM：拆出来是因为维护扫描要多取两列身份，不能把列名拼到 FROM 之后。 */
+    private static final String TURN_FROM = " FROM ai_chat_turn t"
             + " LEFT JOIN ai_chat_message u ON u.id = t.user_message_id"
             + " LEFT JOIN ai_chat_message a ON a.id = t.assistant_message_id";
+    private static final String TURN_COLUMNS = TURN_SELECT + TURN_FROM;
+    /** 维护扫描额外看的两列：{@code source_revision} 是批次身份的一部分，{@code memory_eligible} 决定能否当来源。 */
+    private static final String MAINTENANCE_SELECT = TURN_SELECT
+            + ", t.source_revision, t.memory_eligible" + TURN_FROM;
 
     private final DataSource dataSource;
 
@@ -77,6 +82,191 @@ public class ChatHistoryRepository {
                             result.getString("u_meta"), nullableLong(result, "a_id"),
                             result.getString("a_content"), result.getString("a_cipher"),
                             result.getString("a_meta")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /**
+     * 维护扫描的一行：轮次身份、来源版本与正文列（不解密）。
+     * 与 {@link TurnHistory} 分开，是因为后台装载必须额外看到 {@code source_revision}
+     * 与 {@code memory_eligible}——前者是批次身份的一部分，后者决定这一轮能不能当来源。
+     */
+    public record MaintenanceRow(long turnId, String requestId, String status, long contextGeneration,
+                                 long sourceRevision, boolean memoryEligible, String contentDeletedAt,
+                                 String startedAt, String finishedAt, Long userMessageId, String userContent,
+                                 String userContentCipher, String userContentMeta, Long assistantMessageId,
+                                 String assistantContent, String assistantContentCipher, String assistantContentMeta) {
+    }
+
+    /** 待处理边界：区间内合格完整轮次的数量。 */
+    public record MaintenanceBacklog(int eligibleTurns) {
+    }
+
+    /**
+     * 按 ID <b>升序</b>取 {@code (afterTurnId, throughTurnId]} 区间的一批行（§2.5 的有界正序扫描）。
+     * 与投影的倒序读取不同：后台水位是从旧往前推的，必须按正序取，并且把非终态、跨代次、
+     * 墓碑行也一并交回，由装载器如实分类计数，而不是在 SQL 里悄悄过滤掉。
+     */
+    public List<MaintenanceRow> maintenanceRange(long sessionId, long afterTurnId, long throughTurnId, int limit)
+            throws SQLException {
+        String sql = MAINTENANCE_SELECT + " WHERE t.session_id = ? AND t.id > ? AND t.id <= ?"
+                + " ORDER BY t.id ASC LIMIT ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, afterTurnId);
+            statement.setLong(3, throughTurnId);
+            statement.setInt(4, Math.max(1, limit));
+            List<MaintenanceRow> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new MaintenanceRow(result.getLong("id"), result.getString("request_id"),
+                            result.getString("status"), result.getLong("context_generation"),
+                            result.getLong("source_revision"), result.getInt("memory_eligible") == 1,
+                            result.getString("content_deleted_at"), result.getString("started_at"),
+                            result.getString("finished_at"), nullableLong(result, "u_id"),
+                            result.getString("u_content"), result.getString("u_cipher"), result.getString("u_meta"),
+                            nullableLong(result, "a_id"), result.getString("a_content"),
+                            result.getString("a_cipher"), result.getString("a_meta")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /** 该会话最早的 RUNNING 轮次 ID；没有则 0。水位永远停在它之前（§2.5）。 */
+    public long firstRunningTurnId(long sessionId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT COALESCE(MIN(id), 0) FROM ai_chat_turn WHERE session_id = ? AND status = 'RUNNING'")) {
+            statement.setLong(1, sessionId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getLong(1) : 0L;
+            }
+        }
+    }
+
+    /** 该会话已有的最大轮次 ID；没有轮次时为 0（待处理边界的右端）。 */
+    public long maxTurnId(long sessionId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT COALESCE(MAX(id), 0) FROM ai_chat_turn WHERE session_id = ?")) {
+            statement.setLong(1, sessionId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getLong(1) : 0L;
+            }
+        }
+    }
+
+    /**
+     * 区间内的合格来源统计：COMPLETED、可学习、同代次、未清理、且停在 RUNNING 之前。
+     * 不含正文，因此锁定状态下也能算——触发判断只需要数量（§8.1）。
+     */
+    public MaintenanceBacklog maintenanceBacklog(long sessionId, long afterTurnId, long throughTurnId,
+                                                 long contextGeneration, long historyFloor) throws SQLException {
+        String sql = "SELECT COUNT(*) AS turns FROM ai_chat_turn"
+                + " WHERE session_id = ? AND id > ? AND id <= ? AND status = 'COMPLETED'"
+                + " AND memory_eligible = 1 AND context_generation = ? AND content_deleted_at IS NULL"
+                + " AND id > ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, afterTurnId);
+            statement.setLong(3, throughTurnId);
+            statement.setLong(4, contextGeneration);
+            statement.setLong(5, historyFloor);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return new MaintenanceBacklog(0);
+                return new MaintenanceBacklog(result.getInt("turns"));
+            }
+        }
+    }
+
+    /**
+     * 摘要源的右边界：合格完整轮次里排除最近 {@code reservedRecent} 条之后，还能整理到的最大轮次 ID。
+     * 返回 0 表示剩下的不够摘要（§8.4「至少最近 2 个完整轮次始终排除在摘要源之外」）。
+     */
+    public long summarySourceBound(long sessionId, long afterTurnId, long throughTurnId, long contextGeneration,
+                                   long historyFloor, int reservedRecent) throws SQLException {
+        String sql = "SELECT COALESCE(MIN(x.id), 0) AS boundary FROM (SELECT t.id FROM ai_chat_turn t"
+                + " WHERE t.session_id = ? AND t.id > ? AND t.id <= ? AND t.status = 'COMPLETED'"
+                + " AND t.memory_eligible = 1 AND t.context_generation = ? AND t.content_deleted_at IS NULL"
+                + " AND t.id > ? ORDER BY t.id DESC LIMIT ?) x";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, afterTurnId);
+            statement.setLong(3, throughTurnId);
+            statement.setLong(4, contextGeneration);
+            statement.setLong(5, historyFloor);
+            statement.setInt(6, Math.max(1, reservedRecent));
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getLong("boundary") == 0) return 0L;
+                return result.getLong("boundary") - 1;
+            }
+        }
+    }
+
+    /**
+     * 区间内前 {@code limit} 行的轮次 ID（升序，只读 ID 不读正文）。
+     * 队列据此把待处理范围切成有界长度，不必为了算范围而取出整批密文。
+     */
+    public List<Long> maintenanceIds(long sessionId, long afterTurnId, long throughTurnId, int limit)
+            throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT id FROM ai_chat_turn WHERE session_id = ? AND id > ? AND id <= ?"
+                             + " ORDER BY id ASC LIMIT ?")) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, afterTurnId);
+            statement.setLong(3, throughTurnId);
+            statement.setInt(4, Math.max(1, limit));
+            List<Long> ids = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) ids.add(result.getLong(1));
+            }
+            return ids;
+        }
+    }
+
+    /** 按 ID 集合取回轮次身份（提交事务里的来源复验用，§7「verify ... source revision」）。 */
+    public List<MaintenanceRow> maintenanceByIds(long sessionId, List<Long> turnIds) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return maintenanceRows(connection, sessionId, turnIds);
+        }
+    }
+
+    /**
+     * 连接内原语：维护任务在<b>同一笔写事务里</b>复验来源身份必须用这条，
+     * 另开连接读会看到与本次事务不一致的已提交快照。
+     */
+    public static List<MaintenanceRow> maintenanceRows(Connection connection, long sessionId, List<Long> turnIds)
+            throws SQLException {
+        if (turnIds == null || turnIds.isEmpty()) return List.of();
+        StringBuilder sql = new StringBuilder(MAINTENANCE_SELECT
+                + " WHERE t.session_id = ? AND t.id IN (");
+        for (int index = 0; index < turnIds.size(); index++) {
+            sql.append(index == 0 ? "?" : ",?");
+        }
+        sql.append(") ORDER BY t.id ASC");
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            statement.setLong(1, sessionId);
+            for (int index = 0; index < turnIds.size(); index++) {
+                statement.setLong(index + 2, turnIds.get(index));
+            }
+            List<MaintenanceRow> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new MaintenanceRow(result.getLong("id"), result.getString("request_id"),
+                            result.getString("status"), result.getLong("context_generation"),
+                            result.getLong("source_revision"), result.getInt("memory_eligible") == 1,
+                            result.getString("content_deleted_at"), result.getString("started_at"),
+                            result.getString("finished_at"), nullableLong(result, "u_id"),
+                            result.getString("u_content"), result.getString("u_cipher"), result.getString("u_meta"),
+                            nullableLong(result, "a_id"), result.getString("a_content"),
+                            result.getString("a_cipher"), result.getString("a_meta")));
                 }
             }
             return rows;

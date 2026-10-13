@@ -15,11 +15,16 @@ import org.springframework.stereotype.Repository;
  *
  * <p>{@code ai_usage_daily} 只是可重建的聚合，attempt 才是结算依据：同一个 attempt 只允许第一次
  * 把数字加进 daily，所以每个写方法都先按状态做 CAS，失手即视为重复结算并返回 false。
- * 本类不做后台额度判定（P6 负责），只提供「先占额度 → 发送 → 按实际结算」的落库形态。</p>
+ * 后台额度判定用 {@link #maintenanceSpend}（跨所有 target 与三个维护 purpose 求和），
+ * 这里只提供「先占额度 → 发送 → 按实际结算」的落库形态。</p>
  */
 @Repository
 public class UsageRepository {
     public static final String PURPOSE_CHAT = "CHAT";
+    /** 三个占后台每日额度的维护用途（§2.6：CHAT 计量但不占）。 */
+    public static final String PURPOSE_MEMORY_EXTRACT = "MEMORY_EXTRACT";
+    public static final String PURPOSE_SESSION_SUMMARY = "SESSION_SUMMARY";
+    public static final String PURPOSE_FORMAT_REPAIR = "FORMAT_REPAIR";
     private static final List<String> OPEN_STATES = List.of("RESERVED", "SENT");
 
     /**
@@ -177,7 +182,9 @@ public class UsageRepository {
         }
     }
 
-    /** 卡在 SENT 的全部 attempt：恢复流程把它们按 UNKNOWN 消费（§7.2.1）。 */
+    /**
+     * 卡在 SENT 的全部 attempt：恢复流程把它们按 UNKNOWN 消费（§7.2.1）。
+     */
     public List<AttemptRow> findUnsettled() throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(
@@ -189,6 +196,58 @@ public class UsageRepository {
                 while (result.next()) rows.add(row(result));
                 return rows;
             }
+        }
+    }
+
+    /** 某个操作（聊天用 requestId、维护用 jobId）仍未结算的 attempt，按创建顺序。 */
+    public List<AttemptRow> findUnsettledByOperation(String operationId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT id, operation_id, purpose, target_fingerprint, budget_date, budget_timezone, state,"
+                             + " reserved_tokens, usage_source, input_tokens, output_tokens, settled_at"
+                             + " FROM ai_usage_attempt WHERE operation_id = ? AND state IN ('RESERVED','SENT')"
+                             + " ORDER BY created_at, id")) {
+            statement.setString(1, operationId);
+            try (ResultSet result = statement.executeQuery()) {
+                List<AttemptRow> rows = new java.util.ArrayList<>();
+                while (result.next()) rows.add(row(result));
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * 当天后台已花的额度：{@code ai_usage_daily} 是可重建聚合，所以这里跨<b>所有 target</b> 与三个维护
+     * purpose 求和——切模型换 target 不能重置每日额度（§2.6）。
+     *
+     * <p>{@code reservedTokens} 是仍未结算的外发预留，判定新任务时必须连同它一起算，
+     * 否则并发中的预留会被当成没花过的钱。</p>
+     */
+    public MaintenanceSpend maintenanceSpend(String budgetDate, String budgetTimezone) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                    SELECT COALESCE(SUM(attempts), 0) AS attempts, COALESCE(SUM(charged_tokens), 0) AS charged,
+                           COALESCE(SUM(reserved_tokens), 0) AS reserved
+                      FROM ai_usage_daily
+                     WHERE budget_date = ? AND budget_timezone = ? AND purpose IN (?, ?, ?)
+                    """)) {
+            statement.setString(1, budgetDate);
+            statement.setString(2, budgetTimezone);
+            statement.setString(3, PURPOSE_MEMORY_EXTRACT);
+            statement.setString(4, PURPOSE_SESSION_SUMMARY);
+            statement.setString(5, PURPOSE_FORMAT_REPAIR);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return new MaintenanceSpend(0, 0, 0);
+                return new MaintenanceSpend(result.getInt("attempts"), result.getLong("charged"),
+                        result.getLong("reserved"));
+            }
+        }
+    }
+
+    /** 当天后台额度快照。{@code spentTokens()} 才是"已经花掉 + 仍在飞行"的合计。 */
+    public record MaintenanceSpend(int attempts, long chargedTokens, long reservedTokens) {
+        public long spentTokens() {
+            return chargedTokens + reservedTokens;
         }
     }
 
@@ -235,8 +294,11 @@ public class UsageRepository {
 
     /**
      * daily 是可重建聚合，缺行时按 {@code ON CONFLICT DO UPDATE} 直接累加。
-     * {@code reserved_tokens} 允许被减到 0 以下吗？不允许：那说明同一笔预留被释放了两次，
-     * 于是这里用 {@code MAX(0, ...)} 兜住并让 CHECK 仍成立。
+     *
+     * <p>{@code excluded.*} 取的是<b>被 MAX(0,?) 夹过</b>的插入值，而结算要能把之前加进去的预留与
+     * attempt 数<b>减回</b>去（释放要退回额度、结算要把预留清零，§2.6），所以那三列改用
+     * {@code ai_usage_daily.x + 原始增量} 再夹 0：既不会写出负数，也不会把减法当成加法丢掉。
+     * 只增不减的四列（input/output/cache/unknown）继续用 {@code excluded}。</p>
      */
     private void bumpDaily(Connection connection, String budgetDate, String budgetTimezone, String target,
                            String purpose, long attempts, long charged, long reservedDelta, long input, long output,
@@ -248,14 +310,14 @@ public class UsageRepository {
                     cache_write_tokens, unknown_attempts)
                 VALUES (?, ?, ?, ?, MAX(0, ?), MAX(0, ?), MAX(0, ?), ?, ?, ?, ?, ?)
                 ON CONFLICT(budget_date, budget_timezone, target_fingerprint, purpose) DO UPDATE SET
-                    attempts = MAX(0, attempts + excluded.attempts),
-                    charged_tokens = MAX(0, charged_tokens + excluded.charged_tokens),
-                    reserved_tokens = MAX(0, reserved_tokens + excluded.reserved_tokens),
-                    input_tokens = input_tokens + excluded.input_tokens,
-                    output_tokens = output_tokens + excluded.output_tokens,
-                    cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
-                    cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
-                    unknown_attempts = unknown_attempts + excluded.unknown_attempts
+                    attempts = MAX(0, ai_usage_daily.attempts + ?),
+                    charged_tokens = MAX(0, ai_usage_daily.charged_tokens + ?),
+                    reserved_tokens = MAX(0, ai_usage_daily.reserved_tokens + ?),
+                    input_tokens = ai_usage_daily.input_tokens + excluded.input_tokens,
+                    output_tokens = ai_usage_daily.output_tokens + excluded.output_tokens,
+                    cache_read_tokens = ai_usage_daily.cache_read_tokens + excluded.cache_read_tokens,
+                    cache_write_tokens = ai_usage_daily.cache_write_tokens + excluded.cache_write_tokens,
+                    unknown_attempts = ai_usage_daily.unknown_attempts + excluded.unknown_attempts
                 """)) {
             statement.setString(1, budgetDate);
             statement.setString(2, budgetTimezone);
@@ -269,6 +331,9 @@ public class UsageRepository {
             statement.setLong(10, cacheRead);
             statement.setLong(11, cacheWrite);
             statement.setLong(12, unknown);
+            statement.setLong(13, attempts);
+            statement.setLong(14, charged);
+            statement.setLong(15, reservedDelta);
             if (statement.executeUpdate() != 1) throw new SQLException("用量聚合写入未命中单行");
         }
     }

@@ -88,7 +88,7 @@ public class ChatTurnRepository {
                           Long assistantMessageId, long contextGeneration, String sourceScopeType, long sourceScopeId,
                           long sourceRevision, long storedHistoryBytes, long reservedHistoryBytes,
                           String contentDeletedAt, String persistenceStatus, String finishReason, String startedAt,
-                          String finishedAt, String retryOf) {
+                          String finishedAt, String retryOf, boolean memoryEligible) {
     }
 
     /**
@@ -113,7 +113,7 @@ public class ChatTurnRepository {
     private static final String TURN_SELECT = "SELECT id, request_id, session_id, status, user_message_id,"
             + " assistant_message_id, context_generation, source_scope_type, source_scope_id, source_revision,"
             + " stored_history_bytes, reserved_history_bytes, content_deleted_at, persistence_status, finish_reason,"
-            + " started_at, finished_at, retry_of FROM ai_chat_turn";
+            + " started_at, finished_at, retry_of, memory_eligible FROM ai_chat_turn";
 
     private final DataSource dataSource;
     private final ImmediateTransaction immediate;
@@ -236,6 +236,10 @@ public class ChatTurnRepository {
                 throw new SQLException("轮次 " + turn.id() + " 存量与实测不一致：算得 " + newStored + "，实测 " + measured);
             }
             ledger.settle(connection, delta, turn.reservedHistoryBytes());
+            if (STATUS_COMPLETED.equals(terminal.status()) && turn.memoryEligible()) {
+                // 只有"合格且已完成"的来源才置唤醒；v1、关掉学习的会话、失败轮次都不产生维护工作（§7）
+                metadata.markMaintenanceWake(connection, turn.sessionId());
+            }
             return new TerminalOutcome(true, false, terminal.status(), newStored,
                     bumpSession(connection, turn.sessionId()));
         });
@@ -474,7 +478,8 @@ public class ChatTurnRepository {
                 result.getLong("stored_history_bytes"), result.getLong("reserved_history_bytes"),
                 result.getString("content_deleted_at"), result.getString("persistence_status"),
                 result.getString("finish_reason"), result.getString("started_at"),
-                result.getString("finished_at"), result.getString("retry_of"));
+                result.getString("finished_at"), result.getString("retry_of"),
+                result.getInt("memory_eligible") == 1);
     }
 
     private long insertTurn(Connection connection, Draft draft, long storedBytes) throws SQLException {

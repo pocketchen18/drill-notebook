@@ -48,4 +48,22 @@ class MemoryTimesTest {
         }
         assertNotEquals(stamps.get(0), stamps.get(1));
     }
+
+    @Test
+    void sqliteStampWithoutTheTAndZStillParses() {
+        long expected = Instant.parse("2026-10-12T08:30:00Z").toEpochMilli();
+        assertEquals(19, "2026-10-12 08:30:00".length(), "SQLite 默认值的宽度正好 19，兼容分支要按 19 判");
+        assertEquals(expected, MemoryTimes.parseMillis("2026-10-12 08:30:00"));
+        assertEquals(expected + 656L, MemoryTimes.parseMillis("2026-10-12 08:30:00.656"));
+        assertEquals(expected, MemoryTimes.parseMillis(MemoryTimes.formatMillis(expected)), "写读要能往返对上");
+    }
+
+    @Test
+    void unreadableStampsParseToZeroInsteadOfAGuess() {
+        assertEquals(0L, MemoryTimes.parseMillis(null));
+        assertEquals(0L, MemoryTimes.parseMillis("  "));
+        assertEquals(0L, MemoryTimes.parseMillis("2026-10-12 08:30"), "缺秒的半截时刻不能当成时刻");
+        assertEquals(0L, MemoryTimes.parseMillis("2026-13-45 99:99:99"));
+        assertEquals(0L, MemoryTimes.parseMillis("刚刚"));
+    }
 }
