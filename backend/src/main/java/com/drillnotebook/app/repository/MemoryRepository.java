@@ -650,8 +650,51 @@ public class MemoryRepository {
     }
 
     // ---- 事务内原语 ----
+    //
+    // 下面这组 *接受调用方 Connection* 的方法只允许在调用方自己的事务里用（P7 的 §7 提交就是这个场景：
+    // 租约 CAS、来源复验、写事实与推进水位必须在同一笔事务内见胜负）。
+    // 类里那些不带 Connection 的写方法各自自开 ImmediateTransaction，绝不能被套进别人的事务。
 
-    private static EvidenceResult insertEvidence(Connection connection, EvidenceDraft draft) throws SQLException {
+    /** 同族当前 ACTIVE 行（事务内版本，供冲突判定与提交前复验用）。 */
+    public static List<FactRow> activeInFamily(Connection connection, String vaultId, String scopeType, long scopeId,
+                                               String familyKeyHmac) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS + " FROM ai_memory_item"
+                + " WHERE vault_id = ? AND scope_type = ? AND scope_id = ? AND family_key_hmac = ?"
+                + " AND status = '" + STATUS_ACTIVE + "' ORDER BY memory_id, version")) {
+            statement.setString(1, vaultId);
+            statement.setString(2, scopeType);
+            statement.setLong(3, scopeId);
+            statement.setString(4, familyKeyHmac);
+            return collect(statement.executeQuery());
+        }
+    }
+
+    /**
+     * 按 (memory_id, version) 取代号把当前 ACTIVE 版置为 SUPERSEDED：与手动 {@code replace} 同一套 CAS，
+     * 命中 0 行就是"目标被并发改过"，调用方必须放弃这条候选而不是硬写。
+     */
+    public static int supersedeVersionIn(Connection connection, String memoryId, int version) throws SQLException {
+        return execute(connection, "UPDATE ai_memory_item SET status = ?"
+                        + " WHERE memory_id = ? AND version = ? AND status = ?",
+                STATUS_SUPERSEDED, memoryId, version, STATUS_ACTIVE);
+    }
+
+    /** 同值确认：只刷新 ACTIVE 版的 last_confirmed_at，不产生新版本（§8.3「CONFIRM 不新增 ACTIVE」）。 */
+    public static int confirmIn(Connection connection, String rowId, String asOf) throws SQLException {
+        return execute(connection, "UPDATE ai_memory_item SET last_confirmed_at = ?"
+                + " WHERE row_id = ? AND status = '" + STATUS_ACTIVE + "'", asOf, rowId);
+    }
+
+    /** 证据 + 关联同时写：重复关联幂等（§2.3 的去重来源）。 */
+    public static EvidenceResult attachEvidenceIn(Connection connection, EvidenceDraft draft, String itemRowId)
+            throws SQLException {
+        EvidenceResult result = insertEvidence(connection, draft);
+        execute(connection, "INSERT OR IGNORE INTO ai_memory_item_evidence(item_row_id, evidence_id) VALUES (?, ?)",
+                itemRowId, result.evidenceId());
+        return result;
+    }
+
+    public static EvidenceResult insertEvidence(Connection connection, EvidenceDraft draft) throws SQLException {
         Optional<String> existing = optionalString(connection,
                 "SELECT id FROM ai_memory_evidence WHERE vault_id = ? AND source_hmac = ?",
                 draft.vaultId(), draft.sourceHmac());
@@ -671,7 +714,7 @@ public class MemoryRepository {
         return new EvidenceResult(evidenceId, false);
     }
 
-    private static void insertFact(Connection connection, NewMemory draft, String memoryId, String rowId, int version)
+    public static void insertFact(Connection connection, NewMemory draft, String memoryId, String rowId, int version)
             throws SQLException {
         execute(connection, "INSERT INTO ai_memory_item(row_id, memory_id, vault_id, version, scope_type, scope_id,"
                         + " kind, predicate_key_hmac, family_key_hmac, value_hmac, status, payload_cipher,"
@@ -703,7 +746,7 @@ public class MemoryRepository {
                 concat(itemRowId, deleting).toArray()) > 0;
     }
 
-    private static Optional<FactRow> findCurrent(Connection connection, String vaultId, String memoryId)
+    public static Optional<FactRow> findCurrent(Connection connection, String vaultId, String memoryId)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS
                 + " FROM ai_memory_item WHERE vault_id = ? AND memory_id = ? AND status = '" + STATUS_ACTIVE
@@ -728,7 +771,7 @@ public class MemoryRepository {
         }
     }
 
-    private static VaultState updateVault(Connection connection, String vaultId, boolean advanceEpoch)
+    public static VaultState updateVault(Connection connection, String vaultId, boolean advanceEpoch)
             throws SQLException {
         String sql = "UPDATE ai_memory_vault SET revision = revision + 1"
                 + (advanceEpoch ? ", epoch = epoch + 1" : "") + " WHERE id = ?";

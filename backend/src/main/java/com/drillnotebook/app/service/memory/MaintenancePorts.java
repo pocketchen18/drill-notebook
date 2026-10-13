@@ -2,6 +2,7 @@ package com.drillnotebook.app.service.memory;
 
 import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -40,22 +41,18 @@ public final class MaintenancePorts {
 
     /** 一个完整来源轮次：身份（ID + source_revision）与正文一起带，落库前要按身份复验。 */
     public record SourceTurn(long turnId, long sourceRevision, Long userMessageId, Long assistantMessageId,
-                             String userText, String assistantText, int estimatedTokens, long finishedMillis) {
+                             String userText, String assistantText, int estimatedTokens, long finishedMillis,
+                             List<SourceBlock> blocks, String sourceCreatedAt) {
+        public SourceTurn {
+            blocks = blocks == null ? List.of() : List.copyOf(blocks);
+        }
     }
 
     /**
-     * 提取产出：本包只关心"这批有没有可用候选"，用于决定终态
-     * （{@code NO_NEW_INFORMATION} / {@code NO_VALID_CANDIDATES} / {@code APPLIED}，§2.4）。
-     * 候选本体与冲突判定属 P7（§8.3）。
+     * 提取可用的一个来源块。装载器只交 {@code USER_AUTHORED} 块（§4.3：附件块拿不到这个 origin，
+     * 所以附件正文永远不可能被当用户亲述来提取），quote 必须在<b>这一块</b>内连续匹配。
      */
-    public record CandidateBatch(int candidateCount, int rejectedCount, Usage usage) {
-        public static CandidateBatch none() {
-            return new CandidateBatch(0, 0, Usage.unknown());
-        }
-
-        public CandidateBatch {
-            usage = usage == null ? Usage.unknown() : usage;
-        }
+    public record SourceBlock(String blockId, String text) {
     }
 
     /** 摘要草稿：模型可见正文与它的估算量，净缩减据此计算（§8.4 第 4 条）。 */
@@ -105,6 +102,30 @@ public final class MaintenancePorts {
         }
     }
 
+    /**
+     * 一次提取调用的产出。{@code format} 是<b>整份返回</b>能不能用（§8.2 第 7 条据此决定修复还是终态），
+     * {@code candidates} 已经过 {@link MemoryValidator} 的全部本地校验，{@code rejections} 只有短代码。
+     */
+    record ExtractionResult(MemoryValidator.FormatStatus format,
+                            List<MemoryValidator.ValidatedCandidate> candidates, List<String> rejections,
+                            Usage usage, Map<String, Integer> knownTargets, String rawText) {
+        ExtractionResult {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            rejections = rejections == null ? List.of() : List.copyOf(rejections);
+            knownTargets = knownTargets == null ? Map.of() : Map.copyOf(knownTargets);
+            usage = usage == null ? Usage.unknown() : usage;
+        }
+
+        boolean formatOk() {
+            return format == MemoryValidator.FormatStatus.OK;
+        }
+
+        static ExtractionResult formatFailure(MemoryValidator.FormatStatus format, Usage usage,
+                                              Map<String, Integer> knownTargets, String rawText) {
+            return new ExtractionResult(format, List.of(), List.of(), usage, knownTargets, rawText);
+        }
+    }
+
     /** 长期事实提取端口（P7 接真实 {@code AiUpstreamClient} 与配套提示词）。 */
     public interface Extractor {
         /** 提示词版本：进任务行与幂等键，换提示词等于换一批输入。 */
@@ -113,7 +134,13 @@ public final class MaintenancePorts {
         /** 提示词与既有事实等"非来源"部分的估算占用，装载时先从 3,000 输入预算里扣掉（§8.2 第 4 条）。 */
         int framingTokens();
 
-        CandidateBatch extract(Batch batch) throws AttemptFailure;
+        /**
+         * @param key 记忆库钥匙：只用于读既有事实正文与派生 HMAC，绝不进请求体、日志或异常信息
+         * @param repairOf 上一次被判格式不合格的原文；{@code null} 表示首次请求。§8.2 第 7 条：最多修复一次，
+         *                 而且修复请求不授予更多数据，只带同一份 schema 与同一段来源
+         */
+        ExtractionResult extract(Batch batch, MemoryCryptoService.MemoryKey key, String repairOf)
+                throws AttemptFailure;
     }
 
     /** 任务续接摘要端口（P8 接 {@code SESSION_SUMMARY_V2}）。 */

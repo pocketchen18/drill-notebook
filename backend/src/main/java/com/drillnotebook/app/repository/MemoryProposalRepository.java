@@ -79,28 +79,37 @@ public class MemoryProposalRepository {
         if (draft.proposalId() == null || draft.proposalId().isBlank()) {
             throw new SQLException("proposalId 必须由调用方先生成：建议 payload 的 AAD 绑定它");
         }
-        return immediate.execute(connection -> {
-            Optional<ProposalRow> existing = byDedupKey(connection, draft.vaultId(), draft.dedupHmac());
-            if (existing.isPresent()) {
-                return new SubmitResult(SubmitOutcome.DUPLICATE, existing.get().id());
-            }
-            long pending = MemoryRepository.pendingCount(connection, draft.vaultId())
-                    + count(connection, "SELECT COUNT(*) FROM ai_memory_proposal WHERE vault_id = ? AND status = ?",
-                    draft.vaultId(), STATUS_PENDING);
-            if (pending >= MemoryRepository.PENDING_QUOTA) {
-                return SubmitResult.refused(SubmitOutcome.PENDING_QUOTA_FULL);
-            }
-            String id = draft.proposalId();
-            execute(connection, "INSERT INTO ai_memory_proposal(id, vault_id, session_id, source_turn_id, evidence_id,"
-                            + " target_memory_id, target_version, operation, status, version, payload_cipher,"
-                            + " crypto_meta, dedup_hmac, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?,"
-                            + " '" + STATUS_PENDING + "', 1, ?, ?, ?, ?, ?)",
-                    id, draft.vaultId(), draft.sessionId(), draft.sourceTurnId(), draft.evidenceId(),
-                    draft.targetMemoryId(), draft.targetVersion(), draft.operation(),
-                    draft.payloadCipher(), draft.cryptoMeta(), draft.dedupHmac(), draft.createdAt(),
-                    draft.expiresAt());
-            return new SubmitResult(SubmitOutcome.SUBMITTED, id);
-        });
+        return immediate.execute(connection -> submitIn(connection, draft));
+    }
+
+    /** 事务内提交：P7 的 §7 要求建议与水位、job 终态在同一笔事务里见胜负。 */
+    public SubmitResult submitIn(Connection connection, ProposalDraft draft) throws SQLException {
+        if (!List.of("REPLACE_PROPOSAL", "RETRACT_PROPOSAL").contains(draft.operation())) {
+            throw new SQLException("非法的建议动作: " + draft.operation());
+        }
+        if (draft.proposalId() == null || draft.proposalId().isBlank()) {
+            throw new SQLException("proposalId 必须由调用方先生成：建议 payload 的 AAD 绑定它");
+        }
+        Optional<ProposalRow> existing = byDedupKey(connection, draft.vaultId(), draft.dedupHmac());
+        if (existing.isPresent()) {
+            return new SubmitResult(SubmitOutcome.DUPLICATE, existing.get().id());
+        }
+        long pending = MemoryRepository.pendingCount(connection, draft.vaultId())
+                + count(connection, "SELECT COUNT(*) FROM ai_memory_proposal WHERE vault_id = ? AND status = ?",
+                draft.vaultId(), STATUS_PENDING);
+        if (pending >= MemoryRepository.PENDING_QUOTA) {
+            return SubmitResult.refused(SubmitOutcome.PENDING_QUOTA_FULL);
+        }
+        String id = draft.proposalId();
+        execute(connection, "INSERT INTO ai_memory_proposal(id, vault_id, session_id, source_turn_id, evidence_id,"
+                        + " target_memory_id, target_version, operation, status, version, payload_cipher,"
+                        + " crypto_meta, dedup_hmac, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?,"
+                        + " '" + STATUS_PENDING + "', 1, ?, ?, ?, ?, ?)",
+                id, draft.vaultId(), draft.sessionId(), draft.sourceTurnId(), draft.evidenceId(),
+                draft.targetMemoryId(), draft.targetVersion(), draft.operation(),
+                draft.payloadCipher(), draft.cryptoMeta(), draft.dedupHmac(), draft.createdAt(),
+                draft.expiresAt());
+        return new SubmitResult(SubmitOutcome.SUBMITTED, id);
     }
 
     /** 待确认建议：过期即刻从读路径排除（§2.3.1「读路径即时排除过期抑制」），不做后台清理才生效。 */

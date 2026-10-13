@@ -336,6 +336,25 @@ public class MemoryPolicyService {
                 consentFingerprint(purpose, normalized, apiFormat, row.model()));
     }
 
+    /**
+     * 后台能不能自己解出维护 Key。{@code ai_config} 的 Key 材料分两种：机器指纹随时可解，
+     * password 模式的材料只在用户当场输入主密码时存在——后台<b>不代解、也不缓存明文</b>（§5.1
+     * 「选定后失败就暂停，不偷偷回退另一家」）。走不到这一步的任务应停在等待态，不烧一次外发。
+     */
+    public boolean maintenanceKeyUsable() {
+        AiConfigRepository.ConfigRow row = MODE_DEDICATED.equals(maintenanceMode())
+                ? configs.findMemory() : configs.findChat();
+        if (row == null || row.encryptedKey() == null || row.encryptedKey().isBlank()
+                || row.keyMeta() == null || row.keyMeta().isBlank()) {
+            return false;
+        }
+        try {
+            return !"password".equals(mapper.readTree(row.keyMeta()).path("mode").asText("fingerprint"));
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
     /** 授权指纹：purpose + 归一化 endpoint + apiFormat + model + policyVersion 的 SHA-256 摘要。 */
     public String consentFingerprint(String purpose, String normalizedEndpoint, String apiFormat, String model) {
         String canonical = String.join("|", purpose, normalizedEndpoint, apiFormat, model, POLICY_VERSION);

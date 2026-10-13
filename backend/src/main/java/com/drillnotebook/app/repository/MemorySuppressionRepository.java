@@ -63,10 +63,16 @@ public class MemorySuppressionRepository {
     public boolean isSuppressed(String vaultId, String scopeType, long scopeId, String kind, String keyHmac)
             throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
-            return count(connection, "SELECT COUNT(*) FROM ai_memory_suppression WHERE vault_id = ?"
-                    + " AND scope_type = ? AND scope_id = ? AND suppression_kind = ? AND key_hmac = ?",
-                    vaultId, scopeType, scopeId, kind, keyHmac) > 0;
+            return isSuppressedIn(connection, vaultId, scopeType, scopeId, kind, keyHmac);
         }
+    }
+
+    /** 事务内查抑制：P7 的写入闸门必须在同一笔事务里复核一遍，不能只信排队时的判断（§7）。 */
+    public boolean isSuppressedIn(Connection connection, String vaultId, String scopeType, long scopeId, String kind,
+                                  String keyHmac) throws SQLException {
+        return count(connection, "SELECT COUNT(*) FROM ai_memory_suppression WHERE vault_id = ?"
+                + " AND scope_type = ? AND scope_id = ? AND suppression_kind = ? AND key_hmac = ?",
+                vaultId, scopeType, scopeId, kind, keyHmac) > 0;
     }
 
     /** 某作用域下该档的全部抑制键（P5 的冲突抑制与 P7 的写入资格判定按这批键过滤）。 */

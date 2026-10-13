@@ -23,7 +23,6 @@ import com.drillnotebook.app.service.ActiveTurnRegistry;
 import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.AttemptFailure;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
-import com.drillnotebook.app.service.memory.MaintenancePorts.CandidateBatch;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SummaryDraft;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Usage;
@@ -109,6 +108,7 @@ public class MemoryMaintenanceWorker {
     private final MaintenanceQueue queue;
     private final MaintenancePorts.Extractor extractor;
     private final MaintenancePorts.SummaryDrafter drafter;
+    private final MemoryExtractionWriter writer;
     private final ActiveTurnRegistry turns;
     private final ImmediateTransaction immediate;
     private final TokenEstimator estimator;
@@ -139,9 +139,10 @@ public class MemoryMaintenanceWorker {
                                    MemoryCryptoService crypto, MaintenanceSourceScanner scanner,
                                    MaintenanceQueue queue, MaintenancePorts.Extractor extractor,
                                    MaintenancePorts.SummaryDrafter drafter, ActiveTurnRegistry turns,
-                                   ImmediateTransaction immediate, TokenEstimator estimator, ObjectMapper mapper) {
+                                   ImmediateTransaction immediate, TokenEstimator estimator, ObjectMapper mapper,
+                                   MemoryExtractionWriter writer) {
         this(jobs, usage, metadata, history, memory, policy, vault, crypto, scanner, queue, extractor, drafter,
-                turns, immediate, estimator, mapper, System::currentTimeMillis);
+                turns, immediate, estimator, mapper, writer, System::currentTimeMillis);
     }
 
     public MemoryMaintenanceWorker(MemoryJobRepository jobs, UsageRepository usage,
@@ -151,7 +152,7 @@ public class MemoryMaintenanceWorker {
                                    MaintenanceQueue queue, MaintenancePorts.Extractor extractor,
                                    MaintenancePorts.SummaryDrafter drafter, ActiveTurnRegistry turns,
                                    ImmediateTransaction immediate, TokenEstimator estimator, ObjectMapper mapper,
-                                   LongSupplier clock) {
+                                   MemoryExtractionWriter writer, LongSupplier clock) {
         this.jobs = jobs;
         this.usage = usage;
         this.metadata = metadata;
@@ -168,6 +169,7 @@ public class MemoryMaintenanceWorker {
         this.immediate = immediate;
         this.estimator = estimator;
         this.mapper = mapper;
+        this.writer = writer;
         this.clock = clock;
         // 锁定即不再提交飞行结果（§6.1.7、S11）：钥匙被抹掉后，任何在批结果都只会被丢弃
         vault.onLock(this::invalidateInFlight);
@@ -348,7 +350,7 @@ public class MemoryMaintenanceWorker {
         }
         if (!loaded.ready()) {
             return commit(job, leaseToken, outcomeOfNotice(loaded.notice()), loaded.skips(), loaded.notice(),
-                    loaded.examinedThrough(), null, null, claimGeneration);
+                    loaded.examinedThrough(), null, null, null, null, claimGeneration);
         }
         Batch batch = loaded.batch();
         if (batch.inputRevision() == null || !batch.inputRevision().equals(job.inputRevision())) {
@@ -357,6 +359,9 @@ public class MemoryMaintenanceWorker {
         }
         // 4. 先占额度，再发送（§2.6）
         ZoneId zone = budgetZone();
+        if (job.kind() == Kind.EXTRACT) {
+            return processExtract(job, leaseToken, batch, key.get(), loaded, claimGeneration, zone);
+        }
         String attemptId = UuidV7.generate(clock.getAsLong());
         Attempt attempt = new Attempt(attemptId, job.id(), purposeOf(job.kind()), job.targetFingerprint(),
                 budgetDate(zone), zone.getId(), MaintenanceRules.RESERVE_TOKENS,
@@ -366,14 +371,12 @@ public class MemoryMaintenanceWorker {
                     "RESERVE_FAILED");
         }
         usage.markSent(attemptId);
-        if (job.kind() == Kind.SUMMARY) {
-            // 摘要尝试记账在实际外发之前：失败同样计入冷却，避免同一批被反复压缩（§2.4、§8.5）
-            metadata.recordSummaryAttempt(job.sessionId(), MemoryTimes.formatMillis(clock.getAsLong()),
-                    job.throughTurnId(), job.inputRevision());
-        }
+        // 摘要尝试记账在实际外发之前：失败同样计入冷却，避免同一批被反复压缩（§2.4、§8.5）
+        metadata.recordSummaryAttempt(job.sessionId(), MemoryTimes.formatMillis(clock.getAsLong()),
+                job.throughTurnId(), job.inputRevision());
         Outcome outcome;
         try {
-            outcome = job.kind() == Kind.EXTRACT ? runExtract(batch) : runSummary(batch, key.get());
+            outcome = runSummary(batch, key.get());
         } catch (AttemptFailure failure) {
             // 已经发出去了：用量按 UNKNOWN 消费，预留不返还（§2.6）
             settle(attemptId, ActualUsage.unknown());
@@ -385,7 +388,88 @@ public class MemoryMaintenanceWorker {
         }
         settle(attemptId, actual(outcome.usage()));
         return commit(job, leaseToken, outcome.outcomeCode(), loaded.skips(), loaded.notice(),
-                outcome.examinedThrough(), batch, outcome.checkpoint(), claimGeneration);
+                outcome.examinedThrough(), batch, outcome.checkpoint(), null, null, claimGeneration);
+    }
+
+    /**
+     * 提取路径：一次外发 + <b>至多</b>一次格式修复（§8.2 第 7 条）。修复是第二次真实调用，所以它自己占额度、
+     * 自己记一个 attempt（purpose={@code FORMAT_REPAIR}）；仍不合格就直接 FAILED——不循环、不写任何候选，
+     * 也<b>不清空</b>既有记忆。
+     */
+    private JobResult processExtract(JobRow job, String leaseToken, Batch batch, MemoryCryptoService.MemoryKey key,
+                                     Loaded loaded, long claimGeneration, ZoneId zone) throws SQLException {
+        ExtractionAttempt first = new ExtractionAttempt();
+        JobResult early = callExtractOnce(job, leaseToken, batch, key, null,
+                UsageRepository.PURPOSE_MEMORY_EXTRACT, zone, first);
+        if (early != null) {
+            return early;
+        }
+        MaintenancePorts.ExtractionResult result = first.result;
+        if (!result.formatOk()) {
+            ExtractionAttempt repair = new ExtractionAttempt();
+            early = callExtractOnce(job, leaseToken, batch, key, result.rawText(),
+                    UsageRepository.PURPOSE_FORMAT_REPAIR, zone, repair);
+            if (early != null) {
+                return early;
+            }
+            result = repair.result;
+            if (!result.formatOk()) {
+                log.info("维护提取格式仍不合格 job={}：终态结束，不再修复也不写候选", job.id());
+                return settleFailed(job, leaseToken);
+            }
+        }
+        MemoryExtractionWriter.Plan plan;
+        try {
+            plan = writer.plan(batch, result, key, MemoryTimes.formatMillis(clock.getAsLong()));
+        } catch (MemoryCryptoService.MemoryCryptoException error) {
+            // 钥匙在这刻已不可用（遗忘/锁定）：整批作废，不留半份事实
+            log.info("维护提取加密失败，本批作废 job={}: {}", job.id(), error.toString());
+            return settleSuperseded(job, leaseToken, "VAULT_KEY_UNUSABLE");
+        }
+        // 终态按<b>实际写下什么</b>算：候选全被判定的 IGNORE 吃掉时不能报 APPLIED（§2.4）
+        String code = !plan.nothingToWrite() ? "APPLIED"
+                : !result.candidates().isEmpty() || !result.rejections().isEmpty() ? "NO_VALID_CANDIDATES"
+                : "NO_NEW_INFORMATION";
+        return commit(job, leaseToken, code, loaded.skips(), loaded.notice(), batch.throughTurnId(), batch, null,
+                plan, key, claimGeneration);
+    }
+
+    /** 一次<b>已记账</b>的提取外发：返回 null 表示成功，非 null 就是要直接交回的结论。 */
+    private JobResult callExtractOnce(JobRow job, String leaseToken, Batch batch, MemoryCryptoService.MemoryKey key,
+                                      String repairOf, String purpose, ZoneId zone, ExtractionAttempt out)
+            throws SQLException {
+        long now = clock.getAsLong();
+        String attemptId = UuidV7.generate(now);
+        Attempt attempt = new Attempt(attemptId, job.id(), purpose, job.targetFingerprint(), budgetDate(zone),
+                zone.getId(), MaintenanceRules.RESERVE_TOKENS, MemoryTimes.formatMillis(now), null);
+        if (!usage.reserve(attempt)) {
+            return wait(job, leaseToken, MemoryJobRepository.STATUS_PAUSED_BUDGET, now, "RESERVE_FAILED");
+        }
+        usage.markSent(attemptId);
+        try {
+            out.result = extractor.extract(batch, key, repairOf);
+        } catch (AttemptFailure failure) {
+            settle(attemptId, ActualUsage.unknown());
+            return onFailure(job, leaseToken, failure);
+        } catch (RuntimeException error) {
+            settle(attemptId, ActualUsage.unknown());
+            log.warn("维护提取出现未预期失败 job={}: {}", job.id(), error.toString());
+            return onFailure(job, leaseToken, new AttemptFailure("MAINTENANCE_UNEXPECTED", "本轮维护失败", false));
+        }
+        settle(attemptId, actual(out.result.usage()));
+        return null;
+    }
+
+    /** 外发结果的出参盒子：省掉再造一层 JobResult 包装。 */
+    private static final class ExtractionAttempt {
+        private MaintenancePorts.ExtractionResult result;
+    }
+
+    /** 不重试的终态。格式反复不合格就走这里，任务不会滑进 RETRY 循环（§8.2 第 7 条）。 */
+    private JobResult settleFailed(JobRow job, String leaseToken) throws SQLException {
+        return jobs.settle(job.id(), leaseToken, MemoryTimes.formatMillis(clock.getAsLong()),
+                MemoryJobRepository.STATUS_FAILED, null) == LeaseOutcome.APPLIED
+                ? JobResult.FAILED : JobResult.REJECTED;
     }
 
     /** 开关 / 授权 / 额度 / 版本四道门禁。通过返回 null，否则任务已进等待态或终态。 */
@@ -420,6 +504,11 @@ public class MemoryMaintenanceWorker {
         if (!policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE).configured()) {
             return wait(job, leaseToken, MemoryJobRepository.STATUS_WAITING_CONSENT, nowMillis, "TARGET_MISSING");
         }
+        if (!policy.maintenanceKeyUsable()) {
+            // password 模式的 Key 材料只在用户当场输入主密码时存在：后台不代解、也不缓存明文（§5.1）
+            return wait(job, leaseToken, MemoryJobRepository.STATUS_WAITING_CONSENT, nowMillis,
+                    "TARGET_KEY_NEEDS_PASSWORD");
+        }
         if (key.erased()) {
             return wait(job, leaseToken, MemoryJobRepository.STATUS_WAITING_UNLOCK, nowMillis, "VAULT_LOCKED");
         }
@@ -434,19 +523,6 @@ public class MemoryMaintenanceWorker {
             return wait(job, leaseToken, MemoryJobRepository.STATUS_PAUSED_BUDGET, nowMillis, "DAILY_BUDGET", probe);
         }
         return null;
-    }
-
-    /**
-     * 提取结果映射成终态代码（§2.4）。
-     *
-     * <p>P6 不写事实：候选的确定性冲突处理与加密落库属 P7（§8.3）。既然事实库没有变化，
-     * 这里就不递增 vault 内容 revision、也不重建索引（§8.2 第 9 条）。</p>
-     */
-    private Outcome runExtract(Batch batch) throws AttemptFailure {
-        CandidateBatch candidates = extractor.extract(batch);
-        String code = candidates.candidateCount() > 0 ? "APPLIED"
-                : candidates.rejectedCount() > 0 ? "NO_VALID_CANDIDATES" : "NO_NEW_INFORMATION";
-        return new Outcome(code, batch.throughTurnId(), candidates.usage(), null);
     }
 
     /**
@@ -541,7 +617,9 @@ public class MemoryMaintenanceWorker {
      * 连水位也不推进——锁定的语义是"这把钥匙保护的内容此刻不再外泄"，不是"等它写完再说"（§6.1.7、S11）。</p>
      */
     private JobResult commit(JobRow job, String leaseToken, String outcomeCode, Skips skips, String skipNotice,
-                             long examinedThrough, Batch batch, Checkpoint checkpoint, long claimGeneration)
+                             long examinedThrough, Batch batch, Checkpoint checkpoint,
+                             MemoryExtractionWriter.Plan plan, MemoryCryptoService.MemoryKey key,
+                             long claimGeneration)
             throws SQLException {
         if (lockGeneration.get() != claimGeneration) {
             log.info("记忆库在本批飞行期间被锁定，结果整份丢弃 job={}", job.id());
@@ -559,6 +637,10 @@ public class MemoryMaintenanceWorker {
                 }
                 if (batch != null && !sourcesIntact(connection, job, batch)) {
                     throw new BatchChangedException();
+                }
+                if (plan != null) {
+                    // §7：候选与水位、job 终态在同一笔事务里见胜负；任何一条复验掉就少写一条，不硬塞
+                    writer.applyIn(connection, plan, key, asOf);
                 }
                 if (batch != null && checkpoint != null) {
                     SessionContextRepository.SaveOutcome saved = SessionContextRepository.saveIn(connection,

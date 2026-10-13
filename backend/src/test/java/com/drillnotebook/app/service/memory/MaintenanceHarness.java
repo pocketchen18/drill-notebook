@@ -12,8 +12,10 @@ import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository.JobDraft;
 import com.drillnotebook.app.repository.MemoryOperationRepository;
+import com.drillnotebook.app.repository.MemoryProposalRepository;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.MemorySettingsRepository;
+import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.repository.UsageRepository;
@@ -72,6 +74,9 @@ final class MaintenanceHarness {
     final ActiveTurnRegistry handles;
     final StagingExtractor extractor = new StagingExtractor();
     final StagingDrafter drafter = new StagingDrafter();
+    final MemoryExtractionWriter writer;
+    final MemorySuppressionRepository suppressions;
+    final MemoryProposalRepository proposals;
     final AtomicLong clock = new AtomicLong(Instant.parse("2026-10-11T00:00:00.000Z").toEpochMilli());
     final ObjectMapper mapper = new ObjectMapper();
 
@@ -101,8 +106,11 @@ final class MaintenanceHarness {
         extractor.clock = clock;
         queue = new MaintenanceQueue(metadata, history, jobs, policy, vault, memory, scanner, extractor, drafter);
         handles = wiring.handles();
+        suppressions = new MemorySuppressionRepository(dataSource, immediate);
+        proposals = new MemoryProposalRepository(dataSource, immediate);
+        writer = new MemoryExtractionWriter(memory, suppressions, proposals, crypto, mapper);
         worker = new MemoryMaintenanceWorker(jobs, usage, metadata, history, memory, policy, vault, crypto, scanner,
-                queue, extractor, drafter, handles, immediate, estimator, mapper, clock::get);
+                queue, extractor, drafter, handles, immediate, estimator, mapper, writer, clock::get);
         worker.useRetryJitter(0L);
         // 用例自己按假时钟调 drainOnce：后台线程跑起来的话，"排队落在哪一次 drain"就不确定了（§14 P6）
         worker.useBackgroundDrain(false);
@@ -162,6 +170,8 @@ final class MaintenanceHarness {
         ChatMessageCipher cipher = new ChatMessageCipher(new ApiKeyEncryptor(), mapper);
         ChatMessageCipher.Encrypted user = cipher.encrypt(userText, CHAT_PASSWORD);
         ChatMessageCipher.Encrypted reply = cipher.encrypt(replyText, CHAT_PASSWORD);
+        // §4.3 的块身份在加密的 request_meta 里：提取侧的 quote 只认 USER_AUTHORED 块，测试要写真材实料
+        ChatMessageCipher.Encrypted meta = cipher.encrypt(requestMetaFor(userText), CHAT_PASSWORD);
         String requestId = String.format("01a109ca-1100-7000-8000-%012d", ++turnSequence);
         long generation = jdbc.queryForObject("SELECT context_generation FROM ai_chat_session WHERE id = ?",
                 Long.class, session);
@@ -172,8 +182,9 @@ final class MaintenanceHarness {
                         + " request_meta_crypto, context_generation, source_scope_type, source_scope_id,"
                         + " source_timezone, runtime_generation, memory_eligible, stored_history_bytes,"
                         + " reserved_history_bytes, persistence_status, started_at, finished_at)"
-                        + " VALUES (?, ?, 'RUNNING', 'meta', 'metaMeta', ?, ?, ?, 'Asia/Shanghai', 'run-1', ?, 0, 0,"
-                        + " 'pending', ?, ?)", requestId, session, generation,
+                        + " VALUES (?, ?, 'RUNNING', ?, ?, ?, ?, ?, 'Asia/Shanghai', 'run-1', ?, 0, 0,"
+                        + " 'pending', ?, ?)", requestId, session, meta.cipher(), meta.meta(),
+                generation,
                 scoped ? "NOTEBOOK" : "GLOBAL", scoped ? notebookId : 0L, eligible ? 1 : 0,
                 stamp(clock.get()), stamp(clock.get()));
         long turnId = jdbc.queryForObject("SELECT id FROM ai_chat_turn WHERE request_id = ?", Long.class, requestId);
@@ -197,6 +208,23 @@ final class MaintenanceHarness {
     void seedTurns(int count, int characters) throws SQLException {
         for (int index = 0; index < count; index++) {
             seedTurn(pad("问题" + index + " ", characters), pad("回答" + index + " ", characters));
+        }
+    }
+
+    /** 与 {@code ChatAttachmentService.orderedBlocks} 同形：u0 恒为用户亲述块且自带正文。 */
+    private String requestMetaFor(String userText) {
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("blockId", "u0");
+        block.put("origin", "USER_AUTHORED");
+        block.put("text", userText);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("schemaVersion", 2);
+        meta.put("protocolVersion", 2);
+        meta.put("sourceBlocks", List.of(block));
+        try {
+            return mapper.writeValueAsString(meta);
+        } catch (Exception error) {
+            throw new IllegalStateException("测试来源块无法封装", error);
         }
     }
 
@@ -480,6 +508,20 @@ final class MaintenanceHarness {
         return jdbc.queryForObject("SELECT MIN(id) FROM ai_chat_turn WHERE session_id = ?", Long.class, sessionId);
     }
 
+    /** §5 校验只认本批的 userMessageId：回放用例要按轮次取真实消息 ID。 */
+    long userMessageId(long turnId) {
+        return jdbc.queryForObject("SELECT user_message_id FROM ai_chat_turn WHERE id = ?", Long.class, turnId);
+    }
+
+    /** 当前 ACTIVE 事实（memory_id, version）：作为"随请求发出去的既有事实"喂给校验链。 */
+    Map<String, Integer> activeTargets() {
+        Map<String, Integer> targets = new LinkedHashMap<>();
+        jdbc.query("SELECT memory_id, version FROM ai_memory_item WHERE status = 'ACTIVE'",
+                (org.springframework.jdbc.core.RowCallbackHandler) row ->
+                        targets.put(row.getString("memory_id"), row.getInt("version")));
+        return targets;
+    }
+
     void deleteTurnContent(long turnId) {
         jdbc.update("UPDATE ai_chat_turn SET content_deleted_at = ?, source_revision = source_revision + 1,"
                 + " user_message_id = NULL, assistant_message_id = NULL WHERE id = ?", stamp(clock.get()), turnId);
@@ -504,19 +546,73 @@ final class MaintenanceHarness {
 
     /** 假提取器：按脚本返回候选数量或抛错，并统计被调用次数；脚本用完就回空批次。 */
     static final class StagingExtractor implements MaintenancePorts.Extractor {
+        private static final ObjectMapper VALIDATOR_MAPPER = new ObjectMapper();
         private final Deque<Object> script = new ArrayDeque<>();
         private final AtomicInteger calls = new AtomicInteger();
         private AtomicLong clock;
         private long hangMillis;
         private MaintenancePorts.Batch lastBatch;
+        private String lastRepairOf;
+
+        /** 上游原文回放：{@code MemoryValidator.validate} 在本批真实来源上跑完 §5 才交给写入器。 */
+        private record BodyReplay(String body, Map<String, Integer> knownTargets) {
+        }
+
+        /** 只脚本化"有几个候选"，具体 ID 与 quote 到 {@code extract} 里才按真实批次填。 */
+        private record StagingCount(int candidates, int rejected, MaintenancePorts.Usage usage) {
+        }
 
         void willReturn(int candidates, int rejected) {
-            script.add(new MaintenancePorts.CandidateBatch(candidates, rejected,
-                    new MaintenancePorts.Usage(1_200L, 200L)));
+            script.add(new StagingCount(candidates, rejected, new MaintenancePorts.Usage(1_200L, 200L)));
         }
 
         void willReturnNothing() {
-            script.add(MaintenancePorts.CandidateBatch.none());
+            // 没回数字就是"用量未知"：预留要被整笔吃掉，不能按估算冒领（§2.6）
+            script.add(new StagingCount(0, 0, MaintenancePorts.Usage.unknown()));
+        }
+
+        /**
+         * P6 用例只关心"这批有没有可用候选"，所以候选身份必须取自<b>本批</b>：
+         * 写入器会按"来源不在本批"作废伪造 ID，那样终态码就变成 NO_VALID_CANDIDATES，测不到 APPLIED 那一格。
+         */
+        private static MaintenancePorts.ExtractionResult produced(int candidates, int rejected,
+                                                                  MaintenancePorts.Usage usage,
+                                                                  MaintenancePorts.Batch batch) {
+            List<MemoryValidator.ValidatedCandidate> list = new ArrayList<>();
+            List<MaintenancePorts.SourceTurn> turns = batch == null ? List.of() : batch.turns();
+            for (int index = 0; index < candidates; index++) {
+                MaintenancePorts.SourceTurn turn = turns.isEmpty() ? null : turns.get(index % turns.size());
+                String blockId = turn == null || turn.blocks().isEmpty() ? "u0"
+                        : turn.blocks().get(0).blockId();
+                String quote = turn == null || turn.blocks().isEmpty() ? "以后讲详细些"
+                        : turn.blocks().get(0).text();
+                list.add(new MemoryValidator.ValidatedCandidate("ADD", null, null, "PREFERENCE", "answer.detail",
+                        "answer.detail", "detailed", "detailed", quote,
+                        turn == null ? 1L : turn.turnId(), turn == null ? 1L : turn.userMessageId(), blockId,
+                        turn == null ? "2026-10-11T00:00:00.000Z" : turn.sourceCreatedAt(),
+                        turn == null ? 0L : turn.finishedMillis(), false, null));
+            }
+            List<String> rejections = new ArrayList<>();
+            for (int index = 0; index < rejected; index++) {
+                rejections.add("QUOTE_NOT_CONTINUOUS");
+            }
+            return new MaintenancePorts.ExtractionResult(MemoryValidator.FormatStatus.OK, list, rejections, usage,
+                    Map.of(), "{\"schemaVersion\":2,\"candidates\":[]}");
+        }
+
+        /** 脚本化一段"上游原文"：走<b>真实</b> §5 校验链再交给写入器，回放用例的区分度就在这里。 */
+        void willReturnBody(String body) {
+            script.add(new BodyReplay(body, Map.of()));
+        }
+
+        /** 同上，并声明"随请求发出去的既有事实"（memoryId → 当前版本）：伪造与陈旧目标的用例要它。 */
+        void willReturnBody(String body, Map<String, Integer> knownTargets) {
+            script.add(new BodyReplay(body, knownTargets));
+        }
+
+        /** 最近一次调用收到的 {@code repairOf}：修复请求必须带上被修的那份原文。 */
+        String lastRepairOf() {
+            return lastRepairOf;
         }
 
         void willFail(String code, boolean retryable) {
@@ -556,9 +652,11 @@ final class MaintenanceHarness {
         }
 
         @Override
-        public MaintenancePorts.CandidateBatch extract(MaintenancePorts.Batch batch)
+        public MaintenancePorts.ExtractionResult extract(MaintenancePorts.Batch batch,
+                                                         MemoryCryptoService.MemoryKey key, String repairOf)
                 throws MaintenancePorts.AttemptFailure {
             lastBatch = batch;
+            lastRepairOf = repairOf;
             calls.incrementAndGet();
             if (hangMillis > 0) {
                 clock.addAndGet(hangMillis);
@@ -570,10 +668,19 @@ final class MaintenanceHarness {
             }
             if (next instanceof Runnable action) {
                 action.run();
-                return MaintenancePorts.CandidateBatch.none();
+                return produced(0, 0, MaintenancePorts.Usage.unknown(), batch);
             }
-            return next instanceof MaintenancePorts.CandidateBatch produced ? produced
-                    : MaintenancePorts.CandidateBatch.none();
+            if (next instanceof StagingCount count) {
+                return produced(count.candidates(), count.rejected(), count.usage(), batch);
+            }
+            if (next instanceof BodyReplay replay) {
+                MemoryValidator.Outcome outcome = MemoryValidator.validate(replay.body(), batch,
+                        replay.knownTargets(), VALIDATOR_MAPPER);
+                return new MaintenancePorts.ExtractionResult(outcome.format(), outcome.candidates(),
+                        outcome.rejections(), new MaintenancePorts.Usage(1_200L, 200L), replay.knownTargets(),
+                        replay.body());
+            }
+            return produced(0, 0, MaintenancePorts.Usage.unknown(), batch);
         }
     }
 

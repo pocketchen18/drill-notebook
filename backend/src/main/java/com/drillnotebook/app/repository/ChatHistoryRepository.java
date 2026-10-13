@@ -53,9 +53,11 @@ public class ChatHistoryRepository {
             + " LEFT JOIN ai_chat_message u ON u.id = t.user_message_id"
             + " LEFT JOIN ai_chat_message a ON a.id = t.assistant_message_id";
     private static final String TURN_COLUMNS = TURN_SELECT + TURN_FROM;
-    /** 维护扫描额外看的两列：{@code source_revision} 是批次身份的一部分，{@code memory_eligible} 决定能否当来源。 */
+    /** 维护扫描额外看的列：{@code source_revision} 是批次身份的一部分，{@code memory_eligible} 决定能否当来源，
+     *  {@code request_meta} 两列给出 §4.3 的有序来源块（quote 只能在块内匹配），用户消息时刻是证据的源时间。 */
     private static final String MAINTENANCE_SELECT = TURN_SELECT
-            + ", t.source_revision, t.memory_eligible" + TURN_FROM;
+            + ", t.source_revision, t.memory_eligible, t.request_meta_cipher, t.request_meta_crypto"
+            + ", u.created_at AS u_created_at" + TURN_FROM;
 
     private final DataSource dataSource;
 
@@ -89,15 +91,17 @@ public class ChatHistoryRepository {
     }
 
     /**
-     * 维护扫描的一行：轮次身份、来源版本与正文列（不解密）。
+     * 维护扫描的一行：轮次身份、来源版本、正文列与请求元数据列（都不解密）。
      * 与 {@link TurnHistory} 分开，是因为后台装载必须额外看到 {@code source_revision}
-     * 与 {@code memory_eligible}——前者是批次身份的一部分，后者决定这一轮能不能当来源。
+     * 与 {@code memory_eligible}——前者是批次身份的一部分，后者决定这一轮能不能当来源；
+     * {@code request_meta} 里才有 §4.3 的有序来源块，提取侧的 quote 必须落在某个 {@code USER_AUTHORED} 块内。
      */
     public record MaintenanceRow(long turnId, String requestId, String status, long contextGeneration,
                                  long sourceRevision, boolean memoryEligible, String contentDeletedAt,
                                  String startedAt, String finishedAt, Long userMessageId, String userContent,
                                  String userContentCipher, String userContentMeta, Long assistantMessageId,
-                                 String assistantContent, String assistantContentCipher, String assistantContentMeta) {
+                                 String assistantContent, String assistantContentCipher, String assistantContentMeta,
+                                 String requestMetaCipher, String requestMetaCrypto, String userCreatedAt) {
     }
 
     /** 待处理边界：区间内合格完整轮次的数量。 */
@@ -122,14 +126,7 @@ public class ChatHistoryRepository {
             List<MaintenanceRow> rows = new ArrayList<>();
             try (ResultSet result = statement.executeQuery()) {
                 while (result.next()) {
-                    rows.add(new MaintenanceRow(result.getLong("id"), result.getString("request_id"),
-                            result.getString("status"), result.getLong("context_generation"),
-                            result.getLong("source_revision"), result.getInt("memory_eligible") == 1,
-                            result.getString("content_deleted_at"), result.getString("started_at"),
-                            result.getString("finished_at"), nullableLong(result, "u_id"),
-                            result.getString("u_content"), result.getString("u_cipher"), result.getString("u_meta"),
-                            nullableLong(result, "a_id"), result.getString("a_content"),
-                            result.getString("a_cipher"), result.getString("a_meta")));
+                    rows.add(mapMaintenanceRow(result));
                 }
             }
             return rows;
@@ -259,23 +256,32 @@ public class ChatHistoryRepository {
             List<MaintenanceRow> rows = new ArrayList<>();
             try (ResultSet result = statement.executeQuery()) {
                 while (result.next()) {
-                    rows.add(new MaintenanceRow(result.getLong("id"), result.getString("request_id"),
-                            result.getString("status"), result.getLong("context_generation"),
-                            result.getLong("source_revision"), result.getInt("memory_eligible") == 1,
-                            result.getString("content_deleted_at"), result.getString("started_at"),
-                            result.getString("finished_at"), nullableLong(result, "u_id"),
-                            result.getString("u_content"), result.getString("u_cipher"), result.getString("u_meta"),
-                            nullableLong(result, "a_id"), result.getString("a_content"),
-                            result.getString("a_cipher"), result.getString("a_meta")));
+                    rows.add(mapMaintenanceRow(result));
                 }
             }
             return rows;
         }
     }
 
+    /** 两处维护扫描共用同一列集合，行映射只写一遍。 */
+    private static MaintenanceRow mapMaintenanceRow(ResultSet result) throws SQLException {
+        return new MaintenanceRow(result.getLong("id"), result.getString("request_id"),
+                result.getString("status"), result.getLong("context_generation"),
+                result.getLong("source_revision"), result.getInt("memory_eligible") == 1,
+                result.getString("content_deleted_at"), result.getString("started_at"),
+                result.getString("finished_at"), nullableLong(result, "u_id"),
+                result.getString("u_content"), result.getString("u_cipher"), result.getString("u_meta"),
+                nullableLong(result, "a_id"), result.getString("a_content"),
+                result.getString("a_cipher"), result.getString("a_meta"),
+                result.getString("request_meta_cipher"), result.getString("request_meta_crypto"),
+                result.getString("u_created_at"));
+    }
+
     /** 一批轮次的附件身份：一次查完，避免每轮一条 SQL。 */
     public List<AttachmentStub> attachmentStubs(List<Long> turnIds) throws SQLException {
-        if (turnIds == null || turnIds.isEmpty()) return List.of();
+        if (turnIds == null || turnIds.isEmpty()) {
+            return List.of();
+        }
         StringBuilder sql = new StringBuilder("SELECT turn_id, id, block_id, kind, byte_length"
                 + " FROM ai_chat_attachment WHERE turn_id IN (");
         for (int index = 0; index < turnIds.size(); index++) {

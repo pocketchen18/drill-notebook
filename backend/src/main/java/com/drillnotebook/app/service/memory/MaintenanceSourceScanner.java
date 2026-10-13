@@ -8,8 +8,10 @@ import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.ChatMessageCipher;
 import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
+import com.drillnotebook.app.service.memory.MaintenancePorts.SourceBlock;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -208,6 +210,21 @@ public class MaintenanceSourceScanner {
                 counters.credentials++;
                 continue;
             }
+            List<SourceBlock> blocks = List.of();
+            if (extract) {
+                // §4.3：quote 只能绑在 USER_AUTHORED 块上，所以提取输入必须有块，不能只靠消息正文
+                BlockRead read = authoredBlocks(row, request.sessionPassword());
+                if (read.needsPassword()) {
+                    needsPassword = true;
+                    break;
+                }
+                blocks = read.blocks();
+                if (blocks.isEmpty()) {
+                    // 拿不到 USER_AUTHORED 块就没有可绑定的 quote，这轮当不合格来源跳过，不送正文给模型猜
+                    counters.ineligible++;
+                    continue;
+                }
+            }
             String assistantText = null;
             if (!extract) {
                 ChatMessageCipher.Read reply = cipher.readLegacy(row.assistantContent(), row.assistantContentCipher(),
@@ -237,7 +254,7 @@ public class MaintenanceSourceScanner {
             budget -= tokens;
             turns.add(new SourceTurn(row.turnId(), row.sourceRevision(), row.userMessageId(),
                     row.assistantMessageId(), userText, assistantText, tokens,
-                    MemoryTimes.parseMillis(row.finishedAt())));
+                    MemoryTimes.parseMillis(row.finishedAt()), blocks, row.userCreatedAt()));
         }
         Skips skips = counters.toSkips();
         if (needsPassword) {
@@ -365,6 +382,47 @@ public class MaintenanceSourceScanner {
             return MaintenanceRules.NOTICE_SOURCE_DELETED;
         }
         return null;
+    }
+
+    /** 从请求元数据里读出的用户亲述块；{@code needsPassword} 要把整批推到等待解锁。 */
+    private record BlockRead(List<SourceBlock> blocks, boolean needsPassword) {
+        private static final BlockRead NONE = new BlockRead(List.of(), false);
+    }
+
+    /**
+     * 取 {@code request_meta.sourceBlocks} 里的 {@code USER_AUTHORED} 块（§4.3）。附件块永远拿不到这个
+     * origin，所以附件正文不可能被当作用户亲口说的话来提取；v2 轮次必有 u0 块，缺块就不是合格来源。
+     */
+    private BlockRead authoredBlocks(MaintenanceRow row, String sessionPassword) {
+        ChatMessageCipher.Read meta = cipher.read(row.requestMetaCipher(), row.requestMetaCrypto(), sessionPassword);
+        if (meta.status() == ChatMessageCipher.ReadStatus.NEEDS_PASSWORD) {
+            return new BlockRead(List.of(), true);
+        }
+        if (meta.status() != ChatMessageCipher.ReadStatus.DECRYPTED) {
+            return BlockRead.NONE;
+        }
+        try {
+            JsonNode blocks = mapper.readTree(meta.value()).path("sourceBlocks");
+            if (!blocks.isArray()) {
+                return BlockRead.NONE;
+            }
+            List<SourceBlock> authored = new ArrayList<>();
+            for (JsonNode block : blocks) {
+                if (!"USER_AUTHORED".equals(block.path("origin").asText(""))) {
+                    continue;
+                }
+                String blockId = block.path("blockId").asText("");
+                String text = block.path("text").asText("");
+                if (!blockId.isBlank() && !text.isBlank()) {
+                    authored.add(new SourceBlock(blockId, text));
+                }
+            }
+            return new BlockRead(List.copyOf(authored), false);
+        } catch (Exception error) {
+            // 元数据坏了就当没有可用块：宁可少提取，也不能让 quote 绑到来历不明的文本上
+            log.info("轮次 {} 的来源块无法解析，按不合格来源跳过", row.turnId());
+            return BlockRead.NONE;
+        }
     }
 
     /** 可变计数容器：只在装载循环内部使用。 */

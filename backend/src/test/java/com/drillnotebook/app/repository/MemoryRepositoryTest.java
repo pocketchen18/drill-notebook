@@ -246,6 +246,23 @@ class MemoryRepositoryTest {
     }
 
     @Test
+    void confirmOnlyTouchesTheVersionThatIsStillActive() throws Exception {
+        var added = memory.add(memory("f-goal", "v-1", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+        assertEquals(CasOutcome.APPLIED,
+                memory.setStatus(VAULT, added.memoryId(), 1, MemoryRepository.STATUS_ACTIVE,
+                        MemoryRepository.STATUS_SUPERSEDED), "先造出「已被并发改过」的目标版本");
+
+        try (Connection connection = dataSource.getConnection()) {
+            assertEquals(0, MemoryRepository.confirmIn(connection, added.rowId(), LATER),
+                    "确认与同文件其他写原语同一条 CAS 纪律：状态前提不成立就一行都不动");
+        }
+
+        assertEquals(NOW, jdbc.queryForObject(
+                "SELECT last_confirmed_at FROM ai_memory_item WHERE row_id = ?", String.class, added.rowId()),
+                "已不是 ACTIVE 的旧版不许被刷上确认时刻");
+    }
+
+    @Test
     void statusChangeIsVersionCasAndNeverRewritesHistory() throws Exception {
         var added = memory.add(memory("f-language", "v-1", MemoryRepository.STATUS_ACTIVE, "MANUAL"));
 
