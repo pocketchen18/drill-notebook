@@ -260,8 +260,9 @@ class MemoryValidatorTest {
     private static Batch batch(String userText) {
         SourceTurn turn = new SourceTurn(TURN_ID, 1L, MESSAGE_ID, null, userText, null, 120,
                 1_760_000_000_000L, List.of(new SourceBlock("u0", userText)), "2026-10-11T00:00:00.000Z");
-        return new Batch(Kind.EXTRACT, 900L, TURN_ID, TURN_ID, 1L, "GLOBAL", 0L, "Asia/Shanghai", 1L, 1L, 0L, null,
-                List.of(turn), 120, 120, "revision", 1_760_000_000_000L);
+        return new Batch(Kind.EXTRACT, 900L, TURN_ID, TURN_ID, 1L, "GLOBAL", 0L, "Asia/Shanghai", 1L, 1L,
+                MaintenancePorts.PreviousSummary.NONE,
+                List.of(turn), 120, 120, "revision", 1_760_000_000_000L, List.of());
     }
 
     /** 变异用例的来源文本要含住所有出现过的 quote，这样拒绝一定来自被变异的那一格。 */

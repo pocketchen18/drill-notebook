@@ -183,6 +183,86 @@ class ConversationProjectionTest {
     }
 
     @Test
+    void summaryWithAnIntactReferenceStaysUsable() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        long page = seedPage("hash-v1");
+        checkpoint(1L, 4L, 1L, coverage(1, 4), List.of(new Ref(page, "hash-v1")));
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-ref-ok", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNotNull(result.summary(), "页还在、版本没动、还在同一本笔记本里：摘要照常用（§8.4 第 7 条）");
+        assertEquals(2, result.candidates().size(), "引用没问题时不该把已替代的原文放回来");
+        assertFalse(hasOmission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+    }
+
+    @Test
+    void editedReferencePageMakesTheWholeSummaryUnavailable() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        long page = seedPage("hash-v1");
+        checkpoint(1L, 4L, 1L, coverage(1, 4), List.of(new Ref(page, "hash-v1")));
+        jdbc.update("UPDATE note_page SET content_hash = 'hash-v2' WHERE id = ?", page);
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-ref-changed", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary(),
+                "摘要正文里那句\"见某页\"现在指向别的内容：留着就是拿旧结论冒充当前事实（§8.4 第 7 条）");
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+        assertTrue(result.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
+        assertEquals(6, result.candidates().size(), "摘要失效后原文全部回来，不能顺手按 coverage 丢掉");
+    }
+
+    @Test
+    void deletedReferencePageSaysDeletedInsteadOfChanged() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        long page = seedPage("hash-v1");
+        checkpoint(1L, 4L, 1L, coverage(1, 4), List.of(new Ref(page, "hash-v1")));
+        jdbc.update("DELETE FROM note_page WHERE id = ?", page);
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-ref-deleted", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary(), "引用页被删了同样整份失效（§8.4 第 7 条）");
+        // 提示要能区分"页面没了"和"页面改过了"：两者的处置动作不一样，前者还可能是用户清了笔记
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_DELETED, "SUMMARY"));
+        assertFalse(hasOmission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+    }
+
+    @Test
+    void referencePageOutsideTheSessionScopeInvalidatesTheSummary() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        long page = seedPage("hash-v1");
+        checkpoint(1L, 4L, 1L, coverage(1, 4), List.of(new Ref(page, "hash-v1")));
+        jdbc.update("INSERT INTO notebook(id, title) VALUES (7, '别的笔记本')");
+        // 只改作用域两列，不改上下文代次：这里要测的是"引用还属不属于这本笔记本"，不是换代作废
+        jdbc.update("UPDATE ai_chat_session SET memory_scope_type = 'NOTEBOOK', memory_notebook_id = 7"
+                + " WHERE id = ?", sessionId);
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-ref-scope", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary(), "同一页码换到别的笔记本作用域下就是另一份内容，摘要不再用（§8.4 第 7 条）");
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+    }
+
+    @Test
     void withoutSummaryAuthorizationTheCheckpointIsNotEvenRead() throws Exception {
         seedTurns(6);
         long current = insertRunningTurn();
@@ -466,12 +546,31 @@ class ConversationProjectionTest {
 
     /** 落一份合法检查点：payload 形状按 §2.5（modelSummary 与 serverCoverage 分开）。 */
     private void checkpoint(long generation, long throughTurnId, long revision, List<long[]> ranges) throws Exception {
+        checkpoint(generation, throughTurnId, revision, ranges, List.of());
+    }
+
+    /** 引用台账的一项：页号 + 写入时读到的内容版本。 */
+    private record Ref(long pageId, String contentVersion) {
+    }
+
+    /**
+     * 带引用台账的检查点：{@code references} 每项是一份 {@link Ref}。
+     * 引用是服务端字段，模型看不见，但每次用摘要前都要复验（执行方案 §8.4 第 7 条）。
+     */
+    private void checkpoint(long generation, long throughTurnId, long revision, List<long[]> ranges,
+                            List<Ref> references) throws Exception {
         List<Map<String, Object>> coverage = new ArrayList<>();
         for (long[] range : ranges) {
             coverage.add(Map.of("firstTurnId", range[0], "lastTurnId", range[1]));
         }
+        List<Map<String, Object>> ledger = new ArrayList<>();
+        for (Ref reference : references) {
+            ledger.add(Map.of("pageId", reference.pageId(), "contentVersion", reference.contentVersion(),
+                    "sourceTurnId", 1L));
+        }
         String payload = new ObjectMapper().writeValueAsString(Map.of("schemaVersion", 2,
-                "modelSummary", "用户在准备雅思，偏好先给例子再讲原理。", "serverCoverage", coverage));
+                "modelSummary", "用户在准备雅思，偏好先给例子再讲原理。", "serverCoverage", coverage,
+                "references", ledger));
         MemoryCryptoService.MemoryKey key = vault.requireKey();
         MemoryCryptoService.EncryptedValue encrypted = crypto.encrypt(key, "ai_session_context",
                 String.valueOf(sessionId), revision, payload);
@@ -482,6 +581,15 @@ class ConversationProjectionTest {
                 + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')",
                 sessionId, revision, throughTurnId, generation, epoch, encrypted.cipher(),
                 encrypted.cryptoMeta(), 40);
+    }
+
+    /** 造一页笔记并给定内容版本，返回 pageId：引用复验比的就是这一列。 */
+    private long seedPage(String contentHash) {
+        jdbc.update("INSERT INTO notebook(title) VALUES ('引用所在笔记本')");
+        Long notebook = jdbc.queryForObject("SELECT MAX(id) FROM notebook", Long.class);
+        jdbc.update("INSERT INTO note_page(notebook_id, title, content, content_hash) VALUES (?, '引用页', '正文', ?)",
+                notebook, contentHash);
+        return jdbc.queryForObject("SELECT MAX(id) FROM note_page", Long.class);
     }
 
     private ContextAudit auditOf(ContextAudit.Builder builder, ConversationProjection.Projection result) {

@@ -1,9 +1,9 @@
 package com.drillnotebook.app.service.memory;
 
+import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * 后台维护的输入输出词汇（执行方案 §8 模块依赖：{@code MemoryMaintenanceWorker → MemoryExtractor}）。
@@ -22,16 +22,42 @@ public final class MaintenancePorts {
     }
 
     /**
+     * 上一版<b>有效</b>摘要带来的材料：正文、已覆盖范围与引用（§8.4 第 3、7 条；contracts §2.5）。
+     * revision 为 0 表示没有可用摘要——换代时 coverage 必须把旧段继承过来，否则读侧会把已整理过的
+     * 轮次重新拼进近期原文窗口（§14 P8 的"长会话可控"就靠它）。
+     */
+    public record PreviousSummary(long revision, String modelSummary, List<ContextAudit.CoverageRange> coverage,
+                                  List<SessionSummaryValidator.Reference> references) {
+        public PreviousSummary {
+            coverage = coverage == null ? List.of() : List.copyOf(coverage);
+            references = references == null ? List.of() : List.copyOf(references);
+        }
+
+        public static final PreviousSummary NONE = new PreviousSummary(0L, null, List.of(), List.of());
+    }
+
+    /**
      * 一批可整理来源。{@code turns} 按轮次 ID 升序且都是完整轮次；提取只看用户发言
      * （{@code assistantText} 为 null，reasoning 与附件原文永不进入本结构，§4 不变量 2），
      * 摘要才带助手正文。
      */
     public record Batch(Kind kind, long sessionId, long fromTurnId, long throughTurnId, long contextGeneration,
                         String scopeType, long scopeId, String timezone, long vaultEpoch,
-                        long policyRevision, long summaryRevision, String previousSummary, List<SourceTurn> turns,
-                        int framingTokens, int estimatedTokens, String inputRevision, long latestSourceMillis) {
+                        long policyRevision, PreviousSummary previous, List<SourceTurn> turns,
+                        int framingTokens, int estimatedTokens, String inputRevision, long latestSourceMillis,
+                        List<SessionSummaryValidator.Reference> allowedReferences) {
         public Batch {
             turns = turns == null ? List.of() : List.copyOf(turns);
+            previous = previous == null ? PreviousSummary.NONE : previous;
+            allowedReferences = allowedReferences == null ? List.of() : List.copyOf(allowedReferences);
+        }
+
+        public long summaryRevision() {
+            return previous.revision();
+        }
+
+        public String previousSummary() {
+            return previous.modelSummary();
         }
 
         public boolean empty() {
@@ -55,10 +81,52 @@ public final class MaintenancePorts {
     public record SourceBlock(String blockId, String text) {
     }
 
-    /** 摘要草稿：模型可见正文与它的估算量，净缩减据此计算（§8.4 第 4 条）。 */
-    public record SummaryDraft(String modelSummary, int estimatedTokens, Usage usage) {
+    /**
+     * 摘要草稿：发布视图正文、它的估算量、厂商用量，以及<b>已校验</b>的引用（§6.1；检查点要按引用复验版本）。
+     * 净缩减据 estimatedTokens 计算（§8.4 第 4 条）；{@code omittedItems} 只是诊断，不进模型可见正文。
+     */
+    public record SummaryDraft(String modelSummary, int estimatedTokens, Usage usage,
+                               List<SessionSummaryValidator.Reference> references, int omittedItems) {
         public SummaryDraft {
             usage = usage == null ? Usage.unknown() : usage;
+            references = references == null ? List.of() : List.copyOf(references);
+        }
+
+        public SummaryDraft(String modelSummary, int estimatedTokens, Usage usage) {
+            this(modelSummary, estimatedTokens, usage, List.of(), 0);
+        }
+    }
+
+    /**
+     * 一次摘要调用的产出。{@code format} 判<b>整份返回</b>能不能用（§6.3 第 1 条据此决定修复还是终态），
+     * {@code draft} 为 null 表示"这一份没有可发布的内容"（任务照常终态，不是失败）。
+     */
+    record DraftResult(SessionSummaryValidator.FormatStatus format, SummaryDraft draft, List<String> rejections,
+                       Usage usage, String rawText) {
+        DraftResult {
+            rejections = rejections == null ? List.of() : List.copyOf(rejections);
+            usage = usage == null ? Usage.unknown() : usage;
+        }
+
+        boolean formatOk() {
+            return format == SessionSummaryValidator.FormatStatus.OK;
+        }
+
+        boolean published() {
+            return draft != null;
+        }
+
+        static DraftResult formatFailure(SessionSummaryValidator.FormatStatus format, Usage usage, String rawText) {
+            return new DraftResult(format, null, List.of(), usage, rawText);
+        }
+
+        /** 结构合格但渲染后什么都不剩（或整包装不下）：终态按"没有新东西"走，不写检查点。 */
+        static DraftResult nothing(Usage usage, List<String> rejections, String rawText) {
+            return new DraftResult(SessionSummaryValidator.FormatStatus.OK, null, rejections, usage, rawText);
+        }
+
+        static DraftResult of(SummaryDraft draft, List<String> rejections, Usage usage, String rawText) {
+            return new DraftResult(SessionSummaryValidator.FormatStatus.OK, draft, rejections, usage, rawText);
         }
     }
 
@@ -143,13 +211,21 @@ public final class MaintenancePorts {
                 throws AttemptFailure;
     }
 
-    /** 任务续接摘要端口（P8 接 {@code SESSION_SUMMARY_V2}）。 */
+    /**
+     * 任务续接摘要端口（§8.4 与 contracts §6：{@code SESSION_SUMMARY_V2}）。
+     *
+     * <p>和提取端口同一条纪律：整份结构不合格时最多修复一次，修复是<b>第二次真实外发</b>，
+     * 由 worker 另记一笔 attempt；装不下 3,000 整包不是失败而是"本轮不发"（§6.3 第 4 条）。</p>
+     */
     public interface SummaryDrafter {
         String promptVersion();
 
+        /** 提示词与非来源部分的估算占用，装载时先从 3,000 输入预算里扣掉（§8.4 第 3 条：协议开销计入整包）。 */
         int framingTokens();
 
-        /** 空表示本次没有可发布的草稿（占位实现），任务照常终态而不是失败。 */
-        Optional<SummaryDraft> draft(Batch batch) throws AttemptFailure;
+        /**
+         * @param repairOf 上一次被判格式不合格的原文；{@code null} 表示首次请求（§6.3 第 1 条）
+         */
+        DraftResult draft(Batch batch, String repairOf) throws AttemptFailure;
     }
 }

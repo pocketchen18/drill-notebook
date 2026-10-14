@@ -320,10 +320,11 @@ public class MemoryPolicyService {
 
     /** 某用途的真实外发目标：MEMORY_USE 恒用主模型；维护按 chat/dedicated 切换，不擅自兜底（§5.1）。 */
     public Target targetOf(String purpose) {
+        // slot 必须跟着"实际读的是哪一行"走：共享模式下维护用的就是主模型那一行，
+        // 报成 memory 会让调用方去查一个空槽位（后台外发就是这么丢的 Key）
         String slot = slotOf(purpose);
-        AiConfigRepository.ConfigRow row = PURPOSE_USE.equals(purpose)
-                ? configs.findChat()
-                : MODE_DEDICATED.equals(maintenanceMode()) ? configs.findMemory() : configs.findChat();
+        AiConfigRepository.ConfigRow row = AiConfigRepository.PURPOSE_MEMORY.equals(slot)
+                ? configs.findMemory() : configs.findChat();
         boolean keyPresent = row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank();
         if (row == null || row.endpoint() == null || row.endpoint().isBlank()
                 || row.model() == null || row.model().isBlank()) {
@@ -513,6 +514,12 @@ public class MemoryPolicyService {
         return Eligibility.ok();
     }
 
+    private String slotOf(String purpose) {
+        // 只有"专用维护模型"才把目标指到 memory 槽位；共享模式打的就是主模型那一行（§5.1）
+        return !PURPOSE_USE.equals(purpose) && MODE_DEDICATED.equals(maintenanceMode())
+                ? AiConfigRepository.PURPOSE_MEMORY : AiConfigRepository.PURPOSE_CHAT;
+    }
+
     private String maintenanceMode() {
         try {
             return policyOf(current()).maintenanceModelMode();
@@ -527,10 +534,6 @@ public class MemoryPolicyService {
                     "授权用途只能是 MEMORY_USE 或 MEMORY_MAINTENANCE");
         }
         return null;
-    }
-
-    private static String slotOf(String purpose) {
-        return PURPOSE_USE.equals(purpose) ? AiConfigRepository.PURPOSE_CHAT : AiConfigRepository.PURPOSE_MEMORY;
     }
 
     private static Map<String, Object> targetDetails(Target target) {

@@ -160,6 +160,43 @@ final class MaintenanceHarness {
         return 900L + notebookId;
     }
 
+    /**
+     * 把默认会话切到笔记本作用域（引用台账要按 scope 复验时才用得上，§6.1）。
+     * 必须在 {@code seedTurn} 之前调：换作用域会推进上下文代次。
+     */
+    void useNotebookScope(long notebookId) throws SQLException {
+        jdbc.update("INSERT OR IGNORE INTO notebook(id, title) VALUES (?, '测试笔记本')", notebookId);
+        metadata.changeScope(sessionId, "NOTEBOOK", notebookId, 0L);
+    }
+
+    /** 造一页笔记并给定内容版本，返回 pageId。笔记本体在本测试库里不加密。 */
+    long seedPage(long notebookId, String contentHash) {
+        jdbc.update("INSERT OR IGNORE INTO notebook(id, title) VALUES (?, '另一本笔记本')", notebookId);
+        jdbc.update("INSERT INTO note_page(notebook_id, title, content, content_hash) VALUES (?, '引用页', '正文', ?)",
+                notebookId, contentHash);
+        // last_insert_rowid() 只在同一连接上有意义，而 JdbcTemplate 每次调用换一个连接，所以取当前最大 id
+        return jdbc.queryForObject("SELECT MAX(id) FROM note_page", Long.class);
+    }
+
+    /**
+     * 给某一轮写一条"本轮实际提供过这一页"的上下文审计：摘要装载只认这个来源（§4.5 的 selected）。
+     * 审计里的 {@code version} 故意写成前端串，用来钉住"台账采信的是服务端现读的版本"（§6.1）。
+     */
+    void seedProvidedPage(long turnId, long pageId) throws Exception {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("sourceKey", "PAGE|" + pageId + "|前端串|" + turnId);
+        item.put("kind", "PAGE");
+        item.put("id", String.valueOf(pageId));
+        item.put("version", "前端当年报的版本");
+        item.put("sourceTurnId", turnId);
+        String meta = mapper.writeValueAsString(Map.of("schemaVersion", 1, "audit",
+                Map.of("selected", List.of(item))));
+        ChatMessageCipher.Encrypted encrypted = new ChatMessageCipher(new ApiKeyEncryptor(), mapper)
+                .encrypt(meta, CHAT_PASSWORD);
+        jdbc.update("UPDATE ai_chat_turn SET result_meta_cipher = ?, result_meta_crypto = ? WHERE id = ?",
+                encrypted.cipher(), encrypted.meta(), turnId);
+    }
+
     /** 落一条完整轮次：正文按 password 模式加密，结束时刻取当前假时钟。 */
     long seedTurn(String userText, String replyText) throws SQLException {
         return seedTurn(sessionId, ChatTurnRepository.STATUS_COMPLETED, true, userText, replyText);
@@ -285,7 +322,19 @@ final class MaintenanceHarness {
     }
 
     void grantMaintenanceConsent() throws SQLException {
-        new AiConfigRepository(jdbc).upsertChat("custom", CHAT_ENDPOINT, "stub-model", "enc", "{}", "{}");
+        // Key 材料必须是 ApiKeyEncryptor 的真密文：维护端口会解它，"enc" 这种占位串在真代码里过不了（§5.1）
+        ApiKeyEncryptor encryptor = new ApiKeyEncryptor();
+        String cipherText;
+        String keyMeta;
+        try {
+            ApiKeyEncryptor.EncryptedValue value = encryptor.encrypt("sk-test-key",
+                    encryptor.fingerprintMaterial(), "fingerprint");
+            cipherText = value.encrypted();
+            keyMeta = mapper.writeValueAsString(Map.of("mode", value.mode(), "salt", value.salt(), "iv", value.iv()));
+        } catch (Exception error) {
+            throw new IllegalStateException("测试用 API Key 加密失败", error);
+        }
+        new AiConfigRepository(jdbc).upsertChat("custom", CHAT_ENDPOINT, "stub-model", cipherText, keyMeta, "{}");
         MemoryPolicyService.Target target = policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE);
         MemoryApiResult granted = policy.grantConsent(MemoryPolicyService.PURPOSE_MAINTENANCE, target.fingerprint(),
                 MemoryPolicyService.POLICY_VERSION);
@@ -412,6 +461,11 @@ final class MaintenanceHarness {
         return jdbc.queryForList("SELECT state FROM ai_usage_attempt ORDER BY created_at, id", String.class);
     }
 
+    /** 每次外发用的是哪个 purpose：区分"提取/摘要"与"格式修复"的账（§2.6）。按插入顺序，假时钟下同毫秒不能用时间排序。 */
+    List<String> attemptPurposes() {
+        return jdbc.queryForList("SELECT purpose FROM ai_usage_attempt ORDER BY rowid", String.class);
+    }
+
     int reservedTotal() {
         Integer value = jdbc.queryForObject("SELECT COALESCE(SUM(reserved_tokens), 0) FROM ai_usage_daily",
                 Integer.class);
@@ -470,14 +524,14 @@ final class MaintenanceHarness {
         boolean summary = kind == MemoryJobRepository.Kind.SUMMARY;
         String promptVersion = summary ? drafter.promptVersion() : extractor.promptVersion();
         int framingTokens = summary ? drafter.framingTokens() : extractor.framingTokens();
-        MaintenanceSourceScanner.PreviousSummary previous = summary
+        MaintenancePorts.PreviousSummary previous = summary
                 ? scanner.previousSummary(session, stateOf(session).contextGeneration(), envelope.epoch(), key)
-                : MaintenanceSourceScanner.PreviousSummary.NONE;
+                : MaintenancePorts.PreviousSummary.NONE;
         MaintenanceSourceScanner.Loaded loaded = scanner.load(new Request(kind, session, fromTurnId, throughTurnId,
                 stateOf(session).contextGeneration(), stateOf(session).memoryScopeType(),
                 stateOf(session).memoryNotebookId() == null ? 0L : stateOf(session).memoryNotebookId(),
-                "Asia/Shanghai", envelope.epoch(), policy.current().revision(), previous.revision(),
-                previous.modelSummary(), policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE).fingerprint(),
+                "Asia/Shanghai", envelope.epoch(), policy.current().revision(), previous,
+                policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE).fingerprint(),
                 promptVersion, framingTokens, 0L, CHAT_PASSWORD, key));
         if (!loaded.ready()) {
             throw new IllegalStateException("手动装载失败: " + loaded.outcome());
@@ -534,6 +588,37 @@ final class MaintenanceHarness {
 
     void setTurnStatus(long turnId, String status) {
         jdbc.update("UPDATE ai_chat_turn SET status = ? WHERE id = ?", status, turnId);
+    }
+
+    /**
+     * 直接写一份旧检查点：{@code coverage} 是 {@code {firstTurnId, lastTurnId}} 列表。
+     * 代次与 epoch 取当前值，所以装载器会把它当有效旧摘要来继承——"段数爆表"这类前态
+     * 靠正常批次造不出来（§8.4 第 4-5 条）。
+     */
+    void seedCheckpoint(long revision, long throughTurnId, String modelSummary, List<long[]> coverage)
+            throws Exception {
+        MemoryRepository.VaultEnvelope envelope = memory.readEnvelope().orElseThrow();
+        ChatSessionMetadataRepository.State state = stateOf(sessionId);
+        List<Map<String, Object>> ranges = new ArrayList<>();
+        for (long[] pair : coverage) {
+            Map<String, Object> range = new LinkedHashMap<>();
+            range.put("firstTurnId", pair[0]);
+            range.put("lastTurnId", pair[1]);
+            ranges.add(range);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("schemaVersion", 2);
+        payload.put("modelSummary", modelSummary);
+        payload.put("serverCoverage", ranges);
+        payload.put("references", List.of());
+        payload.put("producer", MaintenanceRules.PROMPT_VERSION_SUMMARY);
+        MemoryCryptoService.EncryptedValue encrypted = crypto.encrypt(vault.currentKey().orElseThrow(),
+                "ai_session_context", String.valueOf(sessionId), revision, mapper.writeValueAsString(payload));
+        jdbc.update("INSERT INTO ai_session_context(session_id, revision, schema_version, through_turn_id,"
+                        + " context_generation, vault_epoch, payload_cipher, crypto_meta, estimated_tokens, updated_at)"
+                        + " VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?)", sessionId, revision, throughTurnId,
+                state.contextGeneration(), envelope.epoch(), encrypted.cipher(), encrypted.cryptoMeta(),
+                modelSummary.length(), stamp(clock.get()));
     }
 
     /** 直接改任务行：模拟"上次进程死在这里"留下的中间态。 */
@@ -684,19 +769,47 @@ final class MaintenanceHarness {
         }
     }
 
-    /** 假摘要器：脚本给草稿，或按"没有产出"结束。 */
+    /**
+     * 假摘要器：脚本给<b>成品草稿</b>（只测 worker 的行为），或给<b>上游原文</b>让真的校验链与渲染器
+     * 跑一遍（§14 P8 的"恶意输出"必须打在真规则上，理由同 D73）。
+     */
     static final class StagingDrafter implements MaintenancePorts.SummaryDrafter {
+        private static final ObjectMapper BODY_MAPPER = new ObjectMapper();
+        private static final TokenEstimator BODY_ESTIMATOR = new TokenEstimator(BODY_MAPPER);
+        private static final MaintenancePorts.Usage REPORTED = new MaintenancePorts.Usage(2_000L, 400L);
+
         private final Deque<Object> script = new ArrayDeque<>();
         private final AtomicInteger calls = new AtomicInteger();
         private MaintenancePorts.Batch lastBatch;
+        private String lastRepairOf;
+        private Runnable duringDraft;
 
+        /** 直接交成品：worker 的净缩减门、payload、CAS 都照旧可测。 */
         void willReturn(String modelSummary, int estimatedTokens) {
-            script.add(new MaintenancePorts.SummaryDraft(modelSummary, estimatedTokens,
-                    new MaintenancePorts.Usage(2_000L, 400L)));
+            script.add(MaintenancePorts.DraftResult.of(new MaintenancePorts.SummaryDraft(modelSummary,
+                    estimatedTokens, REPORTED, List.of(), 0), List.of(), REPORTED, null));
         }
 
+        /**
+         * 交上游原文：走真 {@link SessionSummaryValidator} 与真 {@link SessionSummaryRenderer}。
+         * 串里的 {@code {turn}} 到调用时才换成本批<b>第一条</b>轮次 ID——理由同 D73，脚本里写死的 ID
+         * 一旦和真批次不一致，用例就是在测一条假来源。
+         */
+        void willReturnBody(String body) {
+            script.add(body);
+        }
+
+        /** 本轮没有可发布的草稿（占位实现与"整包装不下"都算这种终态）。 */
         void willReturnNothing() {
-            script.add(Optional.empty());
+            script.add(MaintenancePorts.DraftResult.nothing(MaintenancePorts.Usage.unknown(), List.of(), null));
+        }
+
+        /**
+         * 外发期间先执行一段动作，再照常交脚本里的那份结果：用来制造"检查点在发送之后被人换掉"
+         * 这类只能靠精确时序才能证伪的竞争（§8.4 第 7 条 CAS）。
+         */
+        void invokeDuringDraft(Runnable action) {
+            duringDraft = action;
         }
 
         void willFail(String code, boolean retryable) {
@@ -705,6 +818,11 @@ final class MaintenanceHarness {
 
         MaintenancePorts.Batch lastBatch() {
             return lastBatch;
+        }
+
+        /** 修复请求带上一次的不合格原文：断言"最多修复一次"要看第二次拿到的是什么。 */
+        String lastRepairOf() {
+            return lastRepairOf;
         }
 
         int calls() {
@@ -726,20 +844,44 @@ final class MaintenanceHarness {
         }
 
         @Override
-        @SuppressWarnings("unchecked")
-        public Optional<MaintenancePorts.SummaryDraft> draft(MaintenancePorts.Batch batch)
+        public MaintenancePorts.DraftResult draft(MaintenancePorts.Batch batch, String repairOf)
                 throws MaintenancePorts.AttemptFailure {
             lastBatch = batch;
+            lastRepairOf = repairOf;
             calls.incrementAndGet();
+            if (duringDraft != null) {
+                Runnable action = duringDraft;
+                duringDraft = null;
+                action.run();
+            }
             Object next = script.poll();
             if (next instanceof MaintenancePorts.AttemptFailure failure) {
                 throw failure;
             }
-            if (next instanceof Optional<?> typed) {
-                return (Optional<MaintenancePorts.SummaryDraft>) typed;
+            if (next instanceof MaintenancePorts.DraftResult result) {
+                return result;
             }
-            return next instanceof MaintenancePorts.SummaryDraft draft
-                    ? Optional.of(draft) : Optional.empty();
+            if (!(next instanceof String scripted)) {
+                return MaintenancePorts.DraftResult.nothing(MaintenancePorts.Usage.unknown(), List.of(), null);
+            }
+            return produce(scripted.replace("{turn}", String.valueOf(batch.turns().get(0).turnId())), batch);
+        }
+
+        /** 校验→渲染：与 {@code MaintenanceSummaryDrafter.draft} 后半段同一条流水线。 */
+        private static MaintenancePorts.DraftResult produce(String body, MaintenancePorts.Batch batch) {
+            SessionSummaryValidator.Outcome outcome = SessionSummaryValidator.validate(body,
+                    SessionSummaryValidator.turnIdsOf(batch.turns()), batch.allowedReferences(), BODY_MAPPER);
+            if (!outcome.formatOk()) {
+                return MaintenancePorts.DraftResult.formatFailure(outcome.format(), REPORTED, body);
+            }
+            SessionSummaryRenderer.Published published = SessionSummaryRenderer.render(outcome.summary(),
+                    MaintenanceRules.SUMMARY_MODEL_TOKEN_LIMIT, BODY_ESTIMATOR);
+            if (!published.publishable()) {
+                return MaintenancePorts.DraftResult.nothing(REPORTED, outcome.rejections(), body);
+            }
+            return MaintenancePorts.DraftResult.of(new MaintenancePorts.SummaryDraft(published.modelSummary(),
+                    published.estimatedTokens(), REPORTED, published.references(), published.omittedItems()),
+                    outcome.rejections(), REPORTED, body);
         }
     }
 }

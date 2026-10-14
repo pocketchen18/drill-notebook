@@ -230,6 +230,18 @@ class MemoryPolicyServiceTest {
     }
 
     @Test
+    void sharedModeReportsTheSlotItActuallyReads() throws Exception {
+        seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
+
+        MemoryPolicyService.Target target = policy.targetOf(MAINT);
+
+        assertTrue(target.configured(), "共享模式下维护目标就是主模型那一行");
+        assertEquals("chat", target.slot(),
+                "slot 要说真话：后台外发照着 slot 去取 Key 与端点，报成 memory 就是查一个空槽位（§5.1）");
+        assertEquals(CHAT_MODEL, target.model());
+    }
+
+    @Test
     void dedicatedModeNeverFallsBackToTheChatModel() throws Exception {
         seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
         setMaintenanceMode("dedicated");

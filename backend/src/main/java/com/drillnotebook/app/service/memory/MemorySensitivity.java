@@ -35,7 +35,27 @@ public final class MemorySensitivity {
             Pattern.compile("(确诊|病历|就诊|吃药|服药|抑郁|焦虑|失眠|糖尿病|高血压|肿瘤|哮喘|肝炎)"),
             Pattern.compile("(银行卡|储蓄卡|信用卡|账户余额|基金账号|股票账户)"));
 
+    /** §5.3「送维护模型前用占位符替换」用的就是这一个串，界面上说的"已省略"与发出去的字面一致。 */
+    public static final String CREDENTIAL_PLACEHOLDER = "[已省略凭据]";
+
     private MemorySensitivity() {
+    }
+
+    /**
+     * 把命中的凭据片段换成 {@link #CREDENTIAL_PLACEHOLDER}，其余正文原样保留（§5.3）。
+     *
+     * <p>摘要侧需要它：一轮里通常只有半句是凭据，整轮丢掉会在 coverage 上挖洞（见进度台账 D79）。
+     * 替换只发生在<b>发送副本</b>上，落库与批次身份仍用原文，所以"改写完历史"不可能发生。</p>
+     */
+    public static String redactCredentials(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String redacted = text;
+        for (Pattern pattern : CREDENTIALS) {
+            redacted = pattern.matcher(redacted).replaceAll(CREDENTIAL_PLACEHOLDER);
+        }
+        return redacted;
     }
 
     /** 先判凭据（一律拒），再判其它敏感内容，都不命中才算普通。 */

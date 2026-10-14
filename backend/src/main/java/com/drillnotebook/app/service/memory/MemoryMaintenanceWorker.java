@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service.memory;
 
 import com.drillnotebook.app.config.ImmediateTransaction;
+import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.model.UuidV7;
 import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.ChatHistoryRepository.MaintenanceRow;
@@ -23,6 +24,7 @@ import com.drillnotebook.app.service.ActiveTurnRegistry;
 import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.AttemptFailure;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
+import com.drillnotebook.app.service.memory.MaintenancePorts.DraftResult;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SummaryDraft;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Usage;
@@ -362,33 +364,84 @@ public class MemoryMaintenanceWorker {
         if (job.kind() == Kind.EXTRACT) {
             return processExtract(job, leaseToken, batch, key.get(), loaded, claimGeneration, zone);
         }
-        String attemptId = UuidV7.generate(clock.getAsLong());
-        Attempt attempt = new Attempt(attemptId, job.id(), purposeOf(job.kind()), job.targetFingerprint(),
-                budgetDate(zone), zone.getId(), MaintenanceRules.RESERVE_TOKENS,
-                MemoryTimes.formatMillis(clock.getAsLong()), null);
-        if (!usage.reserve(attempt)) {
-            return wait(job, leaseToken, MemoryJobRepository.STATUS_PAUSED_BUDGET, clock.getAsLong(),
-                    "RESERVE_FAILED");
-        }
-        usage.markSent(attemptId);
-        // 摘要尝试记账在实际外发之前：失败同样计入冷却，避免同一批被反复压缩（§2.4、§8.5）
+        return processSummary(job, leaseToken, batch, key.get(), loaded, claimGeneration, zone);
+    }
+
+    /**
+     * 摘要路径（§8.4 第 4-5 条；§6.3 第 1 条"严重结构错误按一次格式修复规则处理"）：一次外发 +
+     * <b>至多</b>一次格式修复。修复是第二次真实调用，所以它自己占额度、自己记一个 attempt
+     * （purpose={@code FORMAT_REPAIR}，与提取侧同一个 purpose，§2.6）；仍不合格就终态 FAILED，
+     * 不写检查点也不推进水位。
+     *
+     * <p>尝试记账在实际外发<b>之前</b>：失败同样计入 120 秒冷却，避免同一批被反复压缩（§2.4、§8.5）。</p>
+     */
+    private JobResult processSummary(JobRow job, String leaseToken, Batch batch,
+                                     MemoryCryptoService.MemoryKey key, Loaded loaded, long claimGeneration,
+                                     ZoneId zone) throws SQLException {
         metadata.recordSummaryAttempt(job.sessionId(), MemoryTimes.formatMillis(clock.getAsLong()),
                 job.throughTurnId(), job.inputRevision());
+        DraftAttempt first = new DraftAttempt();
+        JobResult early = callDraftOnce(job, leaseToken, batch, null,
+                UsageRepository.PURPOSE_SESSION_SUMMARY, zone, first);
+        if (early != null) {
+            return early;
+        }
+        DraftResult result = first.result;
+        if (!result.formatOk()) {
+            DraftAttempt repair = new DraftAttempt();
+            early = callDraftOnce(job, leaseToken, batch, result.rawText(),
+                    UsageRepository.PURPOSE_FORMAT_REPAIR, zone, repair);
+            if (early != null) {
+                return early;
+            }
+            result = repair.result;
+            if (!result.formatOk()) {
+                log.info("摘要草稿格式仍不合格 job={}：终态结束，不再修复也不写检查点", job.id());
+                return settleFailed(job, leaseToken);
+            }
+        }
         Outcome outcome;
         try {
-            outcome = runSummary(batch, key.get());
+            outcome = summaryOutcome(batch, result, key);
+        } catch (AttemptFailure failure) {
+            return onFailure(job, leaseToken, failure);
+        } catch (RuntimeException error) {
+            log.warn("摘要结果处理出现未预期失败 job={}: {}", job.id(), error.toString());
+            return onFailure(job, leaseToken, new AttemptFailure("MAINTENANCE_UNEXPECTED", "本轮维护失败", false));
+        }
+        return commit(job, leaseToken, outcome.outcomeCode(), loaded.skips(), loaded.notice(),
+                outcome.examinedThrough(), batch, outcome.checkpoint(), null, key, claimGeneration);
+    }
+
+    /** 一次<b>已记账</b>的摘要外发：返回 null 表示成功，非 null 就是要直接交回的结论。 */
+    private JobResult callDraftOnce(JobRow job, String leaseToken, Batch batch, String repairOf, String purpose,
+                                    ZoneId zone, DraftAttempt out) throws SQLException {
+        long now = clock.getAsLong();
+        String attemptId = UuidV7.generate(now);
+        Attempt attempt = new Attempt(attemptId, job.id(), purpose, job.targetFingerprint(), budgetDate(zone),
+                zone.getId(), MaintenanceRules.RESERVE_TOKENS, MemoryTimes.formatMillis(now), null);
+        if (!usage.reserve(attempt)) {
+            return wait(job, leaseToken, MemoryJobRepository.STATUS_PAUSED_BUDGET, now, "RESERVE_FAILED");
+        }
+        usage.markSent(attemptId);
+        try {
+            out.result = drafter.draft(batch, repairOf);
         } catch (AttemptFailure failure) {
             // 已经发出去了：用量按 UNKNOWN 消费，预留不返还（§2.6）
             settle(attemptId, ActualUsage.unknown());
             return onFailure(job, leaseToken, failure);
         } catch (RuntimeException error) {
             settle(attemptId, ActualUsage.unknown());
-            log.warn("维护任务出现未预期失败 job={}: {}", job.id(), error.toString());
+            log.warn("摘要外发出现未预期失败 job={}: {}", job.id(), error.toString());
             return onFailure(job, leaseToken, new AttemptFailure("MAINTENANCE_UNEXPECTED", "本轮维护失败", false));
         }
-        settle(attemptId, actual(outcome.usage()));
-        return commit(job, leaseToken, outcome.outcomeCode(), loaded.skips(), loaded.notice(),
-                outcome.examinedThrough(), batch, outcome.checkpoint(), null, null, claimGeneration);
+        settle(attemptId, actual(out.result.usage()));
+        return null;
+    }
+
+    /** 外发结果的出参盒子：省掉再造一层 JobResult 包装。 */
+    private static final class DraftAttempt {
+        private DraftResult result;
     }
 
     /**
@@ -528,14 +581,14 @@ public class MemoryMaintenanceWorker {
     /**
      * 摘要结果：先判净缩减，不够就保留旧文本（§8.4 第 4 条）；够则把检查点加密好待同一事务写入。
      * 草稿超出模型可见上限或 payload 上限都算非法产出，直接终态而不是盲目重试。
+     * 到这里两次外发都已经结算完毕，所以这一步失败不会再动额度，只会丢掉检查点。
      */
-    private Outcome runSummary(Batch batch, MemoryCryptoService.MemoryKey key)
+    private Outcome summaryOutcome(Batch batch, DraftResult result, MemoryCryptoService.MemoryKey key)
             throws AttemptFailure, SQLException {
-        Optional<SummaryDraft> produced = drafter.draft(batch);
-        if (produced.isEmpty()) {
-            return new Outcome("NO_NEW_INFORMATION", batch.throughTurnId(), Usage.unknown(), null);
+        if (!result.published()) {
+            return new Outcome("NO_NEW_INFORMATION", batch.throughTurnId(), result.usage(), null);
         }
-        SummaryDraft draft = produced.get();
+        SummaryDraft draft = result.draft();
         if (draft.estimatedTokens() > MaintenanceRules.SUMMARY_MODEL_TOKEN_LIMIT) {
             throw new AttemptFailure("SUMMARY_DRAFT_TOO_LARGE", "摘要草稿超出 600 估算 Token 上限", false);
         }
@@ -550,36 +603,36 @@ public class MemoryMaintenanceWorker {
     }
 
     /**
-     * 组装检查点。覆盖范围只标实际进入本批的<b>连续</b>轮次段（§2.5），被跳过的那段不算已整理；
-     * 加密身份绑 {@code (ai_session_context, sessionId, 新 revision)}，所以必须先把 revision 定下来。
+     * 组装检查点。coverage = <b>旧有效摘要的段</b> ∪ 本批实际参与渲染的连续段（§2.5、§8.4 第 4-5 条）：
+     * 只写本批段的话，第二批之后第一批就"没被覆盖"了，读侧会把已整理的原文重新拼进窗口，摘要永远换不掉它。
+     * 段数超过 128 就丢掉继承段，从当前窗口重建——读侧按 coverage 不连续报缺口，比假装完整诚实。
+     *
+     * <p>{@code through_turn_id} 按 §2.5 记<b>已检查上界</b>而不是"最后覆盖轮次"：批尾被跳过的轮次
+     * 必须让 {@code hasGaps} 看得出来。加密身份绑 {@code (ai_session_context, sessionId, 新 revision)}，
+     * 所以必须先把 revision 定下来。</p>
      */
     private Checkpoint checkpointOf(Batch batch, SummaryDraft draft, MemoryCryptoService.MemoryKey key)
             throws SQLException, AttemptFailure {
+        CoverageLedger.Ledger current = CoverageLedger.ofTurns(batch.turns());
+        CoverageLedger.Ledger merged = CoverageLedger.merge(batch.previous().coverage(), current.ranges());
         List<Map<String, Object>> ranges = new ArrayList<>();
-        long first = -1L;
-        long last = -1L;
-        for (SourceTurn turn : batch.turns()) {
-            if (first < 0) {
-                first = turn.turnId();
-                last = turn.turnId();
-                continue;
-            }
-            if (turn.turnId() == last + 1) {
-                last = turn.turnId();
-                continue;
-            }
-            ranges.add(coverage(first, last));
-            first = turn.turnId();
-            last = turn.turnId();
+        for (ContextAudit.CoverageRange range : (merged.overCap() ? current.ranges() : merged.ranges())) {
+            ranges.add(coverage(range.firstTurnId(), range.lastTurnId()));
         }
-        if (first >= 0) {
-            ranges.add(coverage(first, last));
+        List<Map<String, Object>> references = new ArrayList<>();
+        for (SessionSummaryValidator.Reference reference : draft.references()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("pageId", reference.pageId());
+            entry.put("contentVersion", reference.contentVersion());
+            entry.put("sourceTurnId", reference.sourceTurnId());
+            references.add(entry);
         }
         long newRevision = batch.summaryRevision() + 1;
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("schemaVersion", 2);
         payload.put("modelSummary", draft.modelSummary());
         payload.put("serverCoverage", ranges);
+        payload.put("references", references);
         payload.put("producer", drafter.promptVersion());
         String json;
         try {
@@ -594,8 +647,8 @@ public class MemoryMaintenanceWorker {
         try {
             MemoryCryptoService.EncryptedValue encrypted = crypto.encrypt(key, "ai_session_context",
                     String.valueOf(batch.sessionId()), newRevision, json);
-            return new Checkpoint(encrypted.cipher(), encrypted.cryptoMeta(), newRevision,
-                    last < 0 ? batch.throughTurnId() : last, draft.estimatedTokens());
+            return new Checkpoint(encrypted.cipher(), encrypted.cryptoMeta(), newRevision, batch.throughTurnId(),
+                    draft.estimatedTokens());
         } catch (MemoryCryptoService.MemoryCryptoException error) {
             throw new AttemptFailure("SUMMARY_ENCRYPTION_FAILED", "摘要无法加密，本轮不发布检查点", false);
         }
@@ -645,7 +698,7 @@ public class MemoryMaintenanceWorker {
                 if (batch != null && checkpoint != null) {
                     SessionContextRepository.SaveOutcome saved = SessionContextRepository.saveIn(connection,
                             job.sessionId(), batch.summaryRevision(), job.contextGeneration(), job.vaultEpoch(),
-                            checkpoint.revision(), checkpoint.coveredThrough(), job.contextGeneration(),
+                            checkpoint.revision(), checkpoint.checkedThrough(), job.contextGeneration(),
                             job.vaultEpoch(), checkpoint.cipher(), checkpoint.cryptoMeta(),
                             checkpoint.estimatedTokens(), asOf);
                     if (saved != SessionContextRepository.SaveOutcome.APPLIED) {
@@ -799,19 +852,15 @@ public class MemoryMaintenanceWorker {
     private Request requestFor(JobRow job, MemoryRepository.VaultEnvelope envelope,
                                MemoryCryptoService.MemoryKey key) throws SQLException {
         long floor = policy.policyOf(policy.current()).memoryHistoryFloor();
-        MaintenanceSourceScanner.PreviousSummary previous = job.kind() == Kind.SUMMARY
+        MaintenancePorts.PreviousSummary previous = job.kind() == Kind.SUMMARY
                 ? scanner.previousSummary(job.sessionId(), job.contextGeneration(), envelope.epoch(), key)
-                : MaintenanceSourceScanner.PreviousSummary.NONE;
+                : MaintenancePorts.PreviousSummary.NONE;
         return new Request(job.kind(), job.sessionId(), job.fromTurnId(), job.throughTurnId(),
                 job.contextGeneration(), job.sourceScopeType(), job.sourceScopeId(), job.sourceTimezone(),
-                envelope.epoch(), job.policyRevision(), previous.revision(), previous.modelSummary(),
+                envelope.epoch(), job.policyRevision(), previous,
                 job.targetFingerprint(), job.promptVersion(),
                 job.kind() == Kind.EXTRACT ? extractor.framingTokens() : drafter.framingTokens(), floor,
                 vault.sessionPassword(job.sessionId()).orElse(null), key);
-    }
-
-    private static String purposeOf(Kind kind) {
-        return kind == Kind.EXTRACT ? UsageRepository.PURPOSE_MEMORY_EXTRACT : UsageRepository.PURPOSE_SESSION_SUMMARY;
     }
 
     private static String outcomeOfNotice(String notice) {
@@ -860,8 +909,8 @@ public class MemoryMaintenanceWorker {
     private record Outcome(String outcomeCode, long examinedThrough, Usage usage, Checkpoint checkpoint) {
     }
 
-    /** 待写入的检查点：密文与身份在发送阶段就已定，写事务里只做 CAS。 */
-    private record Checkpoint(String cipher, String cryptoMeta, long revision, long coveredThrough,
+    /** 待写入的检查点：密文与身份在发送阶段就已定，写事务里只做 CAS。{@code checkedThrough} 是已检查上界。 */
+    private record Checkpoint(String cipher, String cryptoMeta, long revision, long checkedThrough,
                               int estimatedTokens) {
     }
 

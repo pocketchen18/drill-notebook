@@ -345,10 +345,13 @@ class ChatContextBudgetTest {
 
     @Test
     void summaryAndResumeStateShareOneSessionStateRegion() {
+        // 摘要已经减不动了（整份只剩最小必要项的一行），这时才按 §9.2 舍弃中断状态、优先保留摘要。
+        // 长度靠现算：夹具声明的估算量必须就是正文的真实估算，否则这条用例是在测一个假数字。
+        String text = protectedLineUpToBudget();
         ConversationProjection.Projection withSummary = new ConversationProjection.Projection(
                 List.of(turn(5, "旧问题", "旧回答")), new ContextAudit.Scan(1L, 5L, 5, false),
                 new ConversationProjection.SummaryView(new ContextAudit.Summary(3L, 4L, false,
-                        List.of(new ContextAudit.CoverageRange(1, 4))), "这是任务续接摘要的正文", 560),
+                        List.of(new ContextAudit.CoverageRange(1, 4))), text, estimator.estimateText(text)),
                 new ContextAudit.ResumeState("req-9", "FAILED", "2026-10-11T00:00:00.000Z"), List.of(), 1L,
                 List.of(), 3L);
         ChatContextPlan plan = fit(withSummary, USER_TEXT, ContextMemorySource.Selection.EMPTY, List.of(),
@@ -357,6 +360,92 @@ class ChatContextBudgetTest {
         assertEquals(1, regionItemCount(plan, ContextAudit.Region.SESSION_STATE), "两样共用 600，优先保留摘要");
         assertTrue(hasOmission(plan, ContextAudit.Omission.BUDGET, "RESUME_STATE"));
         assertFalse(dataBlock(plan).contains("req-9"));
+    }
+
+    /** 一行"主题：…"长到刚好贴着 600 上限：整行都是最小必要项，reduce 动不了它。 */
+    private String protectedLineUpToBudget() {
+        StringBuilder text = new StringBuilder("主题：");
+        String unit = "复习二分查找与边界条件确认，";
+        while (estimator.estimateText(text + unit) <= ChatContextAssembler.SESSION_STATE_BUDGET - 5) {
+            text.append(unit);
+        }
+        return text.toString();
+    }
+
+    @Test
+    void resumeStateShrinksTheSummaryViewInsteadOfBeingDropped() {
+        // 摘要单独还装得进 600，加上中断状态就挤不下：按 §6.3 第 3 条该再确定性减摘要，两样都留着。
+        // 长度靠现算而不是写死，换估算器版本也不会把这条用例变成假绿或假红。
+        String head = "主题：二分查找复习\n目标：复习二分查找（user#51）\n";
+        String filler = "讨论：助手建议先检查边界条件之后再决定是否加练（assistant#51）\n";
+        StringBuilder published = new StringBuilder(head);
+        while (estimator.estimateText(published + filler)
+                <= ChatContextAssembler.SESSION_STATE_BUDGET - 10) {
+            published.append(filler);
+        }
+        String text = published.toString().stripTrailing();
+        int fillers = occurrences(text, "讨论：");
+        assertTrue(fillers >= 2, "夹具至少要留下两行讨论才谈得上被减：" + fillers);
+        ConversationProjection.Projection both = new ConversationProjection.Projection(
+                List.of(turn(5, "旧问题", "旧回答")), new ContextAudit.Scan(1L, 5L, 5, false),
+                new ConversationProjection.SummaryView(new ContextAudit.Summary(3L, 4L, false,
+                        List.of(new ContextAudit.CoverageRange(1, 4))), text, estimator.estimateText(text)),
+                new ContextAudit.ResumeState("req-9", "FAILED", "2026-10-11T00:00:00.000Z"), List.of(), 1L,
+                List.of(), 3L);
+
+        ChatContextPlan plan = fit(both, USER_TEXT, ContextMemorySource.Selection.EMPTY, List.of(), Map.of(),
+                List.of(), true, 32000, true);
+
+        assertEquals(2, regionItemCount(plan, ContextAudit.Region.SESSION_STATE),
+                "挤不下时减的是摘要视图，而不是把中断状态整条扔掉（§6.3 第 3 条）");
+        assertTrue(regionTokens(plan, ContextAudit.Region.SESSION_STATE)
+                <= ChatContextAssembler.SESSION_STATE_BUDGET, "两样合计仍在 600 以内");
+        assertFalse(hasOmission(plan, ContextAudit.Omission.BUDGET, "RESUME_STATE"));
+        String data = dataBlock(plan);
+        assertTrue(data.contains("req-9"), "上一轮没完成这件事不能被摘要挤掉");
+        assertTrue(data.contains("主题：二分查找复习"), "最小必要项留在减过的视图里");
+        int kept = occurrences(data, "讨论：");
+        assertTrue(kept < fillers && kept >= 1, "被减掉的是低优先的整行，且只减到装得下：" + kept + "/" + fillers);
+    }
+
+    /**
+     * §14 P8 验收"指代续聊"：较早的轮次由摘要替代，用户这轮只说"那就按这个再来一遍"。
+     * 摘要里的目标与约束必须真进了数据块，否则这句指代没有所指。
+     */
+    @Test
+    void summaryCarriesTheTaskSoAShortFollowUpStillLands() {
+        String published = "主题：二分查找复习\n目标：复习二分查找，只给方案不改笔记（user#1）\n"
+                + "约束：卡片先不归档（user#3）\n";
+        ConversationProjection.Projection withSummary = new ConversationProjection.Projection(
+                List.of(turn(4, "边界条件怎么检查", "先看 low 小于 high 的入口"), turn(5, "再举一例", "用八个元素演示")),
+                new ContextAudit.Scan(1L, 5L, 5, false),
+                new ConversationProjection.SummaryView(new ContextAudit.Summary(3L, 5L, false,
+                        List.of(new ContextAudit.CoverageRange(1, 3))), published,
+                        estimator.estimateText(published)),
+                null, List.of(), 1L,
+                List.of(turn(1, "我想复习二分查找", "可以"), turn(2, "只给方案别改笔记", "好"),
+                        turn(3, "卡片先别归档", "记下了")), 3L);
+
+        ChatContextPlan plan = fit(withSummary, "那就按这个再来一遍", ContextMemorySource.Selection.EMPTY,
+                List.of(), Map.of(), List.of(), true, 32000, true);
+
+        String data = serialized(plan.messages());
+        assertTrue(data.contains("复习二分查找，只给方案不改笔记"), "任务目标要连着这轮短指代一起发出去");
+        assertTrue(data.contains("卡片先不归档"), "用户确认过的约束不能被预算先挤掉");
+        assertFalse(data.contains("我想复习二分查找"), "已由摘要替代的原文不重复发送（§9.4）");
+        assertTrue(data.contains("用八个元素演示"), "最近两轮仍按完整原文保留");
+        assertEquals(1, regionItemCount(plan, ContextAudit.Region.SESSION_STATE));
+        assertNotNull(plan.audit().summary(), "账本要记下这份摘要真的发了");
+        assertEquals("那就按这个再来一遍", firstBlockText(plan.messages().get(plan.messages().size() - 1)),
+                "当前这句指代本身必须原样留在最后");
+    }
+
+    private static int occurrences(String text, String needle) {
+        int count = 0;
+        for (int index = text.indexOf(needle); index >= 0; index = text.indexOf(needle, index + 1)) {
+            count++;
+        }
+        return count;
     }
 
     @Test
@@ -476,17 +565,6 @@ class ChatContextBudgetTest {
         StringBuilder builder = new StringBuilder();
         for (Map<String, Object> message : messages) builder.append(message);
         return builder.toString();
-    }
-
-    private static int occurrences(String haystack, String needle) {
-        int count = 0;
-        int from = 0;
-        while (true) {
-            int index = haystack.indexOf(needle, from);
-            if (index < 0) return count;
-            count++;
-            from = index + needle.length();
-        }
     }
 
     private static String firstBlockText(Map<String, Object> message) {

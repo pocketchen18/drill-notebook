@@ -306,6 +306,43 @@ public class ChatHistoryRepository {
     }
 
     /**
+     * 一批轮次的 {@code result_meta} 密文列（不解密）。
+     *
+     * <p>摘要装载要用它：「本轮实际提供过哪些引用」只存在于落库的上下文审计里（contracts §6.1
+     * 的 {@code allowedReferences}），而审计随 result_meta 加密（§4.5）。单独一条查询而不是加进
+     * {@link MaintenanceRow}，是因为提取批次根本不需要这两列，而它们可能各带 16 KiB。</p>
+     */
+    public record AuditMetaRow(long turnId, String resultMetaCipher, String resultMetaCrypto) {
+    }
+
+    public List<AuditMetaRow> auditMetaByTurnIds(long sessionId, List<Long> turnIds) throws SQLException {
+        if (turnIds == null || turnIds.isEmpty()) {
+            return List.of();
+        }
+        StringBuilder sql = new StringBuilder("SELECT id, result_meta_cipher, result_meta_crypto"
+                + " FROM ai_chat_turn WHERE session_id = ? AND id IN (");
+        for (int index = 0; index < turnIds.size(); index++) {
+            sql.append(index == 0 ? "?" : ",?");
+        }
+        sql.append(") ORDER BY id ASC");
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            statement.setLong(1, sessionId);
+            for (int index = 0; index < turnIds.size(); index++) {
+                statement.setLong(index + 2, turnIds.get(index));
+            }
+            List<AuditMetaRow> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new AuditMetaRow(result.getLong("id"), result.getString("result_meta_cipher"),
+                            result.getString("result_meta_crypto")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /**
      * 倒序取一批没有轮次归属的旧消息（迁移前遗留）。它们全部早于任何轮次行，
      * 所以只在轮次窗口没扫满时补齐，并且只限初始 generation。
      */

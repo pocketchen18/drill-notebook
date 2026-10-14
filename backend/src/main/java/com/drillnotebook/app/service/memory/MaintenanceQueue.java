@@ -144,7 +144,8 @@ public class MaintenanceQueue {
         }
         Loaded loaded = scanner.load(new Request(Kind.EXTRACT, state.sessionId(),
                 state.memoryScanAfterTurn() + 1L, candidateThrough, state.contextGeneration(),
-                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, 0L, null,
+                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision,
+                MaintenancePorts.PreviousSummary.NONE,
                 target.fingerprint(), extractor.promptVersion(), extractor.framingTokens(), historyFloor,
                 sessionPassword, key));
         if (!loaded.ready()) {
@@ -182,12 +183,12 @@ public class MaintenanceQueue {
         if (candidateThrough <= state.summaryScanAfterTurn()) {
             return Counts.NONE;
         }
-        MaintenanceSourceScanner.PreviousSummary previous = scanner.previousSummary(state.sessionId(),
+        MaintenancePorts.PreviousSummary previous = scanner.previousSummary(state.sessionId(),
                 state.contextGeneration(), envelope.epoch(), key);
         Loaded loaded = scanner.load(new Request(Kind.SUMMARY, state.sessionId(),
                 state.summaryScanAfterTurn() + 1L, candidateThrough, state.contextGeneration(),
-                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, previous.revision(),
-                previous.modelSummary(), target.fingerprint(), drafter.promptVersion(), drafter.framingTokens(),
+                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, previous,
+                target.fingerprint(), drafter.promptVersion(), drafter.framingTokens(),
                 historyFloor, sessionPassword, key));
         if (!loaded.ready()) {
             return recordPermanentSkips(state.sessionId(), ScanKind.SUMMARY, loaded);

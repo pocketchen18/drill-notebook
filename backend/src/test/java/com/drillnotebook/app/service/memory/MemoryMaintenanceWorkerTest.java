@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.model.UuidV7;
 import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository;
@@ -12,6 +13,11 @@ import com.drillnotebook.app.repository.MemoryJobRepository.JobRow;
 import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.repository.UsageRepository;
+import com.drillnotebook.app.service.ApiKeyEncryptor;
+import com.drillnotebook.app.service.ChatMessageCipher;
+import com.drillnotebook.app.service.ConversationProjection;
+import com.drillnotebook.app.service.TokenEstimator;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +37,8 @@ import org.junit.jupiter.api.Test;
 class MemoryMaintenanceWorkerTest {
     private static final int TURN_CHARS = 60;
     private static final String NEXT_BUDGET_DAY = "2026-10-12T00:00:00.000Z";
+    private static final long NOTEBOOK = 77L;
+    private static final long OTHER_NOTEBOOK = 78L;
 
     private MaintenanceHarness harness;
 
@@ -500,7 +508,7 @@ class MemoryMaintenanceWorkerTest {
         assertFalse(harness.wakePending(), "陈旧唤醒标记由下一轮静默收口");
     }
 
-    // ---- 摘要（§8.4 的排队门禁在本包，真实压缩属 P8）----
+    // ---- 摘要（§8.4：排队门禁在 P6，coverage 换代与检查点组装在 P8b）----
 
     @Test
     void summaryIsQueuedOnlyAfterPressureVolumeAndCooldown() throws Exception {
@@ -586,6 +594,91 @@ class MemoryMaintenanceWorkerTest {
     }
 
     @Test
+    void newerSummaryBatchInheritsAndMergesTheOlderCoverage() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(12, TURN_CHARS);
+        harness.wake();
+        harness.drafter.willReturn("要点：先背再练，每天二十个", 200);
+        assertEquals(1, harness.drain().committed());
+        assertEquals(8L, harness.checkpoint().orElseThrow().throughTurnId());
+
+        // 会话又聊了两轮，第二批只装中间那段；旧批的八轮必须继续算已整理
+        harness.seedTurns(2, TURN_CHARS);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.turnId(8),
+                harness.turnId(11));
+        harness.drafter.willReturn("要点不变，另加了错题本用法", 180);
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        SessionContextRepository.Checkpoint row = harness.checkpoint().orElseThrow();
+        assertEquals(2L, row.revision());
+        assertEquals(harness.turnId(11), row.throughTurnId());
+        List<?> coverage = (List<?>) payloadOf(row).get("serverCoverage");
+        assertEquals(1, coverage.size(), "相邻的两段合并成一段，不留下两条可拼的碎片（§2.5）");
+        Map<?, ?> only = (Map<?, ?>) coverage.get(0);
+        assertEquals(harness.firstTurnId(), endpoint(only, "firstTurnId"),
+                "第二批必须继承第一批的覆盖：否则读侧会把已整理的十轮重新拼进近期原文窗口（§8.4 第 4-5 条）");
+        assertEquals(harness.turnId(11), endpoint(only, "lastTurnId"));
+        assertEquals(row.throughTurnId(), harness.summaryWatermark());
+    }
+
+    @Test
+    void checkpointThroughStaysAtTheCheckedBoundWhenTheTailIsSkipped() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(4, TURN_CHARS);
+        // 尾轮的原话已被用户清理：永久跳过，它没被整理，但"这一轮确实检查过了"要记进水位（§2.5）
+        harness.deleteTurnContent(harness.turnId(3));
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(3));
+        harness.drafter.willReturn("要点：先背再练", 100);
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        SessionContextRepository.Checkpoint row = harness.checkpoint().orElseThrow();
+        assertEquals(harness.turnId(3), row.throughTurnId(), "through 记的是已检查上界，不是最后一条覆盖轮次");
+        List<?> coverage = (List<?>) payloadOf(row).get("serverCoverage");
+        assertEquals(1, coverage.size());
+        Map<?, ?> only = (Map<?, ?>) coverage.get(0);
+        assertEquals(harness.turnId(2), endpoint(only, "lastTurnId"), "被跳过的那轮不算已整理（§2.5）");
+        assertEquals(harness.turnId(3), harness.summaryWatermark(), "永久跳过照样推进水位，不然同一段反复重扫");
+        assertEquals(1L, harness.stateOf(harness.session()).summarySkippedCount());
+    }
+
+    @Test
+    void overCapCoverageRebuildsFromThisWindowAndMarksGaps() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(6, TURN_CHARS);
+        List<long[]> legacy = new ArrayList<>();
+        for (int index = 0; index <= CoverageLedger.MAX_RANGES; index++) {
+            // 旧摘要把每一轮拆成互不相邻的一段，段数越界：这份继承关系已经不可信
+            legacy.add(new long[]{10_000L + index * 2L, 10_000L + index * 2L});
+        }
+        harness.seedCheckpoint(7L, harness.turnId(5), "旧摘要：段数已经爆表", legacy);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(5));
+        harness.drafter.willReturn("要点：先背再练，每天二十个", 150);
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        SessionContextRepository.Checkpoint row = harness.checkpoint().orElseThrow();
+        assertEquals(8L, row.revision());
+        List<?> coverage = (List<?>) payloadOf(row).get("serverCoverage");
+        assertEquals(1, coverage.size(), "超上限就丢掉继承段，只按当前窗口重建（§2.5）");
+        Map<?, ?> only = (Map<?, ?>) coverage.get(0);
+        assertEquals(harness.firstTurnId(), endpoint(only, "firstTurnId"));
+        assertEquals(harness.turnId(5), endpoint(only, "lastTurnId"));
+    }
+
+    @Test
     void summaryDraftOverTheModelCapEndsTheJobInsteadOfRetryingForever() throws Exception {
         harness.createVaultAndUnlock();
         harness.unlockSessions();
@@ -603,7 +696,248 @@ class MemoryMaintenanceWorkerTest {
         assertEquals(1, harness.drafter.calls(), "非法产出也只外发一次，不盲重试");
         assertTrue(harness.checkpoint().isEmpty(), "不合格的草稿不写检查点");
         assertEquals(0L, harness.summaryWatermark(), "没落结果就不推进水位");
-        assertEquals(List.of("UNKNOWN"), harness.attemptStates(), "已经发出去的一次照记（§2.6）");
+        assertEquals(List.of("SETTLED"), harness.attemptStates(),
+                "端口回了实际用量就按实际量结算，不冒充当过的钱也不把知道的装成不知道（§2.6）");
+    }
+
+    @Test
+    void malformedSummaryGetsExactlyOneRepairAndThenPublishes() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(4, TURN_CHARS);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(3));
+        harness.drafter.willReturnBody("这根本不是JSON");
+        harness.drafter.willReturnBody(validDraftBody());
+
+        assertEquals(1, harness.drainWhenDue().committed());
+
+        assertEquals(2, harness.drafter.calls(), "严重结构错误只修一次，不循环（§6.3 第 1 条）");
+        assertEquals(List.of("SESSION_SUMMARY", "FORMAT_REPAIR"), harness.attemptPurposes(),
+                "修复同样是第二次真实外发，自己占额度、自己记一笔（§2.6）");
+        assertEquals("这根本不是JSON", harness.drafter.lastRepairOf(), "修复请求只带上一次的坏原文，不多给一份数据");
+        JobRow settled = harness.job(jobId);
+        assertEquals(MemoryJobRepository.STATUS_COMPLETED, settled.status());
+        assertEquals("APPLIED", settled.outcomeCode());
+        assertEquals(1L, harness.checkpoint().orElseThrow().revision(), "修得好就照常发布，不是白跑一次");
+    }
+
+    @Test
+    void summaryStillBrokenAfterTheRepairEndsFailedWithoutTouchingTheCheckpoint() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(4, TURN_CHARS);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(3));
+        harness.drafter.willReturnBody("这根本不是JSON");
+        harness.drafter.willReturnBody("修完还不是JSON");
+
+        assertEquals(1, harness.drainWhenDue().failed());
+
+        assertEquals(2, harness.drafter.calls(), "第二次仍不合格就终态，不再有第三次（§6.3 第 1 条）");
+        assertEquals(MemoryJobRepository.STATUS_FAILED, harness.job(jobId).status());
+        assertTrue(harness.checkpoint().isEmpty(), "不合格的两份草稿都不写检查点");
+        assertEquals(0L, harness.summaryWatermark(), "失败的批次不推进水位，来源还在下一批");
+        assertEquals(List.of("SESSION_SUMMARY", "FORMAT_REPAIR"), harness.attemptPurposes());
+    }
+
+    @Test
+    void referenceLedgerOnlyCarriesPagesTheBatchActuallySawInScope() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.useNotebookScope(NOTEBOOK);
+        harness.seedTurns(4, TURN_CHARS);
+        long inScope = harness.seedPage(NOTEBOOK, "服务端现读的版本");
+        long outOfScope = harness.seedPage(OTHER_NOTEBOOK, "别本笔记本的页");
+        harness.seedProvidedPage(harness.turnId(1), inScope);
+        harness.seedProvidedPage(harness.turnId(2), outOfScope);
+        // 模型只能抄：给了在范围内的、越作用域的和凭空的三条，只有第一条能进台账
+        harness.drafter.willReturnBody(validDraftBody()
+                .replace("\"references\":[]", "\"references\":[" + reference(inScope, "服务端现读的版本",
+                        harness.turnId(1)) + "," + reference(outOfScope, "别本笔记本的页", harness.turnId(2)) + ","
+                        + reference(404L, "从没提供过", harness.turnId(1)) + "]"));
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(3));
+
+        assertEquals(1, harness.drainWhenDue().committed());
+
+        assertEquals(List.of(new SessionSummaryValidator.Reference(inScope, "服务端现读的版本", harness.turnId(1))),
+                harness.drafter.lastBatch().allowedReferences(),
+                "允许清单只收\"本批真发过且属于当前作用域\"的页，版本取服务端现读而不是审计里的前端串（§6.1）");
+        List<?> references = (List<?>) payloadOf(harness.checkpoint().orElseThrow()).get("references");
+        assertEquals(1, references.size(), "抄来的越作用域与凭空的引用都不进台账（§8.4 第 7 条）");
+        Map<?, ?> only = (Map<?, ?>) references.get(0);
+        assertEquals(inScope, endpoint(only, "pageId"));
+        assertEquals("服务端现读的版本", only.get("contentVersion"));
+        assertEquals(harness.turnId(1), endpoint(only, "sourceTurnId"));
+        assertEquals("APPLIED", harness.job(jobId).outcomeCode());
+    }
+
+    // ---- §14 P8 验收：CAS、停止轮次、真实发布长度与用户纠正 ----
+
+    @Test
+    void checkpointReplacedAfterTheSendCannotOverwriteTheNewerOne() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(6, TURN_CHARS);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(4));
+        harness.drafter.willReturn("这份草稿在路上时被人超过了", 120);
+        // 外发期间另一条链先写了 revision=9：本批的 CAS 期望值还是装载时的旧版本
+        harness.drafter.invokeDuringDraft(() -> {
+            harness.jdbc.update("DELETE FROM ai_session_context");
+            try {
+                harness.seedCheckpoint(9L, harness.turnId(4), "另一条链先写的新摘要",
+                        List.of(new long[]{harness.firstTurnId(), harness.turnId(2)}));
+            } catch (Exception error) {
+                throw new IllegalStateException(error);
+            }
+        });
+
+        MemoryMaintenanceWorker.Drain done = harness.drainJobWhenDue(jobId);
+
+        assertEquals(1, done.superseded(), "检查点在发送之后被替换，这一批只能作废");
+        assertEquals(0, done.committed());
+        assertEquals(MemoryJobRepository.STATUS_SUPERSEDED, harness.job(jobId).status());
+        SessionContextRepository.Checkpoint row = harness.checkpoint().orElseThrow();
+        assertEquals(9L, row.revision(), "旧结果不许覆新摘要（§8.4 第 7 条）");
+        assertEquals("另一条链先写的新摘要", payloadOf(row).get("modelSummary"));
+        assertEquals(0L, harness.summaryWatermark(), "作废的一批不推进已检查水位");
+    }
+
+    @Test
+    void stoppedTurnStaysOutOfTheSummarySourcesAndOutOfCoverage() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(6, TURN_CHARS);
+        // 第三条被用户按了停止：半截回答不是"完成的事实"，既不能进摘要输入，也不算已整理
+        harness.setTurnStatus(harness.turnId(2), ChatTurnRepository.STATUS_ABORTED);
+        harness.drafter.willReturn("要点：先背再练", 120);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(3));
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        List<Long> sourced = harness.drafter.lastBatch().turns().stream()
+                .map(MaintenancePorts.SourceTurn::turnId).toList();
+        assertEquals(List.of(harness.turnId(0), harness.turnId(1), harness.turnId(3)), sourced,
+                "ABORTED 那一轮的原文没答完，不能当摘要来源（§8.4 第 2 条）");
+        List<?> coverage = (List<?>) payloadOf(harness.checkpoint().orElseThrow()).get("serverCoverage");
+        assertEquals(2, coverage.size(), "被跳过的那一轮把覆盖切成两段，读侧才看得见缺口（§2.5）");
+        assertEquals(harness.turnId(1), endpoint((Map<?, ?>) coverage.get(0), "lastTurnId"));
+        assertEquals(harness.turnId(3), endpoint((Map<?, ?>) coverage.get(1), "firstTurnId"));
+        assertEquals(1L, harness.state().summarySkippedCount());
+    }
+
+    @Test
+    void compressionGainIsMeasuredOnTheRenderedViewNotOnAClaimedNumber() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(3, TURN_CHARS);
+        // 三条来源约 564 估算 Token。这份草稿九栏形状完全合法，只是把三条约束都写满 80 码点：
+        // 渲染后的发布视图压不出 256 的净缩减，就该判"没有收益"——判定吃的是发布视图的实际长度（D60）
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(2));
+        harness.drafter.willReturnBody(verboseDraftBody());
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        assertEquals("NO_COMPRESSION_GAIN", harness.job(jobId).outcomeCode(),
+                "写满的发布视图吃掉了缩减量：换成模型自称的小数字也不算数");
+        assertTrue(harness.checkpoint().isEmpty(), "没到 256 就不替换检查点（§8.4 第 4 条）");
+        assertEquals(3L, harness.summaryWatermark(), "无收益照样推进已检查水位，同输入不再反复压");
+
+        // 真短的草稿：检查点记的估算量必须等于发布正文的现算值
+        harness.seedTurns(3, TURN_CHARS);
+        String second = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.turnId(3),
+                harness.turnId(5));
+        harness.drafter.willReturnBody(validDraftBody());
+        assertEquals(1, harness.drainJobWhenDue(second).committed());
+
+        SessionContextRepository.Checkpoint row = harness.checkpoint().orElseThrow();
+        String published = (String) payloadOf(row).get("modelSummary");
+        assertEquals(new com.drillnotebook.app.service.TokenEstimator(harness.mapper).estimateText(published),
+                row.estimatedTokens(), "存的是渲染后的真实估算 Token，不是夹具或模型给的数");
+    }
+
+    @Test
+    void userCorrectionSurvivesWhileAssistantSelfReportedDoneIsDropped() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(3, TURN_CHARS);
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(2));
+        harness.drafter.willReturnBody(validDraftBody()
+                .replace("\"confirmedUserConstraints\":[]", "\"confirmedUserConstraints\":["
+                        + "{\"text\":\"不对，卡片还没做完，先别归档\",\"sourceRole\":\"user\","
+                        + "\"sourceTurnIds\":[{turn}]}]")
+                .replace("\"workItems\":[]", "\"workItems\":["
+                        + "{\"text\":\"边界检查已经完成\",\"sourceRole\":\"assistant\",\"sourceTurnIds\":[{turn}],"
+                        + "\"state\":\"user_reported_done\"}]"));
+
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        String published = (String) payloadOf(harness.checkpoint().orElseThrow()).get("modelSummary");
+        assertTrue(published.contains("不对，卡片还没做完"), "用户的纠正必须留在续接摘要里（§6.3 第 2 条）");
+        assertFalse(published.contains("边界检查已经完成"),
+                "助手自述完成不是用户说过的，整行删掉；摘要不能把建议升格成已验证事实（§8.4）");
+        assertTrue(published.contains("复习二分查找"), "删一条不许连累整份草稿");
+        assertEquals("APPLIED", harness.job(jobId).outcomeCode());
+    }
+
+    /**
+     * §14 P8 验收的交接证据：写侧落盘的 payload 形状，就是下一轮读侧要解析的形状。
+     * 两头都用真实现（{@link ConversationProjection} 走真解密、真 coverage 判定），
+     * 任何一侧改了键名或版本口径，这条就会红。
+     */
+    @Test
+    void publishedCheckpointIsWhatTheNextPlanReads() throws Exception {
+        harness.createVaultAndUnlock();
+        harness.unlockSessions();
+        harness.grantMaintenanceConsent();
+        harness.enableSummary();
+        harness.seedTurns(6, TURN_CHARS);
+        // §14 P8 退出条件"旧聊天记录没有被摘要改写"：写侧只许动 ai_session_context 自己那一行
+        long messages = harness.jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_message", Long.class);
+        long historyRevision = harness.state().historyRevision();
+        String jobId = harness.enqueueManualJob(Kind.SUMMARY, harness.session(), harness.firstTurnId(),
+                harness.turnId(4));
+        harness.drafter.willReturnBody(validDraftBody());
+        assertEquals(1, harness.drainJobWhenDue(jobId).committed());
+
+        assertEquals(messages, harness.jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_message", Long.class),
+                "摘要不删原文、不补原文（§8.4）");
+        assertEquals(historyRevision, harness.state().historyRevision(),
+                "history_revision 不因摘要改写递增（§2.4）");
+
+        ConversationProjection projection = new ConversationProjection(harness.history, harness.contexts,
+                harness.metadata, new ChatMessageCipher(new ApiKeyEncryptor(), harness.mapper), harness.memory,
+                harness.crypto, harness.vault, harness.policy, new TokenEstimator(harness.mapper), harness.mapper);
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-handoff", TokenEstimator.VERSION);
+        ConversationProjection.Projection read = projection.project(
+                new ConversationProjection.Request(harness.session(), harness.turnId(5), 1L,
+                        MaintenanceHarness.CHAT_PASSWORD, 2400), audit);
+
+        assertNotNull(read.summary(), "写完读不到就是摘要白做（§2.5）");
+        assertEquals(1L, read.summary().audit().revision());
+        assertEquals(harness.turnId(4), read.summary().audit().throughTurnId());
+        assertTrue(read.summary().modelSummary().contains("复习二分查找"), "发布视图的正文要原样回到读侧");
+        assertEquals(2, read.candidates().size(), "覆盖只到最近两轮之前：那两条始终留原文（§9.4）");
+        assertEquals(3, read.coveredCandidates().size(), "回补素材正好是被摘要替掉的那三轮");
     }
 
     // ---- 重试与失败 ----
@@ -660,6 +994,48 @@ class MemoryMaintenanceWorkerTest {
     }
 
     // ---- helpers ----
+
+    /** 解开当前检查点的 payload：coverage 与 references 是服务端字段，模型看不见，只能这样核。 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> payloadOf(SessionContextRepository.Checkpoint row) throws Exception {
+        String payload = harness.crypto.decrypt(harness.vault.currentKey().orElseThrow(), "ai_session_context",
+                String.valueOf(harness.session()), row.revision(), row.payloadCipher(), row.cryptoMeta());
+        return harness.mapper.readValue(payload, Map.class);
+    }
+
+    private static long endpoint(Map<?, ?> range, String field) {
+        return ((Number) range.get(field)).longValue();
+    }
+
+    /** 一份能过 §6.1 全部字段门的草稿：{@code {turn}} 由假摘要器在调用时换成本批第一条轮次 ID。 */
+    private static String validDraftBody() {
+        return "{\"schemaVersion\":2,\"topic\":\"先背再练\",\"taskGoal\":"
+                + "{\"text\":\"复习二分查找\",\"sourceRole\":\"user\",\"sourceTurnIds\":[{turn}]}"
+                + ",\"confirmedUserConstraints\":[],\"confirmedDecisions\":[],\"discussionNotes\":[],"
+                + "\"workItems\":[],\"openQuestions\":[],\"nextSteps\":[],\"references\":[]}";
+    }
+
+    private static String reference(long pageId, String contentVersion, long sourceTurnId) {
+        return "{\"pageId\":" + pageId + ",\"contentVersion\":\"" + contentVersion + "\",\"sourceTurnId\":"
+                + sourceTurnId + "}";
+    }
+
+    /** 四条各写满 80 码点、互不重复的约束：形状合法，但渲染出来的发布视图几乎和原文一样长。 */
+    private static String verboseDraftBody() {
+        StringBuilder items = new StringBuilder();
+        for (int index = 0; index < 4; index++) {
+            items.append(items.isEmpty() ? "" : ",");
+            items.append("{\"text\":\"").append(codePoints(78)).append((char) ('甲' + index)).append("条")
+                    .append("\",\"sourceRole\":\"user\",\"sourceTurnIds\":[{turn}]}");
+        }
+        return validDraftBody().replace("\"confirmedUserConstraints\":[]",
+                "\"confirmedUserConstraints\":[" + items + "]");
+    }
+
+    private static String codePoints(int count) {
+        String unit = "复习二分查找的边界条件";
+        return unit.repeat(count / unit.length() + 1).substring(0, count);
+    }
 
     /** 造"进程死在预留/发送/结算之后"的状态：任务仍是 CLAIMED 且租约已经过期。 */
     private String crashWithAttempt(String attemptState) throws Exception {

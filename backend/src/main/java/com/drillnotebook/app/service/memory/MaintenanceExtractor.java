@@ -1,10 +1,7 @@
 package com.drillnotebook.app.service.memory;
 
-import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.service.AiUpstreamClient;
-import com.drillnotebook.app.service.ApiKeyEncryptor;
-import com.drillnotebook.app.service.EmbeddingSpaceContracts;
 import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.AttemptFailure;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
@@ -12,13 +9,10 @@ import com.drillnotebook.app.service.memory.MaintenancePorts.ExtractionResult;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -46,34 +40,16 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
 
     private static final Logger log = LoggerFactory.getLogger(MaintenanceExtractor.class);
 
-    private final AiUpstreamClient upstream;
-    private final MemoryPolicyService policy;
-    private final AiConfigRepository configs;
-    private final ApiKeyEncryptor keys;
+    private final MaintenanceUpstream upstream;
     private final MemoryRepository memory;
     private final MemoryCryptoService crypto;
     private final TokenEstimator estimator;
     private final ObjectMapper mapper;
 
-    /**
-     * {@code AiUpstreamClient} 不是 Spring bean（{@code AiService} 自己懒建一个），维护侧照同一个口径自建：
-     * 共享连接池由 JDK 的 HttpClient 自己管，多一个实例不额外占端口，也不引入新的 bean 依赖边。
-     */
     @Autowired
-    public MaintenanceExtractor(MemoryPolicyService policy, AiConfigRepository configs, ApiKeyEncryptor keys,
-                                MemoryRepository memory, MemoryCryptoService crypto, TokenEstimator estimator,
-                                ObjectMapper mapper) {
-        this(new AiUpstreamClient(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build(), mapper),
-                policy, configs, keys, memory, crypto, estimator, mapper);
-    }
-
-    MaintenanceExtractor(AiUpstreamClient upstream, MemoryPolicyService policy, AiConfigRepository configs,
-                        ApiKeyEncryptor keys, MemoryRepository memory, MemoryCryptoService crypto,
-                        TokenEstimator estimator, ObjectMapper mapper) {
+    public MaintenanceExtractor(MaintenanceUpstream upstream, MemoryRepository memory, MemoryCryptoService crypto,
+                                TokenEstimator estimator, ObjectMapper mapper) {
         this.upstream = upstream;
-        this.policy = policy;
-        this.configs = configs;
-        this.keys = keys;
         this.memory = memory;
         this.crypto = crypto;
         this.estimator = estimator;
@@ -253,62 +229,9 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
         return text.toString();
     }
 
-    /** 一次带外发目标的调用：目标在中途被换掉就停在这里，不会拿着旧指纹去打新模型。 */
+    /** 一次带外发目标的调用：目标解析与指纹复验都在 {@link MaintenanceUpstream}，中途换模型就当场停下。 */
     private AiUpstreamClient.Result dispatch(String input) throws AttemptFailure {
-        MemoryPolicyService.Target target = policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE);
-        if (!target.configured()) {
-            throw new AttemptFailure("TARGET_MISSING", "维护模型未配置", false);
-        }
-        AiConfigRepository.ConfigRow row = configs.find(target.slot());
-        if (row == null || row.encryptedKey() == null || row.encryptedKey().isBlank()) {
-            throw new AttemptFailure("TARGET_KEY_MISSING", "维护模型缺少 API Key", false);
-        }
-        String endpoint = EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint());
-        String apiFormat = row.provider() == null ? AiUpstreamClient.FORMAT_CHAT_COMPLETIONS
-                : mapFormat(row.provider());
-        if (!target.fingerprint().equals(policy.consentFingerprint(MemoryPolicyService.PURPOSE_MAINTENANCE, endpoint,
-                apiFormat, row.model()))) {
-            throw new AttemptFailure("TARGET_CHANGED", "维护目标在本次运行中被更换", false);
-        }
-        String apiKey = headlessKey(row);
-        List<Map<String, Object>> messages = List.of(
-                Map.of("role", "system", "content", MemoryValidator.SYSTEM_PROMPT),
-                Map.of("role", "user", "content", input));
-        AiUpstreamClient.Upstream upstreamTarget = new AiUpstreamClient.Upstream(endpoint, apiKey, row.model(),
-                apiFormat, MaintenanceRules.OUTPUT_TOKEN_BUDGET, true);
-        try {
-            return upstream.call(upstreamTarget, messages, false, null,
-                    (int) Math.max(1, MaintenanceRules.CALL_TIMEOUT_MILLIS / 1_000L));
-        } catch (Exception error) {
-            // 网络/网关的失败形态太多：统一按可重试交给 job 的三次上限，绝不在这里自己循环
-            throw new AttemptFailure("MAINTENANCE_UPSTREAM_ERROR", "维护模型调用失败", true, error);
-        }
-    }
-
-    /**
-     * 后台没有用户输入，只有机器指纹模式的 Key 能自解（§5.1：拿不到就停，不回退到别的模型）。
-     * password 模式由 worker 的门禁提前挡成等待态，走到这里说明配置中途被换过。
-     */
-    private String headlessKey(AiConfigRepository.ConfigRow row) throws AttemptFailure {
-        try {
-            Map<String, Object> meta = mapper.readValue(row.keyMeta(), new TypeReference<>() {
-            });
-            if ("password".equals(String.valueOf(meta.getOrDefault("mode", "fingerprint")))) {
-                throw new AttemptFailure("TARGET_KEY_NEEDS_PASSWORD", "维护模型 Key 需要主密码，后台不代解", false);
-            }
-            return keys.decrypt(row.encryptedKey(), String.valueOf(meta.get("salt")), String.valueOf(meta.get("iv")),
-                    keys.fingerprintMaterial());
-        } catch (AttemptFailure failure) {
-            throw failure;
-        } catch (Exception error) {
-            throw new AttemptFailure("TARGET_KEY_UNREADABLE", "维护模型 Key 无法解密", false, error);
-        }
-    }
-
-    private static String mapFormat(String provider) {
-        String lowered = provider.toLowerCase(Locale.ROOT);
-        return lowered.contains("anthropic") || lowered.contains("claude") ? AiUpstreamClient.FORMAT_ANTHROPIC
-                : AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        return upstream.call(MemoryValidator.SYSTEM_PROMPT, input);
     }
 
     private static String text(Object value) {

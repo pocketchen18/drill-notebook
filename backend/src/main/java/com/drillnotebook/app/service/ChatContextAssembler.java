@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.model.Citation;
 import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.model.RetrievalHit;
+import com.drillnotebook.app.service.memory.SessionSummaryRenderer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -93,8 +94,9 @@ public class ChatContextAssembler {
                           ContextMemorySource.Selection memories, List<RetrievalHit> hits,
                           ContextAudit.Builder audit) {
         List<String> notices = new ArrayList<>();
-        Item summary = buildSummary(projection, audit);
-        Item resumeState = buildResumeState(projection, audit);
+        SessionState sessionState = buildSessionState(projection, audit);
+        Item summary = sessionState.summary();
+        Item resumeState = sessionState.resumeState();
         List<Item> memoryItems = buildMemories(input, memories, audit, notices);
         List<Turn> turns = buildTurns(input, projection, audit);
         List<Item> pageParts = buildPage(input, audit);
@@ -118,20 +120,55 @@ public class ChatContextAssembler {
                 summary.modelSummary(), summary.estimatedTokens());
     }
 
-    private Item buildResumeState(ConversationProjection.Projection projection, ContextAudit.Builder audit) {
+    private Item buildResumeState(ConversationProjection.Projection projection, Item summary,
+                                  ContextAudit.Builder audit) {
         ContextAudit.ResumeState resume = projection.resumeState();
         if (resume == null) return null;
-        String text = "服务端中断状态：上一轮 " + resume.requestId() + " 以 " + resume.status()
-                + " 结束（" + (resume.finishedAt() == null ? "未知时间" : resume.finishedAt())
-                + "）。这只是中断事实，不代表任何待办指令。";
+        String text = resumeText(resume);
         int tokens = estimator.estimateText(text);
-        if (projection.summary() != null
-                && tokens + projection.summary().estimatedTokens() > SESSION_STATE_BUDGET) {
-            // 摘要与 resumeState 共用 600 预算：优先保留摘要，中断状态交给响应里的提示（§9.2）
+        if (summary != null && tokens + summary.estimatedTokens() > SESSION_STATE_BUDGET) {
+            // 摘要与 resumeState 共用 600 预算：先让 §6.3 第 3 条的再裁剪顶上，减不动才舍弃中断态
             audit.omit(ContextAudit.Omission.BUDGET, "RESUME_STATE", 1);
             return null;
         }
         return new Item("RESUME_STATE", resume.requestId(), resume.status(), null, text, tokens);
+    }
+
+    /**
+     * 会话状态区的两格一起定（contracts §6.3 第 3 条）：摘要与 resumeState 共用 600 估算 Token，
+     * 挤不下时<b>先再确定性减一次摘要视图</b>，而不是直接把中断态扔掉——减下来的还是发布时的整行子集，
+     * 不会出现半句。只有连最小必要项都塞不进剩余空间时，才退回 §9.2 的"摘要优先、中断状态交给响应提示"。
+     */
+    private SessionState buildSessionState(ConversationProjection.Projection projection,
+                                           ContextAudit.Builder audit) {
+        Item summary = buildSummary(projection, audit);
+        Item resumeState = buildResumeState(projection, summary, audit);
+        if (summary == null || resumeState != null || projection.resumeState() == null) {
+            return new SessionState(summary, resumeState);
+        }
+        // 走到这里说明中断状态是因为预算被舍弃的：把它重新请回来，代价由摘要那边付
+        ContextAudit.ResumeState resume = projection.resumeState();
+        String resumeText = resumeText(resume);
+        int resumeTokens = estimator.estimateText(resumeText);
+        String reduced = SessionSummaryRenderer.reduce(summary.text(), SESSION_STATE_BUDGET - resumeTokens,
+                estimator);
+        if (reduced.isBlank()) {
+            return new SessionState(summary, null);
+        }
+        audit.clearOmission(ContextAudit.Omission.BUDGET, "RESUME_STATE");
+        return new SessionState(new Item(summary.kind(), summary.id(), summary.version(), summary.sourceTurnId(),
+                reduced, estimator.estimateText(reduced)),
+                new Item("RESUME_STATE", resume.requestId(), resume.status(), null, resumeText, resumeTokens));
+    }
+
+    private static String resumeText(ContextAudit.ResumeState resume) {
+        return "服务端中断状态：上一轮 " + resume.requestId() + " 以 " + resume.status()
+                + " 结束（" + (resume.finishedAt() == null ? "未知时间" : resume.finishedAt())
+                + "）。这只是中断事实，不代表任何待办指令。";
+    }
+
+    /** 会话状态区的两格：摘要与中断状态，两者合计不超过 600 估算 Token。 */
+    private record SessionState(Item summary, Item resumeState) {
     }
 
     private List<Item> buildMemories(Input input, ContextMemorySource.Selection selection,
