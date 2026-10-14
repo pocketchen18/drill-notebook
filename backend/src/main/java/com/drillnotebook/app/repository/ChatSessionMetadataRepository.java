@@ -5,6 +5,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.springframework.stereotype.Repository;
@@ -65,18 +67,21 @@ public class ChatSessionMetadataRepository {
         try (PreparedStatement statement = connection.prepareStatement(SELECT)) {
             statement.setLong(1, sessionId);
             try (ResultSet result = statement.executeQuery()) {
-                if (!result.next()) return Optional.empty();
-                return Optional.of(new State(result.getLong("id"), result.getString("memory_scope_type"),
-                        nullableLong(result, "memory_notebook_id"), result.getInt("memory_learn_enabled") == 1,
-                        result.getLong("context_generation"), result.getLong("history_revision"),
-                        result.getLong("memory_scan_after_turn"), result.getLong("summary_scan_after_turn"),
-                        result.getString("summary_last_attempt_at"),
-                        result.getLong("summary_last_attempt_through"),
-                        result.getString("summary_last_input_revision"), result.getString("archived_at"),
-                        result.getInt("maintenance_wake_pending") == 1, result.getLong("memory_skipped_count"),
-                        result.getLong("summary_skipped_count"), result.getString("last_scan_notice")));
+                return result.next() ? Optional.of(state(result)) : Optional.empty();
             }
         }
+    }
+
+    /** 列名在 {@link #SELECT} 与待处理积压查询里完全一致，所以两处共用同一份行映射。 */
+    private static State state(ResultSet result) throws SQLException {
+        return new State(result.getLong("id"), result.getString("memory_scope_type"),
+                nullableLong(result, "memory_notebook_id"), result.getInt("memory_learn_enabled") == 1,
+                result.getLong("context_generation"), result.getLong("history_revision"),
+                result.getLong("memory_scan_after_turn"), result.getLong("summary_scan_after_turn"),
+                result.getString("summary_last_attempt_at"), result.getLong("summary_last_attempt_through"),
+                result.getString("summary_last_input_revision"), result.getString("archived_at"),
+                result.getInt("maintenance_wake_pending") == 1, result.getLong("memory_skipped_count"),
+                result.getLong("summary_skipped_count"), result.getString("last_scan_notice"));
     }
 
     /**
@@ -106,9 +111,23 @@ public class ChatSessionMetadataRepository {
         }
     }
 
+    public void markMaintenanceWake(long sessionId) throws SQLException {
+        immediate.execute(connection -> {
+            markMaintenanceWake(connection, sessionId);
+            return null;
+        });
+    }
+
     /** 全部积压处理完成后才清唤醒。 */
     public void clearMaintenanceWake(Connection connection, long sessionId) throws SQLException {
         update(connection, "UPDATE ai_chat_session SET maintenance_wake_pending = 0 WHERE id = ?", sessionId);
+    }
+
+    public void clearMaintenanceWake(long sessionId) throws SQLException {
+        immediate.execute(connection -> {
+            clearMaintenanceWake(connection, sessionId);
+            return null;
+        });
     }
 
     /**
@@ -126,6 +145,19 @@ public class ChatSessionMetadataRepository {
         }
         State state = read(connection, sessionId).orElseThrow();
         return kind == ScanKind.MEMORY ? state.memoryScanAfterTurn() : state.summaryScanAfterTurn();
+    }
+
+    /** 独立事务版的水位推进：后台任务结算时用，不能假设调用方已经握着写事务。 */
+    public long advanceScanWatermark(long sessionId, ScanKind kind, long throughTurnId) throws SQLException {
+        return immediate.execute(connection -> advanceScanWatermark(connection, sessionId, kind, throughTurnId));
+    }
+
+    /** 独立事务版的跳过统计。 */
+    public void recordSkips(long sessionId, ScanKind kind, long additional, String notice) throws SQLException {
+        immediate.execute(connection -> {
+            recordSkips(connection, sessionId, kind, additional, notice);
+            return null;
+        });
     }
 
     /**
@@ -168,6 +200,15 @@ public class ChatSessionMetadataRepository {
             statement.setLong(4, sessionId);
             if (statement.executeUpdate() != 1) throw new SQLException("摘要尝试记录未命中单行: " + sessionId);
         }
+    }
+
+    /** 独立事务版：worker 在真正外发 SUMMARY 之前记账，失败同样计冷却（§2.4）。 */
+    public void recordSummaryAttempt(long sessionId, String attemptedAt, long throughTurnId, String inputRevision)
+            throws SQLException {
+        immediate.execute(connection -> {
+            recordSummaryAttempt(connection, sessionId, attemptedAt, throughTurnId, inputRevision);
+            return null;
+        });
     }
 
     /** 扫描跳过的数值统计与最近提示；只存计数和短代码，不存正文（§2.5）。 */
@@ -250,6 +291,10 @@ public class ChatSessionMetadataRepository {
                 statement.setLong(3, sessionId);
                 if (statement.executeUpdate() != 1) throw new SQLException("归档状态未命中单行: " + sessionId);
             }
+            if (archived) {
+                // 归档暂停维护：同事务作废该会话的未终态任务与租约，水位保留（§2.1）
+                MemoryJobRepository.supersedeForSessionIn(connection, sessionId);
+            }
             return archived ? ArchiveResult.ARCHIVED : ArchiveResult.UNARCHIVED;
         });
     }
@@ -261,6 +306,35 @@ public class ChatSessionMetadataRepository {
                     sessionId);
             return read(connection, sessionId).orElseThrow().contextGeneration();
         });
+    }
+
+    /** 一个待处理会话：元数据 + 该会话当前的最大轮次 ID（待处理边界的右端）。 */
+    public record Backlog(State state, long maxTurnId) {
+    }
+
+    /**
+     * 有待处理积压的会话（§2.1「后台仅在 {@code maintenance_wake_pending=true} 且未归档时检查积压」）。
+     * 按 id 稳定排序，只看这一批，剩下的下一轮再来——队列容量就是在这里生效的。
+     */
+    public List<Backlog> findPendingMaintenance(int limit) throws SQLException {
+        String sql = "SELECT s.id, s.memory_scope_type, s.memory_notebook_id, s.memory_learn_enabled,"
+                + " s.context_generation, s.history_revision, s.memory_scan_after_turn, s.summary_scan_after_turn,"
+                + " s.summary_last_attempt_at, s.summary_last_attempt_through, s.summary_last_input_revision,"
+                + " s.archived_at, s.maintenance_wake_pending, s.memory_skipped_count, s.summary_skipped_count,"
+                + " s.last_scan_notice, (SELECT COALESCE(MAX(t.id), 0) FROM ai_chat_turn t WHERE t.session_id = s.id)"
+                + " AS max_turn_id FROM ai_chat_session AS s WHERE s.maintenance_wake_pending = 1 AND s.archived = 0"
+                + " ORDER BY s.id LIMIT ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, Math.max(1, limit));
+            List<Backlog> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new Backlog(state(result), result.getLong("max_turn_id")));
+                }
+            }
+            return rows;
+        }
     }
 
     private static boolean hasRunningTurn(Connection connection, long sessionId) throws SQLException {

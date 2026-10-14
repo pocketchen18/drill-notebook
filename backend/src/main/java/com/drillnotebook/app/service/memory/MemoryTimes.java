@@ -31,4 +31,35 @@ public final class MemoryTimes {
     public static String format(Instant instant) {
         return FIXED_WIDTH_UTC.format(instant);
     }
+
+    /**
+     * 文本时刻转 epoch 毫秒；无法识别（含 {@code null}、空白和各种乱码）返回 0，调用方据此判"没有时刻"。
+     *
+     * <p>兼容 SQLite 默认值那种没有 {@code T}/{@code Z} 的写法：{@code yyyy-MM-dd HH:mm:ss} 正好
+     * <b>19</b> 个字符（第 10 位是空格），历史行里确实存在。这里判成 19 而不是 20，否则这一路静默
+     * 退化成"没有时刻"——冷却会被旁路、合并窗口会落到 1970 年。</p>
+     */
+    public static long parseMillis(String value) {
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        String text = value.trim();
+        try {
+            if (text.length() >= 19 && text.charAt(10) == ' ') {
+                text = text.substring(0, 10) + "T" + text.substring(11) + "Z";
+            }
+            return Instant.parse(text).toEpochMilli();
+        } catch (RuntimeException error) {
+            try {
+                return java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli();
+            } catch (RuntimeException fallback) {
+                return 0L;
+            }
+        }
+    }
+
+    /** epoch 毫秒转库内文本时刻；{@code null} 写成 SQL NULL 由调用方负责。 */
+    public static String formatMillis(long epochMilli) {
+        return format(Instant.ofEpochMilli(epochMilli));
+    }
 }

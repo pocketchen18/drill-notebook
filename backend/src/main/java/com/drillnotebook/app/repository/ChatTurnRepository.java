@@ -88,7 +88,7 @@ public class ChatTurnRepository {
                           Long assistantMessageId, long contextGeneration, String sourceScopeType, long sourceScopeId,
                           long sourceRevision, long storedHistoryBytes, long reservedHistoryBytes,
                           String contentDeletedAt, String persistenceStatus, String finishReason, String startedAt,
-                          String finishedAt, String retryOf) {
+                          String finishedAt, String retryOf, boolean memoryEligible) {
     }
 
     /**
@@ -113,7 +113,7 @@ public class ChatTurnRepository {
     private static final String TURN_SELECT = "SELECT id, request_id, session_id, status, user_message_id,"
             + " assistant_message_id, context_generation, source_scope_type, source_scope_id, source_revision,"
             + " stored_history_bytes, reserved_history_bytes, content_deleted_at, persistence_status, finish_reason,"
-            + " started_at, finished_at, retry_of FROM ai_chat_turn";
+            + " started_at, finished_at, retry_of, memory_eligible FROM ai_chat_turn";
 
     private final DataSource dataSource;
     private final ImmediateTransaction immediate;
@@ -236,6 +236,10 @@ public class ChatTurnRepository {
                 throw new SQLException("轮次 " + turn.id() + " 存量与实测不一致：算得 " + newStored + "，实测 " + measured);
             }
             ledger.settle(connection, delta, turn.reservedHistoryBytes());
+            if (STATUS_COMPLETED.equals(terminal.status()) && turn.memoryEligible()) {
+                // 只有"合格且已完成"的来源才置唤醒；v1、关掉学习的会话、失败轮次都不产生维护工作（§7）
+                metadata.markMaintenanceWake(connection, turn.sessionId());
+            }
             return new TerminalOutcome(true, false, terminal.status(), newStored,
                     bumpSession(connection, turn.sessionId()));
         });
@@ -420,14 +424,22 @@ public class ChatTurnRepository {
 
     /** 幂等判定要比对的两列请求元数据（不解密）。 */
     public Optional<MetaColumns> findRequestMeta(String requestId) throws SQLException {
+        return findMeta("request_meta_cipher, request_meta_crypto", requestId);
+    }
+
+    /** 收尾落库的结果元数据（不解密）：上下文检查器与重放响应据此只读已保存的审计。 */
+    public Optional<MetaColumns> findResultMeta(String requestId) throws SQLException {
+        return findMeta("result_meta_cipher, result_meta_crypto", requestId);
+    }
+
+    private Optional<MetaColumns> findMeta(String columns, String requestId) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(
-                     "SELECT request_meta_cipher, request_meta_crypto FROM ai_chat_turn WHERE request_id = ?")) {
+                     "SELECT " + columns + " FROM ai_chat_turn WHERE request_id = ?")) {
             statement.setString(1, requestId);
             try (ResultSet result = statement.executeQuery()) {
                 if (!result.next()) return Optional.empty();
-                return Optional.of(new MetaColumns(result.getString("request_meta_cipher"),
-                        result.getString("request_meta_crypto")));
+                return Optional.of(new MetaColumns(result.getString(1), result.getString(2)));
             }
         }
     }
@@ -466,7 +478,8 @@ public class ChatTurnRepository {
                 result.getLong("stored_history_bytes"), result.getLong("reserved_history_bytes"),
                 result.getString("content_deleted_at"), result.getString("persistence_status"),
                 result.getString("finish_reason"), result.getString("started_at"),
-                result.getString("finished_at"), result.getString("retry_of"));
+                result.getString("finished_at"), result.getString("retry_of"),
+                result.getInt("memory_eligible") == 1);
     }
 
     private long insertTurn(Connection connection, Draft draft, long storedBytes) throws SQLException {

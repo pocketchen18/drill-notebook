@@ -435,9 +435,12 @@ class ChatTurnServiceLifecycleTest {
     void chatUsageAttemptSettlesExactlyOnce() throws Exception {
         BeginResult begun = service.begin(input(sessionId, "计量一次就好"));
         Lease lease = begun.lease();
-        String attempt = service.startUsage(lease, "target-fp");
+        String attempt = service.startUsage(lease, "target-fp", "plan-chat-1");
         assertNotNull(attempt);
         assertEquals("SENT", usageState(attempt), "外发之前就必须置 SENT（§2.6）");
+        assertEquals("plan-chat-1", jdbc.queryForObject(
+                "SELECT context_plan_id FROM ai_usage_attempt WHERE id = ?", String.class, attempt),
+                "用量要绑回本轮实际发出的计划（P4 交接 C）");
 
         service.settleUsage(attempt, new AiUpstreamClient.Usage("provider", 100, 40, 10, 0));
         service.finalizeTurn(lease, UpstreamReply.of(REPLY, null, "stop"), null);
@@ -456,7 +459,7 @@ class ChatTurnServiceLifecycleTest {
     @Test
     void missingProviderUsageIsSettledAsUnknownNotEstimated() throws Exception {
         BeginResult begun = service.begin(input(sessionId, "厂商没回用量"));
-        String attempt = service.startUsage(begun.lease(), "target-fp");
+        String attempt = service.startUsage(begun.lease(), "target-fp", null);
         service.settleUsage(attempt, AiUpstreamClient.Usage.unknown());
         service.finalizeTurn(begun.lease(), UpstreamReply.of(REPLY, null, "stop"), null);
 
@@ -471,11 +474,11 @@ class ChatTurnServiceLifecycleTest {
     @Test
     void recoveryConsumesSentLeftoversAndReleasesProvenUnsent() throws Exception {
         BeginResult crashed = service.begin(input(sessionId, "发到一半进程没了"));
-        String sent = service.startUsage(crashed.lease(), "target-fp");
+        String sent = service.startUsage(crashed.lease(), "target-fp", null);
         service.finalizeTurn(crashed.lease(), UpstreamReply.of(REPLY, null, "stop"), null);
 
         BeginResult running = service.begin(input(newSession("另一个会话"), "还在读"));
-        String live = service.startUsage(running.lease(), "target-fp");
+        String live = service.startUsage(running.lease(), "target-fp", null);
 
         jdbc.update("INSERT INTO ai_usage_attempt(id, operation_id, purpose, target_fingerprint, budget_date,"
                 + " budget_timezone, reserved_tokens, usage_source, state, created_at) VALUES"

@@ -61,11 +61,13 @@ class AiUpstreamClientTest {
                         Map.of("type", "text", "text", "看图"),
                         Map.of("type", "image_url", "image_url", Map.of("url", image))))));
         assertEquals("你是学习助手", payload.system());
-        assertEquals(2, payload.messages().size());
-        JsonNode blocks = mapper.valueToTree(payload.messages().get(1).get("content"));
-        assertEquals("text", blocks.get(0).path("type").asText());
-        assertEquals("看图", blocks.get(0).path("text").asText());
-        JsonNode imageBlock = blocks.get(1);
+        // 连续两条 user 必须并成一条（Anthropic 不接受同角色相邻），块序原样保留
+        assertEquals(1, payload.messages().size());
+        JsonNode blocks = mapper.valueToTree(payload.messages().get(0).get("content"));
+        assertEquals(3, blocks.size(), "两条 user 的三个块全部按顺序并进来");
+        assertEquals("你好", blocks.get(0).path("text").asText());
+        assertEquals("看图", blocks.get(1).path("text").asText());
+        JsonNode imageBlock = blocks.get(2);
         assertEquals("image", imageBlock.path("type").asText());
         assertEquals("base64", imageBlock.path("source").path("type").asText());
         assertEquals("image/png", imageBlock.path("source").path("media_type").asText());

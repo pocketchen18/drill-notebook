@@ -70,9 +70,16 @@ public class ChatTurnService {
         }
     }
 
-    /** 开始成功后的凭据：拿到它才可以外发，收尾时必须原样交回。 */
+    /**
+     * 开始成功后的凭据：拿到它才可以外发，收尾时必须原样交回。
+     * {@code attachments} 是本轮已通过有界校验并封装好的明文形态，只交给上下文组装器，绝不落盘。
+     */
     public record Lease(String requestId, long turnId, long sessionId, long userMessageId, String masterPassword,
-                       ActiveTurnRegistry.Handle handle) {
+                        ActiveTurnRegistry.Handle handle,
+                        List<ChatAttachmentService.Sourced> attachments) {
+        public Lease {
+            attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        }
     }
 
     /** 开始结果：STARTED 带 Lease 可外发；REPLAY 带已落库的终态与可展示的回复。 */
@@ -221,7 +228,7 @@ public class ChatTurnService {
         return switch (started.outcome()) {
             case STARTED -> new BeginResult("STARTED",
                     new Lease(requestId, started.turnId(), input.sessionId(), started.userMessageId(),
-                            input.masterPassword(), handle), null, null, null);
+                            input.masterPassword(), handle, prepared.sourced()), null, null, null);
             case DUPLICATE_REQUEST -> {
                 registry.release(requestId, handle);
                 yield replay(started.turn(), input, fingerprint);
@@ -295,13 +302,14 @@ public class ChatTurnService {
      *
      * <p>记账失败绝不拦住用户的聊天——回复比统计表重要；此时返回 null，后续结算静默跳过。</p>
      *
+     * @param contextPlanId 本轮实际发出的上下文计划 ID；v1 没有计划时为 null（contracts §4.5）
      * @return attempt ID，登记不可用时为 null
      */
-    public String startUsage(Lease lease, String targetFingerprint) {
+    public String startUsage(Lease lease, String targetFingerprint, String contextPlanId) {
         ZoneId zone = ZoneId.systemDefault();
         Attempt attempt = new Attempt(UuidV7.generate(System.currentTimeMillis()), lease.requestId(),
                 UsageRepository.PURPOSE_CHAT, targetFingerprint, LocalDate.now(zone).toString(), zone.getId(),
-                0, MemoryTimes.now());
+                0, MemoryTimes.now(), contextPlanId);
         try {
             if (!usage.reserve(attempt)) return null;
             usage.markSent(attempt.id());
@@ -368,6 +376,28 @@ public class ChatTurnService {
         body.put("retryOf", turn.retryOf());
         body.put("contentDeleted", turn.contentDeletedAt() != null);
         return body;
+    }
+
+    /**
+     * 读回这一轮已保存的上下文审计（只读，不再建计划、不触发检索或提取）。
+     * 读不到就交空：墓碑、v1 或落库失败的轮次本来就没有审计，检查器据此显示"本轮未保存上下文记录"。
+     */
+    public Optional<Map<String, Object>> storedAudit(String requestId, String masterPassword) {
+        try {
+            Optional<ChatTurnRepository.MetaColumns> meta = turns.findResultMeta(requestId);
+            if (meta.isEmpty() || meta.get().cipher() == null || meta.get().cipher().isBlank()) {
+                return Optional.empty();
+            }
+            ChatMessageCipher.Read read = cipher.read(meta.get().cipher(), meta.get().crypto(), masterPassword);
+            if (read.status() != ChatMessageCipher.ReadStatus.DECRYPTED) return Optional.empty();
+            com.fasterxml.jackson.databind.JsonNode audit = mapper.readTree(read.value()).path("audit");
+            if (audit.isMissingNode() || audit.isNull() || !audit.has("planId")) return Optional.empty();
+            return Optional.of(mapper.convertValue(audit, new com.fasterxml.jackson.core.type.TypeReference<>() {
+            }));
+        } catch (SQLException | com.fasterxml.jackson.core.JsonProcessingException error) {
+            log.warn("读取轮次上下文审计失败 requestId={}: {}", requestId, error.toString());
+            return Optional.empty();
+        }
     }
 
     /** 用户停止：置取消标志并关闭上游响应体；正文一个字都没收到时本轮终态是 ABORTED。 */
@@ -717,8 +747,10 @@ public class ChatTurnService {
                 .append(state.memoryNotebookId() == null ? 0L : state.memoryNotebookId()).append('|')
                 .append("text=").append(input.userText().codePointCount(0, input.userText().length())).append('|')
                 .append("text=").append(input.userText()).append('|')
+                // 重新生成来源也是有效输入：同 ID 换 retryOf 必须 409，不能悄悄重放原结果（§7.2 第 7 条）
+                .append("retryOf=").append(input.retryOf() == null ? "" : input.retryOf()).append('|')
                 .append("attachments=").append(ChatAttachmentService.identity(input.attachments())).append('|')
-                .append("options=").append(new TreeMap<>(input.requestOptions()));
+                .append("options=").append(canonicalOptions(input.requestOptions()));
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
             StringBuilder hex = new StringBuilder(digest.length * 2);
@@ -727,6 +759,32 @@ public class ChatTurnService {
         } catch (java.security.NoSuchAlgorithmException error) {
             throw new IllegalStateException("SHA-256 不可用", error);
         }
+    }
+
+    /**
+     * 选项的规范化序列化：等价输入必须得到同一串字节。递归排序嵌套 Map，不依赖 {@code Map.toString()}
+     * （迭代顺序与标量格式都跟实现走，客户端换一个等价写法就会误报 REQUEST_CONFLICT）。
+     */
+    private String canonicalOptions(Map<String, Object> options) {
+        try {
+            return mapper.writeValueAsString(sortDeep(options));
+        } catch (Exception error) {
+            throw reject(500, "CHAT_META_UNWRITABLE", "请求选项无法规范化", Map.of());
+        }
+    }
+
+    private static Object sortDeep(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            TreeMap<String, Object> sorted = new TreeMap<>();
+            map.forEach((key, item) -> sorted.put(String.valueOf(key), sortDeep(item)));
+            return sorted;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> rows = new java.util.ArrayList<>(list.size());
+            for (Object item : list) rows.add(sortDeep(item));
+            return rows;
+        }
+        return value;
     }
 
     private String bounded(Map<String, Object> meta) {

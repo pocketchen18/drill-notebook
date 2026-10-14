@@ -257,7 +257,8 @@ public class RetrievalIndexRepository {
             String title,
             String headingPath,
             String text,
-            Double bm25Score
+            Double bm25Score,
+            String contentHash
     ) {}
 
     /**
@@ -286,7 +287,7 @@ public class RetrievalIndexRepository {
             String corpusType, Long corpusId, String matchExpr, int topK) {
         StringBuilder sql = new StringBuilder(
                 "SELECT c.id AS chunk_id, c.source_id, c.corpus_id,"
-                        + " c.title, c.heading_path, c.text, c.chunk_index,"
+                        + " c.title, c.heading_path, c.text, c.chunk_index, c.content_hash,"
                         + " bm25(retrieval_chunk_fts, 2.0, 1.5, 1.0) AS score"
                         + " FROM retrieval_chunk_fts"
                         + " JOIN retrieval_chunk c"
@@ -315,7 +316,8 @@ public class RetrievalIndexRepository {
                         rs.getString("title"),
                         rs.getString("heading_path"),
                         rs.getString("text"),
-                        rs.getDouble("score")),
+                        rs.getDouble("score"),
+                        rs.getString("content_hash")),
                 params.toArray());
     }
 
@@ -341,7 +343,7 @@ public class RetrievalIndexRepository {
             String corpusType, Long corpusId, String likePattern, int topK) {
         StringBuilder sql = new StringBuilder(
                 "SELECT c.id AS chunk_id, c.source_id, c.corpus_id,"
-                        + " c.title, c.heading_path, c.text, c.chunk_index"
+                        + " c.title, c.heading_path, c.text, c.chunk_index, c.content_hash"
                         + " FROM retrieval_chunk c"
                         + " WHERE c.corpus_type = ?"
                         + " AND (COALESCE(c.title, '') LIKE ? ESCAPE '\\'"
@@ -380,7 +382,8 @@ public class RetrievalIndexRepository {
                         rs.getString("title"),
                         rs.getString("heading_path"),
                         rs.getString("text"),
-                        null),
+                        null,
+                        rs.getString("content_hash")),
                 params.toArray());
     }
 
@@ -422,7 +425,7 @@ public class RetrievalIndexRepository {
         if (chunkIds == null || chunkIds.isEmpty()) return List.of();
         StringBuilder sql = new StringBuilder(
                 "SELECT id, corpus_type, corpus_id, source_id, chunk_index,"
-                        + " title, heading_path, text FROM retrieval_chunk WHERE id IN (");
+                        + " title, heading_path, text, content_hash FROM retrieval_chunk WHERE id IN (");
         for (int i = 0; i < chunkIds.size(); i++) {
             if (i > 0) sql.append(",");
             sql.append("?");
@@ -438,7 +441,8 @@ public class RetrievalIndexRepository {
                         rs.getString("title"),
                         rs.getString("heading_path"),
                         rs.getString("text"),
-                        null),
+                        null,
+                        rs.getString("content_hash")),
                 chunkIds.toArray());
     }
 }

@@ -294,7 +294,7 @@ public class HybridRetrievalService {
                         base.chunkId(), base.title(), base.headingPath(), base.snippet(),
                         matchTypes, entry.ftsRank(), entry.vectorRank(), entry.rrfScore());
                 hits.add(new RetrievalHit(citation, lexicalHit.text(),
-                        lexicalHit.sourceId(), lexicalHit.chunkIndex()));
+                        lexicalHit.sourceId(), lexicalHit.chunkIndex(), lexicalHit.contentHash()));
             } else {
                 RetrievalIndexRepository.LexicalRow row = rowsById.get(entry.chunkId());
                 if (row == null) continue; // chunk deleted between scan and fetch
@@ -304,7 +304,7 @@ public class HybridRetrievalService {
                         RetrievalService.buildSnippet(row.text(), normalizedQuery),
                         matchTypes, null, entry.vectorRank(), entry.rrfScore());
                 hits.add(new RetrievalHit(citation, row.text(),
-                        row.sourceId(), row.chunkIndex()));
+                        row.sourceId(), row.chunkIndex(), row.contentHash()));
             }
         }
         return List.copyOf(hits);

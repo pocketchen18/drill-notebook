@@ -349,6 +349,18 @@ public class MemoryPolicyService {
 
     // ---- 资格判定 ----
 
+    /**
+     * 这个拦截原因是<b>用户主动排除</b>维护，还是只是<b>暂时</b>等着？
+     *
+     * <p>§2.1 要求"预算/解锁等待不丢 pending"，但开关不是等待：{@code enabled}/{@code autoExtract}/
+     * {@code compressSession} 关掉，或作用域已经失效，表示这批来源本就不该进维护链，唤醒标记可以收口；
+     * 重新开启后由新完成的轮次或显式 flush 重新置位，而扫描始终从水位算起，不会漏掉区间里的来源。</p>
+     */
+    public static boolean switchedOff(Gate gate) {
+        return gate == Gate.MEMORY_DISABLED || gate == Gate.AUTO_EXTRACT_DISABLED
+                || gate == Gate.COMPRESS_DISABLED || gate == Gate.SCOPE_INVALID;
+    }
+
     /** 手动录入：库存在且已解锁 + scope 合法；不需要开关，也不需要外发授权（§5.1）。 */
     public Eligibility manualWriteEligibility(String scopeType, long scopeId) throws SQLException {
         Eligibility state = vaultStateGate();

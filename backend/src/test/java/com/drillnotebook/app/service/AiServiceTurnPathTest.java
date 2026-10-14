@@ -47,6 +47,7 @@ class AiServiceTurnPathTest {
     private DataSource dataSource;
     private JdbcTemplate jdbc;
     private ChatLegacyWiring.Wiring wiring;
+    private ChatContextWiring.Stack contexts;
     private AiService ai;
     private long sessionId;
 
@@ -57,8 +58,9 @@ class AiServiceTurnPathTest {
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(appRoot)).initialize();
         jdbc = new JdbcTemplate(dataSource);
         wiring = ChatLegacyWiring.wire(dataSource, jdbc);
+        contexts = ChatContextWiring.wire(dataSource, jdbc, wiring);
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(),
-                new ObjectMapper(), null, wiring.turnService(), wiring.cipher());
+                new ObjectMapper(), null, wiring.turnService(), wiring.cipher(), contexts.contexts());
         ai.saveConfig(MOCK_CONFIG);
         sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1 WHERE id = ?", sessionId);

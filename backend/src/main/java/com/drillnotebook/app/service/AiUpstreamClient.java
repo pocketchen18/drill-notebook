@@ -358,7 +358,33 @@ public class AiUpstreamClient {
             }
             out.add(Map.of("role", role, "content", toAnthropicBlocks(content)));
         }
-        return new AnthropicPayload(system.toString().strip(), out);
+        return new AnthropicPayload(system.toString().strip(), mergeConsecutiveUserTurns(out));
+    }
+
+    /**
+     * Anthropic 不接受连续两条同角色消息，而 §9.3 的顺序天然是"数据块 + 当前输入"两条连续 user：
+     * 这里把它们并成一条多块消息，<b>块与块的先后顺序原样保留</b>，当前请求仍然是最后一个块。
+     */
+    static List<Map<String, Object>> mergeConsecutiveUserTurns(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> merged = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            boolean sameRole = !merged.isEmpty()
+                    && "user".equals(message.get("role"))
+                    && "user".equals(merged.get(merged.size() - 1).get("role"));
+            if (!sameRole) {
+                merged.add(message);
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> previous = (List<Map<String, Object>>) merged.get(merged.size() - 1)
+                    .get("content");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> current = (List<Map<String, Object>>) message.get("content");
+            List<Map<String, Object>> blocks = new ArrayList<>(previous);
+            blocks.addAll(current);
+            merged.set(merged.size() - 1, Map.of("role", "user", "content", List.copyOf(blocks)));
+        }
+        return List.copyOf(merged);
     }
 
     static List<Map<String, Object>> toAnthropicBlocks(Object content) {
@@ -474,41 +500,48 @@ public class AiUpstreamClient {
         Usage[] usage = {Usage.unknown()};
         boolean[] terminal = {false};
         boolean[] downstreamGone = {false};
-        readSse(body, (eventName, data) -> {
-            if (stopped(handle, deadline)) return false;
-            if ("[DONE]".equals(data.trim())) {
-                terminal[0] = true;
-                return false;
-            }
-            JsonNode node;
-            try {
-                node = mapper.readTree(data);
-            } catch (IOException error) {
-                return true; // 跳过无法解析的行
-            }
-            throwIfUpstreamError(node);
-            Usage parsed = usageOfChatCompletion(node);
-            if (parsed.reported()) usage[0] = parsed;
-            JsonNode delta = node.path("choices").path(0).path("delta");
-            String reasoningKept = capture.keepReasoning(delta.path("reasoning_content").asText(""));
-            if (!reasoningKept.isEmpty() && listener != null && !listener.onDelta("reasoning", reasoningKept)) {
-                downstreamGone[0] = true;
-                return false;
-            }
-            String textKept = capture.keepText(delta.path("content").asText(""));
-            if (!textKept.isEmpty() && listener != null && !listener.onDelta("text", textKept)) {
-                downstreamGone[0] = true;
-                return false;
-            }
-            String finishReason = node.path("choices").path(0).path("finish_reason").asText("");
-            if (!finishReason.isEmpty()) {
-                finish[0] = finishReason;
-                terminal[0] = true;
-            }
-            return !capture.limited();
-        });
+        boolean[] readInterrupted = {false};
+        try {
+            readSse(body, (eventName, data) -> {
+                if (stopped(handle, deadline)) return false;
+                if ("[DONE]".equals(data.trim())) {
+                    terminal[0] = true;
+                    return false;
+                }
+                JsonNode node;
+                try {
+                    node = mapper.readTree(data);
+                } catch (IOException error) {
+                    return true; // 跳过无法解析的行
+                }
+                throwIfUpstreamError(node);
+                Usage parsed = usageOfChatCompletion(node);
+                if (parsed.reported()) usage[0] = parsed;
+                JsonNode delta = node.path("choices").path(0).path("delta");
+                String reasoningKept = capture.keepReasoning(delta.path("reasoning_content").asText(""));
+                if (!reasoningKept.isEmpty() && listener != null && !listener.onDelta("reasoning", reasoningKept)) {
+                    downstreamGone[0] = true;
+                    return false;
+                }
+                String textKept = capture.keepText(delta.path("content").asText(""));
+                if (!textKept.isEmpty() && listener != null && !listener.onDelta("text", textKept)) {
+                    downstreamGone[0] = true;
+                    return false;
+                }
+                String finishReason = node.path("choices").path(0).path("finish_reason").asText("");
+                if (!finishReason.isEmpty()) {
+                    finish[0] = finishReason;
+                    terminal[0] = true;
+                }
+                return !capture.limited();
+            });
+        } catch (IOException interrupted) {
+            // 到期/取消会关掉响应体，让读流直接失败：已经收到的半句仍要交回，不能当成什么都没发生
+            if (!stopped(handle, deadline)) throw interrupted;
+            readInterrupted[0] = true;
+        }
         return new Result(capture.text(), capture.reasoning(), finish[0], terminal[0], capture.limited(),
-                downstreamGone[0], usage[0]);
+                downstreamGone[0] || readInterrupted[0], usage[0]);
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
@@ -519,6 +552,24 @@ public class AiUpstreamClient {
         Usage[] usage = {Usage.unknown()};
         boolean[] terminal = {false};
         boolean[] downstreamGone = {false};
+        boolean[] readInterrupted = {false};
+        try {
+            consumeAnthropicEvents(body, listener, handle, deadline, capture, finish, usage, terminal,
+                    downstreamGone);
+        } catch (IOException interrupted) {
+            // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
+            if (!stopped(handle, deadline)) throw interrupted;
+            readInterrupted[0] = true;
+        }
+        return new Result(capture.text(), capture.reasoning(), finish[0],
+                terminal[0] || !finish[0].isEmpty(), capture.limited(),
+                downstreamGone[0] || readInterrupted[0], usage[0]);
+    }
+
+    private void consumeAnthropicEvents(InputStream body, StreamListener listener,
+                                        ActiveTurnRegistry.Handle handle, Deadline deadline, Capture capture,
+                                        String[] finish, Usage[] usage, boolean[] terminal,
+                                        boolean[] downstreamGone) throws IOException {
         readSse(body, (eventName, data) -> {
             if (stopped(handle, deadline)) return false;
             JsonNode node;
@@ -559,8 +610,6 @@ public class AiUpstreamClient {
             }
             return !capture.limited();
         });
-        return new Result(capture.text(), capture.reasoning(), finish[0],
-                terminal[0] || !finish[0].isEmpty(), capture.limited(), downstreamGone[0], usage[0]);
     }
 
     /**

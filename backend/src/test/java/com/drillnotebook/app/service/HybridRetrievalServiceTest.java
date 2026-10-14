@@ -186,7 +186,7 @@ class HybridRetrievalServiceTest {
         for (int chunk = 1; chunk <= 5; chunk++) {
             Citation citation = new Citation("NOTEBOOK", 1, chunk, chunk,
                     "t" + chunk, "", "s" + chunk, List.of("bm25"), chunk, null, null);
-            bm25.add(new RetrievalHit(citation, "text" + chunk, chunk, 0));
+            bm25.add(new RetrievalHit(citation, "text" + chunk, chunk, 0, null));
         }
         List<HybridRetrievalService.VectorRanked> vector = List.of(
                 new HybridRetrievalService.VectorRanked(4, 4, 0, 0.99),
@@ -526,7 +526,8 @@ class HybridRetrievalServiceTest {
                 mapper,
                 lexical,
                 wiring.turnService(),
-                wiring.cipher());
+                wiring.cipher(),
+                null);
         service.saveConfig(Map.of(
                 "provider", "custom",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort(),
