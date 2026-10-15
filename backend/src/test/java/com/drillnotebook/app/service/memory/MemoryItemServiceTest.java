@@ -135,6 +135,35 @@ class MemoryItemServiceTest {
         assertFalse(String.valueOf(candidates).contains(VALUE), "冲突响应不回别人的正文");
     }
 
+    /**
+     * §12 的"手动添加两条学习目标"能并存：族键必须由服务端按 {@code predicate:value} 派生。
+     * 早先手动路径只看前端传来的 family，两条不同目标撞在同一个空族键上被 409 挡回，
+     * 而自动提取链用的是另一套派生——两条路径口径不同（P9b 的 D99）。
+     */
+    @Test
+    void manualMultiValuedGoalsEachGetTheirOwnFamily() throws Exception {
+        createFingerprintVault();
+        String firstGoal = (String) items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "雅思 7 分",
+                null, null, null)).body().get("memoryId");
+
+        MemoryApiResult second = items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "准备托福",
+                null, null, null));
+        assertEquals(201, second.status(), String.valueOf(second.body()));
+        String otherGoal = (String) second.body().get("memoryId");
+        assertEquals(2, count("ai_memory_item"), "多值事实各占一族，谁也不顶掉谁");
+        assertFalse(jdbc.queryForObject("SELECT family_key_hmac FROM ai_memory_item WHERE memory_id = ?",
+                        String.class, firstGoal)
+                .equals(jdbc.queryForObject("SELECT family_key_hmac FROM ai_memory_item WHERE memory_id = ?",
+                        String.class, otherGoal)), "族键里没带值，两条目标就成了同族冲突");
+
+        MemoryApiResult duplicate = items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "雅思 7 分",
+                null, null, null));
+        assertEquals(409, duplicate.status(), "换个值才算另一条，抄一遍还是冲突");
+        assertEquals("MEMORY_FAMILY_CONFLICT", duplicate.body().get("code"));
+        assertEquals(true, items.get(firstGoal).body().get("multiValued"),
+                "候选能不能「分别保留」由服务端这张表判定，界面不许复刻一份谓词清单");
+    }
+
     @Test
     void credentialsAreRefusedEvenWhenTheUserInsists() throws Exception {
         createFingerprintVault();

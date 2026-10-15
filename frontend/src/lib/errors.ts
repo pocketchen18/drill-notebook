@@ -20,6 +20,27 @@ const FRIENDLY_MESSAGES: Record<string, string> = {
   MEMORY_SETTINGS_CONFLICT: '记忆设置刚被改过，请重试',
   MEMORY_CONSENT_STALE: '模型或授权已变更，需要重新授权',
   MEMORY_TARGET_MISSING: '还没有可用的维护模型，请先在 AI 连接里配置',
+  // 候选与建议审阅（P9b）：后端 message 已可读，这里只兜 message 缺失的情况
+  MEMORY_DECISION_INVALID: '这个审阅按钮服务端不认识，请刷新后重试',
+  MEMORY_DECISION_NOT_ALLOWED: '这一类内容只能采用或保留当前，不能并存',
+  MEMORY_VERSION_REQUIRED: '请先重新读取待确认内容',
+  MEMORY_TARGET_VERSION_REQUIRED: '采纳前要先看到当前值的版本，请刷新后重试',
+  MEMORY_TARGET_REQUIRED: '替换要先选好被替换的那条记忆',
+  MEMORY_TARGET_NOT_FOUND: '要替换的那条记忆已经没有生效版本了',
+  MEMORY_TARGET_INVALID: '不能把候选替换成它自己',
+  MEMORY_FAMILY_CONFLICT: '同一类里已经有别的生效记忆，请先整理再采纳',
+  MEMORY_PROPOSAL_EXPIRED: '这条建议已经过期，请对照当前值重新决定',
+  MEMORY_PROPOSAL_STALE: '这条建议已经不成立了（来源、会话或记忆库已变化）',
+  MEMORY_PROPOSAL_NOT_FOUND: '这条建议已经不在了',
+  MEMORY_ITEM_NOT_FOUND: '这条记忆已经不在了，请重新读取列表',
+  MEMORY_STORAGE_UNAVAILABLE: '记忆存储层暂时不可用，你的原话没有丢失，请稍后重试',
+  MEMORY_VAULT_NOT_INITIALIZED: '还没有记忆库，先创建本地加密库再试',
+  MEMORY_SOURCE_MISSING: '这条候选的聊天原话已经不在了，不能落成记忆',
+  MEMORY_PAGE_STALE: '列表已经变化，请回到第一页再看一次',
+  MEMORY_CLEAR_CONFIRMATION_REQUIRED: '清空本机全部 AI 记忆需要你显式确认',
+  MEMORY_EPOCH_REQUIRED: '清空要先读到当前记忆库版本',
+  MEMORY_EPOCH_CHANGED: '记忆库版本已经变过，请重载后再确认清空',
+  MEMORY_OPERATION_IN_FLIGHT: '上一次同一个操作还在进行中，请稍后重试',
 };
 
 /**

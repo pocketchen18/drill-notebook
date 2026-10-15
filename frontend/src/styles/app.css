@@ -1308,8 +1308,18 @@ html[data-theme='dark'] {
 .ai-memory-meta { display: grid; gap: 4px; overflow-wrap: anywhere; }
 .ai-memory-sources { display: grid; gap: 8px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 .ai-memory-counts { display: grid; gap: 2px; padding-top: 12px; border-top: 1px dashed var(--line); }
+/* 待确认审阅：新值/当前值/原话/作用域/为什么待确认摊在同一张卡片上 */
+.ai-memory-review { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px dashed var(--line); }
+.ai-memory-review-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle-bg); }
+.ai-memory-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-memory-review-body { display: grid; gap: 6px; margin: 0; overflow-wrap: anywhere; }
+.ai-memory-review-body > div { display: grid; gap: 2px; }
+.ai-memory-review-body dt { font-size: 12px; color: var(--muted); }
+.ai-memory-review-body dd { margin: 0; }
+.ai-memory-review-error { margin-top: 2px; }
 @media (max-width: 759px) {
   .ai-memory-item { flex-direction: column; align-items: flex-start; }
+  .ai-memory-review-actions { width: 100%; }
 }
 /* 快捷键编辑器：作用域分组 + 绑定 chip（含移除按钮）+ 录入按钮（全部跟主题变量，明暗两态共用） */
 .settings-group { display: grid; gap: 12px; }

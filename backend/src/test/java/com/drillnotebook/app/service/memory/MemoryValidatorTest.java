@@ -247,6 +247,12 @@ class MemoryValidatorTest {
                         "雅思照旧，我还准备托福。", String.valueOf(MESSAGE_ID), "\"u0\"", "null", "false")),
                 batch("雅思照旧，我还准备托福。"), Map.of(), MAPPER).candidates().get(0);
         assertEquals("study.goal:准备托福", goal.family(), "多值事实不能和单值偏好共用同一条唯一约束（§8.3）");
+        ValidatedCandidate constraint = MemoryValidator.validate(
+                envelope(candidate("ADD", "null", "null", "TASK", "task.constraint", "\"每次只给三步\"",
+                        "每次只给三步以内的操作", String.valueOf(MESSAGE_ID), "\"u0\"", "null", "false")),
+                batch("每次只给三步以内的操作"), Map.of(), MAPPER).candidates().get(0);
+        assertEquals("task.constraint:每次只给三步", constraint.family(),
+                "契约 §2 把 task.constraint 列为多值：两条并存的任务约束不得互相判冲突");
         ValidatedCandidate detail = MemoryValidator.validate(
                 envelope(candidate("ADD", "null", "null", "PREFERENCE", "answer.detail", "\"detailed\"",
                         QUOTE_SOURCE, String.valueOf(MESSAGE_ID), "\"u0\"", "null", "false")),

@@ -447,6 +447,53 @@ class MemoryRepositoryTest {
     }
 
     @Test
+    void deleteInLeavesTheWholeChainIntactWhenTheCallersTransactionRollsBack() throws Exception {
+        long turn = insertTurn();
+        String memoryId = attachFact("f-rollback", "v-1", turn);
+        long epochBefore = vault().epoch();
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            assertTrue(memory.deleteVersionsByMemoryIdIn(connection, VAULT, memoryId, 1).deleted());
+            assertTrue(MemoryRepository.findCurrent(connection, VAULT, memoryId).isEmpty(),
+                    "同一笔事务内就该读到已删的状态");
+
+            connection.rollback();
+        }
+
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE memory_id = '" + memoryId + "'"),
+                "调用方回滚就一行都不少：§4.4 的撤销复用半边删除不得自己落盘");
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_suppression"), "回滚也不留抑制行");
+        assertEquals(epochBefore, vault().epoch(), "遗忘边界不得在回滚后推进");
+    }
+
+    @Test
+    void linkEvidenceReusesTheExistingQuoteInsteadOfWritingASecondOne() throws Exception {
+        long turn = insertTurn();
+        attachFact("f-link", "v-1", turn);
+        String evidenceId = evidenceIdOf(turn, "f-link");
+        var carrier = memory.add(memory("f-link-carrier", "v-2", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            assertEquals(1, MemoryRepository.linkEvidenceIn(connection, carrier.rowId(), evidenceId));
+            assertEquals(0, MemoryRepository.linkEvidenceIn(connection, carrier.rowId(), evidenceId),
+                    "同一对关联重复挂上就是幂等");
+            var source = MemoryRepository.findEvidenceIn(connection, evidenceId).orElseThrow();
+            assertEquals("hmac-turn-" + turn + "-f-link", source.sourceHmac(),
+                    "审阅要拿这条来源的 HMAC 写拒绝抑制");
+            assertTrue(MemoryRepository.findEvidenceIn(connection, "no-such-evidence").isEmpty(),
+                    "来源已被清理时就不是可审阅的建议");
+            connection.commit();
+        }
+
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_evidence WHERE id = '" + evidenceId + "'"),
+                "复用建议那行的原话，不再造第二份密文");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item_evidence WHERE item_row_id = '"
+                + carrier.rowId() + "'"));
+    }
+
+    @Test
     void deleteKeepsEvidenceStillReferencedByOtherVersions() throws Exception {
         var first = memory.add(memory("f-shared", "v-a", MemoryRepository.STATUS_ACTIVE, "AUTO"));
         memory.attachEvidence(evidence("hmac-shared", "共用的原话"), first.rowId());

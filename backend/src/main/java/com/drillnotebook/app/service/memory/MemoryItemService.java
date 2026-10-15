@@ -123,7 +123,9 @@ public class MemoryItemService {
 
         String predicate = clean(input.predicate());
         String value = clean(input.value());
-        String family = blank(input.family()) ? predicate : clean(input.family());
+        // 多值谓词（study.goal 等）的族键含值，否则两条并存的学习目标会被"同族只许一条 ACTIVE"顶掉（§2 谓词表）
+        String family = blank(input.family()) ? MemoryValidator.familyKey(predicate, value)
+                : clean(input.family());
         String rowId = UUID.randomUUID().toString();
         String dedupeId = blank(input.operationId()) ? null : input.operationId().trim();
         try {
@@ -339,9 +341,9 @@ public class MemoryItemService {
         }
         Map<String, Object> existing = readPayload(key, active);
         String predicate = blank(edit.predicate()) ? text(existing.get("predicate")) : clean(edit.predicate());
-        String family = blank(edit.family()) ? (blank(text(existing.get("family"))) ? predicate
-                : text(existing.get("family"))) : clean(edit.family());
         String value = blank(edit.value()) ? text(existing.get("value")) : clean(edit.value());
+        // 族键按"这个值属于哪一族"重算：值改了还挂着旧值的族，并存判断与抑制都会错位（§2 谓词表）
+        String family = blank(edit.family()) ? MemoryValidator.familyKey(predicate, value) : clean(edit.family());
         String kind = blank(text(existing.get("kind"))) ? "PREFERENCE" : text(existing.get("kind"));
         String validUntil = edit.validUntil() == null ? active.validUntil() : edit.validUntil();
         String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil);
@@ -374,6 +376,8 @@ public class MemoryItemService {
         if (replaced.outcome() == MemoryRepository.ReplaceOutcome.NOT_FOUND) {
             return MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "这条记忆已经没有生效版本");
         }
+        // 手动改过当前值，指向旧版本的建议就再也无法采纳：立刻置 STALE，别让它留在待确认列表里（§2.3.1）
+        proposals.markStaleForTarget(key.vaultId(), memoryId);
         log.info("记忆已产生新版本: memoryId={}, version={}", memoryId, replaced.version());
         return MemoryApiResult.of(200, itemBody(key, memory.findCurrent(key.vaultId(), memoryId).orElseThrow(), false));
     }
@@ -482,6 +486,20 @@ public class MemoryItemService {
             Map<String, Object> payload = readPayload(key, row);
             body.put("predicate", payload.get("predicate"));
             body.put("value", payload.get("value"));
+            // 待确认候选能不能"分别保留"取决于这张服务端表，界面不许自己复刻
+            body.put("multiValued", MemoryValidator.MULTI_VALUE_PREDICATES
+                    .contains(String.valueOf(payload.get("predicate"))));
+            Object reason = payload.get("conflictReason");
+            if (reason != null) {
+                body.put("reviewReason", String.valueOf(reason));
+                body.put("reviewReasonText", MemoryReviewReasons.text(String.valueOf(reason)));
+            }
+            // 候选是被哪一条顶下来的就写在载荷里：替换选择器据此预选旧目标（只有元信息，不含正文）
+            Object against = payload.get("proposedAgainstMemoryId");
+            if (against != null) {
+                body.put("proposedAgainstMemoryId", String.valueOf(against));
+                body.put("proposedAgainstVersion", payload.get("proposedAgainstVersion"));
+            }
             body.put("corrupt", false);
         } catch (MemoryCryptoException error) {
             body.put("corrupt", true);
@@ -513,7 +531,8 @@ public class MemoryItemService {
     }
 
     /** 元信息集合：409 与列表用，不含正文。 */
-    private static Map<String, Object> factKeys(FactRow row) {
+    /** 409 与冲突响应里"那条记忆"的元信息形状：只到元信息为止，正文一概不跟随错误返回。 */
+    static Map<String, Object> factKeys(FactRow row) {
         Map<String, Object> keys = new LinkedHashMap<>();
         keys.put("memoryId", row.memoryId());
         keys.put("version", row.version());

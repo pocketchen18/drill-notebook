@@ -1,16 +1,22 @@
 import { del, delJson, get, patch, post, put } from './api';
 import type {
+  CandidateDecision,
   ConsentPurpose,
+  MemoryClearResult,
   MemoryItem,
   MemoryItemEdit,
   MemoryItemInput,
   MemoryListPage,
   MemoryPatch,
+  MemoryProposalPage,
+  MemoryReviewResult,
+  MemoryScopeType,
   MemorySettings,
   MemoryStatus,
   MemoryStatusBody,
   MemoryTarget,
   MemoryVaultStatus,
+  ProposalDecision,
   VaultMode
 } from './aiMemoryTypes';
 
@@ -18,8 +24,8 @@ import type {
  * 记忆管理 REST（contracts §3）。判定都在后端，这一层只负责：路径、请求体键名、返回类型。
  *
  * <p>三条纪律：主密码与会话密码只能走请求体（旧 `/messages` 的 query 密码不复用）；
- * 列表与搜索的关键词也走请求体，URL 里不留用户原话；编辑与删除必须带 expectedVersion，
- * 服务端从不相信前端禁用按钮。</p>
+ * 列表与搜索的关键词也走请求体，URL 里只允许 scope/limit/cursor 这类非内容筛选条件；
+ * 编辑与删除必须带 expectedVersion，服务端从不相信前端禁用按钮。</p>
  */
 
 const BASE = '/api/ai/memory';
@@ -92,3 +98,52 @@ export const searchMemoryItems = (params: MemorySearchParams) =>
   post<MemoryListPage>(`${BASE}/search`, params);
 
 export const getMemoryStatus = () => get<MemoryStatusBody>(`${BASE}/status`);
+
+/** 建议列表的筛选条件：只有这三类非内容参数可以进 URL（后端有用例白名单钉着）。 */
+export interface MemoryProposalParams {
+  scopeType?: MemoryScopeType;
+  scopeId?: number;
+  limit?: number;
+  cursor?: string;
+}
+
+export function listMemoryProposals(params: MemoryProposalParams = {}): Promise<MemoryProposalPage> {
+  const query = new URLSearchParams();
+  if (params.scopeType) query.set('scopeType', params.scopeType);
+  // 不带 scopeType 就不写 scopeId：后端只在接受筛选时才看它，URL 里也不留多余的数字
+  if (params.scopeType && params.scopeId != null) query.set('scopeId', String(params.scopeId));
+  if (params.limit != null) query.set('limit', String(params.limit));
+  if (params.cursor) query.set('cursor', params.cursor);
+  const suffix = query.toString();
+  return get<MemoryProposalPage>(`${BASE}/proposals${suffix ? `?${suffix}` : ''}`);
+}
+
+export interface ProposalReview {
+  expectedVersion: number;
+  /** 采纳与并存必须带上用户看到的「当前值」版本；拒绝不带。 */
+  expectedTargetVersion?: number;
+  decision: ProposalDecision;
+  operationId?: string;
+}
+
+export interface CandidateReview {
+  expectedVersion: number;
+  decision: CandidateDecision;
+  /** 只有 replace 需要点名旧目标（§3：人工选择才允许替换）。 */
+  targetMemoryId?: string;
+  expectedTargetVersion?: number;
+  operationId?: string;
+}
+
+export const reviewMemoryProposal = (proposalId: string, review: ProposalReview) =>
+  post<MemoryReviewResult>(`${BASE}/proposals/${encodeURIComponent(proposalId)}/review`, review);
+
+export const reviewMemoryCandidate = (memoryId: string, review: CandidateReview) =>
+  post<MemoryReviewResult>(`${BASE}/items/${encodeURIComponent(memoryId)}/review`, review);
+
+/**
+ * 清空全部 AI 记忆。202 也是成功响应（还有剩余行），调用方拿返回的 epoch 继续清，
+ * 所以这里不能把非 200 当失败——`apiRequest` 只在 4xx/5xx 抛错。
+ */
+export const clearAllMemories = (expectedVaultEpoch: number, operationId?: string) =>
+  post<MemoryClearResult>(`${BASE}/clear`, { confirm: true, expectedVaultEpoch, operationId });

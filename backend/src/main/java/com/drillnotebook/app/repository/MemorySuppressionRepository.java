@@ -40,14 +40,19 @@ public class MemorySuppressionRepository {
 
     public RecordOutcome record(String vaultId, Suppression suppression) throws SQLException {
         requireKind(suppression.kind());
-        return immediate.execute(connection -> {
-            int inserted = execute(connection, "INSERT OR IGNORE INTO ai_memory_suppression(vault_id, scope_type,"
-                            + " scope_id, suppression_kind, key_hmac, source_through_turn_id, created_at)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    vaultId, suppression.scopeType(), suppression.scopeId(), suppression.kind(),
-                    suppression.keyHmac(), suppression.sourceThroughTurnId(), suppression.createdAt());
-            return inserted == 1 ? RecordOutcome.APPLIED : RecordOutcome.ALREADY_PRESENT;
-        });
+        return immediate.execute(connection -> recordIn(connection, vaultId, suppression));
+    }
+
+    /** 事务内写抑制：§4.4 的"reject 只写来源抑制""accept 给旧族写抑制"必须与事实变更同笔提交。 */
+    public RecordOutcome recordIn(Connection connection, String vaultId, Suppression suppression)
+            throws SQLException {
+        requireKind(suppression.kind());
+        int inserted = execute(connection, "INSERT OR IGNORE INTO ai_memory_suppression(vault_id, scope_type,"
+                        + " scope_id, suppression_kind, key_hmac, source_through_turn_id, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                vaultId, suppression.scopeType(), suppression.scopeId(), suppression.kind(),
+                suppression.keyHmac(), suppression.sourceThroughTurnId(), suppression.createdAt());
+        return inserted == 1 ? RecordOutcome.APPLIED : RecordOutcome.ALREADY_PRESENT;
     }
 
     /** 显式解除：返回真正删掉的条数，0 表示本来就没有（调用方据此给"无变化"响应）。 */

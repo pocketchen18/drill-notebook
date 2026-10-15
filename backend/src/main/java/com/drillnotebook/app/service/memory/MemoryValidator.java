@@ -53,6 +53,12 @@ public final class MemoryValidator {
     /** §5 允许的谓词词表；表外就是伪造。 */
     public static final List<String> ALLOWED_PREDICATES = List.of("answer.language", "answer.detail", "answer.order",
             "study.goal", "study.background", "task.constraint", "other");
+    /**
+     * contracts §2 谓词表里标"多值"的那批：族键必须含规范化值，否则两条并存的学习目标/任务约束
+     * 会被表上的"同族只许一条 ACTIVE"判成冲突。审阅侧的 keep_both 也按这份词表放行，不再各留一套。
+     */
+    public static final Set<String> MULTI_VALUE_PREDICATES = Set.of("study.goal", "study.background",
+            "task.constraint", "other");
     public static final int MAX_CANDIDATES = 6;
     public static final int MAX_VALUE_CODE_POINTS = 160;
     public static final int MAX_QUOTE_CODE_POINTS = 400;
@@ -326,7 +332,7 @@ public final class MemoryValidator {
         }
         String reviewReason = reviewReason(operation, predicate, node, language);
         accepted.add(new ValidatedCandidate(operation, targetMemoryId, targetVersion, node.path("kind").asText(""),
-                predicate, family(predicate, normalized), rawValue, normalized, quote, source.turnId(),
+                predicate, familyKey(predicate, normalized), rawValue, normalized, quote, source.turnId(),
                 userMessageId, blockId, source.sourceCreatedAt(), source.finishedMillis(),
                 reviewReason != null, reviewReason));
         return null;
@@ -375,18 +381,15 @@ public final class MemoryValidator {
     }
 
     /**
-     * 单值偏好以谓词作同族键；可并存的多值事实（学习目标、学习背景、other）把规范化值也带进族键。
+     * 单值偏好以谓词作同族键；{@link #MULTI_VALUE_PREDICATES} 里的那些把规范化值也带进族键。
      * 表上的"同族只许一条 ACTIVE"是硬约束，不带值就会把"雅思照旧、还准备托福"判成冲突（§8.3）。
      */
-    private static String family(String predicate, String normalizedValue) {
+    public static String familyKey(String predicate, String normalizedValue) {
         // 撤销建议没有新值，族键退回谓词本身：它只用于抑制查询，不参与同族比较
         if (normalizedValue == null) {
             return predicate;
         }
-        return switch (predicate) {
-            case "study.goal", "study.background", "other" -> predicate + ":" + normalizedValue;
-            default -> predicate;
-        };
+        return MULTI_VALUE_PREDICATES.contains(predicate) ? predicate + ":" + normalizedValue : predicate;
     }
 
     /** §5 的小型语言映射表；认不出返回 null，由调用方标 REVIEW。 */

@@ -140,6 +140,19 @@ public class MemoryRepository {
         }
     }
 
+    /** 事务内读库计数：§4.4 的 epoch 判定必须与变更同笔事务，不能拿事务外的快照。 */
+    public static Optional<VaultState> vaultStateIn(Connection connection, String vaultId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT epoch, revision FROM ai_memory_vault WHERE id = ?")) {
+            statement.setString(1, vaultId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(
+                        new VaultState(vaultId, result.getLong("epoch"), result.getLong("revision")))
+                        : Optional.empty();
+            }
+        }
+    }
+
     /** 内容变更只推进 revision：读路径据此失效缓存，但不构成遗忘边界。 */
     public VaultState bumpRevision(String vaultId) throws SQLException {
         return updateVault(vaultId, false);
@@ -238,6 +251,51 @@ public class MemoryRepository {
 
     /** 重置结果：派生行计数 + 新库状态。 */
     public record ResetResult(VaultPurgeResult purged, VaultState vault) {
+    }
+
+    /** 一趟清理的计数；{@code remaining} 说明这个库还有派生行没删完（§3：清空未完要回 202）。 */
+    public record PurgePass(int factsDeleted, int evidenceDeleted, int proposalsDeleted, int suppressionsDeleted,
+                            int jobsDeleted, int contextsDeleted, boolean remaining) {
+    }
+
+    /**
+     * 清空全部 AI 记忆的批次半边（§11.3）：删事实/候选/证据/摘要/任务/旧 suppression，
+     * 每表最多删 {@code budget} 行，删不完就把 {@code remaining} 报回去让调用方继续或回 202。
+     *
+     * <p>与 {@link #resetVault} 的区别只有一个，也是关键的那个：<b>不换库、不动 DEK</b>。
+     * 遗忘边界由调用方先推进 epoch（读路径按 epoch 取内存快照，epoch 一变旧内容立刻不可读），
+     * 所以分批删除期间不存在"读到半删状态"的窗口。作业与摘要检查点没有 vault_id 列，但都按 epoch 绑定，
+     * 整表清空是有界的（队列有容量上限、每会话一行）。</p>
+     */
+    public PurgePass purgeVaultBatch(String vaultId, int budget) throws SQLException {
+        int limit = Math.max(1, budget);
+        return immediate.execute(connection -> {
+            // 关联先按同一 ORDER BY + LIMIT 删，不靠外键级联（resetVault 也是这个口径）
+            execute(connection, "DELETE FROM ai_memory_item_evidence WHERE item_row_id IN ("
+                    + "SELECT row_id FROM ai_memory_item WHERE vault_id = ? ORDER BY row_id LIMIT ?)", vaultId, limit);
+            int facts = execute(connection, "DELETE FROM ai_memory_item WHERE row_id IN ("
+                    + "SELECT row_id FROM ai_memory_item WHERE vault_id = ? ORDER BY row_id LIMIT ?)", vaultId, limit);
+            execute(connection, "DELETE FROM ai_memory_item_evidence WHERE evidence_id IN ("
+                    + "SELECT id FROM ai_memory_evidence WHERE vault_id = ? ORDER BY id LIMIT ?)", vaultId, limit);
+            int evidence = execute(connection, "DELETE FROM ai_memory_evidence WHERE id IN ("
+                    + "SELECT id FROM ai_memory_evidence WHERE vault_id = ? ORDER BY id LIMIT ?)", vaultId, limit);
+            int proposals = execute(connection, "DELETE FROM ai_memory_proposal WHERE id IN ("
+                    + "SELECT id FROM ai_memory_proposal WHERE vault_id = ? ORDER BY id LIMIT ?)", vaultId, limit);
+            int suppressions = execute(connection, "DELETE FROM ai_memory_suppression WHERE rowid IN ("
+                    + "SELECT rowid FROM ai_memory_suppression WHERE vault_id = ? ORDER BY rowid LIMIT ?)",
+                    vaultId, limit);
+            int jobs = execute(connection, "DELETE FROM ai_memory_job WHERE id IN ("
+                    + "SELECT id FROM ai_memory_job ORDER BY id LIMIT ?)", limit);
+            int contexts = execute(connection, "DELETE FROM ai_session_context WHERE session_id IN ("
+                    + "SELECT session_id FROM ai_session_context ORDER BY session_id LIMIT ?)", limit);
+            boolean remaining = count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ?", vaultId) > 0
+                    || count(connection, "SELECT COUNT(*) FROM ai_memory_evidence WHERE vault_id = ?", vaultId) > 0
+                    || count(connection, "SELECT COUNT(*) FROM ai_memory_proposal WHERE vault_id = ?", vaultId) > 0
+                    || count(connection, "SELECT COUNT(*) FROM ai_memory_suppression WHERE vault_id = ?", vaultId) > 0
+                    || count(connection, "SELECT COUNT(*) FROM ai_memory_job") > 0
+                    || count(connection, "SELECT COUNT(*) FROM ai_session_context") > 0;
+            return new PurgePass(facts, evidence, proposals, suppressions, jobs, contexts, remaining);
+        });
     }
 
     // ---- 事实 ----
@@ -354,61 +412,70 @@ public class MemoryRepository {
      */
     public DeleteResult deleteVersionsByMemoryId(String vaultId, String memoryId, int expectedVersion)
             throws SQLException {
-        return immediate.execute(connection -> {
-            requireVault(connection, vaultId);
-            if (count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
-                    vaultId, memoryId) == 0) {
-                return DeleteResult.of(DeleteOutcome.NOT_FOUND);
+        return immediate.execute(connection -> deleteVersionsByMemoryIdIn(connection, vaultId, memoryId,
+                expectedVersion));
+    }
+
+    /**
+     * 事务内半边删除：§4.4 的 accept 撤销要"复用 deleteMemory 全套清理/边界/索引 barrier"，
+     * 且必须与建议终态同一笔事务，所以这里只搬走原来 {@code deleteVersionsByMemoryId} 的事务体，
+     * 语义一字未改。提交后的 epoch barrier（作废任务与摘要检查点）仍由调用方负责。
+     */
+    public DeleteResult deleteVersionsByMemoryIdIn(Connection connection, String vaultId, String memoryId,
+                                                   int expectedVersion) throws SQLException {
+        requireVault(connection, vaultId);
+        if (count(connection, "SELECT COUNT(*) FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
+                vaultId, memoryId) == 0) {
+            return DeleteResult.of(DeleteOutcome.NOT_FOUND);
+        }
+        Optional<FactRow> victimRow = findVersion(connection, vaultId, memoryId, expectedVersion);
+        if (victimRow.isEmpty() || STATUS_SUPERSEDED.equals(victimRow.get().status())) {
+            FactRow victim = victimRow.orElse(null);
+            return new DeleteResult(DeleteOutcome.VERSION_CONFLICT,
+                    victim == null ? null : victim.scopeType(), victim == null ? 0 : victim.scopeId(),
+                    victim == null ? null : victim.familyKeyHmac(),
+                    victim == null ? null : victim.predicateKeyHmac(), 0, 0, 0, 0, null);
+        }
+        FactRow victim = victimRow.get();
+        List<String> rowIds = ids(connection, "SELECT row_id FROM ai_memory_item WHERE vault_id = ?"
+                + " AND memory_id = ?", vaultId, memoryId);
+        List<String> linkedEvidence = rowIds.isEmpty() ? List.of() : ids(connection,
+                "SELECT DISTINCT evidence_id FROM ai_memory_item_evidence WHERE item_row_id IN ("
+                        + placeholders(rowIds.size()) + ")", rowIds.toArray());
+        int suppressions = insertSuppression(connection, vaultId, victim,
+                MemorySuppressionRepository.KIND_FAMILY, victim.familyKeyHmac())
+                + insertSuppression(connection, vaultId, victim,
+                MemorySuppressionRepository.KIND_PREDICATE, victim.predicateKeyHmac());
+        int versions = execute(connection, "DELETE FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
+                vaultId, memoryId);
+        List<String> orphans = linkedEvidence.isEmpty() ? List.of() : ids(connection,
+                "SELECT id FROM ai_memory_evidence WHERE id IN (" + placeholders(linkedEvidence.size()) + ")"
+                        + " AND NOT EXISTS (SELECT 1 FROM ai_memory_item_evidence link WHERE link.evidence_id"
+                        + " = ai_memory_evidence.id)", linkedEvidence.toArray());
+        if (!orphans.isEmpty()) {
+            List<String> orphanHmacs = ids(connection, "SELECT source_hmac FROM ai_memory_evidence WHERE id IN ("
+                    + placeholders(orphans.size()) + ")", orphans.toArray());
+            for (String sourceHmac : orphanHmacs) {
+                suppressions += insertSuppression(connection, vaultId, victim,
+                        MemorySuppressionRepository.KIND_EVIDENCE, sourceHmac);
             }
-            Optional<FactRow> victimRow = findVersion(connection, vaultId, memoryId, expectedVersion);
-            if (victimRow.isEmpty() || STATUS_SUPERSEDED.equals(victimRow.get().status())) {
-                FactRow victim = victimRow.orElse(null);
-                return new DeleteResult(DeleteOutcome.VERSION_CONFLICT,
-                        victim == null ? null : victim.scopeType(), victim == null ? 0 : victim.scopeId(),
-                        victim == null ? null : victim.familyKeyHmac(),
-                        victim == null ? null : victim.predicateKeyHmac(), 0, 0, 0, 0, null);
-            }
-            FactRow victim = victimRow.get();
-            List<String> rowIds = ids(connection, "SELECT row_id FROM ai_memory_item WHERE vault_id = ?"
-                    + " AND memory_id = ?", vaultId, memoryId);
-            List<String> linkedEvidence = rowIds.isEmpty() ? List.of() : ids(connection,
-                    "SELECT DISTINCT evidence_id FROM ai_memory_item_evidence WHERE item_row_id IN ("
-                            + placeholders(rowIds.size()) + ")", rowIds.toArray());
-            int suppressions = insertSuppression(connection, vaultId, victim,
-                    MemorySuppressionRepository.KIND_FAMILY, victim.familyKeyHmac())
-                    + insertSuppression(connection, vaultId, victim,
-                    MemorySuppressionRepository.KIND_PREDICATE, victim.predicateKeyHmac());
-            int versions = execute(connection, "DELETE FROM ai_memory_item WHERE vault_id = ? AND memory_id = ?",
-                    vaultId, memoryId);
-            List<String> orphans = linkedEvidence.isEmpty() ? List.of() : ids(connection,
-                    "SELECT id FROM ai_memory_evidence WHERE id IN (" + placeholders(linkedEvidence.size()) + ")"
-                            + " AND NOT EXISTS (SELECT 1 FROM ai_memory_item_evidence link WHERE link.evidence_id"
-                            + " = ai_memory_evidence.id)", linkedEvidence.toArray());
-            if (!orphans.isEmpty()) {
-                List<String> orphanHmacs = ids(connection, "SELECT source_hmac FROM ai_memory_evidence WHERE id IN ("
-                        + placeholders(orphans.size()) + ")", orphans.toArray());
-                for (String sourceHmac : orphanHmacs) {
-                    suppressions += insertSuppression(connection, vaultId, victim,
-                            MemorySuppressionRepository.KIND_EVIDENCE, sourceHmac);
-                }
-            }
-            // 先置 STALE 再删证据：evidence_id 的外键是 ON DELETE SET NULL，删完就找不到该建议了
-            int staled = execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
-                    + " AND status = 'PENDING' AND target_memory_id = ?", vaultId, memoryId);
-            if (!linkedEvidence.isEmpty()) {
-                staled += execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
-                                + " AND status = 'PENDING' AND evidence_id IN ("
-                                + placeholders(linkedEvidence.size()) + ")",
-                        concat(vaultId, linkedEvidence).toArray());
-            }
-            int evidence = orphans.isEmpty() ? 0 : execute(connection,
-                    "DELETE FROM ai_memory_evidence WHERE id IN (" + placeholders(orphans.size()) + ")",
-                    orphans.toArray());
-            VaultState vault = updateVault(connection, vaultId, true);
-            return new DeleteResult(DeleteOutcome.DELETED, victim.scopeType(), victim.scopeId(),
-                    victim.familyKeyHmac(), victim.predicateKeyHmac(), versions, evidence, staled, suppressions,
-                    vault);
-        });
+        }
+        // 先置 STALE 再删证据：evidence_id 的外键是 ON DELETE SET NULL，删完就找不到该建议了
+        int staled = execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
+                + " AND status = 'PENDING' AND target_memory_id = ?", vaultId, memoryId);
+        if (!linkedEvidence.isEmpty()) {
+            staled += execute(connection, "UPDATE ai_memory_proposal SET status = 'STALE' WHERE vault_id = ?"
+                            + " AND status = 'PENDING' AND evidence_id IN ("
+                            + placeholders(linkedEvidence.size()) + ")",
+                    concat(vaultId, linkedEvidence).toArray());
+        }
+        int evidence = orphans.isEmpty() ? 0 : execute(connection,
+                "DELETE FROM ai_memory_evidence WHERE id IN (" + placeholders(orphans.size()) + ")",
+                orphans.toArray());
+        VaultState vault = updateVault(connection, vaultId, true);
+        return new DeleteResult(DeleteOutcome.DELETED, victim.scopeType(), victim.scopeId(),
+                victim.familyKeyHmac(), victim.predicateKeyHmac(), versions, evidence, staled, suppressions,
+                vault);
     }
 
     /** 遗忘后旧摘要检查点不可信：按 epoch 清掉快照（§4.4 invalidate session contexts）。 */
@@ -692,6 +759,77 @@ public class MemoryRepository {
         execute(connection, "INSERT OR IGNORE INTO ai_memory_item_evidence(item_row_id, evidence_id) VALUES (?, ?)",
                 itemRowId, result.evidenceId());
         return result;
+    }
+
+    /** 把<b>已存在</b>的证据挂到新的一行上：审阅采纳建议时原话已随建议落库，不该重新造一份证据。 */
+    public static int linkEvidenceIn(Connection connection, String itemRowId, String evidenceId) throws SQLException {
+        return execute(connection, "INSERT OR IGNORE INTO ai_memory_item_evidence(item_row_id, evidence_id)"
+                + " VALUES (?, ?)", itemRowId, evidenceId);
+    }
+
+    /** 事务内按版本号读某一版（含 PENDING/DISABLED）：审阅待确认候选要读的就是那条 PENDING 行。 */
+    public static Optional<FactRow> findVersionIn(Connection connection, String vaultId, String memoryId, int version)
+            throws SQLException {
+        return findVersion(connection, vaultId, memoryId, version);
+    }
+
+    /** 事务内读某一行挂着哪些来源：候选审阅要拿原话判"根据还在不在"，拒绝时还要它的 {@code source_hmac} 写抑制。 */
+    public static List<EvidenceRow> evidenceForItemIn(Connection connection, String itemRowId) throws SQLException {
+        return evidenceForItem(connection, itemRowId);
+    }
+
+    /**
+     * 采纳一条待确认候选：PENDING 版就地转 ACTIVE 并打人工保护。
+     *
+     * <p>状态前提写在 {@code WHERE} 里，命中 0 行就是"这一版已经不是待确认"，调用方回 409 而不是重试。
+     * 同族只允许一条 ACTIVE 是<b>数据库</b>保证的（{@code idx_memory_one_active_family} 部分唯一索引），
+     * 所以调用方必须先做 {@link #activeInFamily} 复验把冲突翻成 409，不能靠这里报错。</p>
+     */
+    public static int promotePendingIn(Connection connection, String vaultId, String memoryId, int version,
+                                       String asOf) throws SQLException {
+        return execute(connection, "UPDATE ai_memory_item SET status = ?, manual_protected = 1,"
+                        + " last_confirmed_at = ? WHERE vault_id = ? AND memory_id = ? AND version = ? AND status = ?",
+                STATUS_ACTIVE, asOf, vaultId, memoryId, version, STATUS_PENDING);
+    }
+
+    /** 删掉一条待确认候选（只允许删 PENDING；ACTIVE 与历史版本都得留着）。关联证据由外键级联断开。 */
+    public static int deletePendingVersionIn(Connection connection, String vaultId, String memoryId, int version)
+            throws SQLException {
+        return execute(connection, "DELETE FROM ai_memory_item WHERE vault_id = ? AND memory_id = ? AND version = ?"
+                + " AND status = '" + STATUS_PENDING + "'", vaultId, memoryId, version);
+    }
+
+    /** 按证据 id 读那行来源（列表与详情的只读半边）。 */
+    public Optional<EvidenceRow> findEvidence(String evidenceId) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return findEvidenceIn(connection, evidenceId);
+        }
+    }
+
+    /**
+     * 事务内按证据 id 读那行来源：审阅建议时既要判"来源还在不在"（源被撤销或整轮清理后就没有可审阅的
+     * 根据了），也要拿它的 {@code source_hmac} 写拒绝抑制、拿 {@code sourceCreatedAt} 定来源时间。
+     */
+    public static Optional<EvidenceRow> findEvidenceIn(Connection connection, String evidenceId)
+            throws SQLException {
+        if (evidenceId == null || evidenceId.isBlank()) {
+            return Optional.empty();
+        }
+        try (PreparedStatement statement = connection.prepareStatement("SELECT id, session_id, turn_id, message_id,"
+                + " source_block_id, source_hmac, quote_cipher, crypto_meta, source_created_at"
+                + " FROM ai_memory_evidence WHERE id = ?")) {
+            statement.setString(1, evidenceId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new EvidenceRow(result.getString("id"), nullableLong(result, "session_id"),
+                        nullableLong(result, "turn_id"), nullableLong(result, "message_id"),
+                        result.getString("source_block_id"), result.getString("source_hmac"),
+                        result.getString("quote_cipher"), result.getString("crypto_meta"),
+                        result.getString("source_created_at")));
+            }
+        }
     }
 
     public static EvidenceResult insertEvidence(Connection connection, EvidenceDraft draft) throws SQLException {

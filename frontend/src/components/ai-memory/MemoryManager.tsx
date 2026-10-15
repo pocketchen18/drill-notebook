@@ -8,18 +8,21 @@ import type { Notebook } from '../../lib/types';
 import type { MemoryItem, MemoryKind, MemoryScopeType } from '../../lib/aiMemoryTypes';
 import {
   addMemoryItem,
+  clearAllMemories,
   deleteMemoryItem,
   getMemorySettings,
   updateMemorySettings
 } from '../../lib/aiMemoryApi';
 import { MemoryDetail } from './MemoryDetail';
 import { MemoryListView } from './MemoryListView';
+import { MemoryReviewPanel } from './MemoryReviewPanel';
 
 /**
- * 记忆管理面板（§12）：把列表、详情编辑、手动新增与删除确认装在一起。
+ * 记忆管理面板（§12）：待确认审阅、列表、详情编辑、手动新增、删除确认与清空。
  *
  * <p>只有库已解锁才请求正文；未解锁时界面说的是"需要解锁"，不会伪装成"没有记忆"。
- * 删除与遗忘都要显式确认，forget=true 会同时推进全局遗忘边界，所以它单独一个勾选。</p>
+ * 删除与遗忘都要显式确认，forget=true 会同时推进全局遗忘边界，所以它单独一个勾选。
+ * 清空是全库动作：确认弹窗里必须写清它不动旧备份（§11.3）。</p>
  */
 
 const KIND_OPTIONS: Array<{ value: MemoryKind; label: string }> = [
@@ -49,6 +52,7 @@ export function MemoryManager(): JSX.Element {
   const [addVisible, setAddVisible] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MemoryItem | null>(null);
   const [forget, setForget] = useState(false);
+  const [clearVisible, setClearVisible] = useState(false);
   const [kind, setKind] = useState<MemoryKind>('PREFERENCE');
   const [scopeType, setScopeType] = useState<MemoryScopeType>('GLOBAL');
   const [scopeId, setScopeId] = useState<number>(0);
@@ -68,6 +72,7 @@ export function MemoryManager(): JSX.Element {
     setDetail(null);
     setAddVisible(false);
     setDeleteTarget(null);
+    setClearVisible(false);
     setForget(false);
     setSensitiveConfirmed(false);
     const trigger = triggerRef.current;
@@ -77,6 +82,9 @@ export function MemoryManager(): JSX.Element {
 
   const refreshLists = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-list'] });
+    // 审阅区那两堆用的是别的键：不一起作废，删掉的候选还会留在卡片上让人再点一次
+    void queryClient.invalidateQueries({ queryKey: ['ai-memory-proposals'] });
+    void queryClient.invalidateQueries({ queryKey: ['ai-memory-candidates'] });
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-status'] });
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-settings'] });
   };
@@ -125,6 +133,29 @@ export function MemoryManager(): JSX.Element {
     onError: (error) => Message.error(friendlyMessage(error, '删除失败'))
   });
 
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      // 202 是"还在清"，不是失败：拿返回的 epoch 续接，最多五趟，超出就交回用户手动再点
+      let epoch = settings?.epoch ?? 0;
+      let result = await clearAllMemories(epoch, newOperationId());
+      for (let pass = 1; result.cleared === false && pass < 5; pass += 1) {
+        epoch = result.epoch;
+        result = await clearAllMemories(epoch, newOperationId());
+      }
+      return result;
+    },
+    onSuccess: (result) => {
+      closeAndRestore();
+      refreshLists();
+      if (result.cleared) {
+        Message.success('已清空本机 AI 记忆，学习与使用都已关闭');
+      } else {
+        Message.warning('还有内容没删完，请再点一次清空');
+      }
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '清空失败'))
+  });
+
   const autoExtractMutation = useMutation({
     mutationFn: () => updateMemorySettings(settings?.revision ?? 0, { autoExtract: true, enabled: true }),
     onSuccess: () => {
@@ -167,11 +198,15 @@ export function MemoryManager(): JSX.Element {
     <section className="panel">
       <div className="panel-header">
         <h2>记忆</h2>
-        <Button type="primary" icon={<Plus size={14} />} onClick={() => openWithFocusRestore(() => setAddVisible(true))}>
-          手动添加
-        </Button>
+        <Space size="small">
+          <Button type="primary" icon={<Plus size={14} />} onClick={() => openWithFocusRestore(() => setAddVisible(true))}>
+            手动添加
+          </Button>
+          <Button status="danger" onClick={() => openWithFocusRestore(() => setClearVisible(true))}>清空全部记忆</Button>
+        </Space>
       </div>
       <div className="panel-body">
+        <MemoryReviewPanel enabled={unlocked} notebooks={notebookOptions} />
         <MemoryListView
           enabled={unlocked}
           notebooks={notebookOptions}
@@ -284,6 +319,22 @@ export function MemoryManager(): JSX.Element {
           <Checkbox checked={forget} onChange={setForget}>
             同时遗忘来源：推进全局遗忘边界，之后的整理不得再引用更早内容
           </Checkbox>
+        </div>
+      </Modal>
+
+      <Modal
+        title="清空全部 AI 记忆"
+        visible={clearVisible}
+        okText="确认清空"
+        okButtonProps={{ status: 'danger' }}
+        cancelText="取消"
+        confirmLoading={clearMutation.isPending}
+        onOk={() => clearMutation.mutate()}
+        onCancel={closeAndRestore}
+      >
+        <div className="form-stack">
+          <Typography.Text>删除本机所有 AI 记忆与候选，并关闭「使用记忆」「自动学习」。</Typography.Text>
+          <Typography.Text type="secondary">旧备份不受影响，需要时请到数据管理里删除备份。</Typography.Text>
         </div>
       </Modal>
     </section>

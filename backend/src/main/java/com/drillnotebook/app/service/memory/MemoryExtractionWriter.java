@@ -280,7 +280,7 @@ public class MemoryExtractionWriter {
         payload.put("family", candidate.family());
         payload.put("value", candidate.value());
         payload.put("normalizedValue", candidate.normalizedValue());
-        payload.put("displayText", displayText(candidate));
+        payload.put("displayText", displayText(candidate.predicate(), candidate.normalizedValue()));
         payload.put("keywords", MemoryLexicon.tokens(candidate.normalizedValue()).stream().limit(MAX_KEYWORDS)
                 .toList());
         payload.put("sensitivity", MemorySensitivity.classify(candidate.value()).name());
@@ -295,10 +295,9 @@ public class MemoryExtractionWriter {
         return serialize(payload);
     }
 
-    /** 展示句由服务端模板生成：模型自由造句不能混进给用户看的正文（§2.3）。 */
-    private static String displayText(ValidatedCandidate candidate) {
-        String value = candidate.normalizedValue();
-        return switch (candidate.predicate()) {
+    /** 展示句由服务端模板生成：模型自由造句不能混进给用户看的正文（§2.3）。审阅采纳走同一套模板。 */
+    static String displayText(String predicate, String value) {
+        return switch (predicate) {
             case "answer.language" -> "回答语言：" + value;
             case "answer.detail" -> "回答详略：" + ("concise".equals(value) ? "简洁" : "详细");
             case "answer.order" -> "讲解顺序：" + ("example_first".equals(value) ? "先例子后原理" : "先原理后例子");

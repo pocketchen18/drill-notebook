@@ -126,7 +126,36 @@ public class MemoryProposalRepository {
 
     public Optional<ProposalRow> find(String id) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
-            return find(connection, id);
+            return findIn(connection, id);
+        }
+    }
+
+    /**
+     * 待确认建议的分页读：按 {@code (created_at, id)} 升序 keyset 翻页，多取一条由调用方判有没有下一页。
+     *
+     * <p>游标是上一页最后一行的时间 + id；scope 不在明文列里（在加密载荷内），所以这里<b>不能</b>按 scope
+     * 过滤——调用方解密后自己筛，这正是"列表只在已解锁时给出"的原因（§3）。</p>
+     */
+    public List<ProposalRow> pagePending(String vaultId, String asOf, String afterCreatedAt, String afterId, int limit)
+            throws SQLException {
+        StringBuilder sql = new StringBuilder(SELECT).append(" WHERE vault_id = ? AND status = ?")
+                .append(" AND expires_at > ?");
+        List<Object> args = new ArrayList<>();
+        args.add(vaultId);
+        args.add(STATUS_PENDING);
+        args.add(asOf);
+        if (afterCreatedAt != null && afterId != null) {
+            sql.append(" AND (created_at > ? OR (created_at = ? AND id > ?))");
+            args.add(afterCreatedAt);
+            args.add(afterCreatedAt);
+            args.add(afterId);
+        }
+        sql.append(" ORDER BY created_at, id LIMIT ?");
+        args.add(Math.max(1, limit));
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            bind(statement, args.toArray());
+            return collect(statement.executeQuery());
         }
     }
 
@@ -135,28 +164,50 @@ public class MemoryProposalRepository {
      * 版本不符就什么都不改，调用方据最新 metadata 回 409（§4.4）。
      */
     public ReviewOutcome review(String id, int expectedVersion, String decision) throws SQLException {
+        requireDecision(decision);
+        return immediate.execute(connection -> reviewIn(connection, id, expectedVersion, decision));
+    }
+
+    /** 事务内审阅：§4.4 要求事实变更、建议终态与 operation 记录在同一笔事务里见胜负。 */
+    public static ReviewOutcome reviewIn(Connection connection, String id, int expectedVersion, String decision)
+            throws SQLException {
+        requireDecision(decision);
+        Optional<ProposalRow> current = findIn(connection, id);
+        if (current.isEmpty()) {
+            return ReviewOutcome.NOT_FOUND;
+        }
+        if (!STATUS_PENDING.equals(current.get().status())) {
+            return ReviewOutcome.ALREADY_DECIDED;
+        }
+        int updated = execute(connection, "UPDATE ai_memory_proposal SET status = ?, version = version + 1"
+                + " WHERE id = ? AND version = ? AND status = ?", decision, id, expectedVersion, STATUS_PENDING);
+        return updated == 1 ? ReviewOutcome.APPLIED : ReviewOutcome.VERSION_CONFLICT;
+    }
+
+    private static void requireDecision(String decision) throws SQLException {
         if (!List.of(STATUS_ACCEPTED, STATUS_REJECTED).contains(decision)) {
             throw new SQLException("非法的审阅决定: " + decision);
         }
-        return immediate.execute(connection -> {
-            Optional<ProposalRow> current = find(connection, id);
-            if (current.isEmpty()) {
-                return ReviewOutcome.NOT_FOUND;
-            }
-            if (!STATUS_PENDING.equals(current.get().status())) {
-                return ReviewOutcome.ALREADY_DECIDED;
-            }
-            int updated = execute(connection, "UPDATE ai_memory_proposal SET status = ?, version = version + 1"
-                    + " WHERE id = ? AND version = ? AND status = ?", decision, id, expectedVersion, STATUS_PENDING);
-            return updated == 1 ? ReviewOutcome.APPLIED : ReviewOutcome.VERSION_CONFLICT;
-        });
     }
 
     /** 目标事实被更新/移除：PENDING 建议变 STALE，不静默重放生效。 */
     public int markStaleForTarget(String vaultId, String targetMemoryId) throws SQLException {
-        return immediate.execute(connection -> execute(connection,
+        return immediate.execute(
+                connection -> markStaleForTargetIn(connection, vaultId, targetMemoryId));
+    }
+
+    /** 事务内置 STALE：审阅时发现目标已改版/来源已撤，就地作废这条建议（§4.4）。 */
+    public static int markStaleForTargetIn(Connection connection, String vaultId, String targetMemoryId)
+            throws SQLException {
+        return execute(connection,
                 "UPDATE ai_memory_proposal SET status = ? WHERE vault_id = ? AND target_memory_id = ? AND status = ?",
-                STATUS_STALE, vaultId, targetMemoryId, STATUS_PENDING));
+                STATUS_STALE, vaultId, targetMemoryId, STATUS_PENDING);
+    }
+
+    /** 事务内把单条建议置 STALE：过期、换代、来源被撤都只作废这一条，不牵连同目标的其它建议。 */
+    public static int markStaleIn(Connection connection, String id) throws SQLException {
+        return execute(connection, "UPDATE ai_memory_proposal SET status = ? WHERE id = ? AND status = ?",
+                STATUS_STALE, id, STATUS_PENDING);
     }
 
     /** 作用域切换或会话归档：该会话的 PENDING 建议全部 STALE（源不再在当前 generation 里）。 */
@@ -195,7 +246,8 @@ public class MemoryProposalRepository {
         }
     }
 
-    private static Optional<ProposalRow> find(Connection connection, String id) throws SQLException {
+    /** 事务内按 id 读建议行：审阅服务要在同一笔事务里判状态、版本与过期。 */
+    public static Optional<ProposalRow> findIn(Connection connection, String id) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT + " WHERE id = ?")) {
             statement.setString(1, id);
             return first(collect(statement.executeQuery()));

@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
 import {
+  clearAllMemories,
   deleteMemoryItem,
   editMemoryItem,
+  listMemoryProposals,
+  reviewMemoryCandidate,
+  reviewMemoryProposal,
   searchMemoryItems,
   unlockMemoryVault,
   updateMemorySettings
@@ -118,5 +122,63 @@ describe('记忆 REST 的请求形状', () => {
     respond(204);
 
     await expect(deleteMemoryItem('m-1', 1, false)).resolves.toBeUndefined();
+  });
+
+  it('建议列表的 URL 只带非内容筛选条件，游标原样编码', async () => {
+    respond(200, { proposals: [], limit: 20, hasMore: false, vaultEpoch: 3, vaultRevision: 2 });
+
+    await listMemoryProposals({ scopeType: 'NOTEBOOK', scopeId: 7, limit: 20, cursor: '2026-10-12T00:00:00Z|p-1' });
+
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toBe('/api/ai/memory/proposals?scopeType=NOTEBOOK&scopeId=7&limit=20&cursor=2026-10-12T00%3A00%3A00Z%7Cp-1');
+    expect(calls[0].url).not.toContain('query');
+    // GET 不带请求体：正文与关键词根本没有可以藏身的地方
+    expect(calls[0].body).toBeUndefined();
+  });
+
+  it('不按作用域筛选时，URL 里不留裸的 scopeId', async () => {
+    respond(200, { proposals: [], limit: 10, hasMore: false, vaultEpoch: 3, vaultRevision: 2 });
+
+    await listMemoryProposals({ scopeId: 7, limit: 10 });
+
+    expect(calls[0].url).toBe('/api/ai/memory/proposals?limit=10');
+  });
+
+  it('审阅两条路由都把版本与点名目标放进请求体', async () => {
+    respond(200, { memoryId: 'm-1', version: 3, status: 'ACTIVE', changed: true });
+
+    await reviewMemoryProposal('p/1', {
+      expectedVersion: 3, decision: 'accept', expectedTargetVersion: 2, operationId: 'op-1'
+    });
+
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toBe('/api/ai/memory/proposals/p%2F1/review');
+    expect(body(0)).toEqual({
+      expectedVersion: 3, decision: 'accept', expectedTargetVersion: 2, operationId: 'op-1'
+    });
+
+    respond(200, { memoryId: 'm-9', version: 5, status: 'SUPERSEDED', changed: true });
+    await reviewMemoryCandidate('c-1', {
+      expectedVersion: 1, decision: 'replace', targetMemoryId: 'm-9', expectedTargetVersion: 4, operationId: 'op-2'
+    });
+
+    expect(calls[0].url).toBe('/api/ai/memory/items/c-1/review');
+    expect(body(0)).toEqual({
+      expectedVersion: 1, decision: 'replace', targetMemoryId: 'm-9', expectedTargetVersion: 4, operationId: 'op-2'
+    });
+  });
+
+  it('清空只发 confirm、epoch 与幂等键；202 表示还没清完但不算失败', async () => {
+    respond(202, {
+      cleared: false, remaining: true, epoch: 6, revision: 9, memoryEnabled: false, autoExtract: false,
+      scanWatermarksAdvanced: 2, purged: { facts: 2000, evidence: 0, proposals: 0, suppressions: 0, jobs: 0, contexts: 0 }
+    });
+
+    const result = await clearAllMemories(5, 'op-1');
+
+    expect(calls[0].url).toBe('/api/ai/memory/clear');
+    expect(body(0)).toEqual({ confirm: true, expectedVaultEpoch: 5, operationId: 'op-1' });
+    expect(result.cleared).toBe(false);
+    expect(result.epoch).toBe(6);
   });
 });

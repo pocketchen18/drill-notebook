@@ -66,12 +66,21 @@ public class MemoryOperationRepository {
     /** 动作成功：标记完成并保存可回吐的响应元数据。 */
     public void complete(String operationId, String resultMeta, String completedAt) throws SQLException {
         immediate.execute(connection -> {
-            if (execute(connection, "UPDATE ai_memory_operation SET status = ?, result_meta = ?, completed_at = ?"
-                    + " WHERE operation_id = ?", STATUS_COMPLETED, resultMeta, completedAt, operationId) != 1) {
-                throw new SQLException("operationId 登记行不存在: " + operationId);
-            }
+            completeIn(connection, operationId, resultMeta, completedAt);
             return null;
         });
+    }
+
+    /**
+     * 事务内登记完成：§4.4 要求 operation 记录与事实变更、建议终态同笔提交，
+     * 否则会出现"事实已改但台账还在 IN_PROGRESS"的中间态。
+     */
+    public void completeIn(Connection connection, String operationId, String resultMeta, String completedAt)
+            throws SQLException {
+        if (execute(connection, "UPDATE ai_memory_operation SET status = ?, result_meta = ?, completed_at = ?"
+                + " WHERE operation_id = ?", STATUS_COMPLETED, resultMeta, completedAt, operationId) != 1) {
+            throw new SQLException("operationId 登记行不存在: " + operationId);
+        }
     }
 
     /** 动作失败：删掉登记行，让客户端能用同一个 operationId 重试。 */

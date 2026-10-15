@@ -170,13 +170,24 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
         </ul>
       )}
 
+      {/* 同一屏还有审阅区的翻页，aria-label 带上归属，屏幕阅读器才分得清按的是哪个 */}
       <Space size="small" className="ai-memory-pager">
-        <Button size="small" disabled={cursorStack.length === 0} onClick={() => setCursorStack((stack) => stack.slice(0, -1))}>
+        <Button
+          size="small"
+          aria-label="记忆列表上一页"
+          disabled={cursorStack.length === 0}
+          onClick={() => setCursorStack((stack) => stack.slice(0, -1))}
+        >
           上一页
         </Button>
-        <Button size="small" disabled={!page?.hasMore} onClick={() => {
-          if (page?.nextCursor) setCursorStack((stack) => [...stack, page.nextCursor as string]);
-        }}>
+        <Button
+          size="small"
+          aria-label="记忆列表下一页"
+          disabled={!page?.hasMore}
+          onClick={() => {
+            if (page?.nextCursor) setCursorStack((stack) => [...stack, page.nextCursor as string]);
+          }}
+        >
           下一页
         </Button>
         {page && <Typography.Text type="secondary">本页 {page.items.length} 条 · 库版本 {page.vaultRevision}</Typography.Text>}
