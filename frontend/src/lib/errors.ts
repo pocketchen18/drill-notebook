@@ -13,6 +13,13 @@ const FRIENDLY_MESSAGES: Record<string, string> = {
   import_failed: '导入失败，请稍后重试',
   not_found: '资源不存在',
   unauthorized: '未授权，请重新登录',
+  // 记忆 REST 的 code 词表（后端 message 已是可读中文，这里只兜 message 缺失的情况）
+  MEMORY_LOCKED: '记忆库已锁定，解锁后才能查看或修改',
+  MEMORY_UNLOCK_FAILED: '主密码不对，未解锁任何内容',
+  MEMORY_VERSION_CONFLICT: '这条记忆刚被别人改过，请对照最新值再决定',
+  MEMORY_SETTINGS_CONFLICT: '记忆设置刚被改过，请重试',
+  MEMORY_CONSENT_STALE: '模型或授权已变更，需要重新授权',
+  MEMORY_TARGET_MISSING: '还没有可用的维护模型，请先在 AI 连接里配置',
 };
 
 /**

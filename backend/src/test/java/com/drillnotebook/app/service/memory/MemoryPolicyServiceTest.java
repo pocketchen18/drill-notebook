@@ -2,6 +2,7 @@ package com.drillnotebook.app.service.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -96,6 +97,21 @@ class MemoryPolicyServiceTest {
         assertEquals("MISSING", consent(USE, body).state());
         assertEquals("api.example.com", consent(USE, body).target().host());
         assertEquals(2000, ((Map<?, ?>) body.get("limits")).get("activeFacts"));
+    }
+
+    @Test
+    void settingsRevisionSurvivesTheVaultStatusMerge() throws Exception {
+        seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
+        createVaultAndLock();
+        long before = policy.current().revision();
+
+        assertEquals(200, policy.update(before, true, null, null, null, null).status());
+
+        Map<String, Object> body = policy.snapshot().body();
+        assertEquals(before + 1, body.get("revision"),
+                "PUT /settings 的 CAS 要的是设置版本；库状态里的同名字段不能把它顶掉（P9a 接线时暴露）");
+        assertNotNull(body.get("vaultRevision"), "库自己的重包装版本另给一个键，两边都要能读");
+        assertEquals(Boolean.TRUE, body.get("initialized"));
     }
 
     @Test

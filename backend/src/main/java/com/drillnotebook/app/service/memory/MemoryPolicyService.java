@@ -185,7 +185,14 @@ public class MemoryPolicyService {
             body.put("consents", Map.of(PURPOSE_USE, consentStatus(PURPOSE_USE),
                     PURPOSE_MAINTENANCE, consentStatus(PURPOSE_MAINTENANCE)));
             body.put("limits", Map.of("activeFacts", ACTIVE_FACT_LIMIT, "pendingFacts", PENDING_FACT_LIMIT));
-            body.putAll(vault.statusBody());
+            // 状态体里的 revision 是记忆库自己的重包装版本，直接合并会把上面那个设置版本顶掉——
+            // 而 PUT /settings 的 CAS 要的就是设置版本，建库之后每次改开关都会假冲突（P9a 接线时暴露）
+            Map<String, Object> vaultStatus = vault.statusBody();
+            Object vaultRevision = vaultStatus.remove("revision");
+            body.putAll(vaultStatus);
+            if (vaultRevision != null) {
+                body.put("vaultRevision", vaultRevision);
+            }
             return MemoryApiResult.of(200, body);
         } catch (SQLException error) {
             return storageError(error);

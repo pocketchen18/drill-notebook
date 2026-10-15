@@ -4,6 +4,8 @@ import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfi
 import { Edit3, Plus, RotateCcw, Sparkles, Star, Trash2 } from 'lucide-react';
 import { AiModelSlotCard } from '../components/AiModelSlotCard';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
+import { MemoryManager } from '../components/ai-memory/MemoryManager';
+import { MemorySettingsCard } from '../components/ai-memory/MemorySettingsCard';
 import { DataManagementPanel } from '../components/DataManagementPanel';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { useUiStore, type OutlineSide, type ThemeMode } from '../stores/uiStore';
@@ -65,6 +67,7 @@ const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'general', label: '常规' },
   { key: 'ai', label: 'AI 连接' },
+  { key: 'memory', label: '记忆' },
   { key: 'embedding', label: '嵌入与检索' },
   { key: 'study', label: '学习与复习' },
   { key: 'data', label: '数据管理' }
@@ -254,7 +257,7 @@ export function SettingsPage(): JSX.Element {
 
   return <main className="page">
     <div className="page-heading">
-      <div><h1>设置</h1><p>主题、快捷键、AI 连接、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
+      <div><h1>设置</h1><p>主题、快捷键、AI 连接、记忆、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
     </div>
     <div className="settings-tab-bar" role="tablist" aria-label="设置分区" onKeyDown={onTabBarKeyDown}>
       {TABS.map((tab) => (
@@ -561,6 +564,14 @@ export function SettingsPage(): JSX.Element {
           <Typography.Text type="secondary">两套密钥均经本地 Java 后端 Argon2id + AES-256-GCM 加密存储。</Typography.Text>
         </div>
       </section>
+      </div>
+    )}
+
+      {/* 记忆 Tab：本地加密记忆的开关、授权、预算与手动管理（§12 新增组件，不堆进聊天面板） */}
+      {activeTab === 'memory' && (
+      <div className="settings-tab-stack" role="tabpanel">
+      <MemorySettingsCard />
+      <MemoryManager />
       </div>
     )}
 
