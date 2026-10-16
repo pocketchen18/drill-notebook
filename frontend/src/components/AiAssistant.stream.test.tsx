@@ -130,7 +130,7 @@ describe('AiAssistant 流式会话状态', () => {
     await waitFor(() => expect(streamCallbacks).toBeTruthy());
     act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-11' }));
     act(() => streamCallbacks!.onText('已经生成的半句'));
-    act(() => streamCallbacks!.onError('AI 响应读取失败：连接被重置'));
+    act(() => streamCallbacks!.onError({ message: 'AI 响应读取失败：连接被重置' }));
 
     // 轮次已经真正开始：不得再发第二个请求（重复生成/计费）
     expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
@@ -150,7 +150,7 @@ describe('AiAssistant 流式会话状态', () => {
     await waitFor(() => expect(streamCallbacks).toBeTruthy());
     act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-12' }));
     act(() => streamCallbacks!.onReasoning('先在草稿里想了几步'));
-    act(() => streamCallbacks!.onError('AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）'));
+    act(() => streamCallbacks!.onError({ message: 'AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）' }));
 
     expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
     expect(await screen.findByText('先在草稿里想了几步')).toBeInTheDocument();
@@ -165,7 +165,7 @@ describe('AiAssistant 流式会话状态', () => {
     await send('第二问');
     await waitFor(() => expect(streamCallbacks).toBeTruthy());
     act(() => streamCallbacks!.onMetadata?.({ requestId: 'turn-13' }));
-    act(() => streamCallbacks!.onError('AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）'));
+    act(() => streamCallbacks!.onError({ message: 'AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）' }));
 
     expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
     expect(screen.getByText('第二问')).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe('AiAssistant 流式会话状态', () => {
 
     await send('第二问');
     await waitFor(() => expect(streamCallbacks).toBeTruthy());
-    act(() => streamCallbacks!.onError('请求失败（404）'));
+    act(() => streamCallbacks!.onError({ message: '请求失败（404）', partial: false }));
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/chat', expect.anything()));
     expect(await screen.findByText('ANSWER')).toBeInTheDocument();

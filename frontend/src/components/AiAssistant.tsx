@@ -640,7 +640,7 @@ export function AiAssistant(): JSX.Element {
             }
             return next;
           });
-          Message.error(streamError || '生成中断，请重试');
+          Message.error(streamError.message || '生成中断，请重试');
           return;
         }
         // 早期失败（后端还没开始这一轮，如不支持流式/请求未被接受）：移除占位与刚插入的 user 消息，

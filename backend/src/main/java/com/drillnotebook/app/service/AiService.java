@@ -304,7 +304,9 @@ public class AiService {
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
             // 同 ID 已完成：直接回已存结果，绝不再次外发、绝不重复落库（§7.2 第 7 条）
-            return chatResponse(request, begun.replayReply(), null, null, null, begun.replayStatus(), "saved", true);
+            return chatResponse(request.protocolVersion(), request.requestId(), request.sessionId(),
+                    request.masterPassword(), begun.replayReply(), null, null, null, begun.replayStatus(),
+                    "saved", true, true);
         }
         ChatTurnService.Lease lease = begun.lease();
         String attempt = null;
@@ -322,8 +324,10 @@ public class AiService {
             finalized = true;
             maybeAutoTitle(request.sessionId(), request.userText());
             reportLegacyFailure(request.protocolVersion(), done.status(), result);
-            return chatResponse(request, done.reply(), dispatch.legacy(), sent, result.usage(), done.status(),
-                    done.persistenceStatus(), false);
+            // requestId 用租约那份权威身份：客户端没带 requestId 时以前会回一个空串
+            return chatResponse(request.protocolVersion(), lease.requestId(), request.sessionId(),
+                    request.masterPassword(), done.reply(), dispatch.legacy(), sent, result.usage(), done.status(),
+                    done.persistenceStatus(), false, done.stateDurable());
         } catch (RuntimeException error) {
             // begin() 成功之后，配置解密、检索、组装、发送任一失败都必须把这一轮收成终态并释放句柄，
             // 否则孤儿清扫会因句柄仍在而跳过它，会话被一个永远不会完成的 RUNNING 永久占住（§7.2.1）
@@ -335,12 +339,62 @@ public class AiService {
         }
     }
 
-    /** 流式聊天结果：完整正文 + 思考链 + 本轮终态与落库情况，外加本轮实际发出的计划与用量。 */
+    /**
+     * 流式聊天结果：完整正文 + 思考链 + 本轮终态与落库情况，外加本轮实际发出的计划与用量。
+     *
+     * <p>{@code resultView} 就是 {@code POST /chat} 回的那一份统一结果（§4.2"done 与统一结果同结构"）：
+     * 以前控制器自己拼 done，漏了 requestId/sessionId/protocolVersion/replayed 与 dispatchState，
+     * 前端拿到 done 也无法把这一轮对上身份。字段集从此只有一个构造点。</p>
+     */
     public record ChatResult(String text, String reasoning, String status, String persistenceStatus,
-                             boolean stateDurable, ChatContextPlan plan, AiUpstreamClient.Usage usage) {
+                             boolean stateDurable, ChatContextPlan plan, AiUpstreamClient.Usage usage,
+                             String requestId, long sessionId, Map<String, Object> resultView) {
         public ChatResult {
             if (status == null) status = ChatTurnRepository.STATUS_COMPLETED;
             if (persistenceStatus == null) persistenceStatus = "saved";
+        }
+    }
+
+    /**
+     * 流式失败的出口：{@code error} 帧要带 requestId/sessionId/code 与 persistenceStatus/stateDurable
+     * （§4.2 末段），而这些只有轮次层知道——身份来自租约，收尾事实来自 {@code abandon} 的那一笔。
+     * {@code partial} 不在这里：只有真正写过 SSE 帧的控制器知道有没有产出。
+     */
+    public static final class StreamFailure extends RuntimeException {
+        private final String requestId;
+        private final long sessionId;
+        private final String code;
+        private final String persistenceStatus;
+        private final boolean stateDurable;
+
+        StreamFailure(String requestId, long sessionId, String code, String persistenceStatus, boolean stateDurable,
+                      RuntimeException cause) {
+            super(cause.getMessage(), cause);
+            this.requestId = requestId;
+            this.sessionId = sessionId;
+            this.code = code;
+            this.persistenceStatus = persistenceStatus;
+            this.stateDurable = stateDurable;
+        }
+
+        public String requestId() {
+            return requestId;
+        }
+
+        public long sessionId() {
+            return sessionId;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        public String persistenceStatus() {
+            return persistenceStatus;
+        }
+
+        public boolean stateDurable() {
+            return stateDurable;
         }
     }
 
@@ -361,11 +415,16 @@ public class AiService {
         TurnRequest request = turnRequest(body);
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
-            return new ChatResult(begun.replayReply(), null, begun.replayStatus(), "saved", true, null, null);
+            return new ChatResult(begun.replayReply(), null, begun.replayStatus(), "saved", true, null, null,
+                    request.requestId(), request.sessionId(),
+                    chatResponse(request.protocolVersion(), request.requestId(), request.sessionId(),
+                            request.masterPassword(), begun.replayReply(), null, null, null, begun.replayStatus(),
+                            "saved", true, true));
         }
         ChatTurnService.Lease lease = begun.lease();
         String attempt = null;
         boolean finalized = false;
+        ChatTurnService.FinalResult lastFinal = null;
         try {
             UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
             if (upstream == null) {
@@ -382,16 +441,17 @@ public class AiService {
                             new ChatTurnService.UpstreamReply(reply, null, "aborted", false, false, true,
                                     AiUpstreamClient.Usage.unknown()), auditFor(dispatch.markSent(), dispatch.legacy()));
                     finalized = true;
-                    return new ChatResult(stopped.reply(), stopped.reasoning(), stopped.status(),
-                            stopped.persistenceStatus(), stopped.stateDurable(), dispatch.markSent(), null);
+                    lastFinal = stopped;
+                    return streamResult(request, lease, stopped, dispatch.markSent(), null, dispatch.legacy());
                 }
                 ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
                         ChatTurnService.UpstreamReply.of(new AiUpstreamClient.Result(reply, null, "stop")),
                         auditFor(dispatch.markSent(), dispatch.legacy()));
                 finalized = true;
+                lastFinal = done;
                 maybeAutoTitle(request.sessionId(), request.userText());
-                return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
-                        done.stateDurable(), dispatch.markSent(), AiUpstreamClient.Usage.unknown());
+                return streamResult(request, lease, done, dispatch.markSent(), AiUpstreamClient.Usage.unknown(),
+                        dispatch.legacy());
             }
             AiConfigRepository.ConfigRow config = requireChatConfig();
             Dispatch dispatch = prepare(body, request, lease, config);
@@ -410,21 +470,37 @@ public class AiService {
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
                     ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
             finalized = true;
+            lastFinal = done;
             maybeAutoTitle(request.sessionId(), request.userText());
             if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
                 throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
             }
-            return new ChatResult(done.reply(), done.reasoning(), done.status(), done.persistenceStatus(),
-                    done.stateDurable(), sent, result.usage());
+            return streamResult(request, lease, done, sent, result.usage(), dispatch.legacy());
         } catch (RuntimeException error) {
             // 与普通路径同一收尾责任：begin() 之后（配置解密、组装、组装后复核、发送）任一失败都要
             // 结算用量、把轮次收成 FAILED 并释放句柄，不能留下没人会放的活跃句柄（§7.2.1）
+            String code = error instanceof ChatTurnRejectException reject ? reject.code() : null;
             if (!finalized) {
                 chatTurns.settleUsage(attempt, null);
-                chatTurns.abandon(lease, "request_failed");
+                lastFinal = chatTurns.abandon(lease, "request_failed");
             }
-            throw error;
+            // 收尾事实跟着异常一起出去：error 帧要带 persistenceStatus/stateDurable（§4.2 末段），
+            // 只带一句 message 的话，前端无法区分"这轮已作废"和"这轮可能还在跑"。
+            throw new StreamFailure(lease.requestId(), lease.sessionId(), code,
+                    lastFinal == null ? "failed" : lastFinal.persistenceStatus(),
+                    lastFinal != null && lastFinal.stateDurable(), error);
         }
+    }
+
+    /** 流式收尾：把这一轮的统一结果与身份一起交出，done 帧与普通响应共用 {@link #chatResponse} 的字段集。 */
+    private ChatResult streamResult(TurnRequest request, ChatTurnService.Lease lease,
+                                    ChatTurnService.FinalResult outcome, ChatContextPlan plan,
+                                    AiUpstreamClient.Usage usage, RetrievalOutcome legacy) {
+        Map<String, Object> view = chatResponse(request.protocolVersion(), lease.requestId(), request.sessionId(),
+                request.masterPassword(), outcome.reply(), legacy, plan, usage, outcome.status(),
+                outcome.persistenceStatus(), false, outcome.stateDurable());
+        return new ChatResult(outcome.reply(), outcome.reasoning(), outcome.status(), outcome.persistenceStatus(),
+                outcome.stateDurable(), plan, usage, lease.requestId(), request.sessionId(), view);
     }
 
     /** 一次派发所需的一切：v2 用统一计划，v1 保持客户端自带 messages 的旧语义（§7.1）。 */
@@ -481,7 +557,11 @@ public class AiService {
                               ChatTurnService.Lease lease) {
         if (sender == null) return;
         if (dispatch.plan() != null) {
-            sender.accept(dispatch.plan().metadataEvent());
+            // v2 也不能只给计划摘要：metadata 必须带 requestId，否则"停止"同样只能断本地 fetch。
+            // （以前只有 v1 分支带 requestId，v2 一升级就把这条身份丢了，且没有任何用例拦得住。）
+            Map<String, Object> event = new LinkedHashMap<>(dispatch.plan().metadataEvent());
+            event.put("requestId", lease.requestId());
+            sender.accept(event);
             return;
         }
         // v1 没有计划，但流式轮次也必须先把 requestId 交给前端：没有它，用户"停止"只能断开本地 fetch，
@@ -624,25 +704,39 @@ public class AiService {
         if (result == null) throw new IllegalArgumentException("AI 服务暂时不可用，请稍后重试");
     }
 
-    private Map<String, Object> chatResponse(TurnRequest request, String reply, RetrievalOutcome legacy,
+    private Map<String, Object> chatResponse(int protocolVersion, String requestId, long sessionId,
+                                             String masterPassword, String reply, RetrievalOutcome legacy,
                                              ChatContextPlan plan, AiUpstreamClient.Usage usage, String status,
-                                             String persistenceStatus, boolean replayed) {
-        if (request.protocolVersion() != 2) {
-            // 检索关闭时 v1 响应与旧契约完全一致（只有 reply/sessionId）。
-            if (legacy == null || !legacy.enabled()) return Map.of("reply", reply, "sessionId", request.sessionId());
+                                             String persistenceStatus, boolean replayed, boolean stateDurable) {
+        if (protocolVersion != 2) {
+            // v1 的成功响应与旧契约完全一致（只有 reply/sessionId），检索开着才多引用两键。
             Map<String, Object> legacyResponse = new LinkedHashMap<>();
+            boolean persisted = "saved".equals(persistenceStatus) && stateDurable;
+            if (!persisted) {
+                // 但这一轮没落住时必须说没落住（§7.2 末段：persistenceStatus=failed 与 stateDurable 要可见），
+                // 否则旧客户端会把一条已经失败的轮次当成好好存着了。
+                legacyResponse.put("status", status);
+                legacyResponse.put("persistenceStatus", persistenceStatus);
+                legacyResponse.put("stateDurable", stateDurable);
+            }
+            if (legacy == null || !legacy.enabled()) {
+                legacyResponse.put("reply", reply);
+                legacyResponse.put("sessionId", sessionId);
+                return legacyResponse;
+            }
             legacyResponse.put("reply", reply);
-            legacyResponse.put("sessionId", request.sessionId());
+            legacyResponse.put("sessionId", sessionId);
             legacyResponse.put("citations", legacy.citations());
             if (legacy.notice() != null) legacyResponse.put("retrievalNotice", legacy.notice());
             return legacyResponse;
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("protocolVersion", 2);
-        result.put("requestId", request.requestId());
-        result.put("sessionId", request.sessionId());
+        result.put("requestId", requestId);
+        result.put("sessionId", sessionId);
         result.put("status", status);
-        result.put("stateDurable", true);
+        // 落库没收住就不能说状态是持久的：以前这里硬编码 true，SSE 那条却如实回 false，两条路径口径不一致（§7.2 末段）
+        result.put("stateDurable", stateDurable);
         result.put("persistenceStatus", persistenceStatus);
         result.put("replayed", replayed);
         result.put("reply", reply);
@@ -653,8 +747,7 @@ public class AiService {
             result.put("contextAudit", auditSummary(plan.planId(), plan.audit().dispatchState(), true, null));
         } else {
             // 重放不再重建计划：交回落库的那份审计摘要，引用明细走 GET /turns/{id}/context（§4.2）
-            Optional<Map<String, Object>> stored = chatTurns.storedAudit(request.requestId(),
-                    request.masterPassword());
+            Optional<Map<String, Object>> stored = chatTurns.storedAudit(requestId, masterPassword);
             if (stored.isPresent()) {
                 Map<String, Object> audit = stored.get();
                 result.put("contextAudit", auditSummary(String.valueOf(audit.get("planId")),

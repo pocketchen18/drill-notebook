@@ -2,6 +2,7 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -145,7 +146,12 @@ class ChatUpstreamDispatchTest {
         Map<String, Object> body = v2("配置坏了也要收尾");
         String requestId = (String) body.get("requestId");
 
-        assertThrows(IllegalArgumentException.class, () -> ai.chatStream(body, null));
+        // 流式失败要带身份与收尾事实出去（§4.2 末段：error 帧要有 requestId/persistence），
+        // 但"轮次必须收成终态并释放句柄"这条前提不变，所以原始异常仍要在 cause 里原样可查。
+        AiService.StreamFailure failure = assertThrows(AiService.StreamFailure.class, () -> ai.chatStream(body, null));
+        assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+        assertEquals(requestId, failure.requestId(), "error 帧要能对上用户刚发起的那一轮");
+        assertEquals("failed", failure.persistenceStatus());
 
         Map<String, Object> status = wiring.turnService().status(requestId);
         assertEquals("FAILED", status.get("status"), "begin() 之后的失败必须把轮次收成终态（§7.2.1）");
@@ -208,9 +214,14 @@ class ChatUpstreamDispatchTest {
         Map<String, Object> body = Map.of("sessionId", sessionId,
                 "messages", List.of(Map.of("role", "user", "content", "只思考不回答")));
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        // 先落终态、后报异常：异常里带这一轮的终态与身份，前端因此不必猜"是不是还在跑"
+        AiService.StreamFailure failure = assertThrows(AiService.StreamFailure.class,
                 () -> ai.chatStream(body, (type, text) -> true));
+        IllegalArgumentException error = assertInstanceOf(IllegalArgumentException.class, failure.getCause());
         assertTrue(error.getMessage().contains("思考过程"), error.getMessage());
+        assertEquals("saved", failure.persistenceStatus(), "上报失败之前，FAILED 终态本身已经落住");
+        assertTrue(failure.stateDurable());
+        assertFalse(failure.requestId().isBlank(), "error 帧必须带 requestId，否则前端查不到这一轮");
 
         assertEquals("FAILED", jdbc.queryForObject(
                 "SELECT status FROM ai_chat_turn ORDER BY id DESC LIMIT 1", String.class),

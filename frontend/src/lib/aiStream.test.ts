@@ -1,5 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { streamChat } from './aiStream';
+import type { StreamCallbacks } from './aiStream';
+
+/**
+ * SSE 帧解析（contracts §4.2）：done 与统一结果同结构、metadata 只在带 requestId 时构成轮次身份、
+ * error 带 code/partial/persistence，以及"没有 done 就 EOF"这条必须能被调用方察觉。
+ */
 
 /** 事件帧按 UTF-8 逐帧回放：内容全 ASCII，charCodeAt 即字节。 */
 const frame = (text: string): Uint8Array => new Uint8Array([...text].map((ch) => ch.charCodeAt(0)));
@@ -15,57 +21,170 @@ const bodyOf = (frames: string[]) => {
   };
 };
 
-const run = async (frames: string[], callbacks: {
-  onMetadata?: (payload: { requestId: string }) => void;
-  onText?: (delta: string) => void;
-}): Promise<string | null> => {
+interface Captured {
+  deltas: string[];
+  metadata: unknown[];
+  done?: Record<string, unknown>;
+  failure?: Record<string, unknown>;
+  noDone?: { requestId?: string; partial: boolean };
+}
+
+const run = async (frames: string[], hooks: Partial<StreamCallbacks> = {}): Promise<Captured> => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: bodyOf(frames) })));
-  let failure: string | null = null;
+  const captured: Captured = { deltas: [], metadata: [] };
   await new Promise<void>((resolve) => {
     void streamChat('/api/ai/chat/stream', {}, {
-      onText: (delta) => callbacks.onText?.(delta),
-      onReasoning: () => undefined,
-      onMetadata: callbacks.onMetadata,
-      onDone: () => resolve(),
-      onError: (message) => {
-        failure = message;
+      onText: (delta) => {
+        captured.deltas.push(delta);
+        hooks.onText?.(delta);
+      },
+      onReasoning: hooks.onReasoning ?? (() => undefined),
+      onMetadata: (metadata) => {
+        captured.metadata.push(metadata);
+        hooks.onMetadata?.(metadata);
+      },
+      onDone: (payload) => {
+        captured.done = payload as unknown as Record<string, unknown>;
+        resolve();
+      },
+      onError: (failure) => {
+        captured.failure = failure as unknown as Record<string, unknown>;
+        resolve();
+      },
+      onNoDone: (info) => {
+        captured.noDone = info;
         resolve();
       }
     });
   });
   vi.unstubAllGlobals();
-  return failure;
+  return captured;
 };
 
 describe('aiStream metadata 事件', () => {
   it('把 metadata 的 requestId 交给 onMetadata，且不影响其他事件', async () => {
-    const seen: string[] = [];
-    let requestId: string | null = null;
-    const failure = await run([
+    const captured = await run([
       'event:metadata\ndata:{"requestId":"r-1","sessionId":10,"status":"prepared"}\n\n',
       'event:text\ndata:{"text":"hi"}\n\n',
       'event:done\ndata:{"reply":"hi"}\n\n'
-    ], {
-      onText: (delta) => seen.push(delta),
-      onMetadata: ({ requestId: id }) => {
-        requestId = id;
-      }
-    });
+    ]);
 
-    expect(failure).toBeNull();
-    expect(requestId).toBe('r-1');
-    expect(seen).toEqual(['hi']);
+    expect(captured.failure).toBeUndefined();
+    expect(captured.metadata).toEqual([
+      { requestId: 'r-1', sessionId: 10, status: 'prepared' }
+    ]);
+    expect(captured.deltas).toEqual(['hi']);
   });
 
-  it('没有 requestId 的 metadata 不触发 onMetadata（v2 计划态事件不误报）', async () => {
-    let calls = 0;
-    const failure = await run(['event:metadata\ndata:{"planId":"p-1"}\n\n', 'event:done\ndata:{"reply":""}\n\n'], {
-      onMetadata: () => {
-        calls += 1;
-      }
-    });
+  it('没有 requestId 的 metadata 不触发 onMetadata（计划态不是轮次身份）', async () => {
+    const captured = await run(['event:metadata\ndata:{"planId":"p-1"}\n\n', 'event:done\ndata:{"reply":""}\n\n']);
 
-    expect(failure).toBeNull();
-    expect(calls).toBe(0);
+    expect(captured.failure).toBeUndefined();
+    expect(captured.metadata).toHaveLength(0);
+  });
+
+  it('v2 的计划态 metadata 与 requestId 一起来：停止按钮要有身份才能取消', async () => {
+    const captured = await run([
+      'event:metadata\ndata:{"requestId":"r-9","planId":"p-9","dispatchState":"not_sent",'
+        + '"memoryContext":{"provided":[{"memoryId":"m-1","version":2}]},"contextUsage":{"inputBudget":8000}}\n\n',
+      'event:done\ndata:{"reply":"ok","requestId":"r-9"}\n\n'
+    ]);
+
+    expect(captured.metadata).toEqual([{
+      requestId: 'r-9',
+      planId: 'p-9',
+      dispatchState: 'not_sent',
+      memoryContext: { provided: [{ memoryId: 'm-1', version: 2 }] },
+      contextUsage: { inputBudget: 8000 }
+    }]);
+  });
+});
+
+describe('aiStream done 事件', () => {
+  it('done 带统一结果的字段集，徽标与检查器不必再发第二次请求', async () => {
+    const captured = await run([
+      'event:done\ndata:{"protocolVersion":2,"requestId":"r-1","sessionId":10,"status":"COMPLETED",'
+        + '"stateDurable":true,"persistenceStatus":"saved","replayed":false,"reply":"hi",'
+        + '"memoryContext":{"provided":[{"memoryId":"m-1","version":2}],"estimatedTokens":48,"vaultRevision":17},'
+        + '"contextUsage":{"estimated":true,"inputBudget":8000},"contextAudit":{"planId":"p-1","dispatchState":"sent",'
+        + '"available":true},"usage":{"source":"provider","inputTokens":1640,"cacheWriteTokens":null}}\n\n'
+    ]);
+
+    expect(captured.done).toMatchObject({
+      reply: 'hi',
+      protocolVersion: 2,
+      requestId: 'r-1',
+      sessionId: 10,
+      status: 'COMPLETED',
+      stateDurable: true,
+      persistenceStatus: 'saved',
+      replayed: false,
+      memoryContext: { provided: [{ memoryId: 'm-1', version: 2 }], vaultRevision: 17 },
+      contextAudit: { planId: 'p-1', dispatchState: 'sent' },
+      usage: { inputTokens: 1640, cacheWriteTokens: null }
+    });
+  });
+
+  it('不认识的后端字段一律忽略，不塞进结果视图', async () => {
+    const captured = await run(['event:done\ndata:{"reply":"hi","brandNewThing":{"a":1}}\n\n']);
+
+    expect(captured.done).toEqual({ reply: 'hi', reasoning: '' });
+  });
+});
+
+describe('aiStream error 事件与 EOF', () => {
+  it('error 帧带 code/partial 与收尾事实，前端才知道这轮能不能自动回退', async () => {
+    const captured = await run([
+      'event:metadata\ndata:{"requestId":"r-2"}\n\n',
+      'event:text\ndata:{"text":"part"}\n\n',
+      'event:error\ndata:{"message":"upstream died","requestId":"r-2","sessionId":10,"code":"MEMORY_LOCKED",'
+        + '"partial":true,"persistenceStatus":"failed","stateDurable":false}\n\n'
+    ]);
+
+    expect(captured.failure).toMatchObject({
+      message: 'upstream died',
+      requestId: 'r-2',
+      sessionId: 10,
+      code: 'MEMORY_LOCKED',
+      partial: true,
+      persistenceStatus: 'failed',
+      stateDurable: false
+    });
+  });
+
+  it('没有 done 就 EOF：交给调用方去查这一轮的终态，不能当完成', async () => {
+    const captured = await run([
+      'event:metadata\ndata:{"requestId":"r-3"}\n\n',
+      'event:text\ndata:{"text":"half"}\n\n'
+    ]);
+
+    expect(captured.done).toBeUndefined();
+    expect(captured.noDone).toEqual({ requestId: 'r-3', partial: true });
+  });
+
+  it('读取中途抛错也算 EOF 之外的失败，partial 反映已经产出的内容', async () => {
+    const frames = ['event:metadata\ndata:{"requestId":"r-4"}\n\n', 'event:text\ndata:{"text":"half"}\n\n'];
+    const reader = {
+      read: async (): Promise<unknown> => {
+        if (frames.length === 0) throw new Error('stream cut');
+        return { done: false, value: frame(frames.shift() as string) };
+      }
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
+    let failure: Record<string, unknown> | undefined;
+    await new Promise<void>((resolve) => {
+      void streamChat('/api/ai/chat/stream', {}, {
+        onText: () => undefined,
+        onReasoning: () => undefined,
+        onDone: () => resolve(),
+        onError: (error) => {
+          failure = error as unknown as Record<string, unknown>;
+          resolve();
+        }
+      });
+    });
+    vi.unstubAllGlobals();
+
+    expect(failure).toMatchObject({ message: 'stream cut', requestId: 'r-4', partial: true });
   });
 });

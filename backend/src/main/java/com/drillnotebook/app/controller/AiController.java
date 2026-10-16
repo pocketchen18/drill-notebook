@@ -2,6 +2,7 @@ package com.drillnotebook.app.controller;
 
 import com.drillnotebook.app.service.AiService;
 import com.drillnotebook.app.service.ChatHistoryService;
+import com.drillnotebook.app.service.ChatTurnRejectException;
 import com.drillnotebook.app.service.RetrievalMaintenanceService;
 import com.drillnotebook.app.service.RetrievalStatusService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -90,12 +91,15 @@ public class AiController {
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter chatStream(@RequestBody Map<String, Object> body) {
         var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(300_000L);
         chatStreamExecutor.submit(() -> {
+            // 本轮是否产出过增量：error 帧要如实带 partial，前端据此判断能不能自动回退（§7.3）
+            boolean[] produced = {false};
             try {
                 AiService.ChatResult result = ai.chatStream(body, (type, text) -> {
                     try {
                         emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
                                 .name(type)
                                 .data(mapperValueToJson(Map.of("text", text))));
+                        produced[0] = true;
                         return true;
                     } catch (Exception sendError) {
                         return false; // 下游断开，中止上游读取
@@ -110,25 +114,11 @@ public class AiController {
                         // 推送失败不撤销本轮：前端断了由 onDelta 的 false 负责裁决
                     }
                 });
-                // done 必须在落库结算之后发；落库失败时如实带上 failed 与 stateDurable=false（§7.2 第 6 条）
-                java.util.Map<String, Object> donePayload = new java.util.LinkedHashMap<>();
-                donePayload.put("reply", result.text());
+                // done 与 POST /chat 同一份字段集，由服务层单点构造；这里只补流式才有的 reasoning。
+                // 以前控制器自己拼 done，漏了 requestId/sessionId/protocolVersion/replayed 与 dispatchState。
+                Map<String, Object> donePayload = new java.util.LinkedHashMap<>(result.resultView());
                 if (result.reasoning() != null && !result.reasoning().isBlank()) {
                     donePayload.put("reasoning", result.reasoning());
-                }
-                donePayload.put("status", result.status());
-                donePayload.put("persistenceStatus", result.persistenceStatus());
-                donePayload.put("stateDurable", result.stateDurable());
-                if (result.plan() != null) {
-                    // v2 的引用/预算/记忆摘要都取自同一个计划，不再另算一套（§9.2）
-                    donePayload.put("citations", result.plan().citations());
-                    donePayload.put("memoryContext", result.plan().memoryContext());
-                    donePayload.put("contextUsage", result.plan().contextUsage());
-                    donePayload.put("contextAudit", Map.of("schemaVersion", 1, "planId", result.plan().planId(),
-                            "available", true));
-                }
-                if (result.usage() != null) {
-                    donePayload.put("usage", usageView(result.usage()));
                 }
                 emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
                         .name("done")
@@ -136,9 +126,25 @@ public class AiController {
                 emitter.complete();
             } catch (Exception error) {
                 try {
+                    Map<String, Object> frame = new java.util.LinkedHashMap<>();
+                    frame.put("message", error.getMessage() == null ? "AI 服务暂时不可用" : error.getMessage());
+                    frame.put("partial", produced[0]);
+                    if (error instanceof AiService.StreamFailure failure) {
+                        // 身份 + 收尾事实：只回一句 message 的话，前端分不清"这轮已作废"还是"这轮还在跑"（§4.2 末段）
+                        if (failure.requestId() != null && !failure.requestId().isBlank()) {
+                            frame.put("requestId", failure.requestId());
+                        }
+                        frame.put("sessionId", failure.sessionId());
+                        if (failure.code() != null) frame.put("code", failure.code());
+                        frame.put("persistenceStatus", failure.persistenceStatus());
+                        frame.put("stateDurable", failure.stateDurable());
+                    } else if (error instanceof ChatTurnRejectException reject) {
+                        // begin() 之前就被拒（请求形状不对）：这一轮还不存在，只有 code
+                        frame.put("code", reject.code());
+                    }
                     emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
                             .name("error")
-                            .data(mapperValueToJson(Map.of("message", error.getMessage() == null ? "AI 服务暂时不可用" : error.getMessage()))));
+                            .data(mapperValueToJson(frame)));
                 } catch (Exception ignored) {
                     // 下游已断开
                 }
@@ -146,16 +152,6 @@ public class AiController {
             }
         });
         return emitter;
-    }
-
-    private static Map<String, Object> usageView(com.drillnotebook.app.service.AiUpstreamClient.Usage usage) {
-        Map<String, Object> view = new java.util.LinkedHashMap<>();
-        view.put("source", usage.source());
-        view.put("inputTokens", usage.inputTokens());
-        view.put("outputTokens", usage.outputTokens());
-        view.put("cacheReadTokens", usage.cacheReadTokens());
-        view.put("cacheWriteTokens", usage.cacheWriteTokens());
-        return view;
     }
 
     private String mapperValueToJson(Map<String, Object> value) {
