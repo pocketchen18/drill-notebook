@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
+import { isUuidV7 } from '../lib/uuidV7';
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
 
@@ -35,10 +36,20 @@ const setContext = (context: AiPageContext): void => {
   useUiStore.setState({ aiOpen: true, pageContext: context });
 };
 
-const chatBody = (): { messages: Array<{ role: string; content: unknown }>; retrievalOptions?: unknown } => {
+interface V2Body {
+  protocolVersion: number;
+  requestId: string;
+  sessionId: number;
+  messages?: unknown;
+  input: { role: string; userText: string };
+  pageContext?: { kind: string; pageId?: number; markdown?: string };
+  retrievalOptions?: { enabled: boolean; scope: string; notebookId?: number };
+}
+
+const chatBody = (): V2Body => {
   const call = apiPost.mock.calls.find((item) => item[0] === '/api/ai/chat');
   expect(call, 'expected a /api/ai/chat call').toBeTruthy();
-  return call![1];
+  return call![1] as V2Body;
 };
 
 const typeAndSend = async (text: string): Promise<void> => {
@@ -52,12 +63,13 @@ const toggleRetrieveNotes = (): void => {
   fireEvent.click(screen.getByLabelText('检索笔记'));
 };
 
-describe('AiAssistant notebook retrieval (Task 14)', () => {
+describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
     apiGet.mockImplementation((url: string) => {
-      if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
+      // streaming:false 让本组用例走确定的非流式通道，只考察请求体与响应渲染
+      if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
       if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) return Promise.resolve([]);
@@ -71,17 +83,20 @@ describe('AiAssistant notebook retrieval (Task 14)', () => {
     setContext({ kind: 'none', title: '无页面上下文', markdown: '' });
   });
 
-  it('disabled 回归：不发送 retrievalOptions，仍注入页面上下文 system message', async () => {
+  it('关闭检索：不带 retrievalOptions，页面正文改走 pageContext，不再有 system 消息', async () => {
     setContext({ kind: 'quiz', title: '刷题', markdown: 'QUIZ MD' });
     renderAssistant();
     await typeAndSend('你好');
     const body = chatBody();
+    expect(body.protocolVersion).toBe(2);
     expect(body.retrievalOptions).toBeUndefined();
-    expect(body.messages[0].role).toBe('system');
-    expect(String(body.messages[0].content)).toContain('QUIZ MD');
+    // v2 前端禁止再拼"你是学习助手"system，也不回传历史（contracts §4.1）
+    expect(body.messages).toBeUndefined();
+    expect(body.input).toEqual({ role: 'user', userText: '你好' });
+    expect(body.pageContext).toEqual({ kind: 'quiz', markdown: 'QUIZ MD' });
   });
 
-  it('note 页开启检索：默认 current + notebookId，且抑制整页 markdown system message', async () => {
+  it('note 页开启检索：默认 current + notebookId，且不再重复带上整页 markdown', async () => {
     setContext({ kind: 'note', title: '页面', markdown: 'NOTE MD', notebookId: 7, notePageId: 5 });
     renderAssistant();
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
@@ -89,9 +104,8 @@ describe('AiAssistant notebook retrieval (Task 14)', () => {
     await typeAndSend('你好');
     const body = chatBody();
     expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'current', notebookId: 7 });
-    // 开启检索后不再重复注入整页 markdown
-    expect(body.messages.every((m) => m.role !== 'system')).toBe(true);
-    expect(body.messages[0].role).toBe('user');
+    expect(body.pageContext).toEqual({ kind: 'note', pageId: 5 });
+    expect(body.pageContext?.markdown).toBeUndefined();
   });
 
   it('无 notebookId 的页面开启检索：默认 all，绝不发送缺 notebookId 的 current', async () => {
@@ -103,6 +117,54 @@ describe('AiAssistant notebook retrieval (Task 14)', () => {
     const body = chatBody();
     expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'all' });
     expect((body.retrievalOptions as { notebookId?: number }).notebookId).toBeUndefined();
+    // 没有页面正文时只留页面身份，不塞空 markdown
+    expect(body.pageContext).toEqual({ kind: 'quiz' });
+  });
+
+  it('每个逻辑请求带一个 UUIDv7 身份，服务端据此做幂等', async () => {
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await typeAndSend('你好');
+
+    expect(isUuidV7(chatBody().requestId)).toBe(true);
+  });
+
+  it('附件走 v2 独立通道：正文不再内联文件内容，data URL 前缀剥掉，clientId 短到服务端能收', async () => {
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+
+    const longName = '第三章-拉格朗日中值定理-课堂笔记整理版本-含板书与课后习题详解-2026-10-12-修订二.md';
+    const textContent = "# 中值定理\nf(b)-f(a)=f'(c)(b-a)";
+    // jsdom 的 File 没有 .text()（Chromium 有），测试里补这一端能力，被测代码不动
+    const originalText = File.prototype.text;
+    Object.defineProperty(File.prototype, 'text', { configurable: true, value: () => Promise.resolve(textContent) });
+    const textFile = new File(['# 中值定理'], longName, { type: 'text/markdown' });
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const imageFile = new File([pngBytes], '截图.png', { type: 'image/png' });
+    const input = document.querySelector<HTMLInputElement>('input[type=file]');
+    expect(input).not.toBeNull();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [textFile, imageFile] } });
+
+    await screen.findByText(longName);
+    await screen.findByText('截图.png');
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '一起看' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(apiPost.mock.calls.some((item) => item[0] === '/api/ai/chat')).toBe(true));
+
+    const body = chatBody();
+    expect(body.input.userText).toBe('一起看');
+    const attachments = (body.input as { attachments?: unknown[] }).attachments;
+    expect(attachments).toHaveLength(2);
+    expect(attachments![0]).toEqual({
+      clientId: 'c0', kind: 'text', name: longName, mimeType: 'text/markdown',
+      text: "# 中值定理\nf(b)-f(a)=f'(c)(b-a)"
+    });
+    const image = attachments![1] as { clientId: string; kind: string; dataBase64?: string; text?: string };
+    expect(image.clientId).toBe('c1');
+    expect(image.kind).toBe('image');
+    expect(image.text).toBeUndefined();
+    expect(image.dataBase64).toBe('iVBORw0KGgo=');
   });
 
   it('citation 点击深链到 /notebooks?pageId=', async () => {
@@ -131,13 +193,14 @@ describe('AiAssistant notebook retrieval (Task 14)', () => {
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/notebooks?pageId=5'));
   });
 
-  it('BM25 降级 notice 与回复同时显示，输入仍可用', async () => {
+  it('检索降级提示与回复同时显示，输入仍可用', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/ai/chat') {
         return Promise.resolve({
           reply: 'ANSWER',
           sessionId: 10,
-          retrievalNotice: { code: 'vector-index-unavailable', message: '向量索引未就绪，本次仅关键词召回' },
+          // v2 的降级只剩码，文案由界面按契约码翻出（沿用旧的检索降级说法）
+          contextUsage: { notices: ['RETRIEVAL_UNAVAILABLE'] },
           citations: [{
             corpusType: 'NOTEBOOK', notebookId: 7, pageId: 5, chunkId: 1,
             title: '第五页', headingPath: '', snippet: '片段', matchTypes: ['bm25']
@@ -153,7 +216,8 @@ describe('AiAssistant notebook retrieval (Task 14)', () => {
     await typeAndSend('你好');
 
     expect(await screen.findByText('ANSWER')).toBeInTheDocument();
-    expect(screen.getByText('向量索引未就绪，本次仅关键词召回')).toBeInTheDocument();
+    // 同一屏有笔记引用，降级文案就不能说"未使用笔记内容"
+    expect(screen.getByText('笔记检索降级：本次只用了关键词召回结果')).toBeInTheDocument();
     expect(screen.getByText('第五页')).toBeInTheDocument();
     // notice 不阻止输入
     expect(screen.getByPlaceholderText(/提问/)).not.toBeDisabled();

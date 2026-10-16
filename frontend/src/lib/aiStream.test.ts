@@ -7,8 +7,8 @@ import type { StreamCallbacks } from './aiStream';
  * error 带 code/partial/persistence，以及"没有 done 就 EOF"这条必须能被调用方察觉。
  */
 
-/** 事件帧按 UTF-8 逐帧回放：内容全 ASCII，charCodeAt 即字节。 */
-const frame = (text: string): Uint8Array => new Uint8Array([...text].map((ch) => ch.charCodeAt(0)));
+/** 事件帧按 UTF-8 编码逐帧回放，中文正文与真实字节流一致。 */
+const frame = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const bodyOf = (frames: string[]) => {
   let index = 0;
@@ -125,6 +125,12 @@ describe('aiStream done 事件', () => {
     });
   });
 
+  it('done 带非空 reasoning 时整段透传，思考链不只来自流式增量', async () => {
+    const captured = await run(['event:done\ndata:{"reply":"hi","reasoning":"先想到二分查找"}\n\n']);
+
+    expect(captured.done).toMatchObject({ reply: 'hi', reasoning: '先想到二分查找' });
+  });
+
   it('不认识的后端字段一律忽略，不塞进结果视图', async () => {
     const captured = await run(['event:done\ndata:{"reply":"hi","brandNewThing":{"a":1}}\n\n']);
 
@@ -160,6 +166,29 @@ describe('aiStream error 事件与 EOF', () => {
 
     expect(captured.done).toBeUndefined();
     expect(captured.noDone).toEqual({ requestId: 'r-3', partial: true });
+  });
+
+  it('done 之后的 EOF 不再补发 onNoDone：收口只算一次', async () => {
+    const captured = await run([
+      'event:metadata\ndata:{"requestId":"r-5"}\n\n',
+      'event:done\ndata:{"reply":"hi","requestId":"r-5"}\n\n'
+    ]);
+    // done 先到就 resolve，读取循环还要走到 EOF 才执行 finally；一个宏任务保证它已跑完
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(captured.done).toMatchObject({ reply: 'hi' });
+    expect(captured.noDone).toBeUndefined();
+  });
+
+  it('error 帧之后的 EOF 同样不再补发 onNoDone', async () => {
+    const captured = await run([
+      'event:metadata\ndata:{"requestId":"r-6"}\n\n',
+      'event:error\ndata:{"message":"断了","requestId":"r-6"}\n\n'
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(captured.failure).toMatchObject({ requestId: 'r-6' });
+    expect(captured.noDone).toBeUndefined();
   });
 
   it('读取中途抛错也算 EOF 之外的失败，partial 反映已经产出的内容', async () => {
