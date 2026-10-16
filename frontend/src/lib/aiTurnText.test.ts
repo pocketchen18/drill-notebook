@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { outcomeNotice, statusNotice, turnStatusText } from './aiTurnText';
+import {
+  auditReasonText,
+  dispatchStateText,
+  omissionReasonText,
+  outcomeNotice,
+  previewLine,
+  regionLabel,
+  sourceKindLabel,
+  statusNotice,
+  turnStatusText
+} from './aiTurnText';
 import type { ChatResultView } from './aiStream';
 
 /** 提示码只翻文案（contracts §1、§4.5）：界面不参与判定，也不许把未知码吞成"没问题"。 */
@@ -63,5 +73,70 @@ describe('aiTurnText 查状态查出来的终态', () => {
     expect(turnStatusText('WEIRD')).toBe('状态未知');
     expect(turnStatusText(undefined)).toBe('状态未知');
     expect(statusNotice({}).code).toBe('UNKNOWN');
+  });
+});
+
+/** 检查器的码表（ContextAudit 与 ContextInspector 的固定枚举）：一类都不能并进另一类。 */
+const AUDIT_REASONS = ['NO_AUDIT_SAVED', 'AUDIT_UNREADABLE', 'LEGACY_TURN_WITHOUT_CONTEXT_PLAN', 'REPLAYED_WITHOUT_AUDIT'];
+const OMISSION_REASONS = ['BUDGET', 'COVERED_BY_SUMMARY', 'OUTSIDE_SCAN_WINDOW', 'WRONG_GENERATION', 'NON_COMPLETED',
+  'SOURCE_DELETED', 'SOURCE_CHANGED', 'LOCKED', 'NOT_AUTHORIZED', 'DUPLICATE', 'ATTACHMENT_POLICY', 'ITEM_LIMIT'];
+const REGIONS = ['SYSTEM', 'MEMORY', 'SESSION_STATE', 'RECENT_TURNS', 'PAGE', 'NOTEBOOK_RAG', 'USER_TEXT', 'TEXT_ATTACHMENT', 'IMAGE'];
+const SELECTED_KINDS = ['MEMORY', 'SUMMARY', 'TURN', 'LEGACY_MESSAGE', 'TEXT_ATTACHMENT', 'IMAGE', 'NOTEBOOK_RAG', 'PAGE'];
+const PREVIEW_REASONS = ['LOCKED', 'SOURCE_CHANGED', 'SOURCE_DELETED', 'OUTSIDE_SCOPE', 'CHECKPOINT_REPLACED', 'WRONG_GENERATION'];
+
+describe('aiTurnText 检查器码表', () => {
+  it('账本不可用的四种原因都保留契约缺省句，未知原因也不装成没发生', () => {
+    for (const reason of AUDIT_REASONS) {
+      expect(auditReasonText(reason), reason).toMatch(/^本轮未保存上下文记录/);
+    }
+    expect(auditReasonText('NO_AUDIT_SAVED')).toBe('本轮未保存上下文记录');
+    expect(auditReasonText('WHATEVER_NEW')).toBe('本轮未保存上下文记录（原因未知）');
+    expect(auditReasonText(undefined)).toBe('本轮未保存上下文记录（原因未知）');
+  });
+
+  it('发送态只说三种事实，未知状态不许挑一种好看的', () => {
+    expect(dispatchStateText('sent')).toBe('已发送给模型');
+    expect(dispatchStateText('not_sent')).toBe('尚未发送给模型');
+    expect(dispatchStateText('unknown')).toBe('发送状态未知');
+    expect(dispatchStateText('drifted')).toBe('发送状态未知');
+    expect(dispatchStateText(undefined)).toBe('发送状态未知');
+  });
+
+  it('省略原因、区域与来源类别逐条有名，不合并成"其他"', () => {
+    for (const reason of OMISSION_REASONS) {
+      expect(omissionReasonText(reason), reason).not.toBe('未提供（原因未记录）');
+    }
+    expect(omissionReasonText('ITEM_LIMIT')).toBe('明细超出账本上限，只保留了计数');
+    expect(new Set(OMISSION_REASONS.map(omissionReasonText)).size).toBe(OMISSION_REASONS.length);
+    for (const region of REGIONS) {
+      expect(regionLabel(region), region).not.toBe(region);
+    }
+    expect(new Set(REGIONS.map(regionLabel)).size).toBe(REGIONS.length);
+    for (const kind of SELECTED_KINDS) {
+      expect(sourceKindLabel(kind), kind).not.toBe(kind);
+    }
+    expect(new Set(SELECTED_KINDS.map(sourceKindLabel)).size).toBe(SELECTED_KINDS.length);
+    // 未知码回落到原样，界面不能替它编一个中文类别
+    expect(sourceKindLabel('MYSTERY')).toBe('MYSTERY');
+  });
+
+  it('预览的四种失败占位各不相同，且不把正文算进去', () => {
+    const lines = PREVIEW_REASONS.map((reason) => previewLine({ available: false, reason }));
+    expect(new Set(lines.map((line) => line.text)).size).toBe(PREVIEW_REASONS.length);
+    for (const line of lines) {
+      expect(line.tone).toBe('gone');
+      expect(line.text).not.toContain('常驻杭州');
+    }
+    expect(previewLine({ available: false, reason: 'SOURCE_DELETED' }).text).toBe('已删除');
+    expect(previewLine({ available: false, reason: 'MYSTERY' }).text).toBe('暂时读不到这条来源');
+  });
+
+  it('可用来源才给引文：图片与空正文另说一句，截断要留标记', () => {
+    expect(previewLine({ available: true, text: '常驻杭州', truncated: true }))
+      .toEqual({ tone: 'quote', text: '常驻杭州…（已截断）' });
+    expect(previewLine({ available: true, text: '常驻杭州' })).toEqual({ tone: 'quote', text: '常驻杭州' });
+    expect(previewLine({ available: true, text: null, note: 'IMAGE_WITHOUT_TEXT_PREVIEW' }))
+      .toEqual({ tone: 'note', text: '图片不提供文字预览' });
+    expect(previewLine({ available: true, text: '   ' })).toEqual({ tone: 'note', text: '这条来源没有文字内容' });
   });
 });

@@ -1,4 +1,5 @@
 export type QuestionType = 'single' | 'multiple' | 'fill' | 'true_false' | 'essay';
+import type { ChatResultView } from './aiStream';
 
 export interface QuestionOption {
   key: string;
@@ -218,6 +219,9 @@ export interface RetrievalOptions {
   notebookId?: number;
 }
 
+/** 本轮 done 的统一结果，且身份已确认（requestId 必然在场，否则界面无法定位到某一轮）。 */
+export type TurnResult = ChatResultView & { requestId: string };
+
 export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant' | 'system';
@@ -231,6 +235,11 @@ export interface ChatMessage {
   reasoning?: string;
   /** 流式进行中标记。 */
   streaming?: boolean;
+  /**
+   * 本轮 done 的统一结果快照（含 requestId 与记忆/上下文/用量四块）：只在内存里，
+   * 供记忆徽标与上下文检查器定位这一轮；不落 localStorage，也不进导出。
+   */
+  turn?: TurnResult;
   /** 前端稳定 key：消息首次创建时分配，后续 refetch/合并复用，避免列表 remount 造成滚动抖动。 */
   _key?: string;
 }

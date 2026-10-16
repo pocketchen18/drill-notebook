@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState, type UIEvent, type PointerEvent a
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Drawer, Dropdown, Input, Message, Modal, Select, Space, Tag, Typography } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
-import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Download, FilePlus2, Layers, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
-import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalNotice, RetrievalOptions } from '../lib/types';
+import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalNotice, RetrievalOptions, TurnResult } from '../lib/types';
+import { ChatContextInspector } from './ai-memory/ChatContextInspector';
+import { MemoryUsageBadge } from './ai-memory/MemoryUsageBadge';
 
 /** GET /api/ai/sessions/{id}/messages 的服务端响应元素：使用 retrievalNotice 字段名，回到前端时映射为 notice。 */
 interface ServerChatMessage extends Omit<ChatMessage, 'notice'> {
@@ -101,6 +103,8 @@ export function AiAssistant(): JSX.Element {
   const [exporting, setExporting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
+  // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
+  const [inspectorTarget, setInspectorTarget] = useState<{ requestId: string; snapshot?: TurnResult } | null>(null);
   const renameInputRef = useRef<RefInputType>(null);
 
   // 稳定消息 key：消息创建时分配一次，后续 refetch 也保持稳定，避免列表 remount 造成滚动/输入抖动。
@@ -164,6 +168,11 @@ export function AiAssistant(): JSX.Element {
       setSessionId(sessionsQuery.data[0].id);
     }
   }, [sessionId, sessionsQuery.data]);
+
+  // 切会话先销毁检查器：它可能正显示上一轮逐条对照出来的正文片段，不能跨会话留着（§4.5、C08）
+  useEffect(() => {
+    setInspectorTarget(null);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!messagesQuery.data) return;
@@ -526,6 +535,8 @@ export function AiAssistant(): JSX.Element {
           reasoning: event.reasoning || prev?.reasoning,
           citations: (event.view.citations as ChatCitation[] | undefined) ?? prev?.citations,
           notice: notice ?? prev?.notice,
+          // 本轮身份与统一结果快照：徽标和检查器只认它，历史接口目前给不出 requestId（P9c-5 补）
+          turn: { ...event.view, requestId: event.requestId },
           streaming: false
         }));
         invalidateSessionLists(true);
@@ -882,6 +893,7 @@ export function AiAssistant(): JSX.Element {
             ) : messages.length ? messages.map((item) => {
               const text = contentText(item.content, item.displayContent);
               const isAssistant = item.role === 'assistant';
+              const turnSnapshot = item.turn?.requestId ? item.turn : null;
               return (
                 <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}`}>
                   {isAssistant && item.reasoning ? (
@@ -919,8 +931,21 @@ export function AiAssistant(): JSX.Element {
                           </div>
                         </div>
                       ) : null}
+                      {turnSnapshot ? (
+                        <MemoryUsageBadge
+                          sessionId={sessionId}
+                          requestId={turnSnapshot.requestId}
+                          provided={turnSnapshot.memoryContext?.provided ?? []}
+                          onOpenInspector={() => setInspectorTarget({ requestId: turnSnapshot.requestId, snapshot: turnSnapshot })}
+                        />
+                      ) : null}
                       <div className="chat-message-actions">
                         <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
+                        {turnSnapshot ? (
+                          <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnSnapshot.requestId, snapshot: turnSnapshot })}>
+                            本轮上下文
+                          </Button>
+                        ) : null}
                       </div>
                     </>
                   ) : null}
@@ -1028,6 +1053,16 @@ export function AiAssistant(): JSX.Element {
         >
           <Typography.Text>删除会话「{deleteConfirmSession?.title ?? ''}」？消息将一并删除，且不可恢复。</Typography.Text>
         </Modal>
+
+        {inspectorTarget ? (
+          <ChatContextInspector
+            sessionId={sessionId}
+            requestId={inspectorTarget.requestId}
+            turn={inspectorTarget.snapshot}
+            open
+            onClose={() => setInspectorTarget(null)}
+          />
+        ) : null}
       </Drawer>
     </>
   );
