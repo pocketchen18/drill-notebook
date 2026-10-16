@@ -209,3 +209,23 @@ export function sourceKindLabel(kind: unknown): string {
   const key = typeof kind === 'string' ? kind : '';
   return KIND_TEXT[key] ?? key ?? '来源';
 }
+
+const HISTORY_TEXT = {
+  CONTENT_DELETED: '这一轮的原文已按你的要求清理，只剩时间与状态',
+  UNLOCK_REQUIRED: '这段历史用主密码加密，解锁本会话后才能显示原文'
+};
+
+/** 历史行自带的如实标注：清理过的原文与失败/中断终态各说各的，不许伪装成一次正常回答（§7.4、§4.5）。 */
+export function historyNotice(row: { turnStatus?: string | null; contentDeleted?: boolean }): TurnNotice | undefined {
+  if (row.contentDeleted) return { code: 'CONTENT_DELETED', message: HISTORY_TEXT.CONTENT_DELETED };
+  if (row.turnStatus && row.turnStatus !== 'COMPLETED') {
+    const notice = statusNotice({ status: row.turnStatus });
+    return { code: notice.code, message: notice.message };
+  }
+  return undefined;
+}
+
+/** 需要主密码才能显示的历史，说的是"去解锁"，不是说"没有消息"。 */
+export function historyUnlockText(): string {
+  return HISTORY_TEXT.UNLOCK_REQUIRED;
+}

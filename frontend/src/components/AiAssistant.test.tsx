@@ -72,7 +72,9 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) return Promise.resolve([]);
+      if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) {
+        return Promise.resolve({ sessionId: 10, messages: [], historyRevision: 0, hasMore: false, limit: 50 });
+      }
       if (url.startsWith('/api/notebooks/')) return Promise.resolve([]);
       return Promise.resolve({});
     });

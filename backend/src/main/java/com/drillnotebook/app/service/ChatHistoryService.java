@@ -79,6 +79,8 @@ public class ChatHistoryService {
         }
         item.put("createdAt", row.createdAt());
         item.put("turnId", row.turnId());
+        // 徽标与上下文检查器只认 requestId（§4.5）：不给这一列，历史加载的回答就永远挂不上本轮身份
+        item.put("requestId", row.requestId());
         item.put("turnRole", row.turnRole());
         // 失败/中断的轮次也要能看见原文，但必须带着它的真实终态
         item.put("turnStatus", row.turnStatus());

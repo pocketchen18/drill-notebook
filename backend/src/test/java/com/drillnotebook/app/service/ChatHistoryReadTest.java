@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -142,6 +143,30 @@ class ChatHistoryReadTest {
                 .SessionUnlock(sessionId, password)));
         Map<String, Object> unlocked = stack.history().page(sessionId, null, null, 10);
         assertEquals("需要主密码才能读的问题", content(unlocked, 0), "解锁后同一条消息才给得出正文");
+    }
+
+    @Test
+    void historyRowsCarryTheIdentityTheInspectorKeysOn() throws Exception {
+        // 徽标与上下文检查器只认 requestId（§4.5）：历史视图不给这一列，重开抽屉后的回答就再也点不开本轮账本
+        String requestId = UuidV7.generate(System.currentTimeMillis());
+        ai.chat(Map.of("protocolVersion", 2, "requestId", requestId, "sessionId", sessionId,
+                "input", Map.of("userText", "这一问要能被追回")));
+
+        List<Map<String, Object>> rows = rows(stack.history().page(sessionId, null, null, 10));
+        Map<String, Object> user = rows.get(rows.size() - 2);
+        Map<String, Object> assistant = rows.get(rows.size() - 1);
+        assertEquals(requestId, user.get("requestId"), "用户行要带本轮身份");
+        assertEquals(requestId, assistant.get("requestId"), "成对两行同属一轮：前端靠它把本地气泡换成服务端行");
+        assertEquals(requestId, stack.inspector().audit(requestId).get("requestId"),
+                "历史给的身份必须就是检查器认的那个键");
+
+        // 迁移前的 legacy 行没有轮次，身份只能缺席，不能由界面拿 turnId 冒充
+        jdbc.update("INSERT INTO ai_chat_message (session_id, role, content) VALUES (?, ?, ?)",
+                sessionId, "user", "迁移前的旧消息");
+        List<Map<String, Object>> after = rows(stack.history().page(sessionId, null, null, 10));
+        Map<String, Object> legacy = after.get(after.size() - 1);
+        assertEquals(Boolean.TRUE, legacy.get("legacy"));
+        assertNull(legacy.get("requestId"), "legacy 行没有轮次身份，不许编一个出来");
     }
 
     @Test

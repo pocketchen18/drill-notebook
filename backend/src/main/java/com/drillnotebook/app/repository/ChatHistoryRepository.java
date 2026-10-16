@@ -41,7 +41,8 @@ public class ChatHistoryRepository {
     /** 历史展示页的一行：带轮次状态与墓碑标记，让失败/legacy 都能被如实标注。 */
     public record HistoryRow(long messageId, String role, String content, String contentCipher, String contentMeta,
                              String reasoningCipher, String reasoningMeta, String createdAt, Long turnId,
-                             String turnRole, String turnStatus, boolean contentDeleted, boolean legacy) {
+                             String requestId, String turnRole, String turnStatus, boolean contentDeleted,
+                             boolean legacy) {
     }
 
     private static final String TURN_SELECT = "SELECT t.id, t.request_id, t.status, t.context_generation,"
@@ -510,7 +511,8 @@ public class ChatHistoryRepository {
         long cursor = backwards ? (beforeMessageId == null ? Long.MAX_VALUE : beforeMessageId) : afterMessageId;
         String sql = "SELECT m.id, m.role, m.content, m.content_cipher, m.content_meta, m.reasoning_cipher,"
                 + " m.reasoning_meta, m.created_at, m.turn_id, m.turn_role,"
-                + " t.status AS turn_status, t.content_deleted_at AS turn_deleted"
+                + " t.request_id AS turn_request_id, t.status AS turn_status,"
+                + " t.content_deleted_at AS turn_deleted"
                 + " FROM ai_chat_message m LEFT JOIN ai_chat_turn t ON t.id = m.turn_id"
                 + " WHERE m.session_id = ? AND m.id " + (backwards ? "< ?" : "> ?")
                 + " ORDER BY m.id " + (backwards ? "DESC" : "ASC") + " LIMIT ?";
@@ -526,7 +528,8 @@ public class ChatHistoryRepository {
                             result.getString("content"), result.getString("content_cipher"),
                             result.getString("content_meta"), result.getString("reasoning_cipher"),
                             result.getString("reasoning_meta"), result.getString("created_at"),
-                            nullableLong(result, "turn_id"), result.getString("turn_role"),
+                            nullableLong(result, "turn_id"), result.getString("turn_request_id"),
+                            result.getString("turn_role"),
                             result.getString("turn_status"), result.getString("turn_deleted") != null,
                             result.getObject("turn_id") == null));
                 }

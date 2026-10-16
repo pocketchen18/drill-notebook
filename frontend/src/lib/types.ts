@@ -240,6 +240,11 @@ export interface ChatMessage {
    * 供记忆徽标与上下文检查器定位这一轮；不落 localStorage，也不进导出。
    */
   turn?: TurnResult;
+  /**
+   * 本轮幂等身份（UUIDv7）：历史行与本地气泡共用它，落地后靠它把本地气泡换成服务端行，
+   * 也靠它把徽标/检查器挂回正确的那一轮。legacy 行没有它。
+   */
+  requestId?: string;
   /** 前端稳定 key：消息首次创建时分配，后续 refetch/合并复用，避免列表 remount 造成滚动抖动。 */
   _key?: string;
 }

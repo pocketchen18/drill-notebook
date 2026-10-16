@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   auditReasonText,
   dispatchStateText,
+  historyNotice,
+  historyUnlockText,
   omissionReasonText,
   outcomeNotice,
   previewLine,
@@ -73,6 +75,22 @@ describe('aiTurnText 查状态查出来的终态', () => {
     expect(turnStatusText('WEIRD')).toBe('状态未知');
     expect(turnStatusText(undefined)).toBe('状态未知');
     expect(statusNotice({}).code).toBe('UNKNOWN');
+  });
+});
+
+describe('aiTurnText 历史行的终态', () => {
+  it('清理过原文、失败轮次、正常完成各说各话，不把缺原文当成没问题', () => {
+    expect(historyNotice({ contentDeleted: true, turnStatus: 'COMPLETED' })).toMatchObject({
+      code: 'CONTENT_DELETED', message: '这一轮的原文已按你的要求清理，只剩时间与状态'
+    });
+    expect(historyNotice({ turnStatus: 'FAILED' })).toMatchObject({
+      code: 'FAILED', message: '这一轮失败，显示的内容可能不完整'
+    });
+    expect(historyNotice({ turnStatus: 'COMPLETED' })).toBeUndefined();
+    expect(historyNotice({})).toBeUndefined();
+    // 一行同时带两个信号时先说原文为什么没了，状态那一句留给「本轮上下文」
+    expect(historyNotice({ contentDeleted: true, turnStatus: 'FAILED' })?.code).toBe('CONTENT_DELETED');
+    expect(historyUnlockText()).toBe('这段历史用主密码加密，解锁本会话后才能显示原文');
   });
 });
 

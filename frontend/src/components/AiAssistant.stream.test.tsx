@@ -26,6 +26,11 @@ vi.mock('../lib/aiStream', () => ({
 
 /** 服务端已落库的消息：测试中按需变化，模拟"新一轮的用户消息在 begin 时已入库"。 */
 let serverMessages: Array<Record<string, unknown>> = [];
+/** 抽屉现在读的是 50 条游标分页的 /history，不再是全量 /messages。 */
+const historyPage = (messages: Array<Record<string, unknown>>) => ({
+  sessionId: 10, messages, historyRevision: messages.length, hasMore: false, limit: 50
+});
+const historyCalls = (): number => apiGet.mock.calls.filter((call) => String(call[0]).includes('/history')).length;
 let streamCallbacks: StreamCallbacks | null = null;
 
 const renderAssistant = () => {
@@ -61,7 +66,7 @@ describe('AiAssistant 流式会话状态', () => {
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url === '/api/ai/sessions/10/messages') return Promise.resolve([...serverMessages]);
+      if (url === '/api/ai/sessions/10/history?limit=50') return Promise.resolve(historyPage(serverMessages));
       if (url.startsWith('/api/notebooks/')) return Promise.resolve([]);
       return Promise.resolve({});
     });
@@ -82,20 +87,21 @@ describe('AiAssistant 流式会话状态', () => {
 
     await send('第二问');
     await waitFor(() => expect(streamCallbacks?.onText).toBeTruthy());
+    // 后端首帧就带 requestId：本地这一对气泡从此有了身份，历史行按它认领，不再靠文本猜
+    act(() => { streamCallbacks!.onMetadata?.({ requestId: turnRequestId(), sessionId: 10 }); });
     // 后端在 begin 时已把新的用户消息落库；同时假设服务端历史里还有更早的一条（第三问），
-    // 它只可能通过 refetch 的合并进入本地列表——用它作为"合并确实执行过"的同步点。
+    // 它只可能通过重取最新一页进入列表——用它作为"合并确实执行过"的同步点。
     serverMessages = [
       ...serverMessages,
-      { id: 3, role: 'user', content: '第二问', createdAt: '2026-10-12T12:01:00.000Z' },
+      { id: 3, role: 'user', content: '第二问', requestId: turnRequestId(), createdAt: '2026-10-12T12:01:00.000Z' },
       { id: 4, role: 'user', content: '第三问', createdAt: '2026-10-12T12:02:00.000Z' }
     ];
 
-    const fetchedBefore = apiGet.mock.calls.filter((call) => call[0] === '/api/ai/sessions/10/messages').length;
+    const fetchedBefore = historyCalls();
     // 用户的原始操作路径：关闭侧边栏再打开 → 消息查询重新启用并 refetch
     await act(async () => { useUiStore.setState({ aiOpen: false }); });
     await act(async () => { useUiStore.setState({ aiOpen: true }); });
-    await waitFor(() => expect(apiGet.mock.calls.filter((call) => call[0] === '/api/ai/sessions/10/messages').length)
-      .toBeGreaterThan(fetchedBefore));
+    await waitFor(() => expect(historyCalls()).toBeGreaterThan(fetchedBefore));
     // 合并完成的标志：新出现的历史消息进入列表
     await screen.findByText('第三问');
 
@@ -189,7 +195,7 @@ describe('AiAssistant 流式会话状态', () => {
       }
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url === '/api/ai/sessions/10/messages') return Promise.resolve([...serverMessages]);
+      if (url === '/api/ai/sessions/10/history?limit=50') return Promise.resolve(historyPage(serverMessages));
       return Promise.resolve([]);
     });
     renderAssistant();
@@ -213,7 +219,7 @@ describe('AiAssistant 流式会话状态', () => {
       if (url.startsWith('/api/ai/turns/')) return Promise.reject(new ApiError('TURN_NOT_FOUND', '没有这个轮次', 404));
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url === '/api/ai/sessions/10/messages') return Promise.resolve([...serverMessages]);
+      if (url === '/api/ai/sessions/10/history?limit=50') return Promise.resolve(historyPage(serverMessages));
       return Promise.resolve([]);
     });
     apiPost.mockImplementation((url: string) => (url === '/api/ai/chat'

@@ -51,6 +51,11 @@ const setContext = (context: AiPageContext): void => {
   useUiStore.setState({ aiOpen: true, pageContext: context });
 };
 
+/** 抽屉读的是 50 条游标分页的 /history：这里给一页服务端历史。 */
+const historyPage = (messages: Array<Record<string, unknown>>) => ({
+  sessionId: 10, messages, historyRevision: messages.length, hasMore: false, limit: 50
+});
+
 const renderAssistant = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -80,7 +85,7 @@ beforeEach(() => {
     }
     if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
     if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-    if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) return Promise.resolve([]);
+    if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) return Promise.resolve(historyPage([]));
     if (url.endsWith('/context')) {
       return Promise.resolve({ requestId: TURN_ID, sessionId: 10, status: 'COMPLETED', available: true, planId: 'plan-7', dispatchState: 'sent', audit: contextAudit });
     }
@@ -154,15 +159,18 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     expect(preview?.[1]).toEqual({ sourceKeys: ['mem:a@2'] });
   });
 
-  it('消息被 refetch 升级后徽标还在：本轮身份不能因为刷新就丢', async () => {
+  it('本轮定稿后重取历史：本地气泡被同 requestId 的服务端行替换，徽标不丢也不重复', async () => {
     apiGet.mockImplementation((url: string) => {
       if (url === '/api/ai/config') {
         return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
       }
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) {
-        return Promise.resolve([{ id: 55, role: 'assistant', content: 'ANSWER', reasoning: null, createdAt: '2026-10-16T10:00:00Z' }]);
+      if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) {
+        return Promise.resolve(historyPage([
+          { id: 54, role: 'user', content: '你好', requestId: chatRequestId(), createdAt: '2026-10-16T10:00:00Z' },
+          { id: 55, role: 'assistant', content: 'ANSWER', requestId: chatRequestId(), turnStatus: 'COMPLETED', createdAt: '2026-10-16T10:00:01Z' }
+        ]));
       }
       if (url.endsWith('/context')) {
         return Promise.resolve({ requestId: TURN_ID, sessionId: 10, status: 'COMPLETED', available: true, audit: contextAudit });
@@ -171,27 +179,40 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     });
     renderAssistant();
     await sendOnce();
-    await waitFor(() => expect(screen.getByRole('button', { name: '本轮提供 2 条记忆' })).toBeTruthy());
-    // 服务端那份同正文消息升级时保留了本地 turn：徽标不该跟着消失
+    await waitFor(() => expect(screen.getAllByText('ANSWER')).toHaveLength(1));
+    // 服务端行没有 citations/memoryContext，这些只存在于本地 done：按 requestId 认领回来才能显示徽标
     expect(screen.getAllByRole('button', { name: '本轮提供 2 条记忆' })).toHaveLength(1);
+    expect(document.querySelectorAll('.chat-message')).toHaveLength(2);
   });
 
-  it('历史加载的消息没有轮次身份，本片不硬造徽标', async () => {
+  it('历史加载的回答能打开检查器，但没有本轮 done 就不硬造徽标', async () => {
+    const historyTurn = '01981234-5678-7000-8000-00000000abcd';
     apiGet.mockImplementation((url: string) => {
       if (url === '/api/ai/config') {
         return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
       }
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) {
-        return Promise.resolve([{ id: 51, role: 'assistant', content: 'OLD ANSWER', reasoning: null, createdAt: '2026-10-15T10:00:00Z' }]);
+      if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) {
+        return Promise.resolve(historyPage([
+          { id: 51, role: 'assistant', content: 'OLD ANSWER', requestId: historyTurn, turnStatus: 'COMPLETED', createdAt: '2026-10-15T10:00:00Z' },
+          { id: 52, role: 'assistant', content: 'LEGACY ANSWER', requestId: null, legacy: true, createdAt: '2026-10-15T10:00:00Z' }
+        ]));
+      }
+      if (url.endsWith('/context')) {
+        return Promise.resolve({ requestId: historyTurn, sessionId: 10, status: 'COMPLETED', available: true, audit: contextAudit });
       }
       return Promise.resolve({});
     });
     renderAssistant();
     await waitFor(() => expect(screen.getByText('OLD ANSWER')).toBeTruthy());
+    // D156 结清：/history 现在给 requestId，重开抽屉后的旧回答也能追回本轮账本
     expect(screen.queryByRole('button', { name: /本轮提供/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: '本轮上下文' })).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: '本轮上下文' })[0]);
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith(`/api/ai/turns/${historyTurn}/context`));
+    await waitFor(() => expect(screen.getByText('已发送给模型')).toBeTruthy());
+    // 没有轮次身份的 legacy 行不该出现入口
+    expect(screen.getAllByRole('button', { name: '本轮上下文' })).toHaveLength(1);
   });
 
   it('动作区的「本轮上下文」打开检查器，仍然只读账本', async () => {

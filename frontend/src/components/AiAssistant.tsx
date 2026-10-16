@@ -6,21 +6,19 @@ import { Download, FilePlus2, Layers, MoreHorizontal, Paperclip, Plus, Send, Spa
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
-import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalNotice, RetrievalOptions, TurnResult } from '../lib/types';
+import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalOptions, TurnResult } from '../lib/types';
 import { ChatContextInspector } from './ai-memory/ChatContextInspector';
 import { MemoryUsageBadge } from './ai-memory/MemoryUsageBadge';
-
-/** GET /api/ai/sessions/{id}/messages 的服务端响应元素：使用 retrievalNotice 字段名，回到前端时映射为 notice。 */
-interface ServerChatMessage extends Omit<ChatMessage, 'notice'> {
-  retrievalNotice?: RetrievalNotice;
-}
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
 import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
 import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
-import { outcomeNotice, statusNotice } from '../lib/aiTurnText';
+import { historyNotice, historyUnlockText, outcomeNotice, statusNotice } from '../lib/aiTurnText';
 import type { TurnNotice } from '../lib/aiTurnText';
+import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
+import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
+import { unlockMemoryVault } from '../lib/aiMemoryApi';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
@@ -101,6 +99,7 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
@@ -121,6 +120,8 @@ export function AiAssistant(): JSX.Element {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // 往前翻页前的列表高度：用来把视口补回原来看着的那条消息
+  const olderAnchorRef = useRef<number | null>(null);
 
   const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
@@ -132,14 +133,35 @@ export function AiAssistant(): JSX.Element {
     enabled: targetNotebookId !== undefined && aiOpen
   });
 
-  const messagesQuery = useQuery({
-    queryKey: ['ai-session-messages', sessionId],
-    queryFn: () => get<ServerChatMessage[]>(`/api/ai/sessions/${sessionId}/messages`),
-    enabled: aiOpen && sessionId !== undefined,
-    // 切换会话必须拿到服务端真实内容：全局 staleTime=10s 会让「中断时抢在落库前的空 refetch」被缓存，
-    // 切回该会话时读到空缓存显示空白。置 0 使每次挂载/聚焦都重取，彻底消除串会话与空缓存。
-    staleTime: 0
-  });
+  const history = useChatHistoryPages(sessionId, aiOpen);
+
+  /** 本轮的引用、降级提示与 done 快照只存在于本地，服务端历史行按 requestId 把它们认领回去。 */
+  const visibleMessages = useMemo<ChatMessage[]>(() => {
+    const snapshots = new Map<string, ChatMessage>();
+    for (const item of messages) {
+      if (item.role === 'assistant' && item.requestId) snapshots.set(item.requestId, item);
+    }
+    const covered = new Set<string>();
+    const server: ChatMessage[] = history.messages.map((row) => {
+      if (row.requestId) covered.add(`${row.role}:${row.requestId}`);
+      const mirror = row.requestId ? snapshots.get(row.requestId) : undefined;
+      return {
+        id: row.id,
+        role: row.role,
+        content: row.content,
+        reasoning: row.reasoning,
+        createdAt: row.createdAt,
+        requestId: row.requestId ?? undefined,
+        citations: mirror?.citations,
+        notice: historyNotice(row) ?? mirror?.notice,
+        turn: mirror?.turn,
+        _key: `h${row.id}`
+      };
+    });
+    // 本地只留还没被服务端历史覆盖的那几条（正在跑的一轮、以及刚定稿还没重取回来的一轮）
+    const local = messages.filter((item) => !(item.requestId && covered.has(`${item.role}:${item.requestId}`)));
+    return [...server, ...local];
+  }, [history.messages, messages]);
 
   useEffect(() => {
     if (!aiOpen) return;
@@ -174,95 +196,37 @@ export function AiAssistant(): JSX.Element {
     setInspectorTarget(null);
   }, [sessionId]);
 
-  useEffect(() => {
-    if (!messagesQuery.data) return;
-    // 合并本地与服务端消息：
-    // 1) 给没有 _key 的本地消息分配稳定 key；
-    // 2) 遍历服务端消息：按 role+content 找本地匹配项，存在则「升级」为带 id/reasoning/citations 的版本并保留 _key；
-    //    没有匹配但角色为 assistant 且本地存在流式占位（空内容 + streaming）时，替换占位为服务端版本；
-    // 3) 保留未被消费的本地消息（如网络尚未到达的「user 已发 / 流式进行中」消息）。
-    setMessages((local) => {
-      type Keyed = ChatMessage & { _key: string };
-      const localWithKeys: Keyed[] = local.map((m) => m._key ? (m as Keyed) : { ...m, _key: nextMessageKey() });
-      const consumed = new Set<string>();
-      const serverMessages: ChatMessage[] = messagesQuery.data.map((item, index) => {
-        const contentText = typeof item.content === 'string' ? item.content : '';
-        const sameContentMatch = localWithKeys.find(
-          (m) => !consumed.has(m._key) && m.role === item.role && typeof m.content === 'string' && m.content === contentText
-        );
-        if (sameContentMatch) {
-          consumed.add(sameContentMatch._key);
-          return {
-            ...sameContentMatch,
-            id: item.id,
-            content: item.content,
-            displayContent: contentText,
-            createdAt: item.createdAt,
-            reasoning: item.reasoning,
-            citations: item.citations,
-            notice: item.retrievalNotice
-          };
-        }
-        // 流式占位 → 服务端真实消息的替换：
-        // - 内容完全相同（少见，正常是 sameContentMatch 已匹配）；
-        // - 本地占位是空内容 + streaming 标志；
-        // - 本地占位的累积文本是服务端文本的前缀（流式中、增量逐字符到达，最后一次 refetch 几乎一致）；
-        // - 服务端文本以本地累积结尾（可能服务端做了轻微 trim/规范化）。
-        if (item.role === 'assistant' && contentText) {
-          const placeholder = localWithKeys.find(
-            (m) => !consumed.has(m._key) && m.role === 'assistant' && m.streaming && (
-              typeof m.content !== 'string' || m.content === '' ||
-              (typeof m.content === 'string' && contentText.startsWith(m.content)) ||
-              (typeof m.content === 'string' && m.content.startsWith(contentText))
-            )
-          );
-          if (placeholder) {
-            consumed.add(placeholder._key);
-            return {
-              ...placeholder,
-              id: item.id,
-              content: item.content,
-              displayContent: contentText,
-              createdAt: item.createdAt,
-              reasoning: item.reasoning,
-              citations: item.citations,
-              notice: item.retrievalNotice,
-              streaming: false
-            };
-          }
-        }
-        return {
-          id: item.id,
-          role: item.role,
-          content: item.content,
-          displayContent: contentText,
-          createdAt: item.createdAt,
-          reasoning: item.reasoning,
-          citations: item.citations,
-          notice: item.retrievalNotice,
-          _key: `s${item.id ?? `idx-${index}`}`
-        };
-      });
-      const pending = localWithKeys.filter((m) => !consumed.has(m._key));
-      // 本地未落库的消息是最新的一批：必须排在服务端消息之后。反过来（pending 在前）会让每次
-      // refetch（关闭再打开侧边栏、窗口聚焦）都把"流式进行中"的气泡顶到整段对话最前面。
-      return [...serverMessages, ...pending];
-    });
-  }, [messagesQuery.data]);
-
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
     const el = event.currentTarget;
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
     stickyBottomRef.current = distanceFromBottom < 80;
     lastScrollTopRef.current = el.scrollTop;
+    // 滚到顶部附近就取更早的一页（§7.4：向上滚动可重新加载），并记住当前高度以便补回位移
+    if (el.scrollTop < 60) requestOlder();
   };
+
+  const requestOlder = (): void => {
+    if (!history.hasOlder || history.isLoadingOlder || history.residentCapped) return;
+    const el = chatContainerRef.current;
+    olderAnchorRef.current = el ? el.scrollHeight : null;
+    history.loadOlder();
+  };
+
+  // 往前插了一页，视口要停在原来那条上，否则每次翻页都被甩到更早的几百条之前
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    const anchor = olderAnchorRef.current;
+    if (!el || anchor === null) return;
+    olderAnchorRef.current = null;
+    el.scrollTop += el.scrollHeight - anchor;
+  }, [history.messages]);
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     if (!stickyBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [visibleMessages]);
   useEffect(() => {
     if (!streaming) return;
     if (!stickyBottomRef.current) return;
@@ -337,9 +301,9 @@ export function AiAssistant(): JSX.Element {
   const handleNewSession = (): void => {
     if (createSessionMutation.isPending) return;
     const sessions = sessionsQuery.data ?? [];
-    // 当前会话以本地 messages 为准（缓存 messageCount 可能因刚中断/未刷新而过期），
+    // 当前会话以"看得见的内容"为准（缓存 messageCount 可能因刚中断/未刷新而过期），
     // 其余会话用缓存计数判断是否空白。
-    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? messages.length === 0 : (item.messageCount ?? 0) === 0));
+    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? visibleMessages.length === 0 : (item.messageCount ?? 0) === 0));
     if (blank) {
       lastExplicitSessionIdRef.current = blank.id;
       setSessionId(blank.id);
@@ -407,7 +371,7 @@ export function AiAssistant(): JSX.Element {
       // 先从缓存移除被删会话及其消息，避免会话 effect 在 refetch 完成前把「已删会话」当作
       // data[0] 重新选中、切回时又把它的内容合并进新会话顶部（删除后短暂串会话的根因）。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
-      queryClient.removeQueries({ queryKey: ['ai-session-messages', deletedId] });
+      queryClient.removeQueries({ queryKey: historyQueryKey(deletedId) });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = undefined;
       setSessionId(undefined);
@@ -415,6 +379,20 @@ export function AiAssistant(): JSX.Element {
       Message.success('会话已删除');
     },
     onError: (error) => Message.error(error.message)
+  });
+
+  /**
+   * 解锁本会话的历史原文：`/history` 的主密码只从进程内的会话解锁状态取（不进 URL、不进 query），
+   * 而那份材料唯一的登记入口就是 vault/unlock 的 sessionUnlocks。密码只在请求体里走一次。
+   */
+  const unlockSessionMutation = useMutation({
+    mutationFn: (password: string) => unlockMemoryVault(password, [{ sessionId: sessionId as number, password }]),
+    onSuccess: async () => {
+      setUnlockPassword('');
+      Message.success('本会话历史已解锁');
+      await history.refreshLatest();
+    },
+    onError: (error) => Message.error(friendlyMessage(error, '解锁失败，请稍后重试'))
   });
 
   // 删除确认使用 Arco Modal 而非 window.confirm：
@@ -468,7 +446,8 @@ export function AiAssistant(): JSX.Element {
 
   const invalidateSessionLists = (refetchMessages: boolean): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-    if (refetchMessages) void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', sessionId] });
+    // 只重取最新一页：更早的页是已看过的稳定游标，没必要为一轮新对话整串重读
+    if (refetchMessages) void history.refreshLatest();
   };
 
   /** 增量只写回本轮那个占位气泡：列表被 refetch 重排时也不能写到别的气泡上。 */
@@ -515,8 +494,20 @@ export function AiAssistant(): JSX.Element {
     });
   };
 
+  /**
+   * 本轮身份要落到这一对本地气泡上：服务端历史行按 requestId 认领它们，
+   * 之后才谈得上"用服务端行替换本地气泡"以及把徽标挂回正确的那一轮。
+   */
+  const stampTurnIdentity = (requestId: string): void => {
+    const target = turnTargetRef.current;
+    if (!target) return;
+    setMessages((current) => current.map((item) =>
+      (item._key === target.userKey || item._key === target.assistantKey ? { ...item, requestId } : item)));
+  };
+
   /** 轮次事件的界面落点：done、查到的终态、失败都只写回本轮那一个气泡（§4.2 统一结果）。 */
   function onTurnEvent(event: TurnEvent): void {
+    stampTurnIdentity(event.requestId);
     switch (event.type) {
       case 'begun':
         return;
@@ -535,7 +526,8 @@ export function AiAssistant(): JSX.Element {
           reasoning: event.reasoning || prev?.reasoning,
           citations: (event.view.citations as ChatCitation[] | undefined) ?? prev?.citations,
           notice: notice ?? prev?.notice,
-          // 本轮身份与统一结果快照：徽标和检查器只认它，历史接口目前给不出 requestId（P9c-5 补）
+          // 本轮身份与统一结果快照：徽标和检查器只认 requestId，历史行现在也带它（§4.5）
+          requestId: event.requestId,
           turn: { ...event.view, requestId: event.requestId },
           streaming: false
         }));
@@ -888,12 +880,53 @@ export function AiAssistant(): JSX.Element {
             ref={chatContainerRef}
             onScroll={onChatScroll}
           >
-            {messagesQuery.isLoading ? (
+            {history.isError ? (
+              <div className="empty-state ai-empty">
+                <p>{friendlyMessage(history.error, '会话历史读取失败')}</p>
+                <Button type="text" size="mini" onClick={history.retry}>重新读取</Button>
+              </div>
+            ) : history.isLoading ? (
               <div className="empty-state ai-empty"><p>加载会话消息…</p></div>
-            ) : messages.length ? messages.map((item) => {
+            ) : (<>
+              {history.hasOlder ? (
+                <div className="ai-history-older">
+                  {history.residentCapped
+                    ? <p className="ai-history-older-cap">已驻留最近 500 条，更早的记录仍在本地库里。</p>
+                    : (
+                      <Button type="text" size="mini" onClick={requestOlder} disabled={history.isLoadingOlder}>
+                        {history.isLoadingOlder ? '正在载入更早的消息…' : '加载更早的消息'}
+                      </Button>
+                    )}
+                </div>
+              ) : null}
+              {history.messages.some((row) => row.readable === false) ? (
+                <div className="ai-history-unlock">
+                  <p className="ai-history-unlock-hint">{historyUnlockText()}</p>
+                  <div className="ai-history-unlock-form">
+                    <Input.Password
+                      value={unlockPassword}
+                      onChange={setUnlockPassword}
+                      placeholder="主密码"
+                      aria-label="解锁本会话历史的主密码"
+                      size="mini"
+                    />
+                    <Button
+                      type="primary"
+                      size="mini"
+                      loading={unlockSessionMutation.isPending}
+                      disabled={!unlockPassword || sessionId === undefined}
+                      onClick={() => { if (sessionId !== undefined) unlockSessionMutation.mutate(unlockPassword); }}
+                    >
+                      解锁本会话
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {visibleMessages.length ? visibleMessages.map((item) => {
               const text = contentText(item.content, item.displayContent);
               const isAssistant = item.role === 'assistant';
               const turnSnapshot = item.turn?.requestId ? item.turn : null;
+              const turnId = item.requestId ?? turnSnapshot?.requestId ?? null;
               return (
                 <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}`}>
                   {isAssistant && item.reasoning ? (
@@ -904,13 +937,13 @@ export function AiAssistant(): JSX.Element {
                   ) : null}
                   <MarkdownContent value={text} />
                   {item.streaming ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
+                  {item.notice ? (
+                    <div className="ai-retrieval-notice">
+                      {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
+                    </div>
+                  ) : null}
                   {isAssistant ? (
                     <>
-                      {item.notice ? (
-                        <div className="ai-retrieval-notice">
-                          {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
-                        </div>
-                      ) : null}
                       {item.citations?.length ? (
                         <div className="ai-citations">
                           <div className="ai-citations-kicker">笔记引用（{item.citations.length}）</div>
@@ -941,8 +974,8 @@ export function AiAssistant(): JSX.Element {
                       ) : null}
                       <div className="chat-message-actions">
                         <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
-                        {turnSnapshot ? (
-                          <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnSnapshot.requestId, snapshot: turnSnapshot })}>
+                        {turnId ? (
+                          <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnId, snapshot: turnSnapshot ?? undefined })}>
                             本轮上下文
                           </Button>
                         ) : null}
@@ -959,6 +992,7 @@ export function AiAssistant(): JSX.Element {
                 </div>
               </div>
             )}
+            </>)}
           </div>
 
           {pendingInsert ? (

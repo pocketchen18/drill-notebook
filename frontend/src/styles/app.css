@@ -1480,6 +1480,14 @@ html[data-theme='dark'] {
 .ai-inspector-source-kind, .ai-inspector-source-version { color: var(--muted); font-size: 11px; }
 .ai-inspector-source-id { font-size: 11px; word-break: break-all; }
 
+/* 会话历史分页与抽屉内解锁：只在「有更早记录」「有密文行」时出现 */
+.ai-history-older { display: flex; justify-content: center; }
+.ai-history-older-cap { margin: 0; color: var(--muted); font-size: 11px; text-align: center; }
+.ai-history-unlock { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-bg); }
+.ai-history-unlock-hint { margin: 0; color: var(--muted); font-size: 12px; }
+.ai-history-unlock-form { display: flex; align-items: center; gap: 8px; }
+.ai-history-unlock-form > .arco-input-wrapper { flex: 1; min-width: 0; }
+
 /* AI 模型槽位卡片（API 格式 / Base URL / 模型拉取 / 测活） */
 .ai-slot-card { display: flex; flex-direction: column; gap: 12px; }
 .ai-slot-form { display: flex; flex-direction: column; gap: 10px; }
