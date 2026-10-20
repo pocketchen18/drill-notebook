@@ -1488,6 +1488,15 @@ html[data-theme='dark'] {
 .ai-history-unlock-form { display: flex; align-items: center; gap: 8px; }
 .ai-history-unlock-form > .arco-input-wrapper { flex: 1; min-width: 0; }
 
+/* 容量条：本地落库字节对可配额度，三档说法分开；到上限才用危险色 */
+.ai-storage-meter { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--subtle-bg); color: var(--muted); font-size: 11px; }
+.ai-storage-meter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-storage-meter-bar { flex: 0 0 72px; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ai-storage-meter-fill { display: block; height: 100%; background: var(--accent-fill); }
+.ai-storage-meter-full { color: var(--danger); }
+.ai-storage-meter-full .ai-storage-meter-fill { background: var(--danger); }
+.ai-storage-meter-error { color: var(--danger); }
+
 /* AI 模型槽位卡片（API 格式 / Base URL / 模型拉取 / 测活） */
 .ai-slot-card { display: flex; flex-direction: column; gap: 12px; }
 .ai-slot-form { display: flex; flex-direction: column; gap: 10px; }

@@ -27,7 +27,8 @@ public final class ChatContextWiring {
     }
 
     /** 一套可直接喂给 {@code new AiService(...)} 的上下文服务与只读入口。 */
-    public record Stack(ChatContextService contexts, ChatHistoryService history, ContextInspector inspector,
+    public record Stack(ChatContextService contexts, ChatHistoryService history, ChatStorageService storage,
+                        ContextInspector inspector,
                         TokenEstimator estimator, ConversationProjection projection,
                         ChatContextAssembler assembler, ContextBudgeter budgeter, IndexedMemorySource memories,
                         MemoryIndexService indexes, MemoryCryptoService crypto, MemoryVaultService vault,
@@ -39,8 +40,8 @@ public final class ChatContextWiring {
         ObjectMapper mapper = new ObjectMapper();
         TokenEstimator estimator = new TokenEstimator(mapper);
         MemoryCryptoService crypto = new MemoryCryptoService(new ApiKeyEncryptor());
-        MemoryVaultService vault = new MemoryVaultService(crypto, wiring.memory(),
-                new MemoryOperationRepository(dataSource, wiring.immediate()), wiring.metadata());
+        MemoryOperationRepository operations = new MemoryOperationRepository(dataSource, wiring.immediate());
+        MemoryVaultService vault = new MemoryVaultService(crypto, wiring.memory(), operations, wiring.metadata());
         MemoryPolicyService policy = new MemoryPolicyService(
                 new MemorySettingsRepository(dataSource, wiring.immediate()), wiring.memory(),
                 new MemoryJobRepository(dataSource, wiring.immediate()), new AiConfigRepository(jdbc),
@@ -59,10 +60,12 @@ public final class ChatContextWiring {
         ChatContextService contexts = new ChatContextService(projection, assembler, budgeter, memories,
                 wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo);
         ChatHistoryService history = new ChatHistoryService(historyRepo, wiring.metadata(), wiring.cipher(), vault);
+        ChatStorageService storage = new ChatStorageService(wiring.ledger(), historyRepo, wiring.metadata(),
+                wiring.turns(), wiring.memory(), operations, mapper);
         ContextInspector inspector = new ContextInspector(wiring.turns(), historyRepo, wiring.metadata(),
                 wiring.cipher(), attachmentReader, wiring.memory(), crypto, vault, checkpoints,
                 new RetrievalIndexRepository(jdbc), mapper);
-        return new Stack(contexts, history, inspector, estimator, projection, assembler, budgeter, memories,
+        return new Stack(contexts, history, storage, inspector, estimator, projection, assembler, budgeter, memories,
                 indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader);
     }
 }

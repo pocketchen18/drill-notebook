@@ -2,6 +2,7 @@ package com.drillnotebook.app.controller;
 
 import com.drillnotebook.app.service.AiService;
 import com.drillnotebook.app.service.ChatHistoryService;
+import com.drillnotebook.app.service.ChatStorageService;
 import com.drillnotebook.app.service.ChatTurnRejectException;
 import com.drillnotebook.app.service.RetrievalMaintenanceService;
 import com.drillnotebook.app.service.RetrievalStatusService;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AiController {
     private final AiService ai;
     private final ChatHistoryService history;
+    private final ChatStorageService storage;
     private final RetrievalStatusService retrievalStatus;
     private final RetrievalMaintenanceService retrievalMaintenance;
     /** SSE 流式推送专用执行器：有界固定池（命名守护线程），避免裸 new Thread 绕过监控与资源回收。 */
@@ -40,11 +42,13 @@ public class AiController {
     public AiController(
             AiService ai,
             ChatHistoryService history,
+            ChatStorageService storage,
             RetrievalStatusService retrievalStatus,
             RetrievalMaintenanceService retrievalMaintenance,
             ObjectMapper mapper) {
         this.ai = ai;
         this.history = history;
+        this.storage = storage;
         this.retrievalStatus = retrievalStatus;
         this.retrievalMaintenance = retrievalMaintenance;
         this.mapper = mapper;
@@ -219,6 +223,39 @@ public class AiController {
                                               @RequestParam(required = false) Long afterMessageId,
                                               @RequestParam(defaultValue = "50") int limit) throws SQLException {
         return history.page(id, beforeMessageId, afterMessageId, limit);
+    }
+
+    /**
+     * 只读容量快照（contracts §2.7、§3）：逻辑落库字节、预留、可配额度与 80% 预警。
+     * 不把物理 DB 大小冒充逻辑计数，也不在读取时重建账本。
+     */
+    @GetMapping("/history/storage")
+    public Map<String, Object> historyStorage() throws SQLException {
+        return storage.snapshot();
+    }
+
+    /** 显式改额度（contracts §3）：CAS 基线是账本 revision，只改配置，一条记录都不清。 */
+    @PutMapping("/history/storage")
+    public Map<String, Object> updateHistoryStorage(@RequestBody Map<String, Object> body) throws SQLException {
+        return storage.updateLimits(body);
+    }
+
+    /**
+     * 清理预览（contracts §3）：只读，把"边界内最多 200 个完整轮次 + legacy 展示行"钉成一份范围，
+     * 连同字节与 2 分钟有效的 previewId 一起回给界面。删任何东西都只发生在下一个入口。
+     */
+    @PostMapping("/history/cleanup/preview")
+    public Map<String, Object> historyCleanupPreview(@RequestBody Map<String, Object> body) throws SQLException {
+        return storage.previewCleanup(body);
+    }
+
+    /**
+     * 执行清理（contracts §3）：原子删掉 previewId 钉住的那一份原文，不可撤销。
+     * 范围变了 409、预览过期 410、confirm 不为 true 400，重复 operationId 只生效一次。
+     */
+    @PostMapping("/history/cleanup")
+    public Map<String, Object> historyCleanup(@RequestBody Map<String, Object> body) throws SQLException {
+        return storage.cleanup(body);
     }
 
     @GetMapping("/sessions/{id}/export")

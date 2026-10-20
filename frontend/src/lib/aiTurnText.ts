@@ -229,3 +229,55 @@ export function historyNotice(row: { turnStatus?: string | null; contentDeleted?
 export function historyUnlockText(): string {
   return HISTORY_TEXT.UNLOCK_REQUIRED;
 }
+
+const STORAGE_TEXT = {
+  METER: '本地存储',
+  WARNING: '接近上限，可清理历史',
+  FULL: '已达上限，先清理才能继续发',
+  ATTACHMENT: '附件也接近上限',
+  READ_FAILED: '存储容量读不出'
+};
+
+/**
+ * 容量条的三档说法（§2.7 尾段、§7.4）：正常/80% 预警/已达上限必须分句，
+ * 且都不许说成"额度用尽"——那是后台维护预算的词，与本地存储无关。
+ */
+export function storageMeterText(snapshot: {
+  usedHistoryBytes: number;
+  historyLimitBytes: number;
+  historyWarning: boolean;
+  attachmentWarning: boolean;
+}): TurnNotice {
+  const used = formatStoredBytes(snapshot.usedHistoryBytes);
+  const limit = formatStoredBytes(snapshot.historyLimitBytes);
+  const head = `${STORAGE_TEXT.METER} ${used} / ${limit}`;
+  if (snapshot.usedHistoryBytes >= snapshot.historyLimitBytes && snapshot.historyLimitBytes > 0) {
+    return { code: 'HISTORY_STORAGE_FULL', message: `${head} · ${STORAGE_TEXT.FULL}` };
+  }
+  if (snapshot.historyWarning) return { code: 'HISTORY_STORAGE_WARNING', message: `${head} · ${STORAGE_TEXT.WARNING}` };
+  return { code: 'OK', message: head };
+}
+
+/** 附件预警单独补一句；正常时不占版面。 */
+export function storageAttachmentSuffix(snapshot: { attachmentWarning: boolean }): string {
+  return snapshot.attachmentWarning ? ` · ${STORAGE_TEXT.ATTACHMENT}` : '';
+}
+
+/** 读不出容量是一条独立说法，不能空着让人以为已经用满了。 */
+export function storageReadFailureText(): string {
+  return STORAGE_TEXT.READ_FAILED;
+}
+
+/** 落库字节按 1024 进制显示；这不是磁盘大小，所以措辞一直是"本地存储"。 */
+export function formatStoredBytes(bytes: number): string {
+  const value = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let scaled = value / 1024;
+  let index = 0;
+  while (scaled >= 1024 && index < units.length - 1) {
+    scaled /= 1024;
+    index += 1;
+  }
+  return `${scaled < 10 ? Number(scaled.toFixed(1)) : Math.round(scaled)} ${units[index]}`;
+}

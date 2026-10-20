@@ -103,4 +103,30 @@ public class SessionContextRepository {
             return statement.executeUpdate() == 1 ? SaveOutcome.APPLIED : SaveOutcome.CONFLICT;
         }
     }
+
+    /**
+     * 连接内失效该会话的摘要检查点（contracts §3「先断开相关读/任务…再更新账本/墓碑/摘要与索引」、
+     * execution §7.4.5「失效相关摘要/任务」）。
+     *
+     * <p>判定只看一个数：检查点当时的<b>已检查上界</b>有没有落在被清掉的轮次里。检查点的 {@code through_turn_id}
+     * 是"这份摘要整理到哪儿为止"，它可能<b>落后于</b>本次清理的批次（例如只清了最近两轮，而摘要还停在最早那轮）。
+     * 那种情况下摘要引用不到任何一条已消失的原话，删它就是无故让一段有效结论失效——所以只删
+     * {@code through_turn_id >= 本批最早的被清轮次}的那一行：一旦它覆盖过任何一条被删的轮次，
+     * 里面那句总结就还在替已消失的原话说话，而检查点只会往前推，没有"改一半"的余地，只能整行作废。</p>
+     *
+     * @param lowestCleanedTurnId 本次清理里 id 最小的那个轮次；传非正数表示本批没有轮次（只清 legacy 行），不动检查点
+     * @return 删掉的行数（0 或 1：一个会话最多一行检查点）
+     */
+    public static int invalidateIn(Connection connection, long sessionId, long lowestCleanedTurnId)
+            throws SQLException {
+        if (lowestCleanedTurnId <= 0) {
+            return 0;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM ai_session_context WHERE session_id = ? AND through_turn_id >= ?")) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, lowestCleanedTurnId);
+            return statement.executeUpdate();
+        }
+    }
 }

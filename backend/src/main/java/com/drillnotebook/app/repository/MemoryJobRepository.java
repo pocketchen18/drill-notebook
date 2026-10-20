@@ -279,6 +279,33 @@ public class MemoryJobRepository {
                 + " lease_until = NULL WHERE session_id = ? AND " + ACTIVE_STATUSES, sessionId);
     }
 
+    /**
+     * 清理原文时的任务作废（contracts §3「先断开相关读/任务」）：只作废<b>读数真的会跨过某一条被清轮次</b>
+     * 的那几笔，不是整会话一刀切。
+     *
+     * <p>理由：批次身份 {@code input_revision} 由它要读的那几轮算出来，读到已经不存在的原话就必须作废重来；
+     * 但把只读保留轮次的任务也顺手顶掉，等于"清理旧消息"间接让新消息永远不被整理——那是清理不该有的副作用。
+     * 所以这里按任务的 {@code from_turn_id..through_turn_id} 区间与被清轮次 ID 集合求交，
+     * 而不是用"最小/最大包围盒"（清理块中间可能夹着没被清的一轮）。</p>
+     *
+     * @return 作废的任务行数
+     */
+    public static int supersedeReadingTurnsIn(Connection connection, long sessionId, List<Long> cleanedTurnIds)
+            throws SQLException {
+        if (cleanedTurnIds == null || cleanedTurnIds.isEmpty()) {
+            return 0;
+        }
+        List<Object> args = new ArrayList<>();
+        args.add(sessionId);
+        args.addAll(cleanedTurnIds);
+        return execute(connection, "UPDATE ai_memory_job SET status = '" + STATUS_SUPERSEDED + "',"
+                + " lease_token = NULL, lease_until = NULL"
+                + " WHERE session_id = ? AND " + ACTIVE_STATUSES
+                + " AND EXISTS (SELECT 1 FROM ai_chat_turn t WHERE t.session_id = ai_memory_job.session_id"
+                + " AND t.id BETWEEN ai_memory_job.from_turn_id AND ai_memory_job.through_turn_id"
+                + " AND t.id IN (" + placeholders(cleanedTurnIds.size()) + "))", args.toArray());
+    }
+
     /** 到期的可认领任务：待处理范围且已到点，按 next_run_at、id 稳定排序，只读不改状态。 */
     public List<JobRow> findClaimable(String asOf, int limit) throws SQLException {
         try (Connection connection = dataSource.getConnection();

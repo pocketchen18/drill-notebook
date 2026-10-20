@@ -102,6 +102,27 @@ public class ChatSessionMetadataRepository {
         return immediate.execute(connection -> bumpHistoryRevision(connection, sessionId));
     }
 
+    /**
+     * 显式清理的 CAS 认领（contracts §3 的 {@code expectedHistoryRevision}）：只有版本还停在预览读到的
+     * 那一份才推进并占住这一笔。抢不到说明预览之后会话又写过东西，用户确认的范围已经对不上号，
+     * 调用方必须回 409 让界面重新预览，而不是拿旧范围继续删。
+     */
+    public boolean claimHistoryRevision(Connection connection, long sessionId, long expectedRevision)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE ai_chat_session SET history_revision = history_revision + 1,"
+                        + " updated_at = datetime('now') WHERE id = ? AND history_revision = ?")) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, expectedRevision);
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    /** 事务内读当前版本：清理认领失败时要把最新值带回给界面重锚。 */
+    public long historyRevision(Connection connection, long sessionId) throws SQLException {
+        return read(connection, sessionId).orElseThrow().historyRevision();
+    }
+
     /** 合格的新轮次或显式 flush 才置唤醒；等待预算/等待解锁都不清除它（§2.1）。 */
     public void markMaintenanceWake(Connection connection, long sessionId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   auditReasonText,
   dispatchStateText,
+  formatStoredBytes,
   historyNotice,
   historyUnlockText,
   omissionReasonText,
@@ -10,6 +11,9 @@ import {
   regionLabel,
   sourceKindLabel,
   statusNotice,
+  storageAttachmentSuffix,
+  storageMeterText,
+  storageReadFailureText,
   turnStatusText
 } from './aiTurnText';
 import type { ChatResultView } from './aiStream';
@@ -91,6 +95,47 @@ describe('aiTurnText 历史行的终态', () => {
     // 一行同时带两个信号时先说原文为什么没了，状态那一句留给「本轮上下文」
     expect(historyNotice({ contentDeleted: true, turnStatus: 'FAILED' })?.code).toBe('CONTENT_DELETED');
     expect(historyUnlockText()).toBe('这段历史用主密码加密，解锁本会话后才能显示原文');
+  });
+});
+
+describe('aiTurnText 容量条', () => {
+  const snapshot = (over: Record<string, unknown> = {}) => ({
+    usedHistoryBytes: 1024, historyLimitBytes: 268435456, historyWarning: false, attachmentWarning: false, ...over
+  });
+
+  it('正常、接近上限、已达上限三句各不相同', () => {
+    expect(storageMeterText(snapshot())).toMatchObject({ code: 'OK', message: '本地存储 1 KB / 256 MB' });
+    expect(storageMeterText(snapshot({ usedHistoryBytes: 230686720, historyWarning: true })).message)
+      .toBe('本地存储 220 MB / 256 MB · 接近上限，可清理历史');
+    expect(storageMeterText(snapshot({ usedHistoryBytes: 268435456, historyWarning: true }))).toMatchObject({
+      code: 'HISTORY_STORAGE_FULL', message: '本地存储 256 MB / 256 MB · 已达上限，先清理才能继续发'
+    });
+    expect(storageReadFailureText()).toBe('存储容量读不出');
+  });
+
+  it('说的是存储不是额度：三句都不许蹭后台预算的词', () => {
+    const all = [
+      storageMeterText(snapshot()).message,
+      storageMeterText(snapshot({ usedHistoryBytes: 230686720, historyWarning: true })).message,
+      storageMeterText(snapshot({ usedHistoryBytes: 268435456, historyWarning: true })).message,
+      storageAttachmentSuffix({ attachmentWarning: true }),
+      storageReadFailureText()
+    ].join('\n');
+    expect(all).not.toMatch(/额度|预算/);
+  });
+
+  it('附件预警只在真要紧时补一句，正常时一个字都不占', () => {
+    expect(storageAttachmentSuffix({ attachmentWarning: false })).toBe('');
+    expect(storageAttachmentSuffix({ attachmentWarning: true })).toBe(' · 附件也接近上限');
+  });
+
+  it('落库字节按 1024 进制换算，整数不硬凑小数', () => {
+    expect(formatStoredBytes(0)).toBe('0 B');
+    expect(formatStoredBytes(512)).toBe('512 B');
+    expect(formatStoredBytes(1024)).toBe('1 KB');
+    expect(formatStoredBytes(1536)).toBe('1.5 KB');
+    expect(formatStoredBytes(268435456)).toBe('256 MB');
+    expect(formatStoredBytes(1024 ** 4)).toBe('1024 GB');
   });
 });
 

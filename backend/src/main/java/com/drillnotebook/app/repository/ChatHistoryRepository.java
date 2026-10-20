@@ -539,8 +539,147 @@ public class ChatHistoryRepository {
         }
     }
 
+    /**
+     * 清理范围里的一条消息（含 legacy 行）。字节按 {@link ChatStorageSizer#MESSAGE_BYTES_SQL} 现算，
+     * 轮次归属留在行上：执行前要逐条核它还在不在原位，被改写就不许继续删。
+     *
+     * <p>{@code role} 是给 legacy 配对用的：迁移前的展示行没有 {@code turn_id}，
+     * 契约（§3「v8临时展示轮次必须采用同一配对规则」）要求它按"一问一答"整组处理，
+     * 没有角色就只能按行删，会把一对劈成半轮。</p>
+     */
+    public record CleanupMessage(long messageId, String role, long bytes, Long turnId) {
+    }
+
+    /**
+     * 显式清理的预览范围（contracts §3 的 {@code POST /history/cleanup/preview}）。
+     *
+     * <p>选取口径三条：{@code t.session_id = ?}、行没被清过（{@code m.content IS NULL
+     * AND m.content_cipher IS NOT NULL} 之外的老实文行不算可清）、以及 {@code m.id <= 边界}。
+     * <b>轮次归属不是筛选条件</b>：一轮的配对消息由 {@code turn_id} 反指回轮次，若按归属筛，
+     * {@link #cleanupTurns} 用子查询数到的行数会与这里的清单不一致，预览与执行的字节口径就会分叉。
+     * 凑不满一条完整问答的行（比如只删了用户行）由服务层按 {@code requestId} 归组后判"本轮不完整"，
+     * 界面据此说明，而不是悄悄少删一轮。</p>
+     */
+    public List<CleanupMessage> cleanupMessages(long sessionId, long beforeOrAtMessageId) throws SQLException {
+        String sql = "SELECT id, role, " + ChatStorageSizer.MESSAGE_BYTES_SQL + " AS bytes, turn_id FROM ai_chat_message"
+                + " WHERE session_id = ? AND id <= ? AND NOT (content IS NULL AND content_cipher IS NULL)"
+                + " ORDER BY id DESC";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, beforeOrAtMessageId);
+            List<CleanupMessage> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new CleanupMessage(result.getLong("id"), result.getString("role"),
+                            result.getLong("bytes"), nullableLong(result, "turn_id")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /**
+     * 边界必须是本会话里真实存在的一条消息。跨会话或已经删掉的 ID 会让范围算成空集，
+     * 那样用户点"清理"时删掉的是他以为的那一批之外的东西，所以预览门口就拦住。
+     */
+    public boolean messageBelongsTo(long sessionId, long messageId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM ai_chat_message WHERE session_id = ? AND id = ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, messageId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() && result.getLong(1) > 0;
+            }
+        }
+    }
+
+    /**
+     * 边界之后的<b>第一条</b> legacy 展示行。它只为了一件事：判"这一对有没有被边界劈开"。
+     *
+     * <p>契约 §3 要求 v8 的展示轮次按同一配对规则整组处理。若边界正好落在一问一答之间，
+     * 只看边界内的行会以为那条问句是"孤儿"而删掉它，答案却留在库里——那正是 execution §7.4.5
+     * 禁的「误删半轮」。取一行、不取全表，也就没有"全量读取再过滤"。</p>
+     */
+    public CleanupMessage firstLegacyAfter(long sessionId, long afterMessageId) throws SQLException {
+        String sql = "SELECT id, role, " + ChatStorageSizer.MESSAGE_BYTES_SQL + " AS bytes, turn_id"
+                + " FROM ai_chat_message"
+                + " WHERE session_id = ? AND id > ? AND turn_id IS NULL"
+                + " AND NOT (content IS NULL AND content_cipher IS NULL) ORDER BY id ASC LIMIT 1";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, afterMessageId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? new CleanupMessage(result.getLong("id"), result.getString("role"),
+                        result.getLong("bytes"), nullableLong(result, "turn_id")) : null;
+            }
+        }
+    }
+
     private static Long nullableLong(ResultSet result, String column) throws SQLException {
         long value = result.getLong(column);
         return result.wasNull() ? null : value;
+    }
+
+    /**
+     * 清理范围里的一轮。字节口径与 {@code ChatTurnRepository.clearScope} 的释放量逐字一致：
+     * 轮次小计 {@code stored_history_bytes} 加它自己的附件字节——预览报多少，执行就扣多少。
+     */
+    public record CleanupTurn(long turnId, String requestId, String status, long sourceRevision,
+                              long storedHistoryBytes, long attachmentBytes, long lastMessageId) {
+    }
+
+    /**
+     * 边界内的<b>完整轮次</b>清单（预览与执行共用同一条 SQL，重算必须逐字段相同）：
+     * 非 RUNNING、未立墓碑、还挂着消息行，且它<b>最后</b>一条消息 ≤ 边界——
+     * 只清"问答都在边界之内"的轮次，绝不把一轮劈成两半（契约 §3「固定最多 200 完整轮次」）。
+     *
+     * <p>到上限后取的是贴边界的最近若干轮（{@code last_message_id DESC}），所以"还有多少更早的轮次
+     * 没纳入"由 {@link #cleanupTurnCount} 单独报，界面不许把它说成"全部清完"。</p>
+     */
+    public List<CleanupTurn> cleanupTurns(long sessionId, long beforeOrAtMessageId, int limit) throws SQLException {
+        String sql = "SELECT t.id, t.request_id, t.status, t.source_revision, t.stored_history_bytes,"
+                + " COALESCE((SELECT SUM(a.byte_length) FROM ai_chat_attachment a WHERE a.turn_id = t.id), 0)"
+                + " AS attachment_bytes,"
+                + " (SELECT MAX(m.id) FROM ai_chat_message m WHERE m.turn_id = t.id) AS last_message_id"
+                + " FROM ai_chat_turn t"
+                + " WHERE t.session_id = ? AND t.status <> 'RUNNING' AND t.content_deleted_at IS NULL"
+                + " AND (SELECT COUNT(*) FROM ai_chat_message m WHERE m.turn_id = t.id) > 0"
+                + " AND (SELECT MAX(m.id) FROM ai_chat_message m WHERE m.turn_id = t.id) <= ?"
+                + " ORDER BY last_message_id DESC LIMIT ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, beforeOrAtMessageId);
+            statement.setInt(3, Math.max(1, limit));
+            List<CleanupTurn> rows = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    rows.add(new CleanupTurn(result.getLong("id"), result.getString("request_id"),
+                            result.getString("status"), result.getLong("source_revision"),
+                            result.getLong("stored_history_bytes"), result.getLong("attachment_bytes"),
+                            result.getLong("last_message_id")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /** 边界内的完整轮次总数（不受 limit 影响），用来如实报"更早的还有几轮没纳入这次预览"。 */
+    public long cleanupTurnCount(long sessionId, long beforeOrAtMessageId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM ai_chat_turn t"
+                + " WHERE t.session_id = ? AND t.status <> 'RUNNING' AND t.content_deleted_at IS NULL"
+                + " AND (SELECT COUNT(*) FROM ai_chat_message m WHERE m.turn_id = t.id) > 0"
+                + " AND (SELECT MAX(m.id) FROM ai_chat_message m WHERE m.turn_id = t.id) <= ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            statement.setLong(2, beforeOrAtMessageId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getLong(1) : 0L;
+            }
+        }
     }
 }

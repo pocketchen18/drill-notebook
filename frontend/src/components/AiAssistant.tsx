@@ -18,6 +18,8 @@ import { historyNotice, historyUnlockText, outcomeNotice, statusNotice } from '.
 import type { TurnNotice } from '../lib/aiTurnText';
 import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
 import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
+import { storageQueryKey } from '../lib/aiStorageApi';
+import { ChatStorageMeter } from './ai-memory/ChatStorageMeter';
 import { unlockMemoryVault } from '../lib/aiMemoryApi';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
@@ -446,6 +448,8 @@ export function AiAssistant(): JSX.Element {
 
   const invalidateSessionLists = (refetchMessages: boolean): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+    // 每轮落库与预留结算都会动容量账本：常驻的那条容量提示要跟着结算走
+    void queryClient.invalidateQueries({ queryKey: storageQueryKey });
     // 只重取最新一页：更早的页是已看过的稳定游标，没必要为一轮新对话整串重读
     if (refetchMessages) void history.refreshLatest();
   };
@@ -1022,6 +1026,8 @@ export function AiAssistant(): JSX.Element {
               ))}
             </div>
           ) : null}
+
+          <ChatStorageMeter enabled={aiOpen} />
 
           <div className="chat-compose ai-drawer-compose">
             <TextArea

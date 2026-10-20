@@ -46,6 +46,39 @@ public class ChatTurnRepository {
         }
     }
 
+    /**
+     * 显式清理在事务里发现"要删的东西已经不是预览那一份"：整笔回滚，一个字节都不少删也不多删。
+     * 它继承 {@link SQLException} 是为了让 {@link ImmediateTransaction} 认定失败并回滚，
+     * 服务层再按 {@link #reason()} 翻成 409，而不是让它冒成 500。
+     */
+    public static class CleanupRefusalException extends SQLException {
+        private final String reason;
+
+        public CleanupRefusalException(String reason, String message) {
+            super(message);
+            this.reason = reason;
+        }
+
+        /** {@code REVISION_CONFLICT}（版本被别的写推走）或 {@code SOURCE_CHANGED}（行被改写）。 */
+        public String reason() {
+            return reason;
+        }
+    }
+
+    /**
+     * 一次显式清理的实删结果。字节口径与预览同源（同一份行数据算出来的释放量），
+     * 记忆侧的四个数与 {@link MemoryRepository#memoryImpactIn} 的预览计数同源——
+     * 预览说受影响几条，这里就必须是几条，少一条多一条都是缺陷。
+     *
+     * @param checkpointsInvalidated 作废的摘要检查点行数（contracts §3「先断开相关读/任务」）
+     * @param jobsSuperseded 被作废的在途维护任务数（只顶掉读数跨过被清范围的那几笔）
+     */
+    public record CleanupOutcome(int cleanedTurns, int legacyCount, int messageCount, long releasedHistoryBytes,
+                                 long releasedAttachmentBytes, int evidenceDeleted, int proposalsDeleted,
+                                 int autoFactsRemoved, int protectedFactsKept, int checkpointsInvalidated,
+                                 int jobsSuperseded, long historyRevision) {
+    }
+
     /** 开始轮次输入：正文与请求元数据必须已由调用方完成有界校验与加密。 */
     public record Draft(String requestId, long sessionId, long contextGeneration, String sourceScopeType,
                         long sourceScopeId, String sourceTimezone, String runtimeGeneration, boolean memoryEligible,
@@ -259,41 +292,160 @@ public class ChatTurnRepository {
             if (STATUS_RUNNING.equals(turn.status())) {
                 throw new SQLException("轮次仍在进行，不能清理原文: " + requestId);
             }
-            long attachmentBytes = scalar(connection,
-                    "SELECT COALESCE(SUM(byte_length), 0) FROM ai_chat_attachment WHERE turn_id = ?", turn.id());
-            long storedBytes = turn.storedHistoryBytes();
-
-            List<Long> messageIds = new ArrayList<>();
-            if (orZero(turn.userMessageId()) > 0) {
-                messageIds.add(turn.userMessageId());
-            }
-            if (orZero(turn.assistantMessageId()) > 0) {
-                messageIds.add(turn.assistantMessageId());
-            }
-            memory.purgeEvidence(connection, null, List.of(turn.id()), messageIds);
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM ai_chat_message WHERE turn_id = ?")) {
-                statement.setLong(1, turn.id());
-                statement.executeUpdate();
-            }
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM ai_chat_attachment WHERE turn_id = ?")) {
-                statement.setLong(1, turn.id());
-                statement.executeUpdate();
-            }
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "UPDATE ai_chat_turn SET user_message_id = NULL, assistant_message_id = NULL,"
-                            + " request_meta_cipher = NULL, request_meta_crypto = NULL,"
-                            + " result_meta_cipher = NULL, result_meta_crypto = NULL, stored_history_bytes = 0,"
-                            + " source_revision = source_revision + 1, content_deleted_at = ? WHERE id = ?")) {
-                statement.setString(1, deletedAt);
-                statement.setLong(2, turn.id());
-                requireOneRow(statement.executeUpdate(), "轮次墓碑写入");
-            }
-            ledger.releaseStorage(connection, storedBytes, attachmentBytes);
+            Released released = clearTurnContent(connection, turn, deletedAt);
+            ledger.releaseStorage(connection, released.historyBytes(), released.attachmentBytes());
             bumpSession(connection, turn.sessionId());
             return null;
         });
+    }
+
+    /**
+     * 一次事务清完预览确定的范围：先 CAS 认领会话版本，再逐轮立墓碑、legacy 展示行删行，
+     * 账本只扣一次。
+     *
+     * <p>这里<b>不重新选范围</b>——只按预览给出的身份逐条核它还在不在原位：轮次不见了、跨了会话、
+     * 还在 RUNNING、已立墓碑，或{@code stored_history_bytes}/{@code source_revision} 与预览那一份不同，
+     * 都抛 {@link CleanupRefusalException} 让整笔回滚。字节按行现算但必须等于预览报的数，
+     * 于是"预览说释放多少"与"账本实际扣多少"不可能分叉，也不会清出一个比预览更大的范围。</p>
+     */
+    public CleanupOutcome clearScope(List<ChatHistoryRepository.CleanupTurn> selected,
+                                     List<ChatHistoryRepository.CleanupMessage> legacy, long sessionId,
+                                     long expectedHistoryRevision, String deletedAt) throws SQLException {
+        return immediate.execute(connection -> {
+            // 会话级前提先立（contracts §3「在<b>同会话</b>短锁/事务内复核集合、版本和无 RUNNING」Q1 取会话级）：
+            // 还在流式的那一轮可能马上要往这一页里写正文，让它和"清理"抢同一批行是不一致的。
+            if (findRunning(connection, sessionId).isPresent()) {
+                throw new CleanupRefusalException("SESSION_RUNNING",
+                        "该会话还有正在进行的轮次，先结束或取消再清理原文");
+            }
+            // 先占版本再删东西：CAS 输了什么都没动，回滚是免费的
+            if (!metadata.claimHistoryRevision(connection, sessionId, expectedHistoryRevision)) {
+                throw new CleanupRefusalException("REVISION_CONFLICT",
+                        "会话在预览之后又推进过历史版本: " + sessionId);
+            }
+            long historyBytes = 0;
+            long attachmentBytes = 0;
+            int messageCount = 0;
+            int evidence = 0;
+            int proposals = 0;
+            int autoFacts = 0;
+            int keptFacts = 0;
+            List<Long> cleanedTurnIds = new ArrayList<>();
+            for (ChatHistoryRepository.CleanupTurn preview : selected) {
+                TurnRow turn = findByRequestId(connection, preview.requestId())
+                        .orElseThrow(() -> refusal("SOURCE_CHANGED", "预览里的轮次已经不见了: " + preview.requestId()));
+                if (turn.sessionId() != sessionId) {
+                    throw refusal("SOURCE_CHANGED", "预览范围跨会话，拒绝执行: " + preview.requestId());
+                }
+                if (STATUS_RUNNING.equals(turn.status())) {
+                    throw refusal("SOURCE_CHANGED", "轮次仍在进行，不能清理原文: " + preview.requestId());
+                }
+                if (turn.contentDeletedAt() != null) {
+                    throw refusal("SOURCE_CHANGED", "这一轮的原文早已被清理: " + preview.requestId());
+                }
+                if (turn.storedHistoryBytes() != preview.storedHistoryBytes()
+                        || turn.sourceRevision() != preview.sourceRevision()) {
+                    throw refusal("SOURCE_CHANGED", "这一轮在预览之后被改写，字节口径已变: " + preview.requestId());
+                }
+                Released released = clearTurnContent(connection, turn, deletedAt);
+                historyBytes += released.historyBytes();
+                attachmentBytes += released.attachmentBytes();
+                messageCount += released.messages();
+                evidence += released.purge().evidenceDeleted();
+                proposals += released.purge().proposalsDeleted();
+                autoFacts += released.purge().autoFactsRemoved();
+                keptFacts += released.purge().protectedFactsKept();
+                cleanedTurnIds.add(turn.id());
+            }
+            for (ChatHistoryRepository.CleanupMessage message : legacy) {
+                long bytes = scalar(connection, "SELECT " + ChatStorageSizer.MESSAGE_BYTES_SQL
+                        + " FROM ai_chat_message WHERE id = ? AND turn_id IS NULL", message.messageId());
+                if (bytes != message.bytes()) {
+                    throw refusal("SOURCE_CHANGED", "legacy 展示行在预览之后被改写: " + message.messageId());
+                }
+                MemoryRepository.PurgeResult purge = memory.purgeEvidence(connection, null, List.of(),
+                        List.of(message.messageId()));
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM ai_chat_message WHERE id = ? AND turn_id IS NULL")) {
+                    statement.setLong(1, message.messageId());
+                    if (statement.executeUpdate() != 1) {
+                        throw refusal("SOURCE_CHANGED", "legacy 展示行已不在原位: " + message.messageId());
+                    }
+                }
+                historyBytes += bytes;
+                messageCount++;
+                evidence += purge.evidenceDeleted();
+                proposals += purge.proposalsDeleted();
+                autoFacts += purge.autoFactsRemoved();
+                keptFacts += purge.protectedFactsKept();
+            }
+            // 断开相关读与任务（§3 顺序：先断开，再删派生，最后才动账本与墓碑）。
+            // 检查点只在它的已检查上界确实覆盖到本批某一轮时才作废：`selected` 是"最新在前"取的，
+            // 所以本批最早的轮次要自己算 min，不能拿 get(0)（那是最新的那一轮）。
+            long lowestCleanedTurnId = cleanedTurnIds.stream().mapToLong(Long::longValue).min().orElse(0L);
+            int checkpoints = SessionContextRepository.invalidateIn(connection, sessionId, lowestCleanedTurnId);
+            int jobs = MemoryJobRepository.supersedeReadingTurnsIn(connection, sessionId, cleanedTurnIds);
+            if (historyBytes > 0 || attachmentBytes > 0) {
+                ledger.releaseStorage(connection, historyBytes, attachmentBytes);
+            }
+            return new CleanupOutcome(selected.size(), legacy.size(), messageCount, historyBytes, attachmentBytes,
+                    evidence, proposals, autoFacts, keptFacts, checkpoints, jobs,
+                    metadata.historyRevision(connection, sessionId));
+        });
+    }
+
+    /** 一轮清完之后的释放字节、删掉的消息行数，以及记忆侧的实际计数（与预览口径必须相等）。 */
+    private record Released(long historyBytes, long attachmentBytes, int messages,
+                            MemoryRepository.PurgeResult purge) {
+    }
+
+    /** 一次事务里的单轮清理：清证据 → 删行 → 立墓碑，计数一并带回。 */
+    private Released clearTurnContent(Connection connection, TurnRow turn, String deletedAt) throws SQLException {
+        long attachmentBytes = scalar(connection,
+                "SELECT COALESCE(SUM(byte_length), 0) FROM ai_chat_attachment WHERE turn_id = ?", turn.id());
+        long storedBytes = turn.storedHistoryBytes();
+        List<Long> messageIds = messageIdsOf(connection, turn.id());
+        // 证据必须在删正文之前清：行没了以后 §2.3 的孤儿自动事实就没人重算了
+        MemoryRepository.PurgeResult purge = memory.purgeEvidence(connection, null, List.of(turn.id()), messageIds);
+        int deletedMessages;
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM ai_chat_message WHERE turn_id = ?")) {
+            statement.setLong(1, turn.id());
+            deletedMessages = statement.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM ai_chat_attachment WHERE turn_id = ?")) {
+            statement.setLong(1, turn.id());
+            statement.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE ai_chat_turn SET user_message_id = NULL, assistant_message_id = NULL,"
+                        + " request_meta_cipher = NULL, request_meta_crypto = NULL,"
+                        + " result_meta_cipher = NULL, result_meta_crypto = NULL, stored_history_bytes = 0,"
+                        + " source_revision = source_revision + 1, content_deleted_at = ? WHERE id = ?")) {
+            statement.setString(1, deletedAt);
+            statement.setLong(2, turn.id());
+            requireOneRow(statement.executeUpdate(), "轮次墓碑写入");
+        }
+        return new Released(storedBytes, attachmentBytes, deletedMessages, purge);
+    }
+
+    private static CleanupRefusalException refusal(String reason, String message) {
+        return new CleanupRefusalException(reason, message);
+    }
+
+    private static List<Long> messageIdsOf(Connection connection, long turnId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id FROM ai_chat_message WHERE turn_id = ? ORDER BY id")) {
+            statement.setLong(1, turnId);
+            List<Long> ids = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    ids.add(result.getLong(1));
+                }
+            }
+            return ids;
+        }
     }
 
     /** 该会话当前 RUNNING 轮次（状态查询、孤儿恢复与"同会话只一轮"检查）。 */

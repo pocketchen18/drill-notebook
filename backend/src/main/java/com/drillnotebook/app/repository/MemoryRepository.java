@@ -716,6 +716,67 @@ public class MemoryRepository {
         return new PurgeResult(evidenceIds.size(), removed, kept, proposalsDeleted, proposalsStaled, revision);
     }
 
+    /**
+     * 清理预览要报的「受影响记忆」计数（contracts §3「保存…受影响记忆计数」、execution §7.4.5
+     *「用户清理必须先预览…受影响记忆」）。<b>纯读</b>：一行都不删，判定口径与
+     * {@link #purgeEvidence} 逐字同源，所以预览报的数与执行时真正删掉的数必须相等。
+     *
+     * @param evidence 会被删掉的原话证据行数
+     * @param proposals 挂在这些证据上的待处理建议数（会一起删）
+     * @param autoFacts 失去唯一来源且无人工保护的自动事实（会被删）
+     * @param protectedFacts 失去来源但被人工保护/历史版本的事实（<b>留着</b>，只断来源）
+     */
+    public record MemoryImpact(int evidence, int proposals, int autoFacts, int protectedFacts) {
+    }
+
+    /** 预览用的只读计数：自开一条只读连接，不参与任何写事务（清理预览必须是纯读）。 */
+    public MemoryImpact memoryImpact(Long sessionId, List<Long> turnIds, List<Long> messageIds) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return memoryImpactIn(connection, sessionId, turnIds, messageIds);
+        }
+    }
+
+    public static MemoryImpact memoryImpactIn(Connection connection, Long sessionId, List<Long> turnIds,
+                                              List<Long> messageIds) throws SQLException {
+        boolean noScope = sessionId == null && (turnIds == null || turnIds.isEmpty())
+                && (messageIds == null || messageIds.isEmpty());
+        if (noScope) {
+            throw new SQLException("统计受影响记忆必须给出会话或轮次/消息范围");
+        }
+        List<String> evidenceIds = ids(connection,
+                "SELECT id FROM ai_memory_evidence WHERE " + evidenceScope(sessionId, turnIds, messageIds),
+                evidenceArgs(sessionId, turnIds, messageIds).toArray());
+        if (evidenceIds.isEmpty()) {
+            return new MemoryImpact(0, 0, 0, 0);
+        }
+        int proposals = Math.toIntExact(count(connection,
+                "SELECT COUNT(*) FROM ai_memory_proposal WHERE evidence_id IN ("
+                        + placeholders(evidenceIds.size()) + ")", evidenceIds.toArray()));
+        List<String> affectedItemRowIds = ids(connection,
+                "SELECT DISTINCT item_row_id FROM ai_memory_item_evidence WHERE evidence_id IN ("
+                        + placeholders(evidenceIds.size()) + ")", evidenceIds.toArray());
+        int autoFacts = 0;
+        int protectedFacts = 0;
+        for (String itemRowId : affectedItemRowIds) {
+            Optional<FactRow> fact = findFactByRowId(connection, itemRowId);
+            if (fact.isEmpty()) {
+                continue;
+            }
+            // 与 purgeEvidence 同一个孤儿判据：除这批之外没有别的来源了才算"失去唯一来源"
+            if (hasRemainingEvidence(connection, itemRowId, evidenceIds)) {
+                continue;
+            }
+            boolean autoLiveFact = "AUTO".equals(fact.get().origin()) && !fact.get().manualProtected()
+                    && (STATUS_ACTIVE.equals(fact.get().status()) || STATUS_PENDING.equals(fact.get().status()));
+            if (autoLiveFact) {
+                autoFacts++;
+            } else {
+                protectedFacts++;
+            }
+        }
+        return new MemoryImpact(evidenceIds.size(), proposals, autoFacts, protectedFacts);
+    }
+
     // ---- 事务内原语 ----
     //
     // 下面这组 *接受调用方 Connection* 的方法只允许在调用方自己的事务里用（P7 的 §7 提交就是这个场景：

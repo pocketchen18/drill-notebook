@@ -86,6 +86,11 @@ beforeEach(() => {
     if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
     if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
     if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) return Promise.resolve(historyPage([]));
+    if (url === '/api/ai/history/storage') {
+      return Promise.resolve({ historyBytes: 2097152, reservedHistoryBytes: 0, usedHistoryBytes: 2097152,
+        historyLimitBytes: 268435456, attachmentBytes: 0, attachmentLimitBytes: 268435456,
+        historyWarning: false, attachmentWarning: false, revision: 3 });
+    }
     if (url.endsWith('/context')) {
       return Promise.resolve({ requestId: TURN_ID, sessionId: 10, status: 'COMPLETED', available: true, planId: 'plan-7', dispatchState: 'sent', audit: contextAudit });
     }
@@ -232,5 +237,17 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     expect(screen.getByText('未解锁，未提供')).toBeTruthy();
     expect(screen.getByText('1 项')).toBeTruthy();
     expect(screen.getByText('没有可用的续接摘要，较早历史按原文进窗口。')).toBeTruthy();
+  });
+
+  it('容量条常驻在输入区上方，一轮定稿后跟着结算再读一次', async () => {
+    const storageCalls = (): number => apiGet.mock.calls.filter((call) => call[0] === '/api/ai/history/storage').length;
+    renderAssistant();
+    await waitFor(() => expect(screen.getByText('本地存储 2 MB / 256 MB')).toBeTruthy());
+    expect(storageCalls()).toBe(1);
+
+    await sendOnce();
+    // 落库与预留结算都会动账本：定稿后要重读一次，但绝不发聊天以外的写请求
+    await waitFor(() => expect(storageCalls()).toBe(2));
+    expect(apiPost.mock.calls.filter((call) => String(call[0]) === '/api/ai/chat')).toHaveLength(1);
   });
 });
