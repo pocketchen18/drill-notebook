@@ -38,6 +38,7 @@ interface BubbleSnapshot {
   readonly cellSelection: boolean;
   readonly inCode: boolean;
   readonly singleBlock: boolean;
+  readonly inlineMath: boolean;
   readonly from: number;
   readonly to: number;
   readonly blockKind: BlockKind;
@@ -53,6 +54,19 @@ interface BubbleSnapshot {
   readonly linkHref: string | null;
 }
 
+/** 选区正好落在一个行内公式上时返回它，用于「再点一次取消公式」。 */
+function inlineMathInSelection(editor: Editor): { from: number; to: number; latex: string } | null {
+  const { from, to } = editor.state.selection;
+  const hits: { from: number; to: number; latex: string }[] = [];
+  editor.state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type.name !== 'mathInline') return true;
+    hits.push({ from: pos, to: pos + node.nodeSize, latex: String(node.attrs.latex ?? '') });
+    return false;
+  });
+  const only = hits.length === 1 ? hits[0] : null;
+  return only && only.from === from && only.to === to ? only : null;
+}
+
 function snapshotOf(editor: Editor): BubbleSnapshot {
   const { selection } = editor.state;
   const textColor = editor.getAttributes('textColor').color;
@@ -65,6 +79,7 @@ function snapshotOf(editor: Editor): BubbleSnapshot {
     cellSelection: selection instanceof CellSelection,
     inCode: editor.isActive('codeBlock'),
     singleBlock: selection.$from.sameParent(selection.$to),
+    inlineMath: inlineMathInSelection(editor) !== null,
     from: selection.from,
     to: selection.to,
     blockKind: currentBlockKind(editor),
@@ -244,8 +259,17 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
     setMode('format');
   };
   const toInlineMath = (): void => {
+    const existing = inlineMathInSelection(editor);
+    if (existing) {
+      // 再点一次 = 取消行内公式，把 LaTeX 源码还原成普通文字
+      if (existing.latex.trim()) chain().insertContentAt({ from: existing.from, to: existing.to }, { type: 'text', text: existing.latex }).run();
+      else chain().deleteRange({ from: existing.from, to: existing.to }).run();
+      return;
+    }
     const { from, to } = editor.state.selection;
     const latex = editor.state.doc.textBetween(from, to, ' ').trim();
+    // 选区内没有文字（整块图片或公式被选中）时直接放过，否则会拿空公式盖掉原内容
+    if (!latex) return;
     chain().insertContentAt({ from, to }, { type: 'mathInline', attrs: { latex } }).run();
   };
 
@@ -363,7 +387,7 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
             </BubbleMenuButton>
             <BubbleButton label="上标" icon={<Superscript size={15} />} active={snapshot.superscript} shortcut="Ctrl+." onClick={() => { chain().toggleSuperscript().run(); }} />
             <BubbleButton label="下标" icon={<Subscript size={15} />} active={snapshot.subscript} shortcut="Ctrl+," onClick={() => { chain().toggleSubscript().run(); }} />
-            <BubbleButton label="转为行内公式" icon={<Radical size={15} />} disabled={!snapshot.singleBlock} onClick={toInlineMath} />
+            <BubbleButton label="转为行内公式" icon={<Radical size={15} />} active={snapshot.inlineMath} disabled={!snapshot.singleBlock} onClick={toInlineMath} />
             <BubbleButton label="清除格式" icon={<RemoveFormatting size={15} />} shortcut="Ctrl+\" onClick={() => { chain().unsetAllMarks().run(); }} />
             <Divider />
             <BubbleButton label="删除" icon={<Trash2 size={15} />} danger title="删除选中内容" onClick={() => { chain().deleteSelection().run(); }} />

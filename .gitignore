@@ -208,3 +208,6 @@ docs/**
 !docs/testing/**
 # Design specs / implementation plans stay local
 docs/superpowers/
+# 本地编辑器验收页：只用于在真浏览器里复现交互问题，不入库
+/frontend/harness.html
+/frontend/src/editorHarness.tsx

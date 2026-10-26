@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Editor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { BlockDragHandle, EditorBubbleMenu, EditorOutline } from './EditorChrome';
+import { MathInline } from './extensions';
 
 const selectionRect = { x: 200, y: 160, top: 160, left: 200, right: 320, bottom: 180, width: 120, height: 20, toJSON: () => ({}) } as DOMRect;
 const editors: Editor[] = [];
@@ -76,6 +77,51 @@ describe('EditorBubbleMenu deletion', () => {
     rect.mockReturnValue({ ...selectionRect, top: -200, bottom: -180 } as DOMRect);
     fireEvent.scroll(document);
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: '选中文本格式' })).toBeNull());
+  });
+});
+
+describe('EditorBubbleMenu 行内公式', () => {
+  function mountMathDoc(html: string): Editor {
+    const editor = new Editor({ extensions: [StarterKit, MathInline], content: html });
+    editors.push(editor);
+    render(<><EditorContent editor={editor} /><EditorBubbleMenu editor={editor} /></>);
+    act(() => { editor.view.focus(); });
+    return editor;
+  }
+
+  async function mathButton(): Promise<HTMLElement> {
+    const toolbar = await screen.findByRole('toolbar', { name: '选中文本格式' });
+    return within(toolbar).getByRole('button', { name: '转为行内公式' });
+  }
+
+  it('converts the selection to a formula and back without losing text', async () => {
+    vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(selectionRect);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(selectionRect);
+    const editor = mountMathDoc('<p>质能方程 rest</p>');
+    act(() => { editor.commands.setTextSelection({ from: 1, to: 5 }); });
+    fireEvent.click(await mathButton());
+    expect(JSON.stringify(editor.getJSON())).toContain('"latex":"质能方程"');
+
+    // 选中公式后再点同一个按钮 = 取消公式；旧实现会把 LaTeX 写成空串，内容直接消失
+    act(() => { editor.commands.setTextSelection({ from: 1, to: 2 }); });
+    const toggle = await mathButton();
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(toggle);
+    expect(editor.getText()).toBe('质能方程 rest');
+    expect(JSON.stringify(editor.getJSON())).not.toContain('mathInline');
+  });
+
+  it('ignores a textless selection instead of overwriting the formula with an empty one', async () => {
+    vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(selectionRect);
+    const editor = mountMathDoc('<p>质能方程 rest</p>');
+    act(() => { editor.commands.setTextSelection({ from: 1, to: 5 }); });
+    fireEvent.click(await mathButton());
+    const before = JSON.stringify(editor.getJSON());
+
+    // 选区比公式大一点：既没命中“恰好一个公式”，也取不到文字 → 保持原样
+    act(() => { editor.commands.setTextSelection({ from: 1, to: 3 }); });
+    fireEvent.click(await mathButton());
+    expect(JSON.stringify(editor.getJSON())).toBe(before);
   });
 });
 
