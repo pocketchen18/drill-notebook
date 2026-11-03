@@ -128,6 +128,25 @@ public class MemoryJobRepository {
             Optional<JobRow> existing = byIdempotencyKey(connection, draft);
             if (existing.isPresent()) {
                 JobRow row = existing.get();
+                if (STATUS_FAILED.equals(row.status()) && !row.promptVersion().equals(draft.promptVersion())) {
+                    // 同范围同输入曾以旧提示词终态失败：提示词已变，复用该行重试一次；
+                    // 新提示词再次失败后版本相同，后续 tick 会走 replay，不会无限重插。
+                    int revived = execute(connection, "UPDATE ai_memory_job SET from_turn_id = ?,"
+                                    + " through_turn_id = ?, context_generation = ?, source_scope_type = ?,"
+                                    + " source_scope_id = ?, source_timezone = ?, vault_epoch = ?,"
+                                    + " policy_revision = ?, target_fingerprint = ?, prompt_version = ?,"
+                                    + " input_revision = ?, status = ?, attempts = 0, lease_token = NULL,"
+                                    + " lease_until = NULL, outcome_code = NULL, error_code = NULL,"
+                                    + " next_run_at = ?, updated_at = ? WHERE id = ? AND status = ?",
+                            draft.fromTurnId(), draft.throughTurnId(), draft.contextGeneration(),
+                            draft.sourceScopeType(), draft.sourceScopeId(), draft.sourceTimezone(),
+                            draft.vaultEpoch(), draft.policyRevision(), draft.targetFingerprint(),
+                            draft.promptVersion(), draft.inputRevision(), STATUS_QUEUED, nextRunAt,
+                            draft.createdAt(), row.id(), STATUS_FAILED);
+                    if (revived == 1) {
+                        return new EnqueueResult(row.id(), row.kind(), STATUS_QUEUED, false);
+                    }
+                }
                 return new EnqueueResult(row.id(), row.kind(), row.status(), true);
             }
             List<JobRow> occupants = collectQuery(connection, SELECT + " WHERE kind = ? AND session_id = ? AND "
@@ -195,8 +214,8 @@ public class MemoryJobRepository {
     }
 
     /**
-     * 连接内结算原语：让上层把「租约复验 + 结果落库 + 任务终态」压进同一笔事务。
-     * 返回受影响行数；0 表示租约已被取消或已过期，调用方必须放弃本次结果而不是重写。
+     * 处理失败终态：先合并候选与事实 + 事务 + 终态压缩在同一事务里。
+     * 返回影响行数；0 表示租约已被抢占或已过期，调用方不得再补写任何东西。
      */
     public static int settleIn(Connection connection, String jobId, String leaseToken, String asOf, String status,
                                String outcomeCode) throws SQLException {
@@ -204,6 +223,20 @@ public class MemoryJobRepository {
         return execute(connection, "UPDATE ai_memory_job SET status = ?, outcome_code = ?, lease_token = NULL,"
                 + " lease_until = NULL, updated_at = ? WHERE id = ? AND status = ? AND lease_token = ?"
                 + " AND lease_until > ?", status, outcomeCode, asOf, jobId, STATUS_CLAIMED, leaseToken, asOf);
+    }
+
+    /**
+     * 失败终态带原因码：{@code outcome_code} 受枚举约束，诊断信息写进自由文本 {@code error_code}，
+     * 便于回看“为什么这条任务没写库”。租约校验与 {@link #settle} 完全一致。
+     */
+    public LeaseOutcome fail(String jobId, String leaseToken, String asOf, String errorCode) throws SQLException {
+        return immediate.execute(connection -> {
+            int updated = execute(connection, "UPDATE ai_memory_job SET status = ?, error_code = ?,"
+                    + " lease_token = NULL, lease_until = NULL, next_run_at = NULL, updated_at = ?"
+                    + " WHERE id = ? AND status = ? AND lease_token = ? AND lease_until > ?",
+                    STATUS_FAILED, errorCode, asOf, jobId, STATUS_CLAIMED, leaseToken, asOf);
+            return updated == 1 ? LeaseOutcome.APPLIED : LeaseOutcome.REJECTED;
+        });
     }
 
     /**
@@ -277,6 +310,33 @@ public class MemoryJobRepository {
     public static int supersedeForSessionIn(Connection connection, long sessionId) throws SQLException {
         return execute(connection, "UPDATE ai_memory_job SET status = '" + STATUS_SUPERSEDED + "', lease_token = NULL,"
                 + " lease_until = NULL WHERE session_id = ? AND " + ACTIVE_STATUSES, sessionId);
+    }
+
+    /**
+     * 清理原文时的任务作废（contracts §3「先断开相关读/任务」）：只作废<b>读数真的会跨过某一条被清轮次</b>
+     * 的那几笔，不是整会话一刀切。
+     *
+     * <p>理由：批次身份 {@code input_revision} 由它要读的那几轮算出来，读到已经不存在的原话就必须作废重来；
+     * 但把只读保留轮次的任务也顺手顶掉，等于"清理旧消息"间接让新消息永远不被整理——那是清理不该有的副作用。
+     * 所以这里按任务的 {@code from_turn_id..through_turn_id} 区间与被清轮次 ID 集合求交，
+     * 而不是用"最小/最大包围盒"（清理块中间可能夹着没被清的一轮）。</p>
+     *
+     * @return 作废的任务行数
+     */
+    public static int supersedeReadingTurnsIn(Connection connection, long sessionId, List<Long> cleanedTurnIds)
+            throws SQLException {
+        if (cleanedTurnIds == null || cleanedTurnIds.isEmpty()) {
+            return 0;
+        }
+        List<Object> args = new ArrayList<>();
+        args.add(sessionId);
+        args.addAll(cleanedTurnIds);
+        return execute(connection, "UPDATE ai_memory_job SET status = '" + STATUS_SUPERSEDED + "',"
+                + " lease_token = NULL, lease_until = NULL"
+                + " WHERE session_id = ? AND " + ACTIVE_STATUSES
+                + " AND EXISTS (SELECT 1 FROM ai_chat_turn t WHERE t.session_id = ai_memory_job.session_id"
+                + " AND t.id BETWEEN ai_memory_job.from_turn_id AND ai_memory_job.through_turn_id"
+                + " AND t.id IN (" + placeholders(cleanedTurnIds.size()) + "))", args.toArray());
     }
 
     /** 到期的可认领任务：待处理范围且已到点，按 next_run_at、id 稳定排序，只读不改状态。 */

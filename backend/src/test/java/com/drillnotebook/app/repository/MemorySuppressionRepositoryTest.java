@@ -12,6 +12,7 @@ import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.repository.MemorySuppressionRepository.RecordOutcome;
 import com.drillnotebook.app.repository.MemorySuppressionRepository.Suppression;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 import javax.sql.DataSource;
@@ -57,6 +58,21 @@ class MemorySuppressionRepositoryTest {
         assertEquals(1, suppressions.countAll(VAULT), "重复抑制不产生第二行");
         assertTrue(suppressions.isSuppressed(VAULT, "GLOBAL", 0, MemorySuppressionRepository.KIND_FAMILY,
                 "hmac-family"));
+    }
+
+    @Test
+    void recordInIsVisibleInsideTheCallersTransactionAndVanishesOnRollback() throws Exception {
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            assertEquals(RecordOutcome.APPLIED, suppressions.recordIn(connection, VAULT,
+                    suppression(MemorySuppressionRepository.KIND_EVIDENCE, "hmac-in-tx", 41L)));
+            assertTrue(suppressions.isSuppressedIn(connection, VAULT, "GLOBAL", 0,
+                            MemorySuppressionRepository.KIND_EVIDENCE, "hmac-in-tx"),
+                    "事务内写的抑制要当场看得见：§4.4 要求它与事实变更同笔提交");
+            connection.rollback();
+        }
+        assertFalse(suppressions.isSuppressed(VAULT, "GLOBAL", 0, MemorySuppressionRepository.KIND_EVIDENCE,
+                "hmac-in-tx"), "调用方回滚就不留抑制行");
     }
 
     @Test

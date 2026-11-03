@@ -2,6 +2,7 @@ package com.drillnotebook.app.service.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -41,6 +42,7 @@ class MemoryPolicyServiceTest {
     private static final String USE = MemoryPolicyService.PURPOSE_USE;
     private static final String MAINT = MemoryPolicyService.PURPOSE_MAINTENANCE;
     private static final String VERSION = MemoryPolicyService.POLICY_VERSION;
+    private static final String MASTER = "policy-master-password";
 
     private Path appRoot;
     private DataSource dataSource;
@@ -99,6 +101,21 @@ class MemoryPolicyServiceTest {
     }
 
     @Test
+    void settingsRevisionSurvivesTheVaultStatusMerge() throws Exception {
+        seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
+        createVaultAndLock();
+        long before = policy.current().revision();
+
+        assertEquals(200, policy.update(before, true, null, null, null, null).status());
+
+        Map<String, Object> body = policy.snapshot().body();
+        assertEquals(before + 1, body.get("revision"),
+                "PUT /settings 的 CAS 要的是设置版本；库状态里的同名字段不能把它顶掉（P9a 接线时暴露）");
+        assertNotNull(body.get("vaultRevision"), "库自己的重包装版本另给一个键，两边都要能读");
+        assertEquals(Boolean.TRUE, body.get("initialized"));
+    }
+
+    @Test
     void targetMissingUntilTheSlotHasEndpointAndModel() throws Exception {
         MemoryPolicyService.ConsentStatus status = policy.consentStatus(USE);
         assertEquals("TARGET_MISSING", status.state());
@@ -110,6 +127,26 @@ class MemoryPolicyServiceTest {
     }
 
     // ---- 开关与版本 ----
+
+    @Test
+    void explicitLockIsRespectedButAFreshProcessAutoUnlocksFingerprintVault() throws Exception {
+        createVaultAndLock();
+
+        assertEquals(Boolean.FALSE, policy.snapshot().body().get("unlocked"), "显式锁定不能被设置页顺手绕开");
+
+        Map<String, Object> restarted = restartedPolicy().snapshot().body();
+        assertEquals(Boolean.TRUE, restarted.get("unlocked"), "重启后指纹库不需要用户再点一次解锁");
+    }
+
+    @Test
+    void passwordVaultStaysLockedUntilTheUserProvidesThePassword() throws Exception {
+        createPasswordVaultAndLock();
+
+        Map<String, Object> body = policy.snapshot().body();
+
+        assertEquals(Boolean.FALSE, body.get("unlocked"), "密码库绝不后台代解");
+        assertTrue(vault.currentKey().isEmpty());
+    }
 
     @Test
     void switchWritesNeverGrantConsent() throws Exception {
@@ -230,6 +267,18 @@ class MemoryPolicyServiceTest {
     }
 
     @Test
+    void sharedModeReportsTheSlotItActuallyReads() throws Exception {
+        seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
+
+        MemoryPolicyService.Target target = policy.targetOf(MAINT);
+
+        assertTrue(target.configured(), "共享模式下维护目标就是主模型那一行");
+        assertEquals("chat", target.slot(),
+                "slot 要说真话：后台外发照着 slot 去取 Key 与端点，报成 memory 就是查一个空槽位（§5.1）");
+        assertEquals(CHAT_MODEL, target.model());
+    }
+
+    @Test
     void dedicatedModeNeverFallsBackToTheChatModel() throws Exception {
         seedChat(CHAT_ENDPOINT, CHAT_MODEL, null);
         setMaintenanceMode("dedicated");
@@ -286,11 +335,11 @@ class MemoryPolicyServiceTest {
         switches(true, true, false);
         assertEquals(Gate.VAULT_MISSING, policy.extractionEligibility("GLOBAL", 0).gate());
 
-        createVaultAndLock();
+        createPasswordVaultAndLock();
         assertEquals(Gate.LOCKED, policy.extractionEligibility("GLOBAL", 0).gate());
         assertEquals(423, policy.extractionEligibility("GLOBAL", 0).toResult().status());
 
-        vault.unlock(null, List.of());
+        vault.unlock(MASTER, List.of());
         assertEquals(Gate.CONSENT_MISSING, policy.extractionEligibility("GLOBAL", 0).gate());
         grantMaintConsent();
         assertEquals(Gate.ALLOWED, policy.extractionEligibility("GLOBAL", 0).gate());
@@ -301,10 +350,10 @@ class MemoryPolicyServiceTest {
     void manualWritesNeedUnlockButNeitherSwitchNorConsent() throws Exception {
         assertEquals(Gate.VAULT_MISSING, policy.manualWriteEligibility("GLOBAL", 0).gate());
 
-        createVaultAndLock();
+        createPasswordVaultAndLock();
         assertEquals(Gate.LOCKED, policy.manualWriteEligibility("GLOBAL", 0).gate());
 
-        vault.unlock(null, List.of());
+        vault.unlock(MASTER, List.of());
         assertTrue(policy.manualWriteEligibility("GLOBAL", 0).allowed(), "首次手动添加发生在开启记忆之前（§3 405 行）");
         assertFalse(policy.current().enabled());
         assertFalse(policy.consentStatus(USE).granted());
@@ -390,6 +439,21 @@ class MemoryPolicyServiceTest {
 
     private void createVaultAndLock() {
         assertEquals(201, vault.create("fingerprint", null, null).status());
+        assertEquals(204, vault.lock().status());
+    }
+
+    /** 同一份库、全新的进程内服务：模拟重启后没有任何内存钥匙。 */
+    private MemoryPolicyService restartedPolicy() {
+        MemoryVaultService restartedVault = new MemoryVaultService(new MemoryCryptoService(new ApiKeyEncryptor()),
+                memory, new MemoryOperationRepository(dataSource, immediate),
+                new ChatSessionMetadataRepository(dataSource, immediate));
+        return new MemoryPolicyService(new MemorySettingsRepository(dataSource, immediate), memory, jobs,
+                new AiConfigRepository(jdbc), new NotebookRepository(jdbc, new ObjectMapper()), restartedVault);
+    }
+
+    /** 锁定语义只在 password 库上还能被观察到：fingerprint 库会由使用方自动解锁。 */
+    private void createPasswordVaultAndLock() {
+        assertEquals(201, vault.create("password", MASTER, null).status());
         assertEquals(204, vault.lock().status());
     }
 

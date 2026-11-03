@@ -1292,6 +1292,46 @@ html[data-theme='dark'] {
 /* 设置行：左侧标题 + 一句说明，右侧控件 */
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .form-stack > .settings-row + .settings-row { padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--line) 65%, transparent); }
+/* 记忆管理（§12）：库表单、列表行、来源清单与统计条，全部走主题变量，明暗两态共用 */
+.ai-memory-vault-form { display: grid; gap: 10px; }
+.ai-memory-list { display: grid; gap: 12px; }
+.ai-memory-spin { align-self: flex-start; }
+.ai-memory-empty { display: grid; gap: 10px; justify-items: center; padding: 16px 0; }
+.ai-memory-items { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ai-memory-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle-bg); transition: border-color 140ms ease, background 140ms ease; }
+.ai-memory-item:hover { border-color: var(--accent-border); background: color-mix(in srgb, var(--accent-soft) 45%, var(--subtle-bg)); }
+.ai-memory-item-main { min-width: 0; display: grid; gap: 6px; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.ai-memory-item-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ai-memory-item-title { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.ai-memory-item-sub { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
+.ai-memory-item-side { display: grid; justify-items: end; gap: 6px; text-align: right; }
+.ai-memory-item-expiry { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ai-memory-item-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.ai-memory-item-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ai-memory-item-status.is-active { color: var(--success-text); }
+.ai-memory-item-status.is-pending { color: #b7791f; }
+.ai-memory-item-status.is-disabled { color: var(--muted); }
+.ai-memory-item-status.is-expired { color: var(--danger); }
+.ai-memory-item-status.is-muted { color: var(--muted); }
+.ai-memory-pager { padding-top: 2px; }
+.ai-memory-detail { display: grid; gap: 14px; }
+.ai-memory-meta { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.ai-memory-sources { display: grid; gap: 8px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.ai-memory-counts { display: grid; gap: 2px; padding-top: 12px; border-top: 1px dashed var(--line); }
+/* 待确认审阅：新值/当前值/原话/作用域/为什么待确认摊在同一张卡片上 */
+.ai-memory-review { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px dashed var(--line); }
+.ai-memory-review-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle-bg); }
+.ai-memory-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-memory-review-body { display: grid; gap: 6px; margin: 0; overflow-wrap: anywhere; }
+.ai-memory-review-body > div { display: grid; gap: 2px; }
+.ai-memory-review-body dt { font-size: 12px; color: var(--muted); }
+.ai-memory-review-body dd { margin: 0; }
+.ai-memory-review-error { margin-top: 2px; }
+@media (max-width: 759px) {
+  .ai-memory-item { grid-template-columns: 1fr; gap: 10px; }
+  .ai-memory-item-side { justify-items: start; justify-content: start; grid-auto-flow: column; text-align: left; }
+  .ai-memory-review-actions { width: 100%; }
+}
 /* 快捷键编辑器：作用域分组 + 绑定 chip（含移除按钮）+ 录入按钮（全部跟主题变量，明暗两态共用） */
 .settings-group { display: grid; gap: 12px; }
 .settings-group + .settings-group { padding-top: 14px; border-top: 1px dashed var(--line); }
@@ -1417,6 +1457,65 @@ html[data-theme='dark'] {
 .ai-citation-title { flex: 0 1 auto; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-citation-heading { flex: 1 1 auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-insert-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent-border); border-radius: var(--radius-md); background: var(--accent-soft); }
+
+/* 记忆徽标与本轮上下文检查器：只读展示，正文只在逐条对照后出现 */
+.ai-memory-badge { margin-top: 8px; }
+.ai-memory-badge-toggle { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--subtle-bg); color: var(--muted); font-size: 12px; cursor: pointer; }
+.ai-memory-badge-toggle:hover { border-color: var(--accent-border); color: var(--text); }
+.ai-memory-badge-panel { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-bg); font-size: 12px; }
+.ai-memory-badge-note { margin: 0 0 6px; color: var(--muted); }
+.ai-memory-badge-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ai-memory-badge-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ai-memory-badge-id { font-size: 11px; color: var(--muted); word-break: break-all; }
+.ai-memory-badge-check, .ai-inspector-source-check { padding: 2px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+.ai-memory-badge-check:disabled, .ai-inspector-source-check:disabled { opacity: 0.6; cursor: default; }
+.ai-memory-badge-quote, .ai-inspector-source-quote { flex: 1 1 100%; padding: 4px 6px; border-left: 2px solid var(--accent-border); background: var(--subtle-bg); word-break: break-word; }
+.ai-memory-badge-gone, .ai-inspector-source-gone, .ai-memory-badge-error, .ai-inspector-error { color: var(--danger); }
+.ai-memory-badge-plain, .ai-inspector-source-plain { color: var(--muted); }
+.ai-memory-badge-error, .ai-inspector-error { margin: 6px 0 0; }
+.ai-memory-badge-inspector { margin-top: 8px; padding: 4px 10px; border: 1px solid var(--accent-border); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); font-size: 12px; cursor: pointer; }
+.ai-inspector { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow-y: auto; font-size: 12px; }
+.ai-inspector-note, .ai-inspector-empty { margin: 0; color: var(--muted); }
+.ai-inspector-block { display: flex; flex-direction: column; gap: 4px; }
+.ai-inspector-line { margin: 0; word-break: break-word; }
+.ai-inspector-muted { margin: 0; color: var(--muted); font-size: 11px; }
+.ai-inspector-flag { margin-left: 6px; color: var(--muted); }
+.ai-inspector-coverage { margin-left: 6px; color: var(--muted); word-break: break-all; }
+.ai-inspector-usage { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.ai-inspector-omission { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ai-inspector-omission-kind, .ai-inspector-omission-count { color: var(--muted); }
+.ai-inspector-table { width: 100%; border-collapse: collapse; }
+.ai-inspector-table th, .ai-inspector-table td { padding: 2px 6px; text-align: left; border-bottom: 1px solid var(--line); }
+.ai-inspector-sources, .ai-inspector-omissions { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ai-inspector-source { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.ai-inspector-source-kind, .ai-inspector-source-version { color: var(--muted); font-size: 11px; }
+.ai-inspector-source-id { font-size: 11px; word-break: break-all; }
+
+/* 会话历史分页与抽屉内解锁：只在「有更早记录」「有密文行」时出现 */
+.ai-history-older { display: flex; justify-content: center; }
+.ai-history-older-cap { margin: 0; color: var(--muted); font-size: 11px; text-align: center; }
+.ai-history-unlock { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-bg); }
+.ai-history-unlock-hint { margin: 0; color: var(--muted); font-size: 12px; }
+.ai-history-unlock-form { display: flex; align-items: center; gap: 8px; }
+.ai-history-unlock-form > .arco-input-wrapper { flex: 1; min-width: 0; }
+
+/* 容量条：本地落库字节对可配额度，三档说法分开；到上限才用危险色 */
+.ai-storage-meter { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--subtle-bg); color: var(--muted); font-size: 11px; }
+.ai-storage-meter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-storage-meter-bar { flex: 0 0 72px; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ai-storage-meter-fill { display: block; height: 100%; background: var(--accent-fill); }
+.ai-storage-meter-full { color: var(--danger); }
+.ai-storage-meter-full .ai-storage-meter-fill { background: var(--danger); }
+.ai-storage-meter-error { color: var(--danger); }
+
+/* 历史清理入口与确认弹窗（contracts §3 `/history/cleanup/*`） */
+.ai-storage-row { display: flex; align-items: center; gap: 6px; }
+.ai-storage-row .ai-storage-meter { flex: 1 1 auto; min-width: 0; }
+.ai-cleanup-entry { flex: 0 0 auto; }
+.ai-cleanup-keep { display: flex; align-items: center; gap: 8px; }
+.ai-cleanup-hint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-cleanup-facts { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle-bg); }
+.ai-cleanup-error { color: var(--danger); }
 
 /* AI 模型槽位卡片（API 格式 / Base URL / 模型拉取 / 测活） */
 .ai-slot-card { display: flex; flex-direction: column; gap: 12px; }

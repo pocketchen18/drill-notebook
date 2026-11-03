@@ -135,6 +135,35 @@ class MemoryItemServiceTest {
         assertFalse(String.valueOf(candidates).contains(VALUE), "冲突响应不回别人的正文");
     }
 
+    /**
+     * §12 的"手动添加两条学习目标"能并存：族键必须由服务端按 {@code predicate:value} 派生。
+     * 早先手动路径只看前端传来的 family，两条不同目标撞在同一个空族键上被 409 挡回，
+     * 而自动提取链用的是另一套派生——两条路径口径不同（P9b 的 D99）。
+     */
+    @Test
+    void manualMultiValuedGoalsEachGetTheirOwnFamily() throws Exception {
+        createFingerprintVault();
+        String firstGoal = (String) items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "雅思 7 分",
+                null, null, null)).body().get("memoryId");
+
+        MemoryApiResult second = items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "准备托福",
+                null, null, null));
+        assertEquals(201, second.status(), String.valueOf(second.body()));
+        String otherGoal = (String) second.body().get("memoryId");
+        assertEquals(2, count("ai_memory_item"), "多值事实各占一族，谁也不顶掉谁");
+        assertFalse(jdbc.queryForObject("SELECT family_key_hmac FROM ai_memory_item WHERE memory_id = ?",
+                        String.class, firstGoal)
+                .equals(jdbc.queryForObject("SELECT family_key_hmac FROM ai_memory_item WHERE memory_id = ?",
+                        String.class, otherGoal)), "族键里没带值，两条目标就成了同族冲突");
+
+        MemoryApiResult duplicate = items.add(new AddInput("GOAL", "GLOBAL", 0L, "study.goal", null, "雅思 7 分",
+                null, null, null));
+        assertEquals(409, duplicate.status(), "换个值才算另一条，抄一遍还是冲突");
+        assertEquals("MEMORY_FAMILY_CONFLICT", duplicate.body().get("code"));
+        assertEquals(true, items.get(firstGoal).body().get("multiValued"),
+                "候选能不能「分别保留」由服务端这张表判定，界面不许复刻一份谓词清单");
+    }
+
     @Test
     void credentialsAreRefusedEvenWhenTheUserInsists() throws Exception {
         createFingerprintVault();
@@ -186,7 +215,7 @@ class MemoryItemServiceTest {
         assertEquals(423, items.get(memoryId).status());
         assertEquals(423, items.list(null, null, null, null, null, null).status());
         assertEquals(423, items.edit(memoryId, new EditInput(1, null, null, "长一点", null, null)).status());
-        assertEquals(423, items.delete(memoryId, 1, false, null).status());
+        assertEquals(423, items.delete(memoryId, 1, null).status());
     }
 
     // ---- 改与停用 ----
@@ -239,7 +268,8 @@ class MemoryItemServiceTest {
 
         assertEquals("DISABLED", items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"))
                 .body().get("status"));
-        assertEquals(404, items.get(memoryId).status(), "停用后没有生效版本");
+        assertEquals(200, items.get(memoryId).status(), "停用后仍能打开详情");
+        assertEquals("DISABLED", items.get(memoryId).body().get("status"));
         assertEquals(200, items.edit(memoryId, new EditInput(1, null, null, null, null, "disabled")).status(),
                 "模式大小写不影响判定");
         assertEquals(false, items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"))
@@ -250,6 +280,74 @@ class MemoryItemServiceTest {
         assertEquals(200, items.get(memoryId).status());
         assertEquals(400, items.edit(memoryId, new EditInput(1, null, null, null, null, "EXPIRED")).status());
         assertEquals(1L, count("ai_memory_item"), "停用与启用都不造新版");
+    }
+
+    @Test
+    void disabledMemoryCanBeRenamedInPlaceWithoutCreatingASecondMemory() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"));
+
+        MemoryApiResult renamed = items.edit(memoryId, new EditInput(1, "新名字", null, null, null, null));
+        assertEquals(200, renamed.status());
+        assertEquals("新名字", renamed.body().get("predicate"));
+        assertEquals("DISABLED", renamed.body().get("status"));
+        assertEquals(2, renamed.body().get("version"));
+        assertEquals(memoryId, renamed.body().get("memoryId"));
+
+        List<?> listed = (List<?>) items.list(null, null, "ALL", null, 10, null).body().get("items");
+        assertEquals(1, listed.size(), "列表只显示当前版本，不把历史版本当第二条记忆");
+        assertEquals(memoryId, ((Map<?, ?>) listed.get(0)).get("memoryId"));
+        assertEquals(2, ((Map<?, ?>) listed.get(0)).get("version"));
+        assertEquals("DISABLED", ((Map<?, ?>) listed.get(0)).get("status"));
+    }
+
+    @Test
+    void validUntilCanBeSetAndClearedWithoutChangingContent() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        String future = Instant.now().plus(30, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+
+        MemoryApiResult set = items.edit(memoryId, new EditInput(1, null, null, null, future, null));
+        assertEquals(200, set.status());
+        assertEquals(future, set.body().get("validUntil"));
+        assertEquals(2, set.body().get("version"));
+
+        MemoryApiResult cleared = items.edit(memoryId, new EditInput(2, null, null, null, "", null));
+        assertEquals(200, cleared.status());
+        assertNull(cleared.body().get("validUntil"), "空字符串表示清除有效期");
+        assertEquals(3, cleared.body().get("version"));
+        assertEquals(memoryId, cleared.body().get("memoryId"));
+    }
+
+    @Test
+    void metadataOnlyEditKeepsAutoOriginButContentEditClaimsIt() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        jdbc.update("UPDATE ai_memory_item SET origin = 'AUTO', manual_protected = 0 WHERE memory_id = ?",
+                memoryId);
+        long turn = insertTurn();
+        memory.attachEvidence(new MemoryRepository.EvidenceDraft("ev-meta", vaultId, sessionId, turn, null, "b1",
+                "src-meta", "密文原话", "{}", MemoryTimes.now()), currentRowId(memoryId));
+        String future = Instant.now().plus(30, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+
+        MemoryApiResult expiry = items.edit(memoryId, new EditInput(1, null, null, null, future, null));
+        assertEquals(200, expiry.status());
+        assertEquals("AUTO", expiry.body().get("origin"), "只改有效期不该把自动来源改成人工");
+        assertEquals(false, expiry.body().get("manualProtected"), "只改有效期也不该顺手锁成人工保护");
+        assertEquals(1, ((List<?>) items.get(memoryId).body().get("sources")).size(), "改有效期不能丢来源");
+
+        MemoryApiResult renamed = items.edit(memoryId, new EditInput(2, "新名字", null, null, null, null));
+        assertEquals(200, renamed.status());
+        assertEquals("AUTO", renamed.body().get("origin"), "只改名称不该把自动来源改成人工");
+        assertEquals(false, renamed.body().get("manualProtected"));
+        assertEquals(1, ((List<?>) items.get(memoryId).body().get("sources")).size(), "改名称不能丢来源");
+
+        MemoryApiResult rewritten = items.edit(memoryId, new EditInput(3, null, null, "新内容", null, null));
+        assertEquals(200, rewritten.status(), String.valueOf(rewritten.body()));
+        assertEquals("MANUAL", rewritten.body().get("origin"), "改内容才转成人工来源");
+        assertEquals(true, rewritten.body().get("manualProtected"));
+        assertEquals(1, ((List<?>) items.get(memoryId).body().get("sources")).size(), "改内容也保留来源");
     }
 
     @Test
@@ -312,12 +410,18 @@ class MemoryItemServiceTest {
         assertEquals(first, ((Map<?, ?>) disabled.get(0)).get("memoryId"));
         List<?> active = (List<?>) items.list(null, null, null, null, 10, null).body().get("items");
         assertEquals(2, active.size());
+
+        MemoryApiResult everything = items.list(null, null, "ALL", null, 10, null);
+        assertEquals(200, everything.status());
+        assertEquals("ALL", everything.body().get("status"));
+        assertEquals(3, ((List<?>) everything.body().get("items")).size(),
+                "ALL 不按状态过滤，停用的那条也要出现");
     }
 
     // ---- 删除 ----
 
     @Test
-    void forgetfulDeleteWipesTheChainAndRaisesTheBarriers() throws Exception {
+    void deleteWipesTheChainWithoutMovingScanBoundaries() throws Exception {
         createFingerprintVault();
         String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
         long turn = insertTurn();
@@ -332,7 +436,7 @@ class MemoryItemServiceTest {
                         + " VALUES (?, 1, ?, 1, 1, 'ctx', '{}', 20, ?)", sessionId, turn, MemoryTimes.now());
         long epochBefore = memory.readVault(vaultId).orElseThrow().epoch();
 
-        MemoryApiResult deleted = items.delete(memoryId, 1, true, "op-del-1");
+        MemoryApiResult deleted = items.delete(memoryId, 1, "op-del-1");
         assertEquals(204, deleted.status());
         assertTrue(deleted.body().isEmpty(), "204 不带正文");
 
@@ -342,31 +446,29 @@ class MemoryItemServiceTest {
         assertEquals("STALE", jdbc.queryForObject("SELECT status FROM ai_memory_proposal", String.class),
                 "指向被删记忆的建议置 STALE，不留在 PENDING");
         assertEquals(3L, count("ai_memory_suppression"), "family + predicate + 来源");
-        assertEquals(epochBefore + 1, memory.readVault(vaultId).orElseThrow().epoch(), "遗忘推 epoch");
+        assertEquals(epochBefore + 1, memory.readVault(vaultId).orElseThrow().epoch(), "删除推 epoch");
         assertEquals("SUPERSEDED", jdbc.queryForObject("SELECT status FROM ai_memory_job WHERE id = ?",
                 String.class, jobId));
         assertEquals(0L, count("ai_session_context"), "旧 epoch 的摘要检查点作废");
-        assertEquals(turn, scanWatermark("memory_scan_after_turn"), "会话水位推到当前边界");
-        assertEquals(turn, scanWatermark("summary_scan_after_turn"));
-        assertTrue(policy.policyOf(policy.current()).memoryHistoryFloor() >= turn, "全局遗忘边界单调推进");
+        assertEquals(0L, scanWatermark("memory_scan_after_turn"), "删除不动会话扫描水位");
+        assertEquals(0L, scanWatermark("summary_scan_after_turn"));
+        assertEquals(0L, policy.policyOf(policy.current()).memoryHistoryFloor(), "删除不动全局边界");
 
         assertEquals(200, items.list(null, null, null, null, null, null).status(), "删空后列表仍可用");
     }
 
     @Test
-    void plainDeleteLeavesScanBoundariesAlone() throws Exception {
+    void detailSourceUsesTheSessionTitleInsteadOfRawIds() throws Exception {
         createFingerprintVault();
         String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
-        insertTurn();
-        jdbc.update("UPDATE ai_chat_session SET memory_scan_after_turn = 5, summary_scan_after_turn = 5"
-                + " WHERE id = ?", sessionId);
+        long turn = insertTurn();
+        jdbc.update("UPDATE ai_chat_session SET title = ? WHERE id = ?", "杭州生活", sessionId);
+        memory.attachEvidence(new MemoryRepository.EvidenceDraft("ev-title", vaultId, sessionId, turn, null, "b1",
+                "src-title", "cipher", "{}", MemoryTimes.now()), currentRowId(memoryId));
 
-        assertEquals(204, items.delete(memoryId, 1, false, null).status());
-
-        assertEquals(0L, count("ai_memory_item"));
-        assertEquals(5L, scanWatermark("memory_scan_after_turn"), "不带 forget 的删除不动扫描水位");
-        assertEquals(0L, policy.policyOf(policy.current()).memoryHistoryFloor());
-        assertEquals(2L, memory.readVault(vaultId).orElseThrow().epoch());
+        List<?> sources = (List<?>) items.get(memoryId).body().get("sources");
+        assertEquals(1, sources.size());
+        assertEquals("杭州生活", ((Map<?, ?>) sources.get(0)).get("sessionTitle"));
     }
 
     @Test
@@ -374,17 +476,17 @@ class MemoryItemServiceTest {
         createFingerprintVault();
         String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
 
-        assertEquals(204, items.delete("mem-从未存在", 1, false, null).status(), "不存在按幂等 204");
+        assertEquals(204, items.delete("mem-从未存在", 1, null).status(), "不存在按幂等 204");
 
-        assertEquals(204, items.delete(memoryId, 1, false, "op-del-2").status());
+        assertEquals(204, items.delete(memoryId, 1, "op-del-2").status());
         long epochAfterDelete = memory.readVault(vaultId).orElseThrow().epoch();
-        assertEquals(204, items.delete(memoryId, 1, false, "op-del-2").status());
+        assertEquals(204, items.delete(memoryId, 1, "op-del-2").status());
         assertEquals(epochAfterDelete, memory.readVault(vaultId).orElseThrow().epoch(), "重放不再推一次 epoch");
 
         String second = (String) items.add(add("goal.language", "我在准备雅思")).body().get("memoryId");
-        assertEquals(409, items.delete(second, 99, false, null).status());
+        assertEquals(409, items.delete(second, 99, null).status());
         assertEquals(1L, count("ai_memory_item"), "版本冲突时一条都不删");
-        assertEquals(400, items.delete(second, null, false, null).status());
+        assertEquals(400, items.delete(second, null, null).status());
     }
 
     // ---- 状态计数 ----

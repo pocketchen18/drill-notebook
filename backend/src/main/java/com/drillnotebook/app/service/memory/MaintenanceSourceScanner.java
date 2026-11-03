@@ -1,5 +1,6 @@
 package com.drillnotebook.app.service.memory;
 
+import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.ChatHistoryRepository.MaintenanceRow;
 import com.drillnotebook.app.repository.ChatTurnRepository;
@@ -8,15 +9,20 @@ import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.ChatMessageCipher;
 import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
+import com.drillnotebook.app.service.memory.MaintenancePorts.SourceBlock;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -81,9 +87,20 @@ public class MaintenanceSourceScanner {
     /** 装载请求：区间、身份材料与解密材料。 */
     public record Request(Kind kind, long sessionId, long fromTurnId, long throughTurnId, long contextGeneration,
                           String scopeType, long scopeId, String timezone, long vaultEpoch, long policyRevision,
-                          long summaryRevision, String previousSummary, String targetFingerprint,
+                          MaintenancePorts.PreviousSummary previous, String targetFingerprint,
                           String promptVersion, int framingTokens, long historyFloor, String sessionPassword,
                           MemoryCryptoService.MemoryKey key) {
+        public Request {
+            previous = previous == null ? MaintenancePorts.PreviousSummary.NONE : previous;
+        }
+
+        long summaryRevision() {
+            return previous.revision();
+        }
+
+        String previousSummary() {
+            return previous.modelSummary();
+        }
     }
 
     private static final Logger log = LoggerFactory.getLogger(MaintenanceSourceScanner.class);
@@ -107,40 +124,197 @@ public class MaintenanceSourceScanner {
     }
 
     /**
-     * 当前有效摘要的正文（§8.4 第 3 条的输入之一）。只在与本会话当前代次、当前库 epoch 一致时才认，
-     * 解不出来或超出 payload 上限就当没有——宁可重新整理，也不把别代次的内容续进新批次。
+     * 当前有效摘要的正文、已覆盖范围与引用（§8.4 第 3 条的输入之一，也是换代时 coverage 的来源）。
+     * 只在与本会话当前代次、当前库 epoch 一致时才认，解不出来或超出 payload 上限就当没有——
+     * 宁可重新整理，也不把别代次的内容续进新批次。
      *
      * <p>返回的 {@link PreviousSummary#revision} 同时是批次身份与检查点 CAS 的键。</p>
      */
-    public PreviousSummary previousSummary(long sessionId, long contextGeneration, long vaultEpoch,
-                                           MemoryCryptoService.MemoryKey key) {
+    public MaintenancePorts.PreviousSummary previousSummary(long sessionId, long contextGeneration, long vaultEpoch,
+                                                            MemoryCryptoService.MemoryKey key) {
         try {
             Optional<SessionContextRepository.Checkpoint> row = contexts.read(sessionId);
             if (row.isEmpty()) {
-                return PreviousSummary.NONE;
+                return MaintenancePorts.PreviousSummary.NONE;
             }
             SessionContextRepository.Checkpoint checkpoint = row.get();
             if (checkpoint.contextGeneration() != contextGeneration || checkpoint.vaultEpoch() != vaultEpoch) {
-                return PreviousSummary.NONE;
+                return MaintenancePorts.PreviousSummary.NONE;
             }
             String payload = crypto.decrypt(key, "ai_session_context", String.valueOf(sessionId),
                     checkpoint.revision(), checkpoint.payloadCipher(), checkpoint.cryptoMeta());
             if (payload == null || payload.getBytes(StandardCharsets.UTF_8).length
                     > MaintenanceRules.SUMMARY_PAYLOAD_BYTE_LIMIT) {
-                return PreviousSummary.NONE;
+                return MaintenancePorts.PreviousSummary.NONE;
             }
             Map<String, Object> parsed = mapper.readValue(payload, new TypeReference<>() {
             });
             Object summary = parsed.get("modelSummary");
-            return new PreviousSummary(checkpoint.revision(), summary == null ? null : String.valueOf(summary));
+            return new MaintenancePorts.PreviousSummary(checkpoint.revision(),
+                    summary == null ? null : String.valueOf(summary), ranges(parsed.get("serverCoverage")),
+                    references(parsed.get("references")));
         } catch (Exception error) {
-            return PreviousSummary.NONE;
+            return MaintenancePorts.PreviousSummary.NONE;
         }
     }
 
-    /** 旧摘要的 revision 与正文；revision 为 0 表示没有可用摘要。 */
-    public record PreviousSummary(long revision, String modelSummary) {
-        static final PreviousSummary NONE = new PreviousSummary(0L, null);
+    /** 旧检查点的覆盖段：非法段直接忽略，读侧还有一道同款校验（§2.5）。 */
+    private static List<ContextAudit.CoverageRange> ranges(Object node) {
+        List<ContextAudit.CoverageRange> ranges = new ArrayList<>();
+        if (!(node instanceof List<?> list)) {
+            return List.of();
+        }
+        for (Object element : list) {
+            if (!(element instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object first = map.get("firstTurnId");
+            Object last = map.get("lastTurnId");
+            if (first instanceof Number firstNumber && last instanceof Number lastNumber
+                    && firstNumber.longValue() > 0 && lastNumber.longValue() >= firstNumber.longValue()) {
+                ranges.add(new ContextAudit.CoverageRange(firstNumber.longValue(), lastNumber.longValue()));
+            }
+        }
+        return List.copyOf(ranges);
+    }
+
+    /** 旧摘要的引用：换代时仍然有效，但每次使用前还要按当前 scope 与版本复验（§8.4 第 7 条）。 */
+    private static List<SessionSummaryValidator.Reference> references(Object node) {
+        List<SessionSummaryValidator.Reference> kept = new ArrayList<>();
+        if (!(node instanceof List<?> list)) {
+            return List.of();
+        }
+        for (Object element : list) {
+            if (!(element instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object page = map.get("pageId");
+            Object version = map.get("contentVersion");
+            Object turn = map.get("sourceTurnId");
+            if (page instanceof Number pageNumber && pageNumber.longValue() > 0 && version instanceof String text
+                    && !text.isBlank() && turn instanceof Number turnNumber && turnNumber.longValue() > 0) {
+                kept.add(new SessionSummaryValidator.Reference(pageNumber.longValue(), text,
+                        turnNumber.longValue()));
+            }
+        }
+        return List.copyOf(kept);
+    }
+
+    /**
+     * 引用台账（contracts §6.1 的 {@code allowedReferences}；执行方案 §8.4 第 7 条）：
+     * 只收「本批轮次实际提供给模型的笔记页」和「上一版摘要里已经成立的页」，条数就是 §6.1 的 3。
+     *
+     * <p>{@code contentVersion} <b>不</b>用审计里那串历史字符串，而是现读 {@code note_page.content_hash}：
+     * §6.1 要求"用服务端读取笔记时的更新版本，不能采信前端随填字符串"，而且检索片段在审计里记的是
+     * {@code chunkId@hash}，不是页面版本，直接抄会把片段号当页面号用。页面已经不在了就整个剔除——
+     * 宁可这一版摘要没有引用，也不给模型一个可以抄的假引用。</p>
+     */
+    private List<SessionSummaryValidator.Reference> allowedReferences(Request request, List<SourceTurn> turns,
+                                                                      MaintenancePorts.PreviousSummary previous,
+                                                                      String sessionPassword) {
+        Map<Long, Long> providers = providedPages(request.sessionId(), turns, sessionPassword);
+        List<SessionSummaryValidator.Reference> kept = new ArrayList<>();
+        Set<Long> taken = new LinkedHashSet<>();
+        for (SessionSummaryValidator.Reference reference : previous.references()) {
+            if (kept.size() >= SessionSummaryValidator.MAX_REFERENCES || !taken.add(reference.pageId())) {
+                continue;
+            }
+            String current = usablePageVersion(request, reference.pageId());
+            if (current != null) {
+                kept.add(new SessionSummaryValidator.Reference(reference.pageId(), current,
+                        reference.sourceTurnId()));
+            }
+        }
+        // 其余按"最近提供的优先"补满：providers 按轮次升序装入，所以从尾部往前取
+        List<Long> order = List.copyOf(providers.keySet());
+        for (int index = order.size() - 1; index >= 0 && kept.size() < SessionSummaryValidator.MAX_REFERENCES;
+                index--) {
+            long pageId = order.get(index);
+            if (!taken.add(pageId)) {
+                continue;
+            }
+            String current = usablePageVersion(request, pageId);
+            if (current != null) {
+                kept.add(new SessionSummaryValidator.Reference(pageId, current, providers.get(pageId)));
+            }
+        }
+        return List.copyOf(kept);
+    }
+
+    /** 本批各轮的上下文审计里真发过的页面：整页注入与笔记本检索片段都算，值是哪一轮发的。 */
+    private Map<Long, Long> providedPages(long sessionId, List<SourceTurn> turns, String sessionPassword) {
+        Map<Long, Long> providers = new LinkedHashMap<>();
+        if (turns.isEmpty()) {
+            return providers;
+        }
+        List<ChatHistoryRepository.AuditMetaRow> rows;
+        try {
+            rows = history.auditMetaByTurnIds(sessionId, turns.stream().map(SourceTurn::turnId).toList());
+        } catch (Exception error) {
+            log.warn("摘要引用台账读取失败，本轮按无引用处理 session={}: {}", sessionId, error.toString());
+            return Map.of();
+        }
+        for (ChatHistoryRepository.AuditMetaRow row : rows) {
+            // 一轮没有审计（旧轮次、没走 v2 上下文计划的轮次）是常态，不能因此丢掉整批的引用
+            ChatMessageCipher.Read read = cipher.readLegacy(null, row.resultMetaCipher(), row.resultMetaCrypto(),
+                    sessionPassword);
+            if (read.status() != ChatMessageCipher.ReadStatus.DECRYPTED || read.value() == null
+                    || read.value().isBlank()) {
+                continue;
+            }
+            try {
+                for (Long pageId : citedPages(read.value())) {
+                    providers.putIfAbsent(pageId, row.turnId());
+                }
+            } catch (Exception error) {
+                log.warn("本轮上下文审计解不开，跳过它的引用 turn={}: {}", row.turnId(), error.toString());
+            }
+        }
+        return providers;
+    }
+
+    /** {@code result_meta} 明文里 {@code audit.selected[]} 的页面类条目（contracts §4.5 的落库形态）。 */
+    private List<Long> citedPages(String meta) throws Exception {
+        Map<String, Object> parsed = mapper.readValue(meta, new TypeReference<>() {
+        });
+        if (!(parsed.get("audit") instanceof Map<?, ?> audit)
+                || !(audit.get("selected") instanceof List<?> selected)) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>();
+        for (Object element : selected) {
+            if (!(element instanceof Map<?, ?> item)) {
+                continue;
+            }
+            String kind = String.valueOf(item.get("kind"));
+            // 两类条目的 id 都是 pageId（片段的 pageId 来自 citation），所以页面级台账能直接归一
+            if (("PAGE".equals(kind) || "NOTEBOOK_RAG".equals(kind))
+                    && item.get("id") instanceof String text && text.matches("\\d+")
+                    && Long.parseLong(text) > 0) {
+                ids.add(Long.parseLong(text));
+            }
+        }
+        return ids;
+    }
+
+    /** 这一页现在还能不能当引用：笔记本作用域要页确实属于那本笔记本，且读得到内容版本。 */
+    private String usablePageVersion(Request request, long pageId) {
+        try {
+            if ("NOTEBOOK".equals(request.scopeType())) {
+                Optional<Long> owner = history.notebookIdOfPage(pageId);
+                if (owner.isEmpty() || owner.get() != request.scopeId()) {
+                    return null;
+                }
+            }
+            Optional<String> hash = history.pageContentHash(pageId);
+            // 版本长度按 §6.1 引用上限卡住：超长说明这列不是我们认的内容版本，别把它交给模型抄
+            return hash.filter(value -> !value.isBlank()
+                    && value.codePointCount(0, value.length()) <= SessionSummaryValidator.MAX_VERSION_CODE_POINTS)
+                    .orElse(null);
+        } catch (Exception error) {
+            log.warn("引用页面复验失败，按不可用处理 page={}: {}", pageId, error.toString());
+            return null;
+        }
     }
 
     /** 装载一批来源并按 §8.5 派生批次身份。 */
@@ -208,6 +382,21 @@ public class MaintenanceSourceScanner {
                 counters.credentials++;
                 continue;
             }
+            List<SourceBlock> blocks = List.of();
+            if (extract) {
+                // §4.3：quote 只能绑在 USER_AUTHORED 块上，所以提取输入必须有块，不能只靠消息正文
+                BlockRead read = authoredBlocks(row, request.sessionPassword());
+                if (read.needsPassword()) {
+                    needsPassword = true;
+                    break;
+                }
+                blocks = new ArrayList<>(read.blocks());
+                if (blocks.stream().noneMatch(block -> block.text() != null
+                        && block.text().strip().equals(userText.strip()))) {
+                    // 旧数据没有 sourceBlocks，或 sourceBlocks 未包含用户原话时，补一条可引用的 USER_AUTHORED 块。
+                    blocks.add(new SourceBlock("u" + row.userMessageId(), userText));
+                }
+            }
             String assistantText = null;
             if (!extract) {
                 ChatMessageCipher.Read reply = cipher.readLegacy(row.assistantContent(), row.assistantContentCipher(),
@@ -237,7 +426,7 @@ public class MaintenanceSourceScanner {
             budget -= tokens;
             turns.add(new SourceTurn(row.turnId(), row.sourceRevision(), row.userMessageId(),
                     row.assistantMessageId(), userText, assistantText, tokens,
-                    MemoryTimes.parseMillis(row.finishedAt())));
+                    MemoryTimes.parseMillis(row.finishedAt()), blocks, row.userCreatedAt()));
         }
         Skips skips = counters.toSkips();
         if (needsPassword) {
@@ -256,10 +445,12 @@ public class MaintenanceSourceScanner {
         // from/through 用<b>请求区间</b>而不是"首末条可用轮次"：认领时按同样的区间重算身份才会一致
         Batch batch = new Batch(request.kind(), request.sessionId(), request.fromTurnId(), examined,
                 request.contextGeneration(), request.scopeType(), request.scopeId(), request.timezone(),
-                request.vaultEpoch(), request.policyRevision(), request.summaryRevision(),
-                request.previousSummary(), List.copyOf(turns), Math.max(0, request.framingTokens()),
-                used + Math.max(0, request.framingTokens()), identity,
-                turns.get(turns.size() - 1).finishedMillis());
+                request.vaultEpoch(), request.policyRevision(), request.previous(), List.copyOf(turns),
+                Math.max(0, request.framingTokens()), used + Math.max(0, request.framingTokens()), identity,
+                turns.get(turns.size() - 1).finishedMillis(),
+                request.kind() == Kind.SUMMARY
+                        ? allowedReferences(request, turns, request.previous(), request.sessionPassword())
+                        : List.of());
         return new Loaded(Outcome.READY, batch, skips, examined, skipNotice(skips));
     }
 
@@ -365,6 +556,47 @@ public class MaintenanceSourceScanner {
             return MaintenanceRules.NOTICE_SOURCE_DELETED;
         }
         return null;
+    }
+
+    /** 从请求元数据里读出的用户亲述块；{@code needsPassword} 要把整批推到等待解锁。 */
+    private record BlockRead(List<SourceBlock> blocks, boolean needsPassword) {
+        private static final BlockRead NONE = new BlockRead(List.of(), false);
+    }
+
+    /**
+     * 取 {@code request_meta.sourceBlocks} 里的 {@code USER_AUTHORED} 块（§4.3）。附件块永远拿不到这个
+     * origin，所以附件正文不可能被当作用户亲口说的话来提取；旧数据没有 sourceBlocks 时返回空列表，由调用方兜底。
+     */
+    private BlockRead authoredBlocks(MaintenanceRow row, String sessionPassword) {
+        ChatMessageCipher.Read meta = cipher.read(row.requestMetaCipher(), row.requestMetaCrypto(), sessionPassword);
+        if (meta.status() == ChatMessageCipher.ReadStatus.NEEDS_PASSWORD) {
+            return new BlockRead(List.of(), true);
+        }
+        if (meta.status() != ChatMessageCipher.ReadStatus.DECRYPTED) {
+            return BlockRead.NONE;
+        }
+        try {
+            JsonNode blocks = mapper.readTree(meta.value()).path("sourceBlocks");
+            if (!blocks.isArray()) {
+                return BlockRead.NONE;
+            }
+            List<SourceBlock> authored = new ArrayList<>();
+            for (JsonNode block : blocks) {
+                if (!"USER_AUTHORED".equals(block.path("origin").asText(""))) {
+                    continue;
+                }
+                String blockId = block.path("blockId").asText("");
+                String text = block.path("text").asText("");
+                if (!blockId.isBlank() && !text.isBlank()) {
+                    authored.add(new SourceBlock(blockId, text));
+                }
+            }
+            return new BlockRead(List.copyOf(authored), false);
+        } catch (Exception error) {
+            // 元数据坏了就当没有可用块：宁可少提取，也不能让 quote 绑到来历不明的文本上
+            log.info("轮次 {} 的来源块无法解析，按不合格来源跳过", row.turnId());
+            return BlockRead.NONE;
+        }
     }
 
     /** 可变计数容器：只在装载循环内部使用。 */

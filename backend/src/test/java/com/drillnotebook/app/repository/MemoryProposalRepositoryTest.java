@@ -15,6 +15,7 @@ import com.drillnotebook.app.repository.MemoryProposalRepository.ProposalRow;
 import com.drillnotebook.app.repository.MemoryProposalRepository.ReviewOutcome;
 import com.drillnotebook.app.repository.MemoryProposalRepository.SubmitOutcome;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -135,6 +136,25 @@ class MemoryProposalRepositoryTest {
     }
 
     @Test
+    void reviewInFollowsTheCallersTransactionAndLeavesNothingOnRollback() throws Exception {
+        String target = newFact();
+        String id = proposals.submit(draft("dedup-1", target)).id();
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            assertEquals(ReviewOutcome.APPLIED, MemoryProposalRepository.reviewIn(connection, id, 1,
+                    MemoryProposalRepository.STATUS_ACCEPTED));
+            assertEquals(MemoryProposalRepository.STATUS_ACCEPTED,
+                    MemoryProposalRepository.findIn(connection, id).orElseThrow().status(),
+                    "同一笔事务内就要读到终态");
+            connection.rollback();
+        }
+        ProposalRow afterRollback = proposals.find(id).orElseThrow();
+        assertEquals(MemoryProposalRepository.STATUS_PENDING, afterRollback.status());
+        assertEquals(1, afterRollback.version(), "调用方回滚就一行都不留：建议终态不得自己落盘");
+    }
+
+    @Test
     void reviewWithStaleVersionChangesNothing() throws Exception {
         String target = newFact();
         String id = proposals.submit(draft("dedup-1", target)).id();
@@ -185,6 +205,27 @@ class MemoryProposalRepositoryTest {
         assertEquals(1, proposals.purgeTerminalBefore(LATER), "只清超期的终态建议");
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE status = 'PENDING'"));
         assertEquals(0, proposals.purgeTerminalBefore(LATER), "没有可清的就不动");
+    }
+
+    @Test
+    void pendingPageWalksAKeysetInsideOneVault() throws Exception {
+        String target = newFact();
+        proposals.submit(new ProposalDraft("prop-a", VAULT, sessionId, null, null, target, 1, "REPLACE_PROPOSAL",
+                "a", "{}", "dedup-a", "2026-10-01T00:00:00.000Z", EXPIRES));
+        proposals.submit(new ProposalDraft("prop-b", VAULT, sessionId, null, null, target, 1, "RETRACT_PROPOSAL",
+                "b", "{}", "dedup-b", "2026-10-02T00:00:00.000Z", EXPIRES));
+        proposals.submit(new ProposalDraft("prop-gone", VAULT, sessionId, null, null, target, 1, "REPLACE_PROPOSAL",
+                "c", "{}", "dedup-c", "2026-10-03T00:00:00.000Z", "2026-10-04T00:00:00.000Z"));
+
+        List<ProposalRow> first = proposals.pagePending(VAULT, NOW, null, null, 1);
+        assertEquals(1, first.size());
+        assertEquals("prop-a", first.get(0).id(), "按 created_at 升序给最早那条，翻页期间不受末尾新增影响");
+
+        List<ProposalRow> second = proposals.pagePending(VAULT, NOW, first.get(0).createdAt(), first.get(0).id(), 5);
+        assertEquals(1, second.size(), "既不漏下一条，也不把已经看过的那条重一遍");
+        assertEquals("prop-b", second.get(0).id());
+        assertEquals(0, proposals.pagePending(VAULT, NOW, "2026-10-02T00:00:00.000Z", "prop-b", 5).size());
+        assertEquals(0, proposals.pagePending("别的库", NOW, null, null, 5).size(), "分页不得跨记忆库");
     }
 
     @Test

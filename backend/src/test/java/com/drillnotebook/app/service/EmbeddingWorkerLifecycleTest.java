@@ -184,8 +184,18 @@ class EmbeddingWorkerLifecycleTest {
         return createFakeWorkerCommand(args.toArray(new String[0]));
     }
 
-    /** Read spawn count from marker file. */
-    private static int readSpawnCount(Path markerFile) throws IOException {
+    /**
+     * Read spawn count from marker file.
+     *
+     * <p>有界等一下再读，而不是立刻读：这里数的是真子进程写下的标记，而握手/请求超时会先返回，
+     * 那一刻 JVM 冷启动可能还没跑到写文件那一步，立刻读拿到 0 —— 红的是这台机器的调度，
+     * 不是"只许 spawn 一次"这条被测性质。真的从来没 spawn 时，等满窗口仍然返回 0，断言照旧翻红。</p>
+     */
+    private static int readSpawnCount(Path markerFile) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + 2_000L;
+        while (!Files.exists(markerFile) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
         if (!Files.exists(markerFile)) return 0;
         return Integer.parseInt(Files.readString(markerFile).trim());
     }
@@ -493,7 +503,10 @@ class EmbeddingWorkerLifecycleTest {
         List<String> skipCmd = createSpawnCountingCommand(spawnMarker.toString(),
             "-DFAKE_WORKER_SKIP_HANDSHAKE=1");
         lifecycle = createLifecycle(skipCmd);
-        lifecycle.handshakeTimeout = Duration.ofMillis(500);
+        // 这里必须给得比本机 JVM 冷启动长：握手一到就 destroyForcibly，
+        // 500ms 时子进程还没跑到 main()（写 spawn 标记那句）就被杀了，"spawn 过 1 次"根本观测不到。
+        // 本用例测的是"超时之后的状态"，fake worker 永远不作答，所以把期限放大不改变被验性质。
+        lifecycle.handshakeTimeout = Duration.ofSeconds(3);
 
         WorkerResult r = sendHello("hst1");
         assertTrue(r instanceof WorkerResult.WorkerUnavailable,

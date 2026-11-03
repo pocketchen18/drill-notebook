@@ -80,6 +80,7 @@ public class MaintenanceQueue {
     public Sweep sweep(long nowMillis) throws SQLException {
         List<Backlog> pending = sessions.findPendingMaintenance(SESSIONS_PER_SWEEP);
         if (pending.isEmpty()) {
+            log.debug("维护扫描: 无待处理会话");
             return new Sweep(0, 0, 0, 0, 0, List.of());
         }
         List<Long> scanned = pending.stream().map(Backlog::state).map(State::sessionId).toList();
@@ -89,6 +90,9 @@ public class MaintenanceQueue {
         if (envelope.isEmpty() || key.isEmpty() || !policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE)
                 .configured()) {
             // 没有库、没解锁、外发目标没配好：既不外发也不入队，待处理标记保留
+            log.debug("维护扫描跳过: pending={} envelope={} key={} targetConfigured={}", pending.size(),
+                    envelope.isPresent(), key.isPresent(),
+                    policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE).configured());
             return new Sweep(pending.size(), 0, 0, 0, 0, scanned);
         }
         MemoryPolicyService.Target target = policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE);
@@ -125,28 +129,44 @@ public class MaintenanceQueue {
                                 MemoryRepository.VaultEnvelope envelope, MemoryCryptoService.MemoryKey key,
                                 MemoryPolicyService.Target target, long policyRevision, long historyFloor,
                                 String timezone, String sessionPassword, long nowMillis) throws SQLException {
-        if (!policy.extractionEligibility(state.memoryScopeType(), scopeId).allowed()) {
+        MemoryPolicyService.Eligibility eligibility = policy.extractionEligibility(state.memoryScopeType(), scopeId);
+        if (!eligibility.allowed()) {
+            log.debug("提取跳过: session={} gate={} message={}", state.sessionId(), eligibility.gate(),
+                    eligibility.message());
             return Counts.NONE;
         }
         long bound = pendingBound(state.sessionId(), maxTurnId);
         if (bound <= state.memoryScanAfterTurn()) {
+            log.debug("提取跳过: session={} bound={} scanAfter={}", state.sessionId(), bound,
+                    state.memoryScanAfterTurn());
             return Counts.NONE;
         }
         ChatHistoryRepository.MaintenanceBacklog backlog = history.maintenanceBacklog(state.sessionId(),
                 state.memoryScanAfterTurn(), bound, state.contextGeneration(), historyFloor);
         MaintenanceRules.ExtractTrigger trigger = MaintenanceRules.extractTrigger(backlog.eligibleTurns());
         if (trigger == MaintenanceRules.ExtractTrigger.NONE) {
+            log.debug("提取跳过: session={} eligible={} trigger={}", state.sessionId(), backlog.eligibleTurns(),
+                    trigger);
             return Counts.NONE;
         }
         long candidateThrough = lastId(state.sessionId(), state.memoryScanAfterTurn(), bound);
         if (candidateThrough <= state.memoryScanAfterTurn()) {
+            log.debug("提取跳过: session={} candidateThrough={} scanAfter={}", state.sessionId(), candidateThrough,
+                    state.memoryScanAfterTurn());
             return Counts.NONE;
         }
         Loaded loaded = scanner.load(new Request(Kind.EXTRACT, state.sessionId(),
                 state.memoryScanAfterTurn() + 1L, candidateThrough, state.contextGeneration(),
-                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, 0L, null,
+                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision,
+                MaintenancePorts.PreviousSummary.NONE,
                 target.fingerprint(), extractor.promptVersion(), extractor.framingTokens(), historyFloor,
                 sessionPassword, key));
+        log.debug("提取加载: session={} bound={} scanAfter={} eligible={} trigger={} through={} outcome={} "
+                        + "ready={} examined={} skips={} needsPassword={}", state.sessionId(), bound,
+                state.memoryScanAfterTurn(), backlog.eligibleTurns(), trigger, candidateThrough,
+                loaded.outcome(), loaded.ready(), loaded.examinedThrough(),
+                loaded.skips() == null ? -1 : loaded.skips().total(),
+                loaded.outcome() == MaintenanceSourceScanner.Outcome.WAITING_UNLOCK);
         if (!loaded.ready()) {
             return recordPermanentSkips(state.sessionId(), ScanKind.MEMORY, loaded);
         }
@@ -182,12 +202,12 @@ public class MaintenanceQueue {
         if (candidateThrough <= state.summaryScanAfterTurn()) {
             return Counts.NONE;
         }
-        MaintenanceSourceScanner.PreviousSummary previous = scanner.previousSummary(state.sessionId(),
+        MaintenancePorts.PreviousSummary previous = scanner.previousSummary(state.sessionId(),
                 state.contextGeneration(), envelope.epoch(), key);
         Loaded loaded = scanner.load(new Request(Kind.SUMMARY, state.sessionId(),
                 state.summaryScanAfterTurn() + 1L, candidateThrough, state.contextGeneration(),
-                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, previous.revision(),
-                previous.modelSummary(), target.fingerprint(), drafter.promptVersion(), drafter.framingTokens(),
+                state.memoryScopeType(), scopeId, timezone, envelope.epoch(), policyRevision, previous,
+                target.fingerprint(), drafter.promptVersion(), drafter.framingTokens(),
                 historyFloor, sessionPassword, key));
         if (!loaded.ready()) {
             return recordPermanentSkips(state.sessionId(), ScanKind.SUMMARY, loaded);

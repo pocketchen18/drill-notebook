@@ -412,11 +412,53 @@ public class ConversationProjection {
             // 段数爆表：旧检查点失效，只当"没摘要"用当前窗口重建（§2.5）
             return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, parsed.ranges().size());
         }
+        ContextAudit.Omission stale = staleReference(request.sessionId(), parsed.references());
+        if (stale != null) {
+            // 引用台账里任何一条页面对不上（删了、改版了、不属于本会话的作用域），整份摘要都不再用：
+            // 摘要正文里那句"见某页"已经指向别的内容，留着就是拿旧结论冒充当前事实（§8.4 第 7 条）
+            return unavailable(audit, notices, stale, 1);
+        }
         boolean hasGaps = !contiguous(parsed.ranges(), checkpoint.throughTurnId())
                 || history.countNonCompletedThrough(request.sessionId(), checkpoint.throughTurnId()) > 0;
         ContextAudit.Summary auditSummary = new ContextAudit.Summary(checkpoint.revision(),
                 checkpoint.throughTurnId(), hasGaps, List.copyOf(parsed.ranges()));
         return new SummaryView(auditSummary, parsed.modelSummary(), estimator.estimateText(parsed.modelSummary()));
+    }
+
+    /**
+     * 引用台账的逐条复验（执行方案 §8.4 第 7 条）：页面还在不在、内容版本还是不是当时那一版、
+     * 在不在本会话的笔记本作用域里。版本比的是 {@code note_page.content_hash} 本身，
+     * 所以页面被编辑过一次就立刻失效——引用不是全文缓存，查细节仍走用户当前请求下的检索。
+     *
+     * @return 该报进审计的省略原因；全部对得上时为 {@code null}
+     */
+    private ContextAudit.Omission staleReference(long sessionId, List<Reference> references) throws SQLException {
+        if (references.isEmpty()) {
+            return null;
+        }
+        ChatSessionMetadataRepository.State state = sessions.read(sessionId).orElse(null);
+        Long notebook = state == null || "GLOBAL".equals(state.memoryScopeType())
+                ? null : state.memoryNotebookId();
+        for (Reference reference : references) {
+            Optional<String> current = history.pageContentHash(reference.pageId());
+            if (current.isEmpty()) {
+                return ContextAudit.Omission.SOURCE_DELETED;
+            }
+            if (!current.get().equals(reference.contentVersion())) {
+                return ContextAudit.Omission.SOURCE_CHANGED;
+            }
+            if (notebook != null) {
+                Optional<Long> owner = history.notebookIdOfPage(reference.pageId());
+                if (owner.isEmpty() || !owner.get().equals(notebook)) {
+                    return ContextAudit.Omission.SOURCE_CHANGED;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 台账里的一条引用：只需要页码与版本能判有效性，来源轮次留写侧与检查器用。 */
+    private record Reference(long pageId, String contentVersion) {
     }
 
     /** 授权门不通过时的省略原因：锁定照实说，其余（开关关闭、无授权、目标变了）都算"没被授权"。 */
@@ -432,10 +474,10 @@ public class ConversationProjection {
         return null;
     }
 
-    private record Parsed(String modelSummary, List<ContextAudit.CoverageRange> ranges) {
+    private record Parsed(String modelSummary, List<ContextAudit.CoverageRange> ranges, List<Reference> references) {
     }
 
-    /** 检查点 payload 的明文形状（§2.5：模型可见部分与 serverCoverage 分开）；P8 写、P4 读。 */
+    /** 检查点 payload 的明文形状（§2.5：模型可见部分与 serverCoverage 分开；引用台账只给服务端自己看）。 */
     private Parsed parsePayload(String payload) {
         try {
             Map<String, Object> parsed = mapper.readValue(payload, new TypeReference<>() {
@@ -451,8 +493,17 @@ public class ConversationProjection {
                     ranges.add(new ContextAudit.CoverageRange(first.longValue(), last.longValue()));
                 }
             }
+            List<Reference> references = new ArrayList<>();
+            if (parsed.get("references") instanceof List<?> list) {
+                for (Object element : list) {
+                    if (!(element instanceof Map<?, ?> map)) continue;
+                    if (!(map.get("pageId") instanceof Number page) || page.longValue() <= 0) continue;
+                    if (!(map.get("contentVersion") instanceof String text) || text.isBlank()) continue;
+                    references.add(new Reference(page.longValue(), text));
+                }
+            }
             Object summary = parsed.get("modelSummary");
-            return new Parsed(summary == null ? "" : String.valueOf(summary), ranges);
+            return new Parsed(summary == null ? "" : String.valueOf(summary), ranges, references);
         } catch (Exception error) {
             return null;
         }

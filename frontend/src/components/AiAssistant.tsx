@@ -2,20 +2,27 @@ import { useEffect, useMemo, useRef, useState, type UIEvent, type PointerEvent a
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Drawer, Dropdown, Input, Message, Modal, Select, Space, Tag, Typography } from '@arco-design/web-react';
 import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
-import { Download, FilePlus2, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Download, FilePlus2, Layers, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
-import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalNotice, RetrievalOptions } from '../lib/types';
-
-/** GET /api/ai/sessions/{id}/messages 的服务端响应元素：使用 retrievalNotice 字段名，回到前端时映射为 notice。 */
-interface ServerChatMessage extends Omit<ChatMessage, 'notice'> {
-  retrievalNotice?: RetrievalNotice;
-}
+import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalOptions, TurnResult } from '../lib/types';
+import { ChatContextInspector } from './ai-memory/ChatContextInspector';
+import { MemoryUsageBadge } from './ai-memory/MemoryUsageBadge';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
 import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
-import { streamChat } from '../lib/aiStream';
+import { useAiChatTurn } from '../hooks/useAiChatTurn';
+import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
+import { historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
+import type { TurnNotice } from '../lib/aiTurnText';
+import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
+import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
+import { storageQueryKey } from '../lib/aiStorageApi';
+import { ChatStorageMeter } from './ai-memory/ChatStorageMeter';
+import { ChatHistoryCleanup } from './ai-memory/ChatHistoryCleanup';
+import { attachmentLimitError } from '../lib/aiAttachmentLimits';
+import type { PendingAttachment } from '../lib/aiAttachmentLimits';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
@@ -29,12 +36,17 @@ interface Attachment {
   kind: AttachmentKind;
   value: string;
   mime: string;
+  /** 原始字节数：附件门限（数量/单图/合计）按它算，服务端也用同一个数判 413。 */
+  bytes: number;
+  /** 文本的码点数：服务端按本轮文本合计判 200k，客户端得留着自己那份数。 */
+  codepoints?: number;
 }
 
-interface ChatRequest {
-  content: string | ChatContentPart[];
-  displayContent: string;
-}
+/** 同一批里两个同名同时间的文件也必须各有各的 key，否则移除一个会连带移除另一个。 */
+let attachmentSeq = 0;
+const nextAttachmentId = (file: File): string => `${file.name}-${file.lastModified}-${(attachmentSeq += 1)}`;
+
+type PreparedAttachment = { attachment: Attachment } | { warning: string } | { error: string };
 
 function contentText(content: string | ChatContentPart[], displayContent?: string): string {
   if (displayContent) return displayContent;
@@ -103,6 +115,8 @@ export function AiAssistant(): JSX.Element {
   const [exporting, setExporting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
+  // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
+  const [inspectorTarget, setInspectorTarget] = useState<{ requestId: string; snapshot?: TurnResult } | null>(null);
   const renameInputRef = useRef<RefInputType>(null);
 
   // 稳定消息 key：消息创建时分配一次，后续 refetch 也保持稳定，避免列表 remount 造成滚动/输入抖动。
@@ -113,15 +127,18 @@ export function AiAssistant(): JSX.Element {
   };
   // 标记用户最近一次显式选中的会话 id，避免 sessions effect 在 refetch 时把用户切走。
   const lastExplicitSessionIdRef = useRef<number | undefined>(undefined);
-  // 流式 → 非流式回退时，chatMutation.onSuccess 复用同一 userKey 保持稳定。
-  const pendingFallbackUserKeyRef = useRef<string | null>(null);
+  // 本轮结果落回哪一个气泡：流式先立占位，非流式收到整块结果才追加。
+  const turnTargetRef = useRef<{ userKey: string; assistantKey: string | null } | null>(null);
   // 流式期间用户已向上滚动 → 暂停自动滚到底；回到接近底部时自动恢复。
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // 往前翻页前的列表高度：用来把视口补回原来看着的那条消息
+  const olderAnchorRef = useRef<number | null>(null);
 
-  const chatAbortRef = useRef<(() => void) | null>(null);
-  const [streaming, setStreaming] = useState(false);
+  const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
+  const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
+  const streaming = turn.busy;
 
   const targetPagesQuery = useQuery({
     queryKey: ['ai-drawer-pages', targetNotebookId],
@@ -129,14 +146,35 @@ export function AiAssistant(): JSX.Element {
     enabled: targetNotebookId !== undefined && aiOpen
   });
 
-  const messagesQuery = useQuery({
-    queryKey: ['ai-session-messages', sessionId],
-    queryFn: () => get<ServerChatMessage[]>(`/api/ai/sessions/${sessionId}/messages`),
-    enabled: aiOpen && sessionId !== undefined,
-    // 切换会话必须拿到服务端真实内容：全局 staleTime=10s 会让「中断时抢在落库前的空 refetch」被缓存，
-    // 切回该会话时读到空缓存显示空白。置 0 使每次挂载/聚焦都重取，彻底消除串会话与空缓存。
-    staleTime: 0
-  });
+  const history = useChatHistoryPages(sessionId, aiOpen);
+
+  /** 本轮的引用、降级提示与 done 快照只存在于本地，服务端历史行按 requestId 把它们认领回去。 */
+  const visibleMessages = useMemo<ChatMessage[]>(() => {
+    const snapshots = new Map<string, ChatMessage>();
+    for (const item of messages) {
+      if (item.role === 'assistant' && item.requestId) snapshots.set(item.requestId, item);
+    }
+    const covered = new Set<string>();
+    const server: ChatMessage[] = history.messages.map((row) => {
+      if (row.requestId) covered.add(`${row.role}:${row.requestId}`);
+      const mirror = row.requestId ? snapshots.get(row.requestId) : undefined;
+      return {
+        id: row.id,
+        role: row.role,
+        content: row.content,
+        reasoning: row.reasoning,
+        createdAt: row.createdAt,
+        requestId: row.requestId ?? undefined,
+        citations: mirror?.citations,
+        notice: historyNotice(row) ?? mirror?.notice,
+        turn: mirror?.turn,
+        _key: `h${row.id}`
+      };
+    });
+    // 本地只留还没被服务端历史覆盖的那几条（正在跑的一轮、以及刚定稿还没重取回来的一轮）
+    const local = messages.filter((item) => !(item.requestId && covered.has(`${item.role}:${item.requestId}`)));
+    return [...server, ...local];
+  }, [history.messages, messages]);
 
   useEffect(() => {
     if (!aiOpen) return;
@@ -166,81 +204,10 @@ export function AiAssistant(): JSX.Element {
     }
   }, [sessionId, sessionsQuery.data]);
 
+  // 切会话先销毁检查器：它可能正显示上一轮逐条对照出来的正文片段，不能跨会话留着（§4.5、C08）
   useEffect(() => {
-    if (!messagesQuery.data) return;
-    // 合并本地与服务端消息：
-    // 1) 给没有 _key 的本地消息分配稳定 key；
-    // 2) 遍历服务端消息：按 role+content 找本地匹配项，存在则「升级」为带 id/reasoning/citations 的版本并保留 _key；
-    //    没有匹配但角色为 assistant 且本地存在流式占位（空内容 + streaming）时，替换占位为服务端版本；
-    // 3) 保留未被消费的本地消息（如网络尚未到达的「user 已发 / 流式进行中」消息）。
-    setMessages((local) => {
-      type Keyed = ChatMessage & { _key: string };
-      const localWithKeys: Keyed[] = local.map((m) => m._key ? (m as Keyed) : { ...m, _key: nextMessageKey() });
-      const consumed = new Set<string>();
-      const serverMessages: ChatMessage[] = messagesQuery.data.map((item, index) => {
-        const contentText = typeof item.content === 'string' ? item.content : '';
-        const sameContentMatch = localWithKeys.find(
-          (m) => !consumed.has(m._key) && m.role === item.role && typeof m.content === 'string' && m.content === contentText
-        );
-        if (sameContentMatch) {
-          consumed.add(sameContentMatch._key);
-          return {
-            ...sameContentMatch,
-            id: item.id,
-            content: item.content,
-            displayContent: contentText,
-            createdAt: item.createdAt,
-            reasoning: item.reasoning,
-            citations: item.citations,
-            notice: item.retrievalNotice
-          };
-        }
-        // 流式占位 → 服务端真实消息的替换：
-        // - 内容完全相同（少见，正常是 sameContentMatch 已匹配）；
-        // - 本地占位是空内容 + streaming 标志；
-        // - 本地占位的累积文本是服务端文本的前缀（流式中、增量逐字符到达，最后一次 refetch 几乎一致）；
-        // - 服务端文本以本地累积结尾（可能服务端做了轻微 trim/规范化）。
-        if (item.role === 'assistant' && contentText) {
-          const placeholder = localWithKeys.find(
-            (m) => !consumed.has(m._key) && m.role === 'assistant' && m.streaming && (
-              typeof m.content !== 'string' || m.content === '' ||
-              (typeof m.content === 'string' && contentText.startsWith(m.content)) ||
-              (typeof m.content === 'string' && m.content.startsWith(contentText))
-            )
-          );
-          if (placeholder) {
-            consumed.add(placeholder._key);
-            return {
-              ...placeholder,
-              id: item.id,
-              content: item.content,
-              displayContent: contentText,
-              createdAt: item.createdAt,
-              reasoning: item.reasoning,
-              citations: item.citations,
-              notice: item.retrievalNotice,
-              streaming: false
-            };
-          }
-        }
-        return {
-          id: item.id,
-          role: item.role,
-          content: item.content,
-          displayContent: contentText,
-          createdAt: item.createdAt,
-          reasoning: item.reasoning,
-          citations: item.citations,
-          notice: item.retrievalNotice,
-          _key: `s${item.id ?? `idx-${index}`}`
-        };
-      });
-      const pending = localWithKeys.filter((m) => !consumed.has(m._key));
-      // 本地未落库的消息是最新的一批：必须排在服务端消息之后。反过来（pending 在前）会让每次
-      // refetch（关闭再打开侧边栏、窗口聚焦）都把"流式进行中"的气泡顶到整段对话最前面。
-      return [...serverMessages, ...pending];
-    });
-  }, [messagesQuery.data]);
+    setInspectorTarget(null);
+  }, [sessionId]);
 
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
@@ -248,13 +215,31 @@ export function AiAssistant(): JSX.Element {
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
     stickyBottomRef.current = distanceFromBottom < 80;
     lastScrollTopRef.current = el.scrollTop;
+    // 滚到顶部附近就取更早的一页（§7.4：向上滚动可重新加载），并记住当前高度以便补回位移
+    if (el.scrollTop < 60) requestOlder();
   };
+
+  const requestOlder = (): void => {
+    if (!history.hasOlder || history.isLoadingOlder || history.residentCapped) return;
+    const el = chatContainerRef.current;
+    olderAnchorRef.current = el ? el.scrollHeight : null;
+    history.loadOlder();
+  };
+
+  // 往前插了一页，视口要停在原来那条上，否则每次翻页都被甩到更早的几百条之前
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    const anchor = olderAnchorRef.current;
+    if (!el || anchor === null) return;
+    olderAnchorRef.current = null;
+    el.scrollTop += el.scrollHeight - anchor;
+  }, [history.messages]);
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     if (!stickyBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [visibleMessages]);
   useEffect(() => {
     if (!streaming) return;
     if (!stickyBottomRef.current) return;
@@ -329,9 +314,9 @@ export function AiAssistant(): JSX.Element {
   const handleNewSession = (): void => {
     if (createSessionMutation.isPending) return;
     const sessions = sessionsQuery.data ?? [];
-    // 当前会话以本地 messages 为准（缓存 messageCount 可能因刚中断/未刷新而过期），
+    // 当前会话以"看得见的内容"为准（缓存 messageCount 可能因刚中断/未刷新而过期），
     // 其余会话用缓存计数判断是否空白。
-    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? messages.length === 0 : (item.messageCount ?? 0) === 0));
+    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? visibleMessages.length === 0 : (item.messageCount ?? 0) === 0));
     if (blank) {
       lastExplicitSessionIdRef.current = blank.id;
       setSessionId(blank.id);
@@ -399,7 +384,7 @@ export function AiAssistant(): JSX.Element {
       // 先从缓存移除被删会话及其消息，避免会话 effect 在 refetch 完成前把「已删会话」当作
       // data[0] 重新选中、切回时又把它的内容合并进新会话顶部（删除后短暂串会话的根因）。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
-      queryClient.removeQueries({ queryKey: ['ai-session-messages', deletedId] });
+      queryClient.removeQueries({ queryKey: historyQueryKey(deletedId) });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = undefined;
       setSessionId(undefined);
@@ -413,43 +398,6 @@ export function AiAssistant(): JSX.Element {
   // Electron 渲染进程的原生同步对话框关闭后 webContents 键盘焦点可能不恢复（鼠标正常、键盘失效，
   // 窗口失焦/复焦后才自愈）——这正是「删除会话后输入框无法输入、切软件切回又好了」的偶发根因。
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<AiChatSession | null>(null);
-
-  const chatMutation = useMutation({
-    mutationFn: (request: ChatRequest) => post<{ reply: string; sessionId: number; citations?: ChatCitation[]; retrievalNotice?: RetrievalNotice }>('/api/ai/chat', {
-      sessionId,
-      messages: [
-        ...(contextMarkdown
-          ? [{ role: 'system' as const, content: `你是学习助手。请结合以下当前页面上下文回答，必要时用 Markdown 与 LaTeX。\n\n${contextMarkdown}` }]
-          : []),
-        ...messages.map(({ role, content }) => ({ role, content })),
-        { role: 'user', content: request.content }
-      ],
-      ...(retrievalOptions ? { retrievalOptions } : {})
-    }),
-    onSuccess: (result, request) => {
-      if (result.sessionId && result.sessionId !== sessionId) {
-        setSessionId(result.sessionId);
-        lastExplicitSessionIdRef.current = result.sessionId;
-      }
-      // 为本地追加的消息分配稳定 _key：等价的流式失败回退路径也会复用 userKey。
-      const userKey = pendingFallbackUserKeyRef.current ?? nextMessageKey();
-      const assistantKey = nextMessageKey();
-      pendingFallbackUserKeyRef.current = null;
-      setMessages((current) => [
-        ...current,
-        { role: 'user', content: request.content, displayContent: request.displayContent, _key: userKey },
-        { role: 'assistant', content: result.reply, citations: result.citations, notice: result.retrievalNotice, _key: assistantKey }
-      ]);
-      setMessage('');
-      setAttachments([]);
-      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-      void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', result.sessionId ?? sessionId] });
-    },
-    onError: (error) => {
-      pendingFallbackUserKeyRef.current = null;
-      Message.error(friendlyMessage(error, 'AI 对话失败，请稍后重试'));
-    }
-  });
 
   // 抽屉宽度：可拖拽调整并持久化到 localStorage。
   const AI_DRAWER_WIDTH_KEY = 'drill-notebook-ai-drawer-width';
@@ -495,184 +443,152 @@ export function AiAssistant(): JSX.Element {
     try { window.localStorage.setItem(AI_DRAWER_WIDTH_KEY, String(AI_DRAWER_DEFAULT_WIDTH)); } catch { /* ignore quota */ }
   };
 
-  /** 流式发送：优先走 /api/ai/chat/stream（主模型 streaming 开启时），失败自动回退非流式。 */
-  const sendStreaming = (request: ChatRequest): void => {
-    // 二次防护：上层 send() 已做并发检查，此处只对极端情况（abort 中）做最后一道保险。
-    if (streaming || chatMutation.isPending) return;
-    const userKey = nextMessageKey();
-    const assistantKey = nextMessageKey();
-    // 会话快照：流式回调一律校验会话未变，防止流式期间切换会话后增量写进新会话的消息。
-    const streamingSessionId = sessionId;
-    const patchSessionMessage = (updater: (prev: ChatMessage) => ChatMessage | null): void => {
-      setMessages((current) => {
-        if (sessionId !== streamingSessionId) return current;
-        const next = [...current];
-        const last = next[next.length - 1];
-        if (last && last.role === 'assistant') {
-          const resolved = updater(last);
-          if (resolved) next[next.length - 1] = resolved;
-        }
-        return next;
-      });
-    };
-    const userMessage: ChatMessage = { role: 'user', content: request.content, displayContent: request.displayContent, _key: userKey };
-    const placeholder: ChatMessage = { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey };
+  const invalidateSessionLists = (refetchMessages: boolean): void => {
+    void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+    // 每轮落库与预留结算都会动容量账本：常驻的那条容量提示要跟着结算走
+    void queryClient.invalidateQueries({ queryKey: storageQueryKey });
+    // 只重取最新一页：更早的页是已看过的稳定游标，没必要为一轮新对话整串重读
+    if (refetchMessages) void history.refreshLatest();
+  };
+
+  /** 增量只写回本轮那个占位气泡：列表被 refetch 重排时也不能写到别的气泡上。 */
+  const patchAssistant = (patch: (prev: ChatMessage) => Partial<ChatMessage>): void => {
     setMessages((current) => {
-      if (sessionId !== streamingSessionId) return current;
-      return [...current, userMessage, placeholder];
+      const key = turnTargetRef.current?.assistantKey;
+      const last = current[current.length - 1];
+      if (!key || !last || last._key !== key || last.role !== 'assistant') return current;
+      return [...current.slice(0, -1), { ...last, ...patch(last) }];
     });
-    setMessage('');
-    setAttachments([]);
-    setStreaming(true);
-    const payload = {
-      sessionId,
-      messages: [
-        ...(contextMarkdown
-          ? [{ role: 'system' as const, content: `你是学习助手。请结合以下当前页面上下文回答，必要时用 Markdown 与 LaTeX。\n\n${contextMarkdown}` }]
-          : []),
-        ...messages.map(({ role, content }) => ({ role, content })),
-        { role: 'user', content: request.content }
-      ],
-      ...(retrievalOptions ? { retrievalOptions } : {})
-    };
-    let aborted = false;
-    // 本轮的服务端 requestId（metadata 事件带回）：停止时要靠它调用取消接口。
-    let streamingRequestId: string | null = null;
-    // 本轮是否已有增量落地。一旦拿到 metadata 或任何 text/reasoning，这一轮就可能已经外发/计费，
-    // 出错后绝不能自动重发第二个请求（execution §7.3：已收到输出后绝不自动回退）。
-    let sawDelta = false;
-    const finishStream = (): void => {
-      // 任何出口都要：清状态 + 清 abort 句柄，避免 onError/重复 done 再次进入分支造成重复占位。
-      setStreaming(false);
-      chatAbortRef.current = null;
-    };
-    // 手动中断：中止 fetch（后端 emitter.send 失败 → 停止读上游）。
-    // 已有部分正文 → 定稿占位（后端照常落库部分内容）；零正文（思考阶段）→ 回滚占位与 user 消息。
-    // 两个历史缺陷（勿回退）：
-    // ① 不能用 streaming state 做重入守卫——此函数在 setStreaming(true) 同一渲染周期内创建，
-    //    闭包捕获的 streaming 恒为 false，会让中断按钮永远空转（死按钮根因之一）。aborted 标志已足够防重入。
-    // ② streamChat 返回的 fetch abort 函数是异步到达的，必须经 abortFetch 捕获并在中断时调用，
-    //    否则只停了前端渲染、SSE 连接与后端上游生成照旧（死按钮根因之二）。
-    let abortFetch: (() => void) | null = null;
-    const stopStreaming = (): void => {
-      if (aborted) return;
-      aborted = true;
-      abortFetch?.();
-      // 只断开前端连接时，后端要等下一次写 SSE 失败或 180 秒总期限才察觉——模型沉默期间会话会被
-      // "该会话已有一轮正在进行"占住（暂停后发不出去）。拿到 requestId 就主动取消，让轮次立刻收尾。
-      if (streamingRequestId) {
-        void post(`/api/ai/turns/${streamingRequestId}/cancel`, {}).catch(() => undefined);
-      }
-      chatAbortRef.current = null;
-      setStreaming(false);
-      // 中断后刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为
-      // 空白会话而复用（表现为「思考中断后永远新建不了」）。注意：不要在此 invalidate 该会话的
-      // 消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存，导致切回时显示空。
-      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-      if (sessionId !== streamingSessionId) return;
-      setMessages((current) => {
-        const next = [...current];
-        const last = next[next.length - 1];
-        if (!(last && last.role === 'assistant' && last.streaming)) return next;
-        const text = typeof last.content === 'string' ? last.content : '';
-        const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
-        if (text.trim() || reasoning.trim()) {
-          // 思考链也算已生成内容：正文或思考链任一非空都定稿保留，绝不静默丢弃。
-          next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
-        } else {
-          // 真正零生成（刚开始连接）：回滚占位与 user 消息，方便立即重发。
-          next.pop();
-          const prev = next[next.length - 1];
-          if (prev && prev.role === 'user' && prev._key === userKey) next.pop();
-        }
+  };
+
+  /** 定稿：流式就地改写占位，非流式这时才追加助手气泡。 */
+  const commitAssistant = (build: (prev: ChatMessage | null) => Omit<ChatMessage, '_key'>): void => {
+    const target = turnTargetRef.current;
+    if (!target) return;
+    const key = target.assistantKey ?? nextMessageKey();
+    turnTargetRef.current = { ...target, assistantKey: key };
+    setMessages((current) => {
+      const last = current[current.length - 1];
+      const merging = last?.role === 'assistant' && last._key === key;
+      const message: ChatMessage = { ...build(merging ? last : null), _key: key };
+      return merging ? [...current.slice(0, -1), message] : [...current, message];
+    });
+  };
+
+  /** 失败/状态未知时的收口：有内容就定稿保留，零生成的空占位撤掉，绝不留下转圈的气泡。 */
+  const settleOrDropAssistant = (notice?: TurnNotice): void => {
+    const key = turnTargetRef.current?.assistantKey;
+    if (!key) return;
+    setMessages((current) => {
+      const next = [...current];
+      const last = next[next.length - 1];
+      if (!last || last._key !== key || last.role !== 'assistant') return next;
+      const text = typeof last.content === 'string' ? last.content : '';
+      const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
+      if (!text.trim() && !reasoning.trim()) {
+        next.pop();
+        turnTargetRef.current = null;
         return next;
-      });
-    };
-    chatAbortRef.current = stopStreaming;
-    void streamChat('/api/ai/chat/stream', payload, {
-      onText: (delta) => {
-        if (aborted) return;
-        sawDelta = true;
-        patchSessionMessage((prev: ChatMessage) => ({ ...prev, content: String(prev.content) + delta }));
-      },
-      onReasoning: (delta) => {
-        if (aborted) return;
-        sawDelta = true;
-        patchSessionMessage((prev: ChatMessage) => ({ ...prev, reasoning: (prev.reasoning ?? '') + delta }));
-      },
-      onMetadata: ({ requestId }) => {
-        if (!aborted) streamingRequestId = requestId;
-      },
-      onDone: ({ reply }) => {
-        if (aborted) return;
-        aborted = true;
-        // 本地已通过 onReasoning 增量累积 reasoning，done 事件携带的 reasoning 与之等价；保留本地版本即可。
-        patchSessionMessage((prev: ChatMessage) => ({
-          ...prev,
+      }
+      next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false, notice };
+      return next;
+    });
+  };
+
+  /**
+   * 本轮身份要落到这一对本地气泡上：服务端历史行按 requestId 认领它们，
+   * 之后才谈得上"用服务端行替换本地气泡"以及把徽标挂回正确的那一轮。
+   */
+  const stampTurnIdentity = (requestId: string): void => {
+    const target = turnTargetRef.current;
+    if (!target) return;
+    setMessages((current) => current.map((item) =>
+      (item._key === target.userKey || item._key === target.assistantKey ? { ...item, requestId } : item)));
+  };
+
+  /** 轮次事件的界面落点：done、查到的终态、失败都只写回本轮那一个气泡（§4.2 统一结果）。 */
+  function onTurnEvent(event: TurnEvent): void {
+    stampTurnIdentity(event.requestId);
+    switch (event.type) {
+      case 'begun':
+        return;
+      case 'text':
+        patchAssistant((prev) => ({ content: `${String(prev.content)}${event.delta}` }));
+        return;
+      case 'reasoning':
+        patchAssistant((prev) => ({ reasoning: `${prev.reasoning ?? ''}${event.delta}` }));
+        return;
+      case 'result': {
+        const notice = outcomeNotice(event.view);
+        commitAssistant((prev) => ({
+          role: 'assistant',
           // reply 为空时保留已流式累积的内容，避免 content 变成 undefined 触发渲染崩溃。
-          content: reply || (typeof prev.content === 'string' ? prev.content : ''),
-          reasoning: prev.reasoning || undefined,
+          content: event.reply || (typeof prev?.content === 'string' ? prev.content : ''),
+          reasoning: event.reasoning || prev?.reasoning,
+          citations: (event.view.citations as ChatCitation[] | undefined) ?? prev?.citations,
+          notice: notice ?? prev?.notice,
+          // 本轮身份与统一结果快照：徽标和检查器只认 requestId，历史行现在也带它（§4.5）
+          requestId: event.requestId,
+          turn: { ...event.view, requestId: event.requestId },
           streaming: false
         }));
-        finishStream();
-        void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-        void queryClient.invalidateQueries({ queryKey: ['ai-session-messages', streamingSessionId] });
-      },
-      onError: (streamError) => {
-        if (aborted) return;
-        aborted = true;
-        finishStream();
-        if (streamingRequestId !== null || sawDelta) {
-          // 轮次已经真正开始（后端已登记，可能已外发/计费，甚至已落库终态）：绝不自动重发第二个请求。
-          // 保留已累积的正文与思考链，把服务端错误如实提示给用户（execution §7.3、§7.2 第 6 条）。
-          setMessages((current) => {
-            if (sessionId !== streamingSessionId) return current;
-            const next = [...current];
-            const last = next[next.length - 1];
-            if (last && last.role === 'assistant' && last.streaming) {
-              const text = typeof last.content === 'string' ? last.content : '';
-              const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
-              if (text.trim() || reasoning.trim()) {
-                next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
-              } else {
-                next.pop();
-              }
-            }
-            return next;
-          });
-          Message.error(streamError || '生成中断，请重试');
-          return;
-        }
-        // 早期失败（后端还没开始这一轮，如不支持流式/请求未被接受）：移除占位与刚插入的 user 消息，
-        // 回退非流式重发一次。
-        setMessages((current) => {
-          if (sessionId !== streamingSessionId) return current;
-          const next = [...current];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant' && last.streaming) next.pop();
-          return next;
-        });
-        setMessages((current) => {
-          if (sessionId !== streamingSessionId) return current;
-          // 移除刚插入的 user 消息（由 chatMutation.onSuccess 重新追加）
-          const next = [...current];
-          if (next.length && next[next.length - 1].role === 'user' && next[next.length - 1]._key === userKey) next.pop();
-          return next;
-        });
-        // 让 chatMutation 复用同一个 userKey，保持消息 key 跨回退稳定。
-        pendingFallbackUserKeyRef.current = userKey;
-        chatMutation.mutate(request);
+        invalidateSessionLists(true);
+        return;
       }
-    }).then((abort) => {
-      // streamChat 的返回值（fetch abort）异步到达；中断时调用它真正掐断 SSE 连接。
-      if (aborted) abort();
-      else abortFetch = abort;
+      case 'failure':
+        // 这一轮真的开始过或已产出内容：保留已生成的部分，把服务端错误如实提示给用户（§7.3、§7.2 第 6 条）。
+        Message.error(event.message || '生成中断，请重试');
+        settleOrDropAssistant(outcomeNotice(event.view));
+        invalidateSessionLists(false);
+        return;
+      case 'status': {
+        const settled = event.status.status !== undefined && event.status.status !== 'RUNNING';
+        // 已经 COMPLETED 就别再说"不完整"：这时交给 refetch 拿服务端那份正文
+        const notice = event.status.status === 'COMPLETED' ? undefined : statusNotice(event.status);
+        settleOrDropAssistant(notice ? { code: notice.code, message: event.message ?? notice.message } : undefined);
+        invalidateSessionLists(settled);
+        return;
+      }
+      case 'unresolved':
+        Message.error(event.message);
+        settleOrDropAssistant({ code: 'STATUS_UNREADABLE', message: '暂时读不到这一轮的结果' });
+        invalidateSessionLists(false);
+        return;
+    }
+  }
+
+  /** 停止：断开连接并带着本轮身份取消，服务端立刻收尾（会话不再被"已有一轮正在进行"占住）。 */
+  const stopGeneration = (): void => {
+    turn.stop();
+    // 只刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为空白会话而复用。
+    // 不要在此 invalidate 该会话的消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存。
+    void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+    // 取消会退还为回复预留的字节，容量条要跟着结算走（6a 复核留下的那条观察）
+    void queryClient.invalidateQueries({ queryKey: storageQueryKey });
+    const key = turnTargetRef.current?.assistantKey;
+    setMessages((current) => {
+      const next = [...current];
+      const last = next[next.length - 1];
+      if (!key || !last || last._key !== key || !(last.role === 'assistant' && last.streaming)) return next;
+      const text = typeof last.content === 'string' ? last.content : '';
+      const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
+      if (text.trim() || reasoning.trim()) {
+        // 思考链也算已生成内容：正文或思考链任一非空都定稿保留，绝不静默丢弃。
+        next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
+      } else {
+        // 真正零生成（刚开始连接）：回滚占位与 user 消息，方便立即重发。
+        next.pop();
+        const prev = next[next.length - 1];
+        if (prev && prev.role === 'user' && prev._key === turnTargetRef.current?.userKey) next.pop();
+        turnTargetRef.current = null;
+      }
+      return next;
     });
   };
 
   const send = (): void => {
     // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
-    if (streaming || chatMutation.isPending) return;
+    if (streaming) return;
     if (!message.trim() && !attachments.length) return;
     if (!configQuery.data?.hasKey) {
       Message.warning('请先在设置中配置 API Key');
@@ -682,20 +598,44 @@ export function AiAssistant(): JSX.Element {
       Message.warning('请先选择或新建会话');
       return;
     }
-    const textParts = [
-      message.trim(),
-      ...attachments.filter((item) => item.kind === 'text').map((item) => `[文件：${item.name}]\n${item.value}`)
-    ].filter(Boolean);
-    const text = textParts.join('\n\n') || '请分析附件内容';
-    const displayText = [message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)].filter(Boolean).join('\n\n') || '请分析附件内容';
+    const text = message.trim() || '请分析附件内容';
+    const displayText = [message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)]
+      .filter(Boolean).join('\n\n') || '请分析附件内容';
     const images = attachments.filter((item) => item.kind === 'image');
     const content: string | ChatContentPart[] = images.length
       ? [{ type: 'text', text }, ...images.map((item) => ({ type: 'image_url' as const, image_url: { url: item.value } }))]
       : text;
-    const request: ChatRequest = { content, displayContent: displayText };
-    const slot = configQuery.data?.chat ?? configQuery.data;
-    if (slot?.streaming !== false) sendStreaming(request);
-    else chatMutation.mutate(request);
+    const userKey = nextMessageKey();
+    const userMessage: ChatMessage = { role: 'user', content, displayContent: displayText, _key: userKey };
+    if (streamEnabled) {
+      const assistantKey = nextMessageKey();
+      turnTargetRef.current = { userKey, assistantKey };
+      setMessages((current) => [...current, userMessage,
+        { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
+    } else {
+      turnTargetRef.current = { userKey, assistantKey: null };
+      setMessages((current) => [...current, userMessage]);
+    }
+    setMessage('');
+    setAttachments([]);
+    // clientId 服务端限 64 码点且只用于本轮关联，不能拿文件名当身份
+    const turnAttachments: TurnAttachment[] = attachments.map((item, index) => (item.kind === 'image'
+      ? { clientId: `c${index}`, kind: 'image', name: item.name, mimeType: item.mime, dataBase64: item.value }
+      : { clientId: `c${index}`, kind: 'text', name: item.name, mimeType: item.mime || 'text/plain', text: item.value }));
+    const input: TurnInput = {
+      sessionId,
+      userText: text,
+      ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
+      ...(pageContext.kind === 'none' ? {} : {
+        pageContext: {
+          kind: pageContext.kind,
+          pageId: pageContext.notePageId,
+          ...(contextMarkdown ? { markdown: contextMarkdown } : {})
+        }
+      }),
+      ...(retrievalOptions ? { retrievalOptions } : {})
+    };
+    turn.send(input);
   };
 
   const insertMutation = useMutation({
@@ -713,25 +653,50 @@ export function AiAssistant(): JSX.Element {
     onError: (error) => Message.error(friendlyMessage(error, '插入笔记失败，请稍后重试'))
   });
 
-  const loadAttachment = async (file: File): Promise<void> => {
+  const pendingOf = (items: Attachment[]): PendingAttachment[] => items.map((item) => ({ kind: item.kind, bytes: item.bytes, codepoints: item.codepoints }));
+
+  const prepareAttachment = async (file: File, current: Attachment[]): Promise<PreparedAttachment> => {
     try {
-      if (file.size > 8 * 1024 * 1024) {
-        Message.warning('单个附件不能超过 8 MB');
-        return;
-      }
-      if (file.type.startsWith('image/')) {
+      const kind: AttachmentKind | undefined = file.type.startsWith('image/') ? 'image'
+        : isTextFile(file) ? 'text' : undefined;
+      if (!kind) return { warning: '目前支持图片和文本类文件' };
+      const pending: PendingAttachment = { kind, bytes: file.size };
+      // 字节数先挡一道：文本超过 4 倍码点上限就必然超限，不必先读进内存
+      const early = attachmentLimitError(pendingOf(current), pending);
+      if (early) return { warning: early };
+      if (kind === 'image') {
         const value = await readAsDataUrl(file);
-        setAttachments((current) => [...current, { id: `${file.name}-${file.lastModified}`, name: file.name, kind: 'image', value, mime: file.type }]);
-        return;
+        return { attachment: { id: nextAttachmentId(file), name: file.name, kind, value, mime: file.type, bytes: file.size } };
       }
-      if (!isTextFile(file)) {
-        Message.warning('目前支持图片和文本类文件');
-        return;
-      }
-      const value = (await file.text()).slice(0, 200_000);
-      setAttachments((current) => [...current, { id: `${file.name}-${file.lastModified}`, name: file.name, kind: 'text', value, mime: file.type || 'text/plain' }]);
+      const value = await file.text();
+      const codepoints = Array.from(value).length;
+      const late = attachmentLimitError(pendingOf(current), { ...pending, codepoints });
+      if (late) return { warning: late };
+      return { attachment: { id: nextAttachmentId(file), name: file.name, kind, value, mime: file.type || 'text/plain', bytes: file.size, codepoints } };
     } catch (error) {
-      Message.error(friendlyMessage(error, '附件读取失败'));
+      return { error: friendlyMessage(error, '附件读取失败') };
+    }
+  };
+
+  const addAttachments = async (files: File[]): Promise<void> => {
+    // 逐个累积再比较：批量选择时后面的文件要按"已经收下的"重算门限，
+    // 不能让每个文件各自拿同一份旧数组去比，否则一次选 10 个就能整批绕过 4 项上限。
+    let next = attachments;
+    const warned = new Set<string>();
+    for (const file of files) {
+      const result = await prepareAttachment(file, next);
+      if ('attachment' in result) {
+        next = [...next, result.attachment];
+        setAttachments(next);
+        continue;
+      }
+      if ('warning' in result) {
+        if (warned.has(result.warning)) continue;
+        warned.add(result.warning);
+        Message.warning(result.warning);
+      } else {
+        Message.error(result.error);
+      }
     }
   };
 
@@ -943,11 +908,30 @@ export function AiAssistant(): JSX.Element {
             ref={chatContainerRef}
             onScroll={onChatScroll}
           >
-            {messagesQuery.isLoading ? (
+            {history.isError ? (
+              <div className="empty-state ai-empty">
+                <p>{friendlyMessage(history.error, '会话历史读取失败')}</p>
+                <Button type="text" size="mini" onClick={history.retry}>重新读取</Button>
+              </div>
+            ) : history.isLoading ? (
               <div className="empty-state ai-empty"><p>加载会话消息…</p></div>
-            ) : messages.length ? messages.map((item) => {
+            ) : (<>
+              {history.hasOlder ? (
+                <div className="ai-history-older">
+                  {history.residentCapped
+                    ? <p className="ai-history-older-cap">已驻留最近 500 条，更早的记录仍在本地库里。</p>
+                    : (
+                      <Button type="text" size="mini" onClick={requestOlder} disabled={history.isLoadingOlder}>
+                        {history.isLoadingOlder ? '正在载入更早的消息…' : '加载更早的消息'}
+                      </Button>
+                    )}
+                </div>
+              ) : null}
+              {visibleMessages.length ? visibleMessages.map((item) => {
               const text = contentText(item.content, item.displayContent);
               const isAssistant = item.role === 'assistant';
+              const turnSnapshot = item.turn?.requestId ? item.turn : null;
+              const turnId = item.requestId ?? turnSnapshot?.requestId ?? null;
               return (
                 <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}`}>
                   {isAssistant && item.reasoning ? (
@@ -958,13 +942,13 @@ export function AiAssistant(): JSX.Element {
                   ) : null}
                   <MarkdownContent value={text} />
                   {item.streaming ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
+                  {item.notice ? (
+                    <div className="ai-retrieval-notice">
+                      {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
+                    </div>
+                  ) : null}
                   {isAssistant ? (
                     <>
-                      {item.notice ? (
-                        <div className="ai-retrieval-notice">
-                          {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
-                        </div>
-                      ) : null}
                       {item.citations?.length ? (
                         <div className="ai-citations">
                           <div className="ai-citations-kicker">笔记引用（{item.citations.length}）</div>
@@ -985,8 +969,21 @@ export function AiAssistant(): JSX.Element {
                           </div>
                         </div>
                       ) : null}
+                      {turnSnapshot ? (
+                        <MemoryUsageBadge
+                          sessionId={sessionId}
+                          requestId={turnSnapshot.requestId}
+                          provided={turnSnapshot.memoryContext?.provided ?? []}
+                          onOpenInspector={() => setInspectorTarget({ requestId: turnSnapshot.requestId, snapshot: turnSnapshot })}
+                        />
+                      ) : null}
                       <div className="chat-message-actions">
                         <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
+                        {turnId ? (
+                          <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnId, snapshot: turnSnapshot ?? undefined })}>
+                            本轮上下文
+                          </Button>
+                        ) : null}
                       </div>
                     </>
                   ) : null}
@@ -1000,6 +997,7 @@ export function AiAssistant(): JSX.Element {
                 </div>
               </div>
             )}
+            </>)}
           </div>
 
           {pendingInsert ? (
@@ -1030,6 +1028,18 @@ export function AiAssistant(): JSX.Element {
             </div>
           ) : null}
 
+          <div className="ai-storage-row">
+            <ChatStorageMeter enabled={aiOpen} />
+            <ChatHistoryCleanup
+              sessionId={sessionId}
+              enabled={aiOpen}
+              messages={history.messages}
+              hasOlder={history.hasOlder}
+              isLoadingOlder={history.isLoadingOlder}
+              loadOlder={history.loadOlder}
+            />
+          </div>
+
           <div className="chat-compose ai-drawer-compose">
             <TextArea
               autoSize={{ minRows: 2, maxRows: 6 }}
@@ -1054,21 +1064,17 @@ export function AiAssistant(): JSX.Element {
               onChange={(event) => {
                 const files = Array.from(event.target.files ?? []);
                 event.target.value = '';
-                void Promise.all(files.map(loadAttachment));
+                void addAttachments(files);
               }}
             />
             <Button type="secondary" icon={<Paperclip size={16} />} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             <Button
               type="primary"
-              icon={streaming || chatMutation.isPending ? <Square size={14} /> : <Send size={16} />}
-              loading={chatMutation.isPending && !streaming}
+              icon={streaming ? <Square size={14} /> : <Send size={16} />}
               disabled={!streaming && (!configQuery.data?.hasKey || sessionId === undefined)}
               onClick={() => {
                 if (streaming) {
-                  if (chatAbortRef.current) chatAbortRef.current();
-                  else if (chatMutation.isPending) {
-                    // 非流式请求挂起中：无 abort 句柄可调用，交给后端超时；按钮态会自行恢复。
-                  }
+                  stopGeneration();
                   return;
                 }
                 send();
@@ -1098,6 +1104,16 @@ export function AiAssistant(): JSX.Element {
         >
           <Typography.Text>删除会话「{deleteConfirmSession?.title ?? ''}」？消息将一并删除，且不可恢复。</Typography.Text>
         </Modal>
+
+        {inspectorTarget ? (
+          <ChatContextInspector
+            sessionId={sessionId}
+            requestId={inspectorTarget.requestId}
+            turn={inspectorTarget.snapshot}
+            open
+            onClose={() => setInspectorTarget(null)}
+          />
+        ) : null}
       </Drawer>
     </>
   );

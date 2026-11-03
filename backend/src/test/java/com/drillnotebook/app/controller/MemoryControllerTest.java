@@ -19,9 +19,11 @@ import com.drillnotebook.app.repository.MemorySettingsRepository;
 import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.service.ApiKeyEncryptor;
+import com.drillnotebook.app.service.memory.MemoryClearService;
 import com.drillnotebook.app.service.memory.MemoryCryptoService;
 import com.drillnotebook.app.service.memory.MemoryItemService;
 import com.drillnotebook.app.service.memory.MemoryPolicyService;
+import com.drillnotebook.app.service.memory.MemoryReviewService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
@@ -29,6 +31,7 @@ import java.lang.reflect.Parameter;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,7 +73,12 @@ class MemoryControllerTest {
                 new MemoryProposalRepository(dataSource, immediate),
                 new MemorySuppressionRepository(dataSource, immediate),
                 new MemoryJobRepository(dataSource, immediate), metadata);
-        controller = new MemoryController(vault, policy, items);
+        MemoryReviewService reviews = new MemoryReviewService(crypto, memory,
+                new MemoryProposalRepository(dataSource, immediate),
+                new MemorySuppressionRepository(dataSource, immediate), operations, vault, policy,
+                new MemoryJobRepository(dataSource, immediate), immediate, new ObjectMapper());
+        controller = new MemoryController(vault, policy, items, reviews,
+                new MemoryClearService(memory, policy, metadata, operations, new ObjectMapper()));
     }
 
     @AfterEach
@@ -78,14 +86,94 @@ class MemoryControllerTest {
         TestWorkspace.deleteRecursively(appRoot);
     }
 
+    /**
+     * §3 把建议列表定成 GET，筛选条件只能挂在查询串上；能进 URL 的只有<b>非内容</b>参数。
+     * 密码、会话密码、搜索词、正文一律只走请求体——这条纪律由下面的白名单守，而不是靠"一个 @RequestParam 都不许有"。
+     */
+    private static final Set<String> ALLOWED_QUERY_PARAMETERS = Set.of("scopeType", "scopeId", "limit", "cursor");
+
     @Test
-    void noRouteTakesAnythingFromTheQueryString() {
+    void onlyNonContentFiltersMayTravelInTheQueryString() {
         for (Method method : MemoryController.class.getDeclaredMethods()) {
             for (Parameter parameter : method.getParameters()) {
-                assertFalse(parameter.isAnnotationPresent(RequestParam.class),
-                        method.getName() + " 用了查询参数：密码与个人内容只能进请求体（§3）");
+                RequestParam annotation = parameter.getAnnotation(RequestParam.class);
+                if (annotation == null) {
+                    continue;
+                }
+                // @RequestParam 的 value/name 是一对别名，但必须显式写一个：靠反射参数名猜，白名单就审不动了
+                String name = annotation.value().isEmpty() ? annotation.name() : annotation.value();
+                assertFalse(name.isEmpty(), method.getName() + " 的查询参数必须显式命名");
+                assertTrue(ALLOWED_QUERY_PARAMETERS.contains(name),
+                        method.getName() + " 把 " + name + " 放进 URL：只有非内容筛选条件可以");
             }
         }
+    }
+
+    @Test
+    void reviewRouteTakesItsDecisionAndVersionsFromTheBody() {
+        ResponseEntity<Map<String, Object>> missing = controller.reviewProposal("prop-1",
+                Map.of("decision", "accept"));
+        assertEquals(400, missing.getStatusCode().value(), "缺 expectedVersion 直接拒（§3）");
+        assertEquals("MEMORY_VERSION_REQUIRED", missing.getBody().get("code"));
+
+        assertEquals(400, controller.reviewProposal("prop-1", Map.of("expectedVersion", 1, "decision", "accept"))
+                .getStatusCode().value(), "采纳必须带上你看到的当前值版本");
+
+        ResponseEntity<Map<String, Object>> unknown = controller.reviewProposal("prop-1",
+                Map.of("expectedVersion", 1, "expectedTargetVersion", 1, "decision", "accept"));
+        assertEquals(404, unknown.getStatusCode().value());
+        assertEquals("MEMORY_PROPOSAL_NOT_FOUND", unknown.getBody().get("code"));
+
+        assertEquals(400, controller.reviewProposal("prop-1", Map.of("expectedVersion", 1,
+                "expectedTargetVersion", 1, "decision", "approve")).getStatusCode().value(),
+                "词表外的决定不进事务");
+    }
+
+    @Test
+    void itemReviewRouteRefusesBeforeItHasAVersionOrATarget() {
+        ResponseEntity<Map<String, Object>> missing = controller.reviewItem("mem-1", Map.of("decision", "accept"));
+        assertEquals(400, missing.getStatusCode().value(), "候选审阅同样必须带 expectedVersion（§3）");
+        assertEquals("MEMORY_VERSION_REQUIRED", missing.getBody().get("code"));
+
+        assertEquals("MEMORY_DECISION_INVALID", controller.reviewItem("mem-1", Map.of("expectedVersion", 1))
+                .getBody().get("code"), "没有决定就没有可执行的动作");
+
+        ResponseEntity<Map<String, Object>> replace = controller.reviewItem("mem-1",
+                Map.of("expectedVersion", 1, "decision", "replace"));
+        assertEquals(400, replace.getStatusCode().value());
+        assertEquals("MEMORY_TARGET_REQUIRED", replace.getBody().get("code"),
+                "替换必须点名旧目标，不能由服务端猜");
+    }
+
+    @Test
+    void proposalsListRefusesToServeWithoutUnlockAndRejectsBogusFilters() {
+        assertEquals(400, controller.proposals("SESSION", 3L, null, null).getStatusCode().value(),
+                "作用域只认 GLOBAL/NOTEBOOK，不给隐式当前会话留后门");
+        assertEquals("MEMORY_SCOPE_INVALID", controller.proposals("SESSION", 3L, null, null).getBody().get("code"));
+        assertEquals("MEMORY_SCOPE_INVALID", controller.proposals("NOTEBOOK", null, null, null).getBody().get("code"));
+
+        ResponseEntity<Map<String, Object>> locked = controller.proposals(null, null, null, null);
+        assertEquals(423, locked.getStatusCode().value(), "没建库/没解锁时列表要 423，不能回一个看起来像"
+                + "“没有建议”的空数组");
+        assertEquals("MEMORY_LOCKED", locked.getBody().get("code"));
+        assertEquals(true, locked.getBody().get("retryable"));
+    }
+
+    @Test
+    void clearRouteNeedsConfirmationAndTheEpochItSaw() {
+        ResponseEntity<Map<String, Object>> unconfirmed = controller.clear(Map.of());
+        assertEquals(409, unconfirmed.getStatusCode().value(), "缺确认不得放行（§12：清空要确认）");
+        assertEquals("MEMORY_CLEAR_CONFIRMATION_REQUIRED", unconfirmed.getBody().get("code"));
+
+        assertEquals("MEMORY_EPOCH_REQUIRED",
+                controller.clear(Map.of("confirm", true)).getBody().get("code"),
+                "确认与 expectedVaultEpoch 都要在请求体里");
+
+        ResponseEntity<Map<String, Object>> noVault = controller.clear(Map.of("confirm", true,
+                "expectedVaultEpoch", 1));
+        assertEquals(409, noVault.getStatusCode().value());
+        assertEquals("MEMORY_VAULT_NOT_INITIALIZED", noVault.getBody().get("code"),
+                "还没有库就说没有可清空的内容，不报 500");
     }
 
     @Test
@@ -178,7 +266,7 @@ class MemoryControllerTest {
         assertEquals(1, ((List<?>) controller.search(Map.of("status", "DISABLED", "limit", 10)).getBody()
                 .get("items")).size());
 
-        assertEquals(204, controller.deleteItem(memoryId, Map.of("expectedVersion", 2, "forget", true,
+        assertEquals(204, controller.deleteItem(memoryId, Map.of("expectedVersion", 2,
                 "operationId", "op-x")).getStatusCode().value(), "停用中的记忆也要能删掉");
         assertEquals(0L, count("ai_memory_item"));
         assertTrue(controller.status().getBody().toString().contains("AUTO_EXTRACT_DISABLED")

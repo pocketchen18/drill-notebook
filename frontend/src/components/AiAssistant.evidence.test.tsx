@@ -73,10 +73,12 @@ const typeAndSend = async (text: string): Promise<void> => {
 
 function mockBaseGet(): void {
   apiGet.mockImplementation((url: string) => {
-    if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
+    if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
     if (url === '/api/notebooks') return Promise.resolve([{ id: 7, title: '高等数学' }]);
     if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: '笔记检索演示' }]);
-    if (url.startsWith('/api/ai/sessions/') && url.endsWith('/messages')) return Promise.resolve([]);
+    if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) {
+      return Promise.resolve({ sessionId: 10, messages: [], historyRevision: 0, hasMore: false, limit: 50 });
+    }
     if (url.startsWith('/api/notebooks/')) return Promise.resolve([]);
     return Promise.resolve({});
   });
@@ -120,7 +122,8 @@ describeEvidence('AiAssistant evidence (DRILL_EVIDENCE_DIR)', () => {
         return Promise.resolve({
           reply: '（仅关键词召回）根据笔记，中值定理包含三类……',
           sessionId: 10,
-          retrievalNotice: { code: 'vector-index-unavailable', message: '向量索引不可用，本次仅使用 BM25 关键词检索' },
+          // v2 的降级只有码，界面按契约码翻出文案
+          contextUsage: { notices: ['RETRIEVAL_UNAVAILABLE'] },
           citations: [
             { corpusType: 'NOTEBOOK', notebookId: 7, pageId: 8, chunkId: 4, title: '中值定理', headingPath: '第二章', snippet: '拉格朗日中值定理', matchTypes: ['bm25'], ftsRank: 1, vectorRank: null, rrfScore: 0.02 }
           ]
@@ -133,7 +136,7 @@ describeEvidence('AiAssistant evidence (DRILL_EVIDENCE_DIR)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
     fireEvent.click(screen.getByLabelText('检索笔记'));
     await typeAndSend('中值定理有哪些');
-    await screen.findByText('向量索引不可用，本次仅使用 BM25 关键词检索');
+    await screen.findByText('笔记检索降级：本次只用了关键词召回结果');
     await screen.findByText('中值定理');
 
     mkdirSync(evidenceDir as string, { recursive: true });

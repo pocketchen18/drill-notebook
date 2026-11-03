@@ -51,8 +51,8 @@ public final class MaintenanceRules {
     /** 等待态重新探门禁的间隔：不满足开关/授权/预算时不忙循环（§8.2 第 2 条）。 */
     public static final long GATE_PROBE_MILLIS = 60_000L;
     /** §5 的提示词版本，落进任务行参与幂等键：换提示词等于换一批输入。 */
-    public static final String PROMPT_VERSION_EXTRACT = "MEMORY_EXTRACT_V2";
-    public static final String PROMPT_VERSION_SUMMARY = "SESSION_SUMMARY_V2";
+    public static final String PROMPT_VERSION_EXTRACT = "MEMORY_EXTRACT_V3";
+    public static final String PROMPT_VERSION_SUMMARY = "SESSION_SUMMARY_V3";
     /** 跳过原因短代码（存 {@code last_scan_notice}，不存正文，§2.5）。 */
     public static final String NOTICE_SOURCE_TOO_LARGE = "SOURCE_TOO_LARGE";
     public static final String NOTICE_SOURCE_DELETED = "SOURCE_DELETED";

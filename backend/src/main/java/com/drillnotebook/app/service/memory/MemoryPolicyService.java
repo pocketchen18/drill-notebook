@@ -166,6 +166,7 @@ public class MemoryPolicyService {
     /** GET /memory/settings：脱敏设置 + 两种授权状态 + 实际目标 + 锁定状态（索引状态属 P5）。 */
     public MemoryApiResult snapshot() {
         try {
+            ensureFingerprintUnlocked();
             MemorySettingsRepository.Settings row = current();
             Policy policy = policyOf(row);
             Map<String, Object> body = new LinkedHashMap<>();
@@ -185,7 +186,14 @@ public class MemoryPolicyService {
             body.put("consents", Map.of(PURPOSE_USE, consentStatus(PURPOSE_USE),
                     PURPOSE_MAINTENANCE, consentStatus(PURPOSE_MAINTENANCE)));
             body.put("limits", Map.of("activeFacts", ACTIVE_FACT_LIMIT, "pendingFacts", PENDING_FACT_LIMIT));
-            body.putAll(vault.statusBody());
+            // 状态体里的 revision 是记忆库自己的重包装版本，直接合并会把上面那个设置版本顶掉——
+            // 而 PUT /settings 的 CAS 要的就是设置版本，建库之后每次改开关都会假冲突（P9a 接线时暴露）
+            Map<String, Object> vaultStatus = vault.statusBody();
+            Object vaultRevision = vaultStatus.remove("revision");
+            body.putAll(vaultStatus);
+            if (vaultRevision != null) {
+                body.put("vaultRevision", vaultRevision);
+            }
             return MemoryApiResult.of(200, body);
         } catch (SQLException error) {
             return storageError(error);
@@ -320,10 +328,11 @@ public class MemoryPolicyService {
 
     /** 某用途的真实外发目标：MEMORY_USE 恒用主模型；维护按 chat/dedicated 切换，不擅自兜底（§5.1）。 */
     public Target targetOf(String purpose) {
+        // slot 必须跟着"实际读的是哪一行"走：共享模式下维护用的就是主模型那一行，
+        // 报成 memory 会让调用方去查一个空槽位（后台外发就是这么丢的 Key）
         String slot = slotOf(purpose);
-        AiConfigRepository.ConfigRow row = PURPOSE_USE.equals(purpose)
-                ? configs.findChat()
-                : MODE_DEDICATED.equals(maintenanceMode()) ? configs.findMemory() : configs.findChat();
+        AiConfigRepository.ConfigRow row = AiConfigRepository.PURPOSE_MEMORY.equals(slot)
+                ? configs.findMemory() : configs.findChat();
         boolean keyPresent = row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank();
         if (row == null || row.endpoint() == null || row.endpoint().isBlank()
                 || row.model() == null || row.model().isBlank()) {
@@ -334,6 +343,25 @@ public class MemoryPolicyService {
         String apiFormat = AiService.apiFormatOf(row);
         return new Target(purpose, slot, row.provider(), hostOf(normalized), row.model(), apiFormat, true, keyPresent,
                 consentFingerprint(purpose, normalized, apiFormat, row.model()));
+    }
+
+    /**
+     * 后台能不能自己解出维护 Key。{@code ai_config} 的 Key 材料分两种：机器指纹随时可解，
+     * password 模式的材料只在用户当场输入主密码时存在——后台<b>不代解、也不缓存明文</b>（§5.1
+     * 「选定后失败就暂停，不偷偷回退另一家」）。走不到这一步的任务应停在等待态，不烧一次外发。
+     */
+    public boolean maintenanceKeyUsable() {
+        AiConfigRepository.ConfigRow row = MODE_DEDICATED.equals(maintenanceMode())
+                ? configs.findMemory() : configs.findChat();
+        if (row == null || row.encryptedKey() == null || row.encryptedKey().isBlank()
+                || row.keyMeta() == null || row.keyMeta().isBlank()) {
+            return false;
+        }
+        try {
+            return !"password".equals(mapper.readTree(row.keyMeta()).path("mode").asText("fingerprint"));
+        } catch (Exception error) {
+            return false;
+        }
     }
 
     /** 授权指纹：purpose + 归一化 endpoint + apiFormat + model + policyVersion 的 SHA-256 摘要。 */
@@ -394,6 +422,7 @@ public class MemoryPolicyService {
         if (!row.compressSession()) {
             return new Eligibility(Gate.COMPRESS_DISABLED, "会话压缩开关是关的");
         }
+        ensureFingerprintUnlocked();
         if (memory.readEnvelope().isEmpty()) {
             return new Eligibility(Gate.VAULT_MISSING, "摘要也要本地记忆库保护内容");
         }
@@ -409,6 +438,7 @@ public class MemoryPolicyService {
         if (!row.enabled()) {
             return new Eligibility(Gate.MEMORY_DISABLED, "长期记忆开关是关的");
         }
+        ensureFingerprintUnlocked();
         if (vault.currentKey().isEmpty()) {
             return new Eligibility(Gate.LOCKED, "记忆库锁定中，本轮不提供记忆");
         }
@@ -440,7 +470,22 @@ public class MemoryPolicyService {
 
     // ---- 内部 ----
 
+    /**
+     * 指纹库的钥匙由机器指纹派生，不需要用户输入；打开设置或首次使用时自动解锁，
+     * 让"启用记忆"保持一个开关就够用。password 库仍然要求用户输入主密码。
+     */
+    private void ensureFingerprintUnlocked() throws SQLException {
+        if (vault.currentKey().isPresent() || vault.lockedByUser()) {
+            return;
+        }
+        java.util.Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
+        if (envelope.isPresent() && MemoryCryptoService.MODE_FINGERPRINT.equals(envelope.get().mode())) {
+            vault.unlock(null, java.util.List.of());
+        }
+    }
+
     private Eligibility vaultStateGate() throws SQLException {
+        ensureFingerprintUnlocked();
         if (memory.readEnvelope().isEmpty()) {
             return new Eligibility(Gate.VAULT_MISSING, "还没有记忆库，先创建再录入");
         }
@@ -494,6 +539,12 @@ public class MemoryPolicyService {
         return Eligibility.ok();
     }
 
+    private String slotOf(String purpose) {
+        // 只有"专用维护模型"才把目标指到 memory 槽位；共享模式打的就是主模型那一行（§5.1）
+        return !PURPOSE_USE.equals(purpose) && MODE_DEDICATED.equals(maintenanceMode())
+                ? AiConfigRepository.PURPOSE_MEMORY : AiConfigRepository.PURPOSE_CHAT;
+    }
+
     private String maintenanceMode() {
         try {
             return policyOf(current()).maintenanceModelMode();
@@ -508,10 +559,6 @@ public class MemoryPolicyService {
                     "授权用途只能是 MEMORY_USE 或 MEMORY_MAINTENANCE");
         }
         return null;
-    }
-
-    private static String slotOf(String purpose) {
-        return PURPOSE_USE.equals(purpose) ? AiConfigRepository.PURPOSE_CHAT : AiConfigRepository.PURPOSE_MEMORY;
     }
 
     private static Map<String, Object> targetDetails(Target target) {

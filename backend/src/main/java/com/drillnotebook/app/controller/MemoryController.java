@@ -1,8 +1,10 @@
 package com.drillnotebook.app.controller;
 
 import com.drillnotebook.app.service.memory.MemoryApiResult;
+import com.drillnotebook.app.service.memory.MemoryClearService;
 import com.drillnotebook.app.service.memory.MemoryItemService;
 import com.drillnotebook.app.service.memory.MemoryPolicyService;
+import com.drillnotebook.app.service.memory.MemoryReviewService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.drillnotebook.app.service.memory.MemoryVaultService.SessionUnlock;
 import java.util.ArrayList;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -25,7 +28,8 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>控制器只拆请求、映射状态码，判定一律在服务层：响应形状是 {@code {code,message,retryable?,details?}}
  * 或成功体，由 {@link MemoryApiResult} 决定，不走全局异常处理器，因此错误里不会出现堆栈、SQL 或正文。</p>
  *
- * <p>两条硬规矩：主密码与会话密码只能走请求体（不进 querystring、不进日志）；
+ * <p>两条硬规矩：主密码、会话密码与用户原话只能走请求体（不进 querystring、不进日志；GET 列表只允许
+ * scope/limit/cursor 这类非内容筛选条件）；
  * 编辑与删除必须带 {@code expectedVersion}，服务端不靠前端禁用按钮。</p>
  */
 @RestController
@@ -35,11 +39,16 @@ public class MemoryController {
     private final MemoryVaultService vault;
     private final MemoryPolicyService policy;
     private final MemoryItemService items;
+    private final MemoryReviewService reviews;
+    private final MemoryClearService clears;
 
-    public MemoryController(MemoryVaultService vault, MemoryPolicyService policy, MemoryItemService items) {
+    public MemoryController(MemoryVaultService vault, MemoryPolicyService policy, MemoryItemService items,
+                            MemoryReviewService reviews, MemoryClearService clears) {
         this.vault = vault;
         this.policy = policy;
         this.items = items;
+        this.reviews = reviews;
+        this.clears = clears;
     }
 
     // ---- 设置与授权 ----
@@ -131,13 +140,58 @@ public class MemoryController {
                 string(payload, "status"))));
     }
 
-    /** 删除走 body 传 expectedVersion 与 forget，不放 URL。 */
+    /** 删除走 body 传 expectedVersion 与 operationId，不放 URL。 */
     @DeleteMapping("/items/{memoryId}")
     public ResponseEntity<Map<String, Object>> deleteItem(@PathVariable String memoryId,
             @RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> payload = body == null ? Map.of() : body;
-        boolean forget = Boolean.TRUE.equals(boolOf(payload, "forget"));
-        return map(items.delete(memoryId, intOf(payload, "expectedVersion"), forget, string(payload, "operationId")));
+        return map(items.delete(memoryId, intOf(payload, "expectedVersion"), string(payload, "operationId")));
+    }
+
+    /**
+     * 审阅一条待确认候选（§3）：decision 与版本都从请求体进来；只有 {@code replace} 才需要点名旧目标。
+     */
+    @PostMapping("/items/{memoryId}/review")
+    public ResponseEntity<Map<String, Object>> reviewItem(@PathVariable String memoryId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        return map(reviews.reviewItem(memoryId, new MemoryReviewService.ItemReviewInput(
+                intOf(payload, "expectedVersion"), string(payload, "decision"), string(payload, "targetMemoryId"),
+                intOf(payload, "expectedTargetVersion"), string(payload, "operationId"))));
+    }
+
+    /**
+     * 建议列表（§3 定为 GET）：只有非内容筛选条件走查询串——scope 是枚举加数字、游标是不透明串，
+     * 都不含用户原话；正文只在响应里出现，且必须已解锁（§3 末段）。
+     */
+    @GetMapping("/proposals")
+    public ResponseEntity<Map<String, Object>> proposals(
+            @RequestParam(name = "scopeType", required = false) String scopeType,
+            @RequestParam(name = "scopeId", required = false) Long scopeId,
+            @RequestParam(name = "limit", required = false) Integer limit,
+            @RequestParam(name = "cursor", required = false) String cursor) {
+        return map(reviews.list(scopeType, scopeId, limit, cursor));
+    }
+
+    /**
+     * 审阅一条替换/撤销建议（§4.4）：decision 与两个 expectedVersion 都从请求体进来，
+     * 采纳/并存必须带上用户看到的"当前值"版本；409 只回元信息，正文不随错误返回。
+     */
+    @PostMapping("/proposals/{proposalId}/review")
+    public ResponseEntity<Map<String, Object>> reviewProposal(@PathVariable String proposalId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        return map(reviews.review(proposalId, new MemoryReviewService.ReviewInput(intOf(payload, "expectedVersion"),
+                intOf(payload, "expectedTargetVersion"), string(payload, "decision"),
+                string(payload, "operationId"))));
+    }
+
+    /** 清空全部 AI 记忆（§11.3）：confirm 与 expectedVaultEpoch 都在请求体里；没删完回 202，不假 204。 */
+    @PostMapping("/clear")
+    public ResponseEntity<Map<String, Object>> clear(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        return map(clears.clear(Boolean.TRUE.equals(boolOf(payload, "confirm")), longObject(payload, "expectedVaultEpoch"),
+                string(payload, "operationId")));
     }
 
     /** 管理页列表与本地检索：query 放请求体，不进 URL（防访问日志留原话）。 */

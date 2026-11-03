@@ -30,9 +30,9 @@ public final class MemoryLexicon {
             "answer.detail", "简短 简洁 详细 啰嗦 冗长 篇幅 展开 步骤",
             "answer.order", "顺序 例子 举例 原理 概念 结论 代码 证明",
             "study.goal", "目标 备考 考试 学习 计划 章节 重点 复习",
-            "study.background", "背景 专业 学生 年级 经历 年限",
+            "study.background", "背景 专业 学生 年级 经历 年限 城市 居住 住在 地点 老家 家乡",
             "task.constraint", "约束 要求 限制 避免 不要 格式 表格",
-            "other", "习惯 偏好 安排 方式");
+            "other", "习惯 偏好 安排 方式 城市 居住 住在 地点");
 
     /** 前缀兜底：手写谓词没进有限词表时，至少归到同一大类的标签。 */
     private static final Map<String, String> PREFIX_LABELS = Map.of(

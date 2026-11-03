@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.memory.Schema9Fixture;
 import com.drillnotebook.app.memory.TestWorkspace;
+import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.model.UuidV7;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.ChatLegacyWiring;
@@ -111,6 +112,61 @@ class AiServiceTurnPathTest {
         assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'COMPLETED'"));
         assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"), "两条路径各自都只写一轮");
         assertEquals(0, ledgerReserved());
+    }
+
+    /**
+     * v2 流式的两帧身份：metadata 必须带 requestId（没有它，「停止」只能断本地 fetch，后端要等下一次写失败
+     * 或总期限才察觉，会话一直被"已有一轮正在进行"占住），done 必须与普通响应同构（§4.2）。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void v2StreamHandshakeCarriesIdentityAndDoneMatchesTheUnifiedResult() {
+        String requestId = UuidV7.generate(System.currentTimeMillis());
+        List<Map<String, Object>> frames = new ArrayList<>();
+        AiService.ChatResult result = ai.chatStream(Map.of(
+                "protocolVersion", 2,
+                "requestId", requestId,
+                "sessionId", sessionId,
+                "input", Map.of("role", "user", "userText", "流式也要把身份给出去")),
+                (type, text) -> true, frames::add);
+
+        Map<String, Object> metadata = frames.get(0);
+        assertEquals(requestId, metadata.get("requestId"), "v2 的 metadata 也得带 requestId");
+        assertNotNull(metadata.get("planId"));
+        assertEquals(ContextAudit.DISPATCH_NOT_SENT, metadata.get("dispatchState"),
+                "首个 metadata 只是准备状态，不许宣称已发送");
+
+        Map<String, Object> done = result.resultView();
+        assertEquals(2, done.get("protocolVersion"));
+        assertEquals(requestId, done.get("requestId"));
+        assertEquals(sessionId, ((Number) done.get("sessionId")).longValue());
+        assertEquals(false, done.get("replayed"));
+        assertEquals("saved", done.get("persistenceStatus"));
+        assertEquals(true, done.get("stateDurable"));
+        assertNotNull(done.get("memoryContext"), "徽标要能直接读到「本轮提供了哪些记忆版本」");
+        assertNotNull(done.get("contextUsage"));
+        Map<String, Object> audit = (Map<String, Object>) done.get("contextAudit");
+        assertEquals(metadata.get("planId"), audit.get("planId"), "计划身份前后一致");
+        assertEquals(ContextAudit.DISPATCH_SENT, audit.get("dispatchState"), "发送状态以最终结果为准");
+    }
+
+    /** 重放不再重建计划：done 仍要带身份并如实标 replayed，引用明细交回落库那份审计。 */
+    @Test
+    void replayedStreamTurnReportsReplayInsteadOfPretendingANewPlan() {
+        String requestId = UuidV7.generate(System.currentTimeMillis());
+        Map<String, Object> body = Map.of(
+                "protocolVersion", 2,
+                "requestId", requestId,
+                "sessionId", sessionId,
+                "input", Map.of("role", "user", "userText", "同一 requestId 再点一次"));
+
+        ai.chatStream(body, (type, text) -> true);
+        AiService.ChatResult replayed = ai.chatStream(body, (type, text) -> true);
+
+        assertEquals(true, replayed.resultView().get("replayed"));
+        assertEquals(requestId, replayed.resultView().get("requestId"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE request_id = '" + requestId + "'"),
+                "重放不写第二轮");
     }
 
     @Test
