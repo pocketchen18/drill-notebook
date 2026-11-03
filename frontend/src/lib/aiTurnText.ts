@@ -154,12 +154,22 @@ const REGION_TEXT: Record<string, string> = {
 const KIND_TEXT: Record<string, string> = {
   MEMORY: '记忆',
   SUMMARY: '续接摘要',
+  RESUME_STATE: '会话状态',
   TURN: '对话轮次',
   LEGACY_MESSAGE: '旧消息',
   TEXT_ATTACHMENT: '文本附件',
   IMAGE: '图片',
   NOTEBOOK_RAG: '笔记片段',
-  PAGE: '页面'
+  PAGE: '页面',
+  // 省略项的 kind 是更宽的一组词（ConversationProjection 的 HISTORY/LEGACY、ContextAudit 的收敛类别、
+  // 附件策略的 ATTACHMENT）：同一张表翻译，界面才不会露出英文原样。LEGACY 与 LEGACY_MESSAGE 同译
+  // 「旧消息」是故意的——它们是同一个概念在"来源"与"省略"两处的两种码。
+  ATTACHMENT: '附件',
+  LEGACY: '旧消息',
+  HISTORY: '更早历史',
+  OTHER: '其他',
+  SELECTION: '选区',
+  DIAGNOSTICS: '诊断'
 };
 
 /** 账本不可用时的那一句；未知原因也如实说"读不出来"，不假装本轮没发生过。 */
@@ -280,4 +290,92 @@ export function formatStoredBytes(bytes: number): string {
     index += 1;
   }
   return `${scaled < 10 ? Number(scaled.toFixed(1)) : Math.round(scaled)} ${units[index]}`;
+}
+
+// ---- 历史清理（contracts §3 的 `/history/cleanup/*`） ----
+//
+// 原则：服务端只给事实（范围、计数、ID、码），界面只措辞；一份预览一旦被服务端打回，
+// 就只能重新预览，界面不许自己"重试一下大概率还行"。
+
+const CLEANUP_ERROR_TEXT: Record<string, string> = {
+  CLEANUP_PREVIEW_EXPIRED: '预览已过期，请重新预览',
+  CLEANUP_PREVIEW_REVISION_MISMATCH: '提交的版本基线不对，请重新预览',
+  CLEANUP_SOURCE_CHANGED: '预览之后这些内容变了，请重新预览',
+  CLEANUP_SESSION_RUNNING: '这个会话还有一轮在生成，先结束或取消再清理',
+  CLEANUP_REVISION_CONFLICT: '会话刚有过更新，请重新预览',
+  CLEANUP_PREVIEW_REQUIRED: '请先预览要清理的内容',
+  CLEANUP_CONFIRM_REQUIRED: '请先勾选确认',
+  CLEANUP_MAX_TURNS_INVALID: '一次最多清理 200 轮',
+  CLEANUP_BOUNDARY_UNKNOWN: '边界不在这个会话里，请重新预览',
+  CLEANUP_OPERATION_IN_FLIGHT: '上一次清理还在进行，稍等再试',
+  CLEANUP_OPERATION_ID_CONFLICT: '这次操作编号已被占用，请重试'
+};
+
+export function cleanupErrorText(code: unknown, fallback?: unknown): string {
+  const key = typeof code === 'string' ? code : '';
+  const mapped = CLEANUP_ERROR_TEXT[key];
+  if (mapped) return mapped;
+  const text = typeof fallback === 'string' ? fallback.trim() : '';
+  return text || '清理没有成功，请稍后再试';
+}
+
+/** 一行说清这一批会删什么；legacy 与分批提示是另外两句。 */
+export function cleanupScopeLine(preview: {
+  turnCount: number;
+  messageCount: number;
+  historyBytes: number;
+  attachmentBytes: number;
+}): string {
+  const head = `清理 ${preview.turnCount} 轮对话 · ${preview.messageCount} 条消息 · 释放 ${formatStoredBytes(preview.historyBytes)}`;
+  return preview.attachmentBytes > 0
+    ? `${head} · 另含附件 ${formatStoredBytes(preview.attachmentBytes)}`
+    : head;
+}
+
+/** 迁移前的展示行：落单的那几条要报 ID，用户能"看见"才谈得上确认（契约 §3）。 */
+export function cleanupLegacyLine(preview: {
+  legacyCount: number;
+  incompleteLegacyCount: number;
+  incompleteLegacyMessageIds: number[];
+}): string | undefined {
+  if (preview.legacyCount <= 0) return undefined;
+  const base = `另有 ${preview.legacyCount} 条迁移前的旧消息`;
+  if (preview.incompleteLegacyCount <= 0) return base;
+  const ids = preview.incompleteLegacyMessageIds.join('、');
+  return `${base}，其中 ${preview.incompleteLegacyCount} 条凑不成一问一答${ids ? `（ID ${ids}）` : ''}`;
+}
+
+/** 没纳入本批的部分：被边界劈开的不完整旧记录，以及超出 200 轮的更早批次。 */
+export function cleanupBatchLines(preview: { excludedMessageCount: number; olderTurnCount: number }): string[] {
+  const lines: string[] = [];
+  if (preview.excludedMessageCount > 0) {
+    lines.push(`${preview.excludedMessageCount} 条不完整的旧记录不纳入本次清理`);
+  }
+  if (preview.olderTurnCount > 0) {
+    lines.push(`还有 ${preview.olderTurnCount} 轮更早的没纳入，清理完这批可以再来一次`);
+  }
+  return lines;
+}
+
+/** 受影响记忆：谁会被删、谁只断来源，一句说完；一条都不涉及就明说。 */
+export function cleanupImpactLine(preview: {
+  affectedEvidence: number;
+  affectedProposals: number;
+  autoFactsRemoved: number;
+  protectedFactsKept: number;
+}): string {
+  const parts: string[] = [];
+  if (preview.affectedEvidence > 0) parts.push(`${preview.affectedEvidence} 条原话证据一起删除`);
+  if (preview.affectedProposals > 0) parts.push(`${preview.affectedProposals} 条建议随原话一起删除`);
+  if (preview.autoFactsRemoved > 0) parts.push(`${preview.autoFactsRemoved} 条自动记忆失去唯一来源会消失`);
+  if (preview.protectedFactsKept > 0) parts.push(`${preview.protectedFactsKept} 条受保护记忆只断来源、内容保留`);
+  if (!parts.length) return '不涉及已保存的记忆';
+  return parts.join('；');
+}
+
+/** 预览的到期时刻：到点就得重新预览，界面不替用户续命。 */
+export function cleanupExpiryLine(expiresAt: string): string | undefined {
+  const at = new Date(expiresAt);
+  if (Number.isNaN(at.getTime())) return undefined;
+  return `预览有效至 ${at.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
 }

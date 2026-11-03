@@ -76,6 +76,24 @@ beforeEach(() => {
 });
 
 describe('ChatContextInspector', () => {
+  it('会话状态那一行不给「对照来源」，省略类别也不许露出英文（D164）', async () => {
+    apiGet.mockResolvedValue(read(audit({
+      selected: [
+        ...SOURCES.slice(0, 1),
+        { sourceKey: 'state:r1', kind: 'RESUME_STATE', id: 'r1', version: '1', sourceTurnId: null }
+      ],
+      omissions: [{ reason: 'OUTSIDE_SCAN_WINDOW', kind: 'HISTORY', count: null }]
+    })));
+    renderInspector();
+
+    // 只有 MEMORY 那一行有按钮：会话状态本来就没有可逐条对照的原文，给按钮只是空期待
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '对照来源' })).toHaveLength(1));
+    expect(screen.getByText('会话状态')).toBeTruthy();
+    expect(screen.getByText('会话状态无法逐条对照')).toBeTruthy();
+    expect(screen.getByText('更早历史')).toBeTruthy();
+    expect(screen.queryByText('HISTORY')).toBeNull();
+  });
+
   it('打开只读一次账本，不碰聊天也不自动预览', async () => {
     renderInspector();
     await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));

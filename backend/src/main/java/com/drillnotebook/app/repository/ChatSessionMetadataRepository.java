@@ -63,6 +63,17 @@ public class ChatSessionMetadataRepository {
         }
     }
 
+    public Optional<String> title(long sessionId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT title FROM ai_chat_session WHERE id = ?")) {
+            statement.setLong(1, sessionId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.ofNullable(result.getString("title")) : Optional.empty();
+            }
+        }
+    }
+
     public static Optional<State> read(Connection connection, long sessionId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT)) {
             statement.setLong(1, sessionId);

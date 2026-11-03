@@ -156,22 +156,33 @@ function SummaryLine({ audit }: { audit: TurnContextAudit }) {
   );
 }
 
+/**
+ * 后端 `ContextInspector.previewOne` 只对"有原文"的类别回内容，`RESUME_STATE` 落 `default` 分支只给占位。
+ * 与其给一个注定只能显示占位的按钮，不如直说这一行不可逐条对照（D164）。
+ */
+const NON_PREVIEWABLE_KINDS = new Set(['RESUME_STATE']);
+
 function SourceRow({ source, previews }: { source: ContextSource; previews: ReturnType<typeof useSourcePreview> }) {
   const preview: SourcePreview | undefined = previews.rows[source.sourceKey];
   const line = preview ? previewLine(preview) : null;
+  const previewable = !NON_PREVIEWABLE_KINDS.has(source.kind);
   return (
     <li className="ai-inspector-source">
       <span className="ai-inspector-source-kind">{sourceKindLabel(source.kind)}</span>
       <code className="ai-inspector-source-id">{source.id ?? '—'}</code>
       <span className="ai-inspector-source-version">{source.version ? `v${source.version}` : '版本未记录'}</span>
-      <button
-        type="button"
-        className="ai-inspector-source-check"
-        disabled={previews.pendingKey === source.sourceKey}
-        onClick={() => previews.preview(source.sourceKey)}
-      >
-        {previews.pendingKey === source.sourceKey ? '对照中…' : '对照来源'}
-      </button>
+      {previewable ? (
+        <button
+          type="button"
+          className="ai-inspector-source-check"
+          disabled={previews.pendingKey === source.sourceKey}
+          onClick={() => previews.preview(source.sourceKey)}
+        >
+          {previews.pendingKey === source.sourceKey ? '对照中…' : '对照来源'}
+        </button>
+      ) : (
+        <span className="ai-inspector-source-plain">会话状态无法逐条对照</span>
+      )}
       {line ? (
         <span className={line.tone === 'quote' ? 'ai-inspector-source-quote'
           : line.tone === 'gone' ? 'ai-inspector-source-gone' : 'ai-inspector-source-plain'}>

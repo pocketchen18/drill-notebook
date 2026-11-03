@@ -96,6 +96,25 @@ class MemoryExtractionReplayTest {
     }
 
     @Test
+    void exactDuplicateValueInAnotherFamilyIsRejectedWithoutANewItem() throws Exception {
+        harness.readyForExtraction();
+        apply("我常住杭州", "study.background", "杭州", "我常住杭州");
+        long revision = harness.vaultRevision();
+        harness.advance(ONE_HOUR);
+        long second = harness.seedTurn("我住在杭州", "好的");
+
+        JobRow job = extract(second, body(add("task.constraint", "杭州", "我住在杭州",
+                harness.userMessageId(second))));
+
+        assertEquals(MemoryJobRepository.STATUS_COMPLETED, job.status());
+        assertEquals("NO_VALID_CANDIDATES", job.outcomeCode(), "值完全相同就不写第二条");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"));
+        assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
+        assertEquals(revision, harness.vaultRevision(), "拒绝重复不涨内容代次");
+        assertEquals(second, harness.memoryWatermark(), "来源仍被消费");
+    }
+
+    @Test
     void newerAutoPreferenceSupersedesTheOlderVersion() throws Exception {
         harness.readyForExtraction();
         apply("以后每次回答都详细一些", "answer.detail", "detailed", "以后每次回答都详细一些");
@@ -118,7 +137,7 @@ class MemoryExtractionReplayTest {
     // ---- §14 P7 回放用例：五种高风险语义的区分度 ----
 
     @Test
-    void negatedCorrectionGoesToPendingAndLeavesActiveUntouched() throws Exception {
+    void negatedCorrectionReplacesTheCurrentVersionDirectly() throws Exception {
         harness.readyForExtraction();
         apply("以后每次讲解都先讲原理", "answer.order", "concept_first", "以后每次讲解都先讲原理");
         harness.advance(ONE_HOUR);
@@ -129,11 +148,10 @@ class MemoryExtractionReplayTest {
 
         assertEquals("APPLIED", job.outcomeCode());
         Map<String, Object> active = onlyItem(MemoryRepository.STATUS_ACTIVE);
-        assertEquals(1, number(active.get("version")), "改口有歧义时旧值不被自动替换");
-        assertTrue(payloadOf(active).contains("\"normalizedValue\":\"concept_first\""));
-        Map<String, Object> pending = onlyItem(MemoryRepository.STATUS_PENDING);
-        assertTrue(payloadOf(pending).contains("NEGATION_AMBIGUITY"), payloadOf(pending));
-        assertEquals(0, itemCount(MemoryRepository.STATUS_SUPERSEDED));
+        assertEquals(2, number(active.get("version")), "改口直接覆盖旧版本");
+        assertTrue(payloadOf(active).contains("\"normalizedValue\":\"example_first\""));
+        assertEquals(0, itemCount(MemoryRepository.STATUS_PENDING), "不再产生待确认");
+        assertEquals(1, itemCount(MemoryRepository.STATUS_SUPERSEDED));
     }
 
     @Test
@@ -192,17 +210,16 @@ class MemoryExtractionReplayTest {
     }
 
     @Test
-    void suppressedEvidenceSourceIsIgnoredEvenWhenItWouldOtherwiseBePending() throws Exception {
+    void suppressedEvidenceSourceIsIgnored() throws Exception {
         harness.readyForExtraction();
         long older = apply("以后每次回答都详细一些", "answer.detail", "detailed", "以后每次回答都详细一些");
         harness.advance(ONE_HOUR);
         long filler = harness.seedTurn("再讲一遍这道题的第二问", "好的");
 
-        // 对照：先证明这条候选本身写得进去（同一句原话换个新值 → 同刻说法只能待确认）
         JobRow before = extract(older, filler, body(add("answer.detail", "concise", "以后每次回答都详细一些",
                 harness.userMessageId(older))), Map.of());
-        assertEquals("APPLIED", before.outcomeCode(), "没抑制时这条候选应进待确认，否则下面的断言测不到东西");
-        assertEquals(1, itemCount(MemoryRepository.STATUS_PENDING));
+        assertEquals("APPLIED", before.outcomeCode(), "没抑制时这条候选应生效");
+        assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
 
         MemoryKey key = harness.vault.currentKey().orElseThrow();
         String sourceHmac = harness.jdbc.queryForObject(
@@ -211,17 +228,16 @@ class MemoryExtractionReplayTest {
                 MemorySuppressionRepository.KIND_EVIDENCE, sourceHmac, older, harness.stamp(harness.now())));
         long wider = harness.seedTurn("再讲一遍第三问", "好的");
 
-        // 同一句原话换个值重提：来源被拒过就不该再收，换措辞绕不开 EVIDENCE 键
         JobRow after = extract(older, wider, body(add("answer.detail", "concise", "以后每次回答都详细一些",
                 harness.userMessageId(older))), Map.of());
 
         assertEquals("NO_VALID_CANDIDATES", after.outcomeCode());
-        assertEquals(1, itemCount(MemoryRepository.STATUS_PENDING), "EVIDENCE 抑制连待确认都不写");
+        assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE), "EVIDENCE 抑制不再写任何事实");
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_evidence"), "被抑制的来源不追加新证据");
     }
 
     @Test
-    void manuallyProtectedFactOnlyGainsAPendingSuggestion() throws Exception {
+    void manuallyProtectedFactIsNotOverwrittenAutomatically() throws Exception {
         harness.readyForExtraction();
         apply("以后每次回答都详细一些", "answer.detail", "detailed", "以后每次回答都详细一些");
         harness.jdbc.update("UPDATE ai_memory_item SET origin = 'MANUAL', manual_protected = 1"
@@ -232,13 +248,12 @@ class MemoryExtractionReplayTest {
         JobRow job = extract(turn, body(add("answer.detail", "concise", "以后讲简洁些",
                 harness.userMessageId(turn))));
 
-        assertEquals("APPLIED", job.outcomeCode());
+        assertEquals("NO_VALID_CANDIDATES", job.outcomeCode());
         Map<String, Object> active = onlyItem(MemoryRepository.STATUS_ACTIVE);
         assertEquals("MANUAL", active.get("origin"));
         assertEquals(1, number(active.get("manual_protected")), "人工保护的事实不被自动覆盖（§8.3）");
         assertTrue(payloadOf(active).contains("\"normalizedValue\":\"detailed\""));
-        Map<String, Object> pending = onlyItem(MemoryRepository.STATUS_PENDING);
-        assertTrue(payloadOf(pending).contains("MANUAL_PROTECTED_TARGET"), payloadOf(pending));
+        assertEquals(0, itemCount(MemoryRepository.STATUS_PENDING), "不再产生待确认建议");
         assertEquals(0, itemCount(MemoryRepository.STATUS_SUPERSEDED));
     }
 
@@ -303,7 +318,10 @@ class MemoryExtractionReplayTest {
         assertEquals("APPLIED", job.outcomeCode());
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal"), "没随请求发过的 ID 就是伪造（§5）");
         assertEquals(2, count("SELECT COUNT(*) FROM ai_memory_item"), "另一条候选不受牵连");
-        assertTrue(payloadOf(onlyItem(MemoryRepository.STATUS_PENDING)).contains("整理错题本"));
+        assertEquals(2, itemCount(MemoryRepository.STATUS_ACTIVE));
+        assertEquals(0, itemCount(MemoryRepository.STATUS_PENDING), "第一条事实直接生效，不再留待确认");
+        assertTrue(payloadOf(itemWithPayload(MemoryRepository.STATUS_ACTIVE, "整理错题本"))
+                .contains("整理错题本"));
     }
 
     @Test
@@ -323,10 +341,9 @@ class MemoryExtractionReplayTest {
     }
 
     @Test
-    void validReplacementSuggestionBecomesPendingProposalWithoutTouchingFacts() throws Exception {
+    void validReplacementSuggestionReplacesTheTargetDirectly() throws Exception {
         harness.readyForExtraction();
         apply("以后每次回答都详细一些", "answer.detail", "detailed", "以后每次回答都详细一些");
-        long revision = harness.vaultRevision();
         long turn = harness.seedTurn("以后回答别那么啰嗦，简洁就行", "好");
         Map<String, Integer> known = harness.activeTargets();
 
@@ -335,12 +352,12 @@ class MemoryExtractionReplayTest {
                 known.values().iterator().next(), false)), known);
 
         assertEquals("APPLIED", job.outcomeCode());
-        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE status = 'PENDING'"));
-        assertEquals(known.values().iterator().next(),
-                harness.jdbc.queryForObject("SELECT target_version FROM ai_memory_proposal", Integer.class));
-        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"), "建议不动事实库（§2.3.1）");
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal"), "不再创建提案");
         assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
-        assertEquals(revision + 1, harness.vaultRevision());
+        Map<String, Object> active = onlyItem(MemoryRepository.STATUS_ACTIVE);
+        assertEquals(2, number(active.get("version")));
+        assertTrue(payloadOf(active).contains("\"normalizedValue\":\"concise\""));
+        assertEquals(1, itemCount(MemoryRepository.STATUS_SUPERSEDED));
     }
 
     @Test
@@ -360,7 +377,7 @@ class MemoryExtractionReplayTest {
     }
 
     @Test
-    void unmappedLanguageBecomesPendingInsteadOfAGuess() throws Exception {
+    void unmappedLanguageIsAddedDirectly() throws Exception {
         harness.readyForExtraction();
         long turn = harness.seedTurn("以后回答用法语，术语保留英文", "好的");
 
@@ -368,14 +385,14 @@ class MemoryExtractionReplayTest {
                 harness.userMessageId(turn))));
 
         assertEquals("APPLIED", job.outcomeCode());
-        assertEquals(0, itemCount(MemoryRepository.STATUS_ACTIVE), "映射表认不出就不自动生效");
-        Map<String, Object> pending = onlyItem(MemoryRepository.STATUS_PENDING);
-        assertTrue(payloadOf(pending).contains("LANGUAGE_UNMAPPED"), payloadOf(pending));
-        assertTrue(payloadOf(pending).contains("\"value\":\"法语\""), "原话留着，但不冒充某种语言码");
+        assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
+        Map<String, Object> active = onlyItem(MemoryRepository.STATUS_ACTIVE);
+        assertTrue(payloadOf(active).contains("\"value\":\"法语\""), "原话直接入库，不再等待映射确认");
+        assertEquals(0, itemCount(MemoryRepository.STATUS_PENDING));
     }
 
     @Test
-    void naturalLanguageRetractionBecomesProposalWithoutTouchingFacts() throws Exception {
+    void naturalLanguageRetractionIsIgnoredWithoutTouchingFacts() throws Exception {
         harness.readyForExtraction();
         apply("以后每次回答都详细一些", "answer.detail", "detailed", "以后每次回答都详细一些");
         long revision = harness.vaultRevision();
@@ -386,14 +403,12 @@ class MemoryExtractionReplayTest {
                 "那条详细偏好作废吧", harness.userMessageId(turn), known.keySet().iterator().next(),
                 known.values().iterator().next(), false)), known);
 
-        assertEquals("APPLIED", job.outcomeCode(), "撤销建议本来就没有新值，不能被归一化判成坏值（§5）");
-        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE status = 'PENDING'"
-                        + " AND operation = 'RETRACT_PROPOSAL'"),
-                "「自然语言忘记」只能落成待确认建议（§8.3、§2.3.1）");
+        assertEquals("NO_VALID_CANDIDATES", job.outcomeCode(), "撤销建议被忽略，不产生新写入");
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal"));
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"), "事实库一条都不动");
         assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
         assertTrue(payloadOf(onlyItem(MemoryRepository.STATUS_ACTIVE)).contains("\"normalizedValue\":\"detailed\""));
-        assertEquals(revision + 1, harness.vaultRevision(), "新增建议也算内容变更");
+        assertEquals(revision, harness.vaultRevision(), "没有写入就不涨内容代次");
     }
 
     // ---- §8.2 第 7 条：格式失败最多修一次，且不清空既有记忆 ----
@@ -514,6 +529,16 @@ class MemoryExtractionReplayTest {
 
     private Map<String, Object> onlyItem(String status) {
         return harness.jdbc.queryForMap("SELECT * FROM ai_memory_item WHERE status = '" + status + "'");
+    }
+
+    private Map<String, Object> itemWithPayload(String status, String needle) throws Exception {
+        for (Map<String, Object> row : harness.jdbc.queryForList(
+                "SELECT * FROM ai_memory_item WHERE status = '" + status + "' ORDER BY row_id")) {
+            if (payloadOf(row).contains(needle)) {
+                return row;
+            }
+        }
+        throw new AssertionError("没有找到状态为 " + status + " 且包含「" + needle + "」的记忆");
     }
 
     private int count(String sql) {

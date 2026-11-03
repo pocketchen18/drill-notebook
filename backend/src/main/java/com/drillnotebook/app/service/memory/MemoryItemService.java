@@ -19,6 +19,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -183,9 +184,9 @@ public class MemoryItemService {
             return locked();
         }
         try {
-            Optional<FactRow> row = memory.findCurrent(key.vaultId(), memoryId);
+            Optional<FactRow> row = memory.findCurrentAnyStatus(key.vaultId(), memoryId);
             if (row.isEmpty()) {
-                return MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "没有这条记忆，或它已经没有生效版本");
+                return MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "没有这条记忆");
             }
             return MemoryApiResult.of(200, itemBody(key, row.get(), true));
         } catch (SQLException error) {
@@ -201,7 +202,8 @@ public class MemoryItemService {
                                 String cursor) {
         String normalizedStatus = blank(status) ? MemoryRepository.STATUS_ACTIVE
                 : status.trim().toUpperCase(Locale.ROOT);
-        if (!LISTABLE_STATUSES.contains(normalizedStatus)) {
+        boolean allStatuses = "ALL".equals(normalizedStatus);
+        if (!allStatuses && !LISTABLE_STATUSES.contains(normalizedStatus)) {
             return MemoryApiResult.error(400, "MEMORY_STATUS_INVALID", "不支持的状态过滤: " + status);
         }
         String normalizedScope = blank(scopeType) ? null : scopeType.trim().toUpperCase(Locale.ROOT);
@@ -232,7 +234,7 @@ public class MemoryItemService {
         boolean hasMore = false;
         try {
             while (matched.size() < pageSize) {
-                List<FactRow> batch = memory.findPage(key.vaultId(), normalizedStatus,
+                List<FactRow> batch = memory.findPage(key.vaultId(), allStatuses ? null : normalizedStatus,
                         normalizedScope, normalizedScope == null ? 0L : (scopeId == null ? 0L : scopeId),
                         afterRecordedAt, afterRowId, SCAN_BATCH);
                 if (batch.isEmpty()) {
@@ -282,7 +284,7 @@ public class MemoryItemService {
             return MemoryApiResult.error(400, "MEMORY_VERSION_REQUIRED", "编辑必须带上读到的 expectedVersion");
         }
         boolean statusChange = !blank(edit.status());
-        boolean contentChange = !blank(edit.value()) || !blank(edit.predicate());
+        boolean contentChange = !blank(edit.value()) || !blank(edit.predicate()) || edit.validUntil() != null;
         if (!statusChange && !contentChange) {
             return MemoryApiResult.error(400, "MEMORY_NOTHING_TO_EDIT", "没有要修改的内容");
         }
@@ -331,13 +333,15 @@ public class MemoryItemService {
 
     private MemoryApiResult changeContent(MemoryKey key, String memoryId, EditInput edit)
             throws SQLException, MemoryCryptoException {
-        Optional<FactRow> current = memory.findCurrent(key.vaultId(), memoryId);
+        Optional<FactRow> current = memory.findVersion(key.vaultId(), memoryId, edit.expectedVersion());
         if (current.isEmpty()) {
-            return MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "这条记忆已经没有生效版本");
+            return memory.findCurrentAnyStatus(key.vaultId(), memoryId).isPresent()
+                    ? conflictWithLatest(key, memoryId)
+                    : MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "这条记忆已经没有可编辑版本");
         }
         FactRow active = current.get();
-        if (active.version() != edit.expectedVersion()) {
-            return conflictWithLatest(key, memoryId);
+        if (!MemoryRepository.STATUS_ACTIVE.equals(active.status()) && !"DISABLED".equals(active.status())) {
+            return MemoryApiResult.error(409, "MEMORY_STATUS_FROZEN", "只有启用或停用的记忆可以改内容");
         }
         Map<String, Object> existing = readPayload(key, active);
         String predicate = blank(edit.predicate()) ? text(existing.get("predicate")) : clean(edit.predicate());
@@ -345,7 +349,11 @@ public class MemoryItemService {
         // 族键按"这个值属于哪一族"重算：值改了还挂着旧值的族，并存判断与抑制都会错位（§2 谓词表）
         String family = blank(edit.family()) ? MemoryValidator.familyKey(predicate, value) : clean(edit.family());
         String kind = blank(text(existing.get("kind"))) ? "PREFERENCE" : text(existing.get("kind"));
-        String validUntil = edit.validUntil() == null ? active.validUntil() : edit.validUntil();
+        String existingPredicate = text(existing.get("predicate"));
+        String existingValue = text(existing.get("value"));
+        boolean contentChanged = !existingPredicate.equals(predicate) || !existingValue.equals(value);
+        String validUntil = edit.validUntil() == null ? active.validUntil()
+                : blank(edit.validUntil()) ? null : clean(edit.validUntil());
         String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil);
         if (problem != null) {
             return badRequest(problem);
@@ -368,8 +376,10 @@ public class MemoryItemService {
         MemoryRepository.ReplaceResult replaced = memory.replace(key.vaultId(), memoryId, edit.expectedVersion(),
                 new MemoryRepository.NewMemory(rowId, key.vaultId(), active.scopeType(), active.scopeId(), kind,
                         crypto.hmac(key, "predicate:" + predicate), familyHmac, crypto.hmac(key, "value:" + value),
-                        MemoryRepository.STATUS_ACTIVE, encrypted.cipher(), encrypted.cryptoMeta(), "MANUAL", true,
-                        active.pinned(), active.validFrom(), validUntil, active.observedAt(), now, now));
+                        active.status(), encrypted.cipher(), encrypted.cryptoMeta(),
+                        contentChanged ? "MANUAL" : active.origin(), contentChanged || active.manualProtected(),
+                        active.pinned(), active.validFrom(), validUntil, active.observedAt(), now, now),
+                active.status());
         if (replaced.outcome() == MemoryRepository.ReplaceOutcome.VERSION_CONFLICT) {
             return conflictWithLatest(key, memoryId);
         }
@@ -379,11 +389,12 @@ public class MemoryItemService {
         // 手动改过当前值，指向旧版本的建议就再也无法采纳：立刻置 STALE，别让它留在待确认列表里（§2.3.1）
         proposals.markStaleForTarget(key.vaultId(), memoryId);
         log.info("记忆已产生新版本: memoryId={}, version={}", memoryId, replaced.version());
-        return MemoryApiResult.of(200, itemBody(key, memory.findCurrent(key.vaultId(), memoryId).orElseThrow(), false));
+        return MemoryApiResult.of(200,
+                itemBody(key, memory.findCurrentAnyStatus(key.vaultId(), memoryId).orElseThrow(), false));
     }
 
     private MemoryApiResult conflictWithLatest(MemoryKey key, String memoryId) throws SQLException {
-        Optional<FactRow> latest = memory.findCurrent(key.vaultId(), memoryId);
+        Optional<FactRow> latest = memory.findCurrentAnyStatus(key.vaultId(), memoryId);
         return MemoryApiResult.error(409, "MEMORY_VERSION_CONFLICT", "这条记忆已经被改过，请重载后再试", false,
                 latest.map(MemoryItemService::factKeys).orElse(Map.of("version", 0)));
     }
@@ -508,12 +519,22 @@ public class MemoryItemService {
         }
         if (withSources) {
             List<Map<String, Object>> sources = new ArrayList<>();
+            Map<Long, String> sessionTitles = new HashMap<>();
             for (EvidenceRow evidence : memory.evidenceForItem(row.rowId())) {
                 Map<String, Object> view = new LinkedHashMap<>();
                 view.put("evidenceId", evidence.evidenceId());
                 view.put("sessionId", evidence.sessionId());
                 view.put("turnId", evidence.turnId());
                 view.put("messageId", evidence.messageId());
+                String sessionTitle = null;
+                if (evidence.sessionId() != null) {
+                    sessionTitle = sessionTitles.get(evidence.sessionId());
+                    if (sessionTitle == null) {
+                        sessionTitle = metadata.title(evidence.sessionId()).orElse("");
+                        sessionTitles.put(evidence.sessionId(), sessionTitle);
+                    }
+                }
+                view.put("sessionTitle", sessionTitle == null || sessionTitle.isBlank() ? "未命名会话" : sessionTitle);
                 view.put("sourceBlockId", evidence.sourceBlockId());
                 view.put("sourceCreatedAt", evidence.sourceCreatedAt());
                 try {
@@ -700,7 +721,7 @@ public class MemoryItemService {
             case "MEMORY_SCOPE_INVALID" ->
                     MemoryApiResult.error(400, code, "作用域只能是 GLOBAL 或带正数 ID 的 NOTEBOOK");
             case "MEMORY_PREDICATE_INVALID" -> MemoryApiResult.error(400, code,
-                    "谓词不能为空且不超过 " + MAX_PREDICATE_CODE_POINTS + " 个字符");
+                    "名称不能为空且不超过 " + MAX_PREDICATE_CODE_POINTS + " 个字符");
             case "MEMORY_VALUE_INVALID" -> MemoryApiResult.error(400, code,
                     "内容不能为空且不超过 " + MAX_VALUE_CODE_POINTS + " 个字符");
             case "MEMORY_EXPIRY_INVALID" -> MemoryApiResult.error(400, code, "到期时间必须是 ISO-8601 UTC 时间");

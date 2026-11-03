@@ -10,15 +10,13 @@ import {
   addMemoryItem,
   clearAllMemories,
   deleteMemoryItem,
-  getMemorySettings,
-  updateMemorySettings
+  getMemorySettings
 } from '../../lib/aiMemoryApi';
 import { MemoryDetail } from './MemoryDetail';
 import { MemoryListView } from './MemoryListView';
-import { MemoryReviewPanel } from './MemoryReviewPanel';
 
 /**
- * 记忆管理面板（§12）：待确认审阅、列表、详情编辑、手动新增、删除确认与清空。
+ * 记忆管理面板（§12）：列表、详情编辑、手动新增、删除确认与清空。
  *
  * <p>只有库已解锁才请求正文；未解锁时界面说的是"需要解锁"，不会伪装成"没有记忆"。
  * 删除与遗忘都要显式确认，forget=true 会同时推进全局遗忘边界，所以它单独一个勾选。
@@ -39,6 +37,15 @@ function newOperationId(): string {
 /** 后端按 Instant.parse 校验有效期，日期选择器要补成完整 UTC 时刻。 */
 function toInstant(dateString: string): string | undefined {
   return dateString ? `${dateString.slice(0, 10)}T00:00:00Z` : undefined;
+}
+
+/**
+ * 名称只用于区分同类记忆（服务端叫 predicate），不是用户必须理解的术语。
+ * 留空时按正文前 20 个字生成，既满足服务端非空校验，也让列表/详情里读得懂。
+ */
+function deriveMemoryName(value: string): string {
+  const compact = value.trim().replace(/\s+/g, ' ');
+  return Array.from(compact).slice(0, 20).join('') || '手动记忆';
 }
 
 export function MemoryManager(): JSX.Element {
@@ -82,9 +89,6 @@ export function MemoryManager(): JSX.Element {
 
   const refreshLists = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-list'] });
-    // 审阅区那两堆用的是别的键：不一起作废，删掉的候选还会留在卡片上让人再点一次
-    void queryClient.invalidateQueries({ queryKey: ['ai-memory-proposals'] });
-    void queryClient.invalidateQueries({ queryKey: ['ai-memory-candidates'] });
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-status'] });
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-settings'] });
   };
@@ -94,7 +98,7 @@ export function MemoryManager(): JSX.Element {
       kind,
       scopeType,
       scopeId: scopeType === 'NOTEBOOK' ? scopeId : undefined,
-      predicate: predicate.trim(),
+      predicate: predicate.trim() || deriveMemoryName(value),
       value: value.trim(),
       validUntil: toInstant(validUntil),
       sensitiveConfirmed: sensitiveConfirmed ? true : undefined,
@@ -156,15 +160,6 @@ export function MemoryManager(): JSX.Element {
     onError: (error) => Message.error(friendlyMessage(error, '清空失败'))
   });
 
-  const autoExtractMutation = useMutation({
-    mutationFn: () => updateMemorySettings(settings?.revision ?? 0, { autoExtract: true, enabled: true }),
-    onSuccess: () => {
-      refreshLists();
-      Message.success('自动记忆已开启');
-    },
-    onError: (error) => Message.warning(friendlyMessage(error, '设置未保存'))
-  });
-
   if (settingsQuery.isPending) {
     return <section className="panel"><div className="panel-body">正在读取记忆状态…</div></section>;
   }
@@ -174,9 +169,9 @@ export function MemoryManager(): JSX.Element {
   if (!settings.initialized) {
     return (
       <section className="panel">
-        <div className="panel-header"><h2>记忆</h2></div>
+        <div className="panel-header"><h2>记忆库</h2></div>
         <div className="panel-body">
-          <Alert type="info" content="还没有记忆库：先在上方创建本地加密库，才能手动添加或查看记忆。" />
+          <Alert type="info" content="开启记忆后会自动创建本地记忆库，之后才能手动添加或查看。" />
         </div>
       </section>
     );
@@ -184,9 +179,9 @@ export function MemoryManager(): JSX.Element {
   if (!unlocked) {
     return (
       <section className="panel">
-        <div className="panel-header"><h2>记忆</h2></div>
+        <div className="panel-header"><h2>记忆库</h2></div>
         <div className="panel-body">
-          <Alert type="warning" content="记忆库已锁定，解锁后才能看到正文（这不是“没有记忆”）。" />
+          <Alert type="warning" content="记忆库已锁定，请在上方解锁后查看（这不是“没有记忆”）。" />
         </div>
       </section>
     );
@@ -197,7 +192,7 @@ export function MemoryManager(): JSX.Element {
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2>记忆</h2>
+        <h2>记忆库</h2>
         <Space size="small">
           <Button type="primary" icon={<Plus size={14} />} onClick={() => openWithFocusRestore(() => setAddVisible(true))}>
             手动添加
@@ -206,15 +201,11 @@ export function MemoryManager(): JSX.Element {
         </Space>
       </div>
       <div className="panel-body">
-        <MemoryReviewPanel enabled={unlocked} notebooks={notebookOptions} />
         <MemoryListView
           enabled={unlocked}
           notebooks={notebookOptions}
           onOpen={(item) => openWithFocusRestore(() => setDetail(item))}
-          onEdit={(item) => openWithFocusRestore(() => setDetail(item))}
-          onDelete={(item) => openWithFocusRestore(() => setDeleteTarget(item))}
           onCreate={() => openWithFocusRestore(() => setAddVisible(true))}
-          onEnableAutoExtract={() => autoExtractMutation.mutate()}
         />
       </div>
 
@@ -226,7 +217,14 @@ export function MemoryManager(): JSX.Element {
         unmountOnExit
         style={{ width: 620 }}
       >
-        {detail && <MemoryDetail item={detail} onClose={closeAndRestore} onChanged={refreshLists} />}
+        {detail && (
+          <MemoryDetail
+            item={detail}
+            onClose={closeAndRestore}
+            onChanged={refreshLists}
+            onDelete={(item) => openWithFocusRestore(() => setDeleteTarget(item))}
+          />
+        )}
       </Modal>
 
       <Modal
@@ -273,15 +271,18 @@ export function MemoryManager(): JSX.Element {
             </Space>
           </div>
           <div className="form-stack">
-            <Typography.Text bold>键名</Typography.Text>
+            <Typography.Text bold>名称（可选）</Typography.Text>
             <Input
-              placeholder="例如 answer.style"
+              placeholder="例如 回答风格"
               value={predicate}
               onChange={setPredicate}
               maxLength={120}
               showWordLimit
-              aria-label="记忆键名"
+              aria-label="记忆名称"
             />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              给这条记忆起个好认的名字，方便以后区分；留空会按内容自动生成。
+            </Typography.Text>
           </div>
           <div className="form-stack">
             <Typography.Text bold>内容</Typography.Text>

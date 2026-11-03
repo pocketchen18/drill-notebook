@@ -55,16 +55,37 @@ class MaintenanceUpstream {
         List<Map<String, Object>> messages = List.of(
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", input));
-        AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
-                EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint()), headlessKey(row), row.model(),
-                mapFormat(row.provider()), MaintenanceRules.OUTPUT_TOKEN_BUDGET, true);
+        String endpoint = EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint());
+        String apiFormat = mapFormat(row.provider());
+        AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(endpoint, headlessKey(row), row.model(),
+                apiFormat, MaintenanceRules.OUTPUT_TOKEN_BUDGET, true, true);
+        int timeoutSeconds = (int) Math.max(1, MaintenanceRules.CALL_TIMEOUT_MILLIS / 1_000L);
         try {
-            return client.call(target, messages, false, null,
-                    (int) Math.max(1, MaintenanceRules.CALL_TIMEOUT_MILLIS / 1_000L));
+            return client.call(target, messages, false, null, timeoutSeconds);
         } catch (Exception error) {
+            if (!target.anthropic() && responseFormatRejected(error)) {
+                // 兼容网关可能不认 response_format：只对这一种明确拒绝再发一次纯提示词请求
+                AiUpstreamClient.Upstream plain = new AiUpstreamClient.Upstream(endpoint, target.apiKey(),
+                        target.model(), apiFormat, MaintenanceRules.OUTPUT_TOKEN_BUDGET, true, false);
+                try {
+                    return client.call(plain, messages, false, null, timeoutSeconds);
+                } catch (Exception retryError) {
+                    throw new MaintenancePorts.AttemptFailure("MAINTENANCE_UPSTREAM_ERROR", "维护模型调用失败", true,
+                            retryError);
+                }
+            }
             // 网络/网关的失败形态太多：统一按可重试交给 job 的三次上限，绝不在这里自己循环
             throw new MaintenancePorts.AttemptFailure("MAINTENANCE_UPSTREAM_ERROR", "维护模型调用失败", true, error);
         }
+    }
+
+    private static boolean responseFormatRejected(Exception error) {
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lowered = message.toLowerCase(Locale.ROOT);
+        return lowered.contains("response_format") || lowered.contains("json_object") || lowered.contains("json mode");
     }
 
     /** 目标解析 + 指纹复验：授权之后换过模型、端点或 Key，都在这一步判成"目标变了"。 */

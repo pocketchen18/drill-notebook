@@ -327,22 +327,38 @@ public class MemoryRepository {
      */
     public ReplaceResult replace(String vaultId, String memoryId, int expectedVersion, NewMemory draft)
             throws SQLException {
+        return replace(vaultId, memoryId, expectedVersion, draft, STATUS_ACTIVE);
+    }
+
+    /**
+     * 替换指定状态的当前版本：ACTIVE 与 DISABLED 都允许原地改名/改正文。
+     * 新版本沿用调用方给的 draft 状态（详情编辑会保留停用状态，不会因为改名把记忆重新启用）。
+     */
+    public ReplaceResult replace(String vaultId, String memoryId, int expectedVersion, NewMemory draft,
+                                 String expectedStatus) throws SQLException {
         scopeContract(draft);
+        if (!STATUS_ACTIVE.equals(expectedStatus) && !"DISABLED".equals(expectedStatus)) {
+            throw new SQLException("只能替换 ACTIVE 或 DISABLED 版本: " + expectedStatus);
+        }
         return immediate.execute(connection -> {
             requireVault(connection, vaultId);
-            Optional<FactRow> current = findCurrent(connection, vaultId, memoryId);
+            Optional<FactRow> current = findVersion(connection, vaultId, memoryId, expectedVersion);
             if (current.isEmpty()) {
-                return ReplaceResult.missing(memoryId);
+                Optional<FactRow> latest = findCurrentAnyStatus(connection, vaultId, memoryId);
+                return latest.map(row -> ReplaceResult.conflict(memoryId, row))
+                        .orElseGet(() -> ReplaceResult.missing(memoryId));
             }
             FactRow active = current.get();
-            if (active.version() != expectedVersion) {
-                return ReplaceResult.conflict(memoryId, active);
+            if (!expectedStatus.equals(active.status())) {
+                return ReplaceResult.conflict(memoryId,
+                        findCurrentAnyStatus(connection, vaultId, memoryId).orElse(active));
             }
             int updated = execute(connection, "UPDATE ai_memory_item SET status = ?"
                     + " WHERE memory_id = ? AND version = ? AND status = ?",
-                    STATUS_SUPERSEDED, memoryId, expectedVersion, STATUS_ACTIVE);
+                    STATUS_SUPERSEDED, memoryId, expectedVersion, expectedStatus);
             if (updated != 1) {
-                return ReplaceResult.conflict(memoryId, findCurrent(connection, vaultId, memoryId).orElse(active));
+                return ReplaceResult.conflict(memoryId,
+                        findCurrentAnyStatus(connection, vaultId, memoryId).orElse(active));
             }
             String rowId = draft.rowId();
             insertFact(connection, draft, memoryId, rowId, expectedVersion + 1);
@@ -498,6 +514,45 @@ public class MemoryRepository {
         }
     }
 
+    /**
+     * 当前可编辑版本（ACTIVE 或 DISABLED），不含历史 SUPERSEDED。
+     * 列表只显示一行、详情点开后要能管理停用记忆，都靠这个口径。
+     */
+    public Optional<FactRow> findCurrentAnyStatus(String vaultId, String memoryId) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return findCurrentAnyStatus(connection, vaultId, memoryId);
+        }
+    }
+
+    private static Optional<FactRow> findCurrentAnyStatus(Connection connection, String vaultId, String memoryId)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS
+                + " FROM ai_memory_item WHERE vault_id = ? AND memory_id = ? AND status <> '"
+                + STATUS_SUPERSEDED + "' ORDER BY version DESC LIMIT 1")) {
+            statement.setString(1, vaultId);
+            statement.setString(2, memoryId);
+            return first(statement.executeQuery());
+        }
+    }
+
+    /** 跨作用域按归一值查当前记忆；自动提取写库前用它拒绝确定重复的内容。 */
+    public Optional<FactRow> findCurrentByValueHmac(String vaultId, String valueHmac) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return findCurrentByValueHmac(connection, vaultId, valueHmac);
+        }
+    }
+
+    public static Optional<FactRow> findCurrentByValueHmac(Connection connection, String vaultId, String valueHmac)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS
+                + " FROM ai_memory_item WHERE vault_id = ? AND value_hmac = ? AND status <> '"
+                + STATUS_SUPERSEDED + "' ORDER BY version DESC LIMIT 1")) {
+            statement.setString(1, vaultId);
+            statement.setString(2, valueHmac);
+            return first(statement.executeQuery());
+        }
+    }
+
     /** 按版本号读某一版（状态改写与冲突 metadata 用，不限于当前 ACTIVE）。 */
     public Optional<FactRow> findVersion(String vaultId, String memoryId, int version) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
@@ -547,15 +602,22 @@ public class MemoryRepository {
 
     /**
      * 管理页分页读：按 {@code (recorded_at, row_id)} 倒序 keyset 翻页，多取一条用于判断还有没有下一页。
-     * {@code scopeType} 为空表示不按作用域过滤；游标是上一页最后一行的时间+行号，翻页期间数据变更不做补齐。
+     * {@code status} 为空表示不按状态过滤；{@code scopeType} 为空表示不按作用域过滤；
+     * 游标是上一页最后一行的时间+行号，翻页期间数据变更不做补齐。
      */
     public List<FactRow> findPage(String vaultId, String status, String scopeType, Long scopeId,
                                   String beforeRecordedAt, String beforeRowId, int limit) throws SQLException {
         StringBuilder sql = new StringBuilder("SELECT ").append(FACT_COLUMNS).append(" FROM ai_memory_item")
-                .append(" WHERE vault_id = ? AND status = ?");
+                .append(" WHERE vault_id = ?");
         List<Object> args = new ArrayList<>();
         args.add(vaultId);
-        args.add(status);
+        if (status != null) {
+            sql.append(" AND status = ?");
+            args.add(status);
+        } else {
+            sql.append(" AND status <> '").append(STATUS_SUPERSEDED)
+                    .append("' AND status <> '").append(STATUS_PENDING).append("'");
+        }
         if (scopeType != null) {
             sql.append(" AND scope_type = ? AND scope_id = ?");
             args.add(scopeType);

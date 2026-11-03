@@ -77,6 +77,30 @@ class MemoryJobRepositoryTest {
     }
 
     @Test
+    void failedPromptVersionDoesNotBlockANewPromptVersion() throws Exception {
+        String id = jobs.enqueue(draft("input-1")).jobId();
+        jobs.claim(id, "lease-a", LATER, NOW);
+        jobs.fail(id, "lease-a", NOW, "FORMAT_INVALID_NOT_JSON");
+
+        EnqueueResult sameVersion = jobs.enqueue(draft("input-1"));
+        assertTrue(sameVersion.replayed(), "同一提示词版本的失败任务仍然回放，避免每个 tick 反复插入");
+        assertEquals(id, sameVersion.jobId());
+
+        JobDraft newVersion = new JobDraft(Kind.EXTRACT, sessionId, 1L, 4L, 1L, "GLOBAL", 0,
+                "Asia/Shanghai", 1L, 1L, "target-fingerprint", "extract-v2", "input-1", NOW);
+        EnqueueResult retry = jobs.enqueue(newVersion);
+
+        assertFalse(retry.replayed(), "提示词版本变化后旧失败任务不能挡住重试");
+        assertEquals(id, retry.jobId(), "同范围复用原行，避免撞唯一约束");
+        assertEquals(MemoryJobRepository.STATUS_QUEUED, retry.status());
+        JobRow revived = jobs.find(id).orElseThrow();
+        assertEquals("extract-v2", revived.promptVersion());
+        assertEquals(0, revived.attempts());
+        assertNull(revived.errorCode());
+        assertEquals(1, count());
+    }
+
+    @Test
     void pendingQueuedRangeIsMergedInsteadOfDuplicated() throws Exception {
         EnqueueResult first = jobs.enqueue(draft("input-1"));
         EnqueueResult wider = jobs.enqueue(draft("input-2", 1L, 6L));
@@ -166,6 +190,20 @@ class MemoryJobRepositoryTest {
         assertNull(settled.leaseToken());
         assertNull(settled.leaseUntil());
         assertThrows(SQLException.class, () -> jobs.settle(id, "lease-a", NOW, "RUNNING", "APPLIED"));
+    }
+
+    @Test
+    void failClosesTheLeaseAndRecordsTheReason() throws Exception {
+        String id = jobs.enqueue(draft("input-1")).jobId();
+        jobs.claim(id, "lease-a", LATER, NOW);
+
+        assertEquals(LeaseOutcome.REJECTED, jobs.fail(id, "lease-b", NOW, "FORMAT_INVALID"));
+        assertEquals(LeaseOutcome.APPLIED, jobs.fail(id, "lease-a", NOW,
+                "FORMAT_INVALID_CANDIDATES_NOT_ARRAY"));
+        JobRow failed = jobs.find(id).orElseThrow();
+        assertEquals(MemoryJobRepository.STATUS_FAILED, failed.status());
+        assertEquals("FORMAT_INVALID_CANDIDATES_NOT_ARRAY", failed.errorCode());
+        assertNull(failed.leaseToken());
     }
 
     @Test

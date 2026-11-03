@@ -73,8 +73,11 @@ class MaintenanceSummaryDrafterTest {
 
         drafter.draft(batch(1, 40), null);
 
-        assertEquals(MaintenanceSummaryDrafter.SYSTEM_PROMPT, client.system(), "系统提示词逐字固定（§6）");
+        assertEquals(MaintenanceSummaryDrafter.systemPrompt(), client.system(), "系统提示词逐字固定（§6）");
         assertTrue(client.system().contains("禁止verified"), "工作状态的门要在提示词里就说清（§6.2）");
+        assertTrue(client.system().contains(MaintenanceSummaryDrafter.OUTPUT_SHAPE),
+                "输出结构必须随提示词发送，否则模型只能自己猜字段");
+        assertTrue(client.lastJsonMode(), "维护调用要求 JSON 模式，思考链不能混进正文");
         Map<String, Object> input = MAPPER.readValue(client.user(), new TypeReference<>() {
         });
         assertEquals(2, ((Number) input.get("schemaVersion")).intValue());
@@ -267,6 +270,7 @@ class MaintenanceSummaryDrafterTest {
     private static final class CapturingClient extends AiUpstreamClient {
         private final List<String> systems = new ArrayList<>();
         private final List<String> bodies = new ArrayList<>();
+        private final List<Boolean> jsonModes = new ArrayList<>();
         private String reply = "{}";
         private int calls;
         private Integer inputTokens;
@@ -282,6 +286,7 @@ class MaintenanceSummaryDrafterTest {
             calls++;
             systems.add(String.valueOf(messages.get(0).get("content")));
             bodies.add(String.valueOf(messages.get(1).get("content")));
+            jsonModes.add(upstream.jsonMode());
             return new Result(reply, null, "stop", true, false, false,
                     new Usage(inputTokens == null && outputTokens == null ? "unknown" : "provider",
                             inputTokens, outputTokens, null, null));
@@ -297,6 +302,10 @@ class MaintenanceSummaryDrafterTest {
 
         String user() {
             return bodies.get(bodies.size() - 1);
+        }
+
+        boolean lastJsonMode() {
+            return jsonModes.get(jsonModes.size() - 1);
         }
     }
 }

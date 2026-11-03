@@ -268,7 +268,8 @@ class MemoryItemServiceTest {
 
         assertEquals("DISABLED", items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"))
                 .body().get("status"));
-        assertEquals(404, items.get(memoryId).status(), "停用后没有生效版本");
+        assertEquals(200, items.get(memoryId).status(), "停用后仍能打开详情");
+        assertEquals("DISABLED", items.get(memoryId).body().get("status"));
         assertEquals(200, items.edit(memoryId, new EditInput(1, null, null, null, null, "disabled")).status(),
                 "模式大小写不影响判定");
         assertEquals(false, items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"))
@@ -279,6 +280,63 @@ class MemoryItemServiceTest {
         assertEquals(200, items.get(memoryId).status());
         assertEquals(400, items.edit(memoryId, new EditInput(1, null, null, null, null, "EXPIRED")).status());
         assertEquals(1L, count("ai_memory_item"), "停用与启用都不造新版");
+    }
+
+    @Test
+    void disabledMemoryCanBeRenamedInPlaceWithoutCreatingASecondMemory() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        items.edit(memoryId, new EditInput(1, null, null, null, null, "DISABLED"));
+
+        MemoryApiResult renamed = items.edit(memoryId, new EditInput(1, "新名字", null, null, null, null));
+        assertEquals(200, renamed.status());
+        assertEquals("新名字", renamed.body().get("predicate"));
+        assertEquals("DISABLED", renamed.body().get("status"));
+        assertEquals(2, renamed.body().get("version"));
+        assertEquals(memoryId, renamed.body().get("memoryId"));
+
+        List<?> listed = (List<?>) items.list(null, null, "ALL", null, 10, null).body().get("items");
+        assertEquals(1, listed.size(), "列表只显示当前版本，不把历史版本当第二条记忆");
+        assertEquals(memoryId, ((Map<?, ?>) listed.get(0)).get("memoryId"));
+        assertEquals(2, ((Map<?, ?>) listed.get(0)).get("version"));
+        assertEquals("DISABLED", ((Map<?, ?>) listed.get(0)).get("status"));
+    }
+
+    @Test
+    void validUntilCanBeSetAndClearedWithoutChangingContent() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        String future = Instant.now().plus(30, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+
+        MemoryApiResult set = items.edit(memoryId, new EditInput(1, null, null, null, future, null));
+        assertEquals(200, set.status());
+        assertEquals(future, set.body().get("validUntil"));
+        assertEquals(2, set.body().get("version"));
+
+        MemoryApiResult cleared = items.edit(memoryId, new EditInput(2, null, null, null, "", null));
+        assertEquals(200, cleared.status());
+        assertNull(cleared.body().get("validUntil"), "空字符串表示清除有效期");
+        assertEquals(3, cleared.body().get("version"));
+        assertEquals(memoryId, cleared.body().get("memoryId"));
+    }
+
+    @Test
+    void metadataOnlyEditKeepsAutoOriginButContentEditClaimsIt() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        jdbc.update("UPDATE ai_memory_item SET origin = 'AUTO', manual_protected = 0 WHERE memory_id = ?",
+                memoryId);
+        String future = Instant.now().plus(30, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+
+        MemoryApiResult expiry = items.edit(memoryId, new EditInput(1, null, null, null, future, null));
+        assertEquals(200, expiry.status());
+        assertEquals("AUTO", expiry.body().get("origin"), "只改有效期不该把自动来源改成人工");
+        assertEquals(false, expiry.body().get("manualProtected"), "只改有效期也不该顺手锁成人工保护");
+
+        MemoryApiResult renamed = items.edit(memoryId, new EditInput(2, "新名字", null, null, null, null));
+        assertEquals(200, renamed.status());
+        assertEquals("MANUAL", renamed.body().get("origin"), "改内容才转成人工来源");
+        assertEquals(true, renamed.body().get("manualProtected"));
     }
 
     @Test
@@ -341,6 +399,12 @@ class MemoryItemServiceTest {
         assertEquals(first, ((Map<?, ?>) disabled.get(0)).get("memoryId"));
         List<?> active = (List<?>) items.list(null, null, null, null, 10, null).body().get("items");
         assertEquals(2, active.size());
+
+        MemoryApiResult everything = items.list(null, null, "ALL", null, 10, null);
+        assertEquals(200, everything.status());
+        assertEquals("ALL", everything.body().get("status"));
+        assertEquals(3, ((List<?>) everything.body().get("items")).size(),
+                "ALL 不按状态过滤，停用的那条也要出现");
     }
 
     // ---- 删除 ----
@@ -380,6 +444,20 @@ class MemoryItemServiceTest {
         assertTrue(policy.policyOf(policy.current()).memoryHistoryFloor() >= turn, "全局遗忘边界单调推进");
 
         assertEquals(200, items.list(null, null, null, null, null, null).status(), "删空后列表仍可用");
+    }
+
+    @Test
+    void detailSourceUsesTheSessionTitleInsteadOfRawIds() throws Exception {
+        createFingerprintVault();
+        String memoryId = (String) items.add(add(PREDICATE, VALUE)).body().get("memoryId");
+        long turn = insertTurn();
+        jdbc.update("UPDATE ai_chat_session SET title = ? WHERE id = ?", "杭州生活", sessionId);
+        memory.attachEvidence(new MemoryRepository.EvidenceDraft("ev-title", vaultId, sessionId, turn, null, "b1",
+                "src-title", "cipher", "{}", MemoryTimes.now()), currentRowId(memoryId));
+
+        List<?> sources = (List<?>) items.get(memoryId).body().get("sources");
+        assertEquals(1, sources.size());
+        assertEquals("杭州生活", ((Map<?, ?>) sources.get(0)).get("sessionTitle"));
     }
 
     @Test

@@ -52,6 +52,19 @@ class AiUpstreamClientTest {
     }
 
     @Test
+    void maintenanceJsonModeOnlyAddsResponseFormatWhenRequested() {
+        List<Map<String, Object>> messages = List.of(Map.of("role", "user", "content", "提取"));
+        AiUpstreamClient.Upstream plain = new AiUpstreamClient.Upstream("https://x/v1", "k", "m",
+                AiUpstreamClient.FORMAT_CHAT_COMPLETIONS, 128, true);
+        AiUpstreamClient.Upstream json = new AiUpstreamClient.Upstream("https://x/v1", "k", "m",
+                AiUpstreamClient.FORMAT_CHAT_COMPLETIONS, 128, true, true);
+
+        assertFalse(client.buildChatCompletionRequest(plain, messages, false).containsKey("response_format"));
+        assertEquals(Map.of("type", "json_object"),
+                client.buildChatCompletionRequest(json, messages, false).get("response_format"));
+    }
+
+    @Test
     void anthropicPayloadLiftsSystemAndMapsImage() {
         String image = "data:image/png;base64,AAAA";
         AiUpstreamClient.AnthropicPayload payload = AiUpstreamClient.toAnthropic(List.of(

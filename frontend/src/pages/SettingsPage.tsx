@@ -567,7 +567,7 @@ export function SettingsPage(): JSX.Element {
       </div>
     )}
 
-      {/* 记忆 Tab：本地加密记忆的开关、授权、预算与手动管理（§12 新增组件，不堆进聊天面板） */}
+      {/* 记忆 Tab：一个总开关 + 记忆库的手动管理，维护细节不堆进界面 */}
       {activeTab === 'memory' && (
       <div className="settings-tab-stack" role="tabpanel">
       <MemorySettingsCard />

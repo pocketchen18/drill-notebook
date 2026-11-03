@@ -33,7 +33,7 @@ const BASE = '/api/ai/memory';
 export interface MemorySearchParams {
   scopeType?: 'GLOBAL' | 'NOTEBOOK';
   scopeId?: number;
-  status?: MemoryStatus;
+  status?: MemoryStatus | 'ALL';
   query?: string;
   limit?: number;
   cursor?: string;
@@ -70,8 +70,8 @@ export const revokeMemoryConsent = (purpose: ConsentPurpose) =>
 export const createMemoryVault = (mode: VaultMode, password?: string, operationId?: string) =>
   post<MemoryVaultStatus>(`${BASE}/vault`, { mode, password, operationId });
 
-export const unlockMemoryVault = (password?: string, sessionUnlocks?: { sessionId: number; password: string }[]) =>
-  post<MemoryVaultStatus>(`${BASE}/vault/unlock`, { password, sessionUnlocks });
+export const unlockMemoryVault = (password?: string) =>
+  post<MemoryVaultStatus>(`${BASE}/vault/unlock`, { password });
 
 export const lockMemoryVault = () => post<void>(`${BASE}/vault/lock`, {});
 

@@ -14,13 +14,15 @@ import { safeFileName } from '../lib/export';
 import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
 import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
-import { historyNotice, historyUnlockText, outcomeNotice, statusNotice } from '../lib/aiTurnText';
+import { historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
 import type { TurnNotice } from '../lib/aiTurnText';
 import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
 import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
 import { storageQueryKey } from '../lib/aiStorageApi';
 import { ChatStorageMeter } from './ai-memory/ChatStorageMeter';
-import { unlockMemoryVault } from '../lib/aiMemoryApi';
+import { ChatHistoryCleanup } from './ai-memory/ChatHistoryCleanup';
+import { attachmentLimitError } from '../lib/aiAttachmentLimits';
+import type { PendingAttachment } from '../lib/aiAttachmentLimits';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
@@ -34,7 +36,17 @@ interface Attachment {
   kind: AttachmentKind;
   value: string;
   mime: string;
+  /** 原始字节数：附件门限（数量/单图/合计）按它算，服务端也用同一个数判 413。 */
+  bytes: number;
+  /** 文本的码点数：服务端按本轮文本合计判 200k，客户端得留着自己那份数。 */
+  codepoints?: number;
 }
+
+/** 同一批里两个同名同时间的文件也必须各有各的 key，否则移除一个会连带移除另一个。 */
+let attachmentSeq = 0;
+const nextAttachmentId = (file: File): string => `${file.name}-${file.lastModified}-${(attachmentSeq += 1)}`;
+
+type PreparedAttachment = { attachment: Attachment } | { warning: string } | { error: string };
 
 function contentText(content: string | ChatContentPart[], displayContent?: string): string {
   if (displayContent) return displayContent;
@@ -101,7 +113,6 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
-  const [unlockPassword, setUnlockPassword] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
@@ -383,20 +394,6 @@ export function AiAssistant(): JSX.Element {
     onError: (error) => Message.error(error.message)
   });
 
-  /**
-   * 解锁本会话的历史原文：`/history` 的主密码只从进程内的会话解锁状态取（不进 URL、不进 query），
-   * 而那份材料唯一的登记入口就是 vault/unlock 的 sessionUnlocks。密码只在请求体里走一次。
-   */
-  const unlockSessionMutation = useMutation({
-    mutationFn: (password: string) => unlockMemoryVault(password, [{ sessionId: sessionId as number, password }]),
-    onSuccess: async () => {
-      setUnlockPassword('');
-      Message.success('本会话历史已解锁');
-      await history.refreshLatest();
-    },
-    onError: (error) => Message.error(friendlyMessage(error, '解锁失败，请稍后重试'))
-  });
-
   // 删除确认使用 Arco Modal 而非 window.confirm：
   // Electron 渲染进程的原生同步对话框关闭后 webContents 键盘焦点可能不恢复（鼠标正常、键盘失效，
   // 窗口失焦/复焦后才自愈）——这正是「删除会话后输入框无法输入、切软件切回又好了」的偶发根因。
@@ -566,6 +563,8 @@ export function AiAssistant(): JSX.Element {
     // 只刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为空白会话而复用。
     // 不要在此 invalidate 该会话的消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存。
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+    // 取消会退还为回复预留的字节，容量条要跟着结算走（6a 复核留下的那条观察）
+    void queryClient.invalidateQueries({ queryKey: storageQueryKey });
     const key = turnTargetRef.current?.assistantKey;
     setMessages((current) => {
       const next = [...current];
@@ -654,25 +653,50 @@ export function AiAssistant(): JSX.Element {
     onError: (error) => Message.error(friendlyMessage(error, '插入笔记失败，请稍后重试'))
   });
 
-  const loadAttachment = async (file: File): Promise<void> => {
+  const pendingOf = (items: Attachment[]): PendingAttachment[] => items.map((item) => ({ kind: item.kind, bytes: item.bytes, codepoints: item.codepoints }));
+
+  const prepareAttachment = async (file: File, current: Attachment[]): Promise<PreparedAttachment> => {
     try {
-      if (file.size > 8 * 1024 * 1024) {
-        Message.warning('单个附件不能超过 8 MB');
-        return;
-      }
-      if (file.type.startsWith('image/')) {
+      const kind: AttachmentKind | undefined = file.type.startsWith('image/') ? 'image'
+        : isTextFile(file) ? 'text' : undefined;
+      if (!kind) return { warning: '目前支持图片和文本类文件' };
+      const pending: PendingAttachment = { kind, bytes: file.size };
+      // 字节数先挡一道：文本超过 4 倍码点上限就必然超限，不必先读进内存
+      const early = attachmentLimitError(pendingOf(current), pending);
+      if (early) return { warning: early };
+      if (kind === 'image') {
         const value = await readAsDataUrl(file);
-        setAttachments((current) => [...current, { id: `${file.name}-${file.lastModified}`, name: file.name, kind: 'image', value, mime: file.type }]);
-        return;
+        return { attachment: { id: nextAttachmentId(file), name: file.name, kind, value, mime: file.type, bytes: file.size } };
       }
-      if (!isTextFile(file)) {
-        Message.warning('目前支持图片和文本类文件');
-        return;
-      }
-      const value = (await file.text()).slice(0, 200_000);
-      setAttachments((current) => [...current, { id: `${file.name}-${file.lastModified}`, name: file.name, kind: 'text', value, mime: file.type || 'text/plain' }]);
+      const value = await file.text();
+      const codepoints = Array.from(value).length;
+      const late = attachmentLimitError(pendingOf(current), { ...pending, codepoints });
+      if (late) return { warning: late };
+      return { attachment: { id: nextAttachmentId(file), name: file.name, kind, value, mime: file.type || 'text/plain', bytes: file.size, codepoints } };
     } catch (error) {
-      Message.error(friendlyMessage(error, '附件读取失败'));
+      return { error: friendlyMessage(error, '附件读取失败') };
+    }
+  };
+
+  const addAttachments = async (files: File[]): Promise<void> => {
+    // 逐个累积再比较：批量选择时后面的文件要按"已经收下的"重算门限，
+    // 不能让每个文件各自拿同一份旧数组去比，否则一次选 10 个就能整批绕过 4 项上限。
+    let next = attachments;
+    const warned = new Set<string>();
+    for (const file of files) {
+      const result = await prepareAttachment(file, next);
+      if ('attachment' in result) {
+        next = [...next, result.attachment];
+        setAttachments(next);
+        continue;
+      }
+      if ('warning' in result) {
+        if (warned.has(result.warning)) continue;
+        warned.add(result.warning);
+        Message.warning(result.warning);
+      } else {
+        Message.error(result.error);
+      }
     }
   };
 
@@ -903,29 +927,6 @@ export function AiAssistant(): JSX.Element {
                     )}
                 </div>
               ) : null}
-              {history.messages.some((row) => row.readable === false) ? (
-                <div className="ai-history-unlock">
-                  <p className="ai-history-unlock-hint">{historyUnlockText()}</p>
-                  <div className="ai-history-unlock-form">
-                    <Input.Password
-                      value={unlockPassword}
-                      onChange={setUnlockPassword}
-                      placeholder="主密码"
-                      aria-label="解锁本会话历史的主密码"
-                      size="mini"
-                    />
-                    <Button
-                      type="primary"
-                      size="mini"
-                      loading={unlockSessionMutation.isPending}
-                      disabled={!unlockPassword || sessionId === undefined}
-                      onClick={() => { if (sessionId !== undefined) unlockSessionMutation.mutate(unlockPassword); }}
-                    >
-                      解锁本会话
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
               {visibleMessages.length ? visibleMessages.map((item) => {
               const text = contentText(item.content, item.displayContent);
               const isAssistant = item.role === 'assistant';
@@ -1027,7 +1028,17 @@ export function AiAssistant(): JSX.Element {
             </div>
           ) : null}
 
-          <ChatStorageMeter enabled={aiOpen} />
+          <div className="ai-storage-row">
+            <ChatStorageMeter enabled={aiOpen} />
+            <ChatHistoryCleanup
+              sessionId={sessionId}
+              enabled={aiOpen}
+              messages={history.messages}
+              hasOlder={history.hasOlder}
+              isLoadingOlder={history.isLoadingOlder}
+              loadOlder={history.loadOlder}
+            />
+          </div>
 
           <div className="chat-compose ai-drawer-compose">
             <TextArea
@@ -1053,7 +1064,7 @@ export function AiAssistant(): JSX.Element {
               onChange={(event) => {
                 const files = Array.from(event.target.files ?? []);
                 event.target.value = '';
-                void Promise.all(files.map(loadAttachment));
+                void addAttachments(files);
               }}
             />
             <Button type="secondary" icon={<Paperclip size={16} />} onClick={() => fileInput.current?.click()} aria-label="添加附件" />

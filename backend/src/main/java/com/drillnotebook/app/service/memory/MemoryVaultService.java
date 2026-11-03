@@ -21,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -64,6 +66,11 @@ public class MemoryVaultService {
 
     private volatile MemoryKey unlocked;
     private volatile long lastUsedNanos;
+    /**
+     * 用户显式锁定后不再被"指纹库自动解锁"绕过；新钥匙装上或进程重启后回到 false。
+     * UI 已经不提供锁定入口，这个标记只保护 API 调用方的显式意图与既有锁定语义。
+     */
+    private volatile boolean lockedByUser;
     private final Map<Long, String> sessionMaterials = new ConcurrentHashMap<>();
     private final List<Runnable> lockHooks = new CopyOnWriteArrayList<>();
     private final List<Runnable> unlockHooks = new CopyOnWriteArrayList<>();
@@ -74,6 +81,30 @@ public class MemoryVaultService {
         this.memory = memory;
         this.operations = operations;
         this.sessions = sessions;
+    }
+
+    /**
+     * 启动即自动解锁 fingerprint 库：记忆维护不该依赖用户先打开设置页。
+     * password 库不在这里猜密码，保持原来的显式解锁入口。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void autoUnlockOnStartup() {
+        try {
+            Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
+            if (envelope.isEmpty()) {
+                return;
+            }
+            MemoryRepository.VaultEnvelope vault = envelope.get();
+            if (!MemoryCryptoService.MODE_FINGERPRINT.equals(vault.mode()) || currentKey().isPresent()) {
+                return;
+            }
+            MemoryKey key = crypto.unlock(vault.vaultId(), vault.wrappedDek(), vault.wrapMeta(),
+                    crypto.fingerprintMaterial(), vault.mode());
+            publishKey(key);
+            log.info("记忆库已自动解锁（fingerprint）");
+        } catch (MemoryCryptoException | SQLException error) {
+            log.warn("记忆库自动解锁失败: {}", error.getClass().getSimpleName());
+        }
     }
 
     // ---- 创建 ----
@@ -179,8 +210,14 @@ public class MemoryVaultService {
 
     /** 锁定：清零钥匙、清除会话材料与缓存；已飞出的外部请求结果不得再提交（§6.1.7）。 */
     public MemoryApiResult lock() {
+        lockedByUser = true;
         lockInternal("显式锁定");
         return MemoryApiResult.noContent();
+    }
+
+    /** 是否有用户显式锁定；指纹库自动解锁必须尊重它。 */
+    public boolean lockedByUser() {
+        return lockedByUser;
     }
 
     // ---- 改密（只重包装） ----
@@ -334,7 +371,12 @@ public class MemoryVaultService {
     }
 
     boolean lockIfIdle(long nowNanos) {
-        if (unlocked == null || nowNanos - lastUsedNanos < IDLE_LOCK_NANOS) {
+        MemoryKey current = unlocked;
+        if (current == null || nowNanos - lastUsedNanos < IDLE_LOCK_NANOS) {
+            return false;
+        }
+        // 指纹库的钥匙可由机器指纹随时重解，闲置锁定只会让记忆无端失效；password 库仍按时锁定
+        if (MemoryCryptoService.MODE_FINGERPRINT.equals(current.mode())) {
             return false;
         }
         lockInternal("闲置超时自动锁定");
@@ -352,6 +394,7 @@ public class MemoryVaultService {
     private synchronized void swapKey(MemoryKey key) {
         MemoryKey previous = unlocked;
         unlocked = key;
+        lockedByUser = false;
         lastUsedNanos = System.nanoTime();
         if (previous != null) {
             previous.erase();

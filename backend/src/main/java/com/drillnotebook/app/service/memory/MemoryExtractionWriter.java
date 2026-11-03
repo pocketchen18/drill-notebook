@@ -1,7 +1,5 @@
 package com.drillnotebook.app.service.memory;
 
-import com.drillnotebook.app.repository.MemoryProposalRepository;
-import com.drillnotebook.app.repository.MemoryProposalRepository.ProposalDraft;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.MemoryRepository.EvidenceDraft;
 import com.drillnotebook.app.repository.MemoryRepository.FactRow;
@@ -30,70 +28,57 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * 把通过 §5 校验的候选写成<b>加密事实、来源证据与待确认建议</b>（执行方案 §8.2 第 9 条、§8.3 判定表；
+ * 把通过 §5 校验的候选写成<b>加密事实与来源证据</b>（执行方案 §8.2 第 9 条、§8.3 判定表；
  * contracts §7 {@code applyExtraction}、§2.3、§2.3.1）。
+ *
+ * <p>用户已删除确认机制：这里只新增 ACTIVE 事实或给同值事实追加来源，不再写 PENDING，
+ * 也不再生成替换/撤销建议。写库前按归一值做一次全库精确校验——能确定是同一段内容就拒绝，
+ * 不确定是否重复则照常新增。</p>
  *
  * <p>分两步是刻意的：{@link #plan} 在<b>事务外</b>读同族当前值、跑 {@link MemoryConflictResolver}
  * 并把载荷与原话预加密（加密是 CPU 活，不占事务）；{@link #applyIn} 只在 worker 那一笔事务里搬字节，
- * 并且写每一条之前<b>再</b>核一次抑制、同族当前版本与 PENDING 配额——两次 CAS 之间不夹网络请求，
- * 也不夹索引重建（§7）。</p>
- *
- * <p>模型没有直写权限：能进 ACTIVE 的只有 {@code ADD_ACTIVE} 与 {@code REPLACE}，其余落 PENDING 或 proposal。
- * 一条都没写成也是合法结局：那时 {@code vaultChanged=false}，既不递增 vault 内容 revision 也不重建索引，
- * 但已扫描水位照样推进（§8.2 第 9 条）。</p>
+ * 并且写每一条之前<b>再</b>核一次抑制与归一值重复——两次检查之间不夹网络请求，也不夹索引重建（§7）。</p>
  */
 @Service
 public class MemoryExtractionWriter {
-    /** §2.3.1：建议默认 7 天失效。 */
-    static final long PROPOSAL_TTL_MILLIS = 7L * 24 * 60 * 60 * 1_000L;
     /** keywords 上限（§2.3）：只由服务端从值里派生，绝不接受模型给的扩展词。 */
     private static final int MAX_KEYWORDS = 8;
 
     private final MemoryRepository memory;
     private final MemorySuppressionRepository suppressions;
-    private final MemoryProposalRepository proposals;
     private final MemoryCryptoService crypto;
     private final ObjectMapper mapper;
 
     public MemoryExtractionWriter(MemoryRepository memory, MemorySuppressionRepository suppressions,
-                                 MemoryProposalRepository proposals, MemoryCryptoService crypto,
-                                 ObjectMapper mapper) {
+                                 MemoryCryptoService crypto, ObjectMapper mapper) {
         this.memory = memory;
         this.suppressions = suppressions;
-        this.proposals = proposals;
         this.crypto = crypto;
         this.mapper = mapper;
     }
 
-    /** 一条要写的事实版本。{@code targetVersion>0} 表示替换：旧版先 CAS 成 SUPERSEDED，新版 version+1。 */
     public record PlannedFact(NewMemory draft, String memoryId, int version, EvidenceDraft evidence,
-                              String targetMemoryId, int targetVersion, String familyHmac, String predicateHmac) {
-    }
-
-    /** 一条要写的替换/撤销建议。 */
-    public record PlannedProposal(ProposalDraft draft, EvidenceDraft evidence, String targetMemoryId,
-                                  int targetVersion) {
+                              String targetMemoryId, int targetVersion, String familyHmac, String predicateHmac,
+                              String valueHmac) {
     }
 
     /** 事务外备料的结果。{@code confirmRowIds} 与 {@code confirmEvidence} 按位一一对应。 */
-    public record Plan(List<PlannedFact> facts, List<String> confirmRowIds, List<PlannedProposal> proposals,
-                       List<EvidenceDraft> confirmEvidence, int ignored, List<String> decisions) {
+    public record Plan(List<PlannedFact> facts, List<String> confirmRowIds, List<EvidenceDraft> confirmEvidence,
+                       int ignored, List<String> decisions) {
         boolean nothingToWrite() {
-            return facts.isEmpty() && confirmRowIds.isEmpty() && proposals.isEmpty();
+            return facts.isEmpty() && confirmRowIds.isEmpty();
         }
     }
 
     /** 写入统计。 */
-    public record Applied(int factsWritten, int factsConfirmed, int proposalsWritten, int ignored,
-                          boolean vaultChanged) {
-        static final Applied NONE = new Applied(0, 0, 0, 0, false);
+    public record Applied(int factsWritten, int factsConfirmed, int ignored, boolean vaultChanged) {
+        static final Applied NONE = new Applied(0, 0, 0, false);
     }
 
     /** 逐候选跑判定表并备好材料；<b>一条都不写</b>，所以复验失败时整批可以干净作废。 */
     public Plan plan(Batch batch, ExtractionResult extracted, MemoryCryptoService.MemoryKey key, String asOf)
             throws SQLException, MemoryCryptoException {
         List<PlannedFact> facts = new ArrayList<>();
-        List<PlannedProposal> proposalDrafts = new ArrayList<>();
         List<String> confirmRowIds = new ArrayList<>();
         List<EvidenceDraft> confirmEvidence = new ArrayList<>();
         List<String> decisions = new ArrayList<>();
@@ -108,6 +93,7 @@ public class MemoryExtractionWriter {
             }
             String familyHmac = crypto.hmac(key, "family:" + candidate.family());
             String predicateHmac = crypto.hmac(key, "predicate:" + candidate.predicate());
+            String valueHmac = crypto.hmac(key, "value:" + candidate.normalizedValue());
             EvidenceDraft evidence = evidenceOf(key, batch, candidate, source);
             boolean byFamily = suppressions.isSuppressed(key.vaultId(), batch.scopeType(), batch.scopeId(),
                     MemorySuppressionRepository.KIND_FAMILY, familyHmac);
@@ -119,6 +105,12 @@ public class MemoryExtractionWriter {
             List<FactRow> active = memory.findActiveInFamily(key.vaultId(), batch.scopeType(), batch.scopeId(),
                     familyHmac);
             ActiveFact current = active.isEmpty() ? null : toActiveFact(key, active.get(0));
+            Optional<FactRow> duplicate = memory.findCurrentByValueHmac(key.vaultId(), valueHmac);
+            if (duplicate.isPresent() && (current == null || !duplicate.get().memoryId().equals(current.memoryId()))) {
+                ignored++;
+                decisions.add("IGNORE:DUPLICATE_VALUE");
+                continue;
+            }
             Decision decision = MemoryConflictResolver.decide(candidate, Optional.ofNullable(current),
                     new Context(byFamily, byPredicate, byEvidence, true));
             decisions.add(decision.action().name() + ":" + decision.reason());
@@ -128,13 +120,10 @@ public class MemoryExtractionWriter {
                     confirmRowIds.add(active.get(0).rowId());
                     confirmEvidence.add(evidence);
                 }
-                case ADD_PROPOSAL -> proposalDrafts.add(new PlannedProposal(
-                        proposalOf(key, batch, candidate, decision, evidence, asOf), evidence,
-                        decision.targetMemoryId(), decision.targetVersion()));
-                default -> facts.add(plannedFact(key, batch, candidate, decision, evidence, asOf));
+                default -> facts.add(plannedFact(key, batch, candidate, decision, evidence, valueHmac, asOf));
             }
         }
-        return new Plan(List.copyOf(facts), List.copyOf(confirmRowIds), List.copyOf(proposalDrafts),
+        return new Plan(List.copyOf(facts), List.copyOf(confirmRowIds),
                 List.copyOf(confirmEvidence), ignored, List.copyOf(decisions));
     }
 
@@ -149,24 +138,19 @@ public class MemoryExtractionWriter {
         }
         int written = 0;
         int confirmed = 0;
-        int proposalCount = 0;
         int dropped = 0;
         for (PlannedFact fact : plan.facts()) {
-            if (reSuppressed(connection, key, fact) || overQuota(connection, key, fact)) {
+            if (reSuppressed(connection, key, fact) || duplicateIn(connection, key, fact)) {
                 dropped++;
                 continue;
             }
             if (fact.targetVersion() > 0) {
-                if (MemoryRepository.supersedeVersionIn(connection, fact.targetMemoryId(), fact.targetVersion())
-                        != 1) {
-                    // 目标在判定之后被人工改过：不覆盖，整条候选就地丢掉
+                if (MemoryRepository.supersedeVersionIn(connection, fact.targetMemoryId(), fact.targetVersion()) != 1) {
                     dropped++;
                     continue;
                 }
-            } else if (MemoryRepository.STATUS_ACTIVE.equals(fact.draft().status())
-                    && !MemoryRepository.activeInFamily(connection, key.vaultId(), fact.draft().scopeType(),
+            } else if (!MemoryRepository.activeInFamily(connection, key.vaultId(), fact.draft().scopeType(),
                     fact.draft().scopeId(), fact.familyHmac()).isEmpty()) {
-                // 只有要写 ACTIVE 才受"同族一条 ACTIVE"约束；待确认事实与 ACTIVE 共存是 §8.3 的正常形态
                 dropped++;
                 continue;
             }
@@ -184,94 +168,39 @@ public class MemoryExtractionWriter {
                 dropped++;
             }
         }
-        for (PlannedProposal proposal : plan.proposals()) {
-            Optional<FactRow> target = MemoryRepository.findCurrent(connection, key.vaultId(),
-                    proposal.targetMemoryId());
-            if (target.isEmpty() || target.get().version() != proposal.targetVersion()) {
-                // 目标已消失或已改版：这条建议失去意义（§2.3.1 的 STALE 语义），不替用户留半成品
-                dropped++;
-                continue;
-            }
-            String evidenceId = MemoryRepository.insertEvidence(connection, proposal.evidence()).evidenceId();
-            ProposalDraft withEvidence = new ProposalDraft(proposal.draft().proposalId(), proposal.draft().vaultId(),
-                    proposal.draft().sessionId(), proposal.draft().sourceTurnId(), evidenceId,
-                    proposal.draft().targetMemoryId(), proposal.draft().targetVersion(),
-                    proposal.draft().operation(), proposal.draft().payloadCipher(), proposal.draft().cryptoMeta(),
-                    proposal.draft().dedupHmac(), proposal.draft().createdAt(), proposal.draft().expiresAt());
-            if (proposals.submitIn(connection, withEvidence).outcome()
-                    == MemoryProposalRepository.SubmitOutcome.SUBMITTED) {
-                proposalCount++;
-            } else {
-                dropped++;
-            }
-        }
-        boolean changed = written + confirmed + proposalCount > 0;
+        boolean changed = written + confirmed > 0;
         if (changed) {
             MemoryRepository.updateVault(connection, key.vaultId(), false);
         }
-        return new Applied(written, confirmed, proposalCount, plan.ignored() + dropped, changed);
+        return new Applied(written, confirmed, plan.ignored() + dropped, changed);
     }
 
     // ---- 事务外备料 ----
 
     private PlannedFact plannedFact(MemoryCryptoService.MemoryKey key, Batch batch, ValidatedCandidate candidate,
-                                    Decision decision, EvidenceDraft evidence, String asOf)
+                                    Decision decision, EvidenceDraft evidence, String valueHmac, String asOf)
             throws SQLException, MemoryCryptoException {
-        boolean replace = decision.action() == Action.REPLACE;
-        boolean pending = decision.action() == Action.ADD_PENDING;
         String rowId = UUID.randomUUID().toString();
+        boolean replace = decision.action() == Action.REPLACE;
         String memoryId = replace ? decision.targetMemoryId() : UUID.randomUUID().toString();
         int version = replace ? decision.targetVersion() + 1 : 1;
         MemoryCryptoService.EncryptedValue encrypted = crypto.encrypt(key, "ai_memory_item", rowId, version,
-                payloadOf(batch, candidate, decision, pending));
+                payloadOf(batch, candidate, decision));
         String observedAt = observedAt(candidate);
         NewMemory draft = new NewMemory(rowId, key.vaultId(), batch.scopeType(), batch.scopeId(), candidate.kind(),
                 crypto.hmac(key, "predicate:" + candidate.predicate()),
                 crypto.hmac(key, "family:" + candidate.family()),
-                crypto.hmac(key, "value:" + candidate.normalizedValue()),
-                pending ? MemoryRepository.STATUS_PENDING : MemoryRepository.STATUS_ACTIVE,
+                valueHmac, MemoryRepository.STATUS_ACTIVE,
                 encrypted.cipher(), encrypted.cryptoMeta(), "AUTO", false, false, null, null,
                 observedAt, asOf, asOf);
-        return new PlannedFact(draft, memoryId, version, evidence, replace ? decision.targetMemoryId() : null,
-                replace ? decision.targetVersion() : 0, crypto.hmac(key, "family:" + candidate.family()),
-                crypto.hmac(key, "predicate:" + candidate.predicate()));
-    }
-
-    private ProposalDraft proposalOf(MemoryCryptoService.MemoryKey key, Batch batch, ValidatedCandidate candidate,
-                                     Decision decision, EvidenceDraft evidence, String asOf)
-            throws SQLException, MemoryCryptoException {
-        boolean retract = "RETRACT_PROPOSAL".equals(candidate.operation());
-        String proposalId = UUID.randomUUID().toString();
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("schemaVersion", 1);
-        payload.put("scopeType", batch.scopeType());
-        payload.put("scopeId", batch.scopeId());
-        payload.put("operation", candidate.operation());
-        payload.put("kind", candidate.kind());
-        payload.put("predicate", candidate.predicate());
-        payload.put("newValue", retract ? null : candidate.normalizedValue());
-        payload.put("blockId", candidate.sourceBlockId());
-        payload.put("sourceTurnId", candidate.turnId());
-        payload.put("sourceGeneration", batch.contextGeneration());
-        payload.put("sourceEpoch", batch.vaultEpoch());
-        payload.put("reviewReason", decision.reason());
-        Map<String, Object> target = new LinkedHashMap<>();
-        target.put("memoryId", decision.targetMemoryId());
-        target.put("version", decision.targetVersion());
-        payload.put("target", target);
-        MemoryCryptoService.EncryptedValue encrypted = crypto.encrypt(key, "ai_memory_proposal", proposalId, 1,
-                serialize(payload));
-        String dedup = crypto.hmac(key, "proposal:" + candidate.operation() + ":" + decision.targetMemoryId() + ":"
-                + decision.targetVersion() + ":" + evidence.sourceHmac() + ":"
-                + (retract ? "" : candidate.normalizedValue()));
-        return new ProposalDraft(proposalId, key.vaultId(), batch.sessionId(), candidate.turnId(), null,
-                decision.targetMemoryId(), decision.targetVersion(), candidate.operation(), encrypted.cipher(),
-                encrypted.cryptoMeta(), dedup, asOf,
-                MemoryTimes.formatMillis(MemoryTimes.parseMillis(asOf) + PROPOSAL_TTL_MILLIS));
+        return new PlannedFact(draft, memoryId, version, evidence,
+                replace ? decision.targetMemoryId() : null, replace ? decision.targetVersion() : 0,
+                crypto.hmac(key, "family:" + candidate.family()),
+                crypto.hmac(key, "predicate:" + candidate.predicate()), valueHmac);
     }
 
     /** 载荷 = contracts §2.3 的字段 + 现有读取方依赖的 {@code kind/predicate/family/value}，一份形状两边共用。 */
-    private String payloadOf(Batch batch, ValidatedCandidate candidate, Decision decision, boolean pending) {
+    private String payloadOf(Batch batch, ValidatedCandidate candidate, Decision decision) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("schemaVersion", 1);
         payload.put("subject", "self");
@@ -285,7 +214,7 @@ public class MemoryExtractionWriter {
                 .toList());
         payload.put("sensitivity", MemorySensitivity.classify(candidate.value()).name());
         payload.put("sourceTimezone", batch.timezone());
-        if (pending || decision.reason() != null) {
+        if (decision.reason() != null) {
             payload.put("conflictReason", decision.reason());
         }
         if (decision.targetMemoryId() != null) {
@@ -333,11 +262,9 @@ public class MemoryExtractionWriter {
                 MemorySuppressionRepository.KIND_EVIDENCE, fact.evidence().sourceHmac());
     }
 
-    /** PENDING 与建议共用同一个 500 上限（§2.3.1）：配额满了就丢掉待确认候选，不挤掉已有条目。 */
-    private boolean overQuota(Connection connection, MemoryCryptoService.MemoryKey key, PlannedFact fact)
+    private boolean duplicateIn(Connection connection, MemoryCryptoService.MemoryKey key, PlannedFact fact)
             throws SQLException {
-        return MemoryRepository.STATUS_PENDING.equals(fact.draft().status())
-                && MemoryRepository.pendingCount(connection, key.vaultId()) >= MemoryRepository.PENDING_QUOTA;
+        return MemoryRepository.findCurrentByValueHmac(connection, key.vaultId(), fact.valueHmac()).isPresent();
     }
 
     private ActiveFact toActiveFact(MemoryCryptoService.MemoryKey key, FactRow row) {
@@ -353,7 +280,7 @@ public class MemoryExtractionWriter {
                     row.payloadCipher(), row.cryptoMeta()), new TypeReference<LinkedHashMap<String, Object>>() {
             });
         } catch (Exception error) {
-            // 载荷坏了就当同族没有当前值：宁可走"新增待确认"，也不拿乱码冒充旧值做替换
+            // 载荷坏了就当同族没有当前值：宁可新增，也不拿乱码冒充旧值
             return Map.of();
         }
     }

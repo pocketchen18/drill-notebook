@@ -197,7 +197,7 @@ class MemoryVaultServiceTest {
 
     @Test
     void idleKeyAutoLocksButEveryUseExtendsTheWindow() throws Exception {
-        vault.create("fingerprint", null, null);
+        vault.create("password", PASSWORD, null);
         MemoryKey handed = vault.requireKey();
 
         assertFalse(vault.lockIfIdle(System.nanoTime() + Duration.ofMinutes(14).toNanos()));
@@ -211,6 +211,17 @@ class MemoryVaultServiceTest {
                 + MemoryVaultService.IDLE_LOCK_AFTER.plusMillis(1).toNanos()));
         assertTrue(handed.erased(), "自动锁定要清零交出去的钥匙");
         assertEquals("MEMORY_LOCKED", assertThrows(MemoryCryptoException.class, vault::requireKey).code());
+    }
+
+    @Test
+    void fingerprintVaultIsNotIdleLockedBecauseItReopensWithoutUserInput() throws Exception {
+        vault.create("fingerprint", null, null);
+        MemoryKey handed = vault.requireKey();
+
+        assertFalse(vault.lockIfIdle(System.nanoTime()
+                + MemoryVaultService.IDLE_LOCK_AFTER.plusMinutes(1).toNanos()));
+        assertFalse(handed.erased());
+        assertTrue(vault.currentKey().isPresent(), "指纹库闲置锁定只会让记忆无端失效");
     }
 
     // ---- 改密 ----

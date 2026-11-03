@@ -49,6 +49,16 @@ class MemoryValidatorTest {
     }
 
     @Test
+    void systemPromptCarriesTheExactOutputShape() {
+        String prompt = MemoryValidator.systemPrompt();
+        assertTrue(prompt.contains(MemoryValidator.OUTPUT_SHAPE), "结构体必须真的随提示词发送");
+        assertTrue(prompt.contains("\"schemaVersion\":2"));
+        assertTrue(prompt.contains("\"targetMemoryId\""));
+        assertTrue(prompt.contains("\"temporalExpression\""));
+        assertTrue(prompt.contains("\"needsReview\":boolean"));
+    }
+
+    @Test
     void onlyOneWrappingFenceIsStrippedAndBraceHuntingIsNotTolerated() {
         String body = envelope(candidate("ADD", "null", "null", "PREFERENCE", "answer.order", "\"example_first\"",
                 QUOTE_SOURCE, String.valueOf(MESSAGE_ID), "\"u0\"", "null", "false"));
@@ -62,11 +72,40 @@ class MemoryValidatorTest {
     }
 
     @Test
+    void bomBeforeTheEnvelopeIsIgnored() {
+        assertEquals(FormatStatus.OK, MemoryValidator.validate("\uFEFF{\"schemaVersion\":2,\"candidates\":[]}",
+                batch(QUOTE_SOURCE), Map.of(), MAPPER).format(), "网关 BOM 不是模型返回的格式错误");
+    }
+
+    @Test
+    void nullCandidatesMeansNoCandidatesInsteadOfAHardFailure() {
+        Outcome outcome = MemoryValidator.validate("{\"schemaVersion\":2,\"candidates\":null}",
+                batch(QUOTE_SOURCE), Map.of(), MAPPER);
+        assertEquals(FormatStatus.OK, outcome.format());
+        assertTrue(outcome.candidates().isEmpty());
+    }
+
+    @Test
     void schemaVersionOneIsRejectedInsteadOfSilentlyMapped() {
         String body = "{\"schemaVersion\":1,\"candidates\":[]}";
         assertEquals(FormatStatus.WRONG_SCHEMA_VERSION,
                 MemoryValidator.validate(body, batch(QUOTE_SOURCE), Map.of(), MAPPER).format(),
                 "V1 结构不隐式映射（§5）");
+    }
+
+    @Test
+    void schemaVersionVariantsCanBeNormalizedBeforeValidation() {
+        for (String body : List.of(
+                "{\"schemaVersion\":1,\"candidates\":[]}",
+                "{\"schemaVersion\":1.0,\"candidates\":[]}",
+                "{\"schemaVersion\":\"2.0\",\"candidates\":[]}",
+                "{\"candidates\":[]}")) {
+            String normalized = MemoryValidator.normalizeSchemaVersion(body, MAPPER);
+            assertEquals(FormatStatus.OK,
+                    MemoryValidator.validate(normalized, batch(QUOTE_SOURCE), Map.of(), MAPPER).format(), body);
+        }
+        String future = "{\"schemaVersion\":3,\"candidates\":[]}";
+        assertEquals(future, MemoryValidator.normalizeSchemaVersion(future, MAPPER), "未知版本不擅自归一");
     }
 
     @Test

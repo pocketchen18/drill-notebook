@@ -108,7 +108,7 @@ final class MaintenanceHarness {
         handles = wiring.handles();
         suppressions = new MemorySuppressionRepository(dataSource, immediate);
         proposals = new MemoryProposalRepository(dataSource, immediate);
-        writer = new MemoryExtractionWriter(memory, suppressions, proposals, crypto, mapper);
+        writer = new MemoryExtractionWriter(memory, suppressions, crypto, mapper);
         worker = new MemoryMaintenanceWorker(jobs, usage, metadata, history, memory, policy, vault, crypto, scanner,
                 queue, extractor, drafter, handles, immediate, estimator, mapper, writer, clock::get);
         worker.useRetryJitter(0L);

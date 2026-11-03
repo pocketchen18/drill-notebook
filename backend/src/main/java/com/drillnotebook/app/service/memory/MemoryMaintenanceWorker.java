@@ -397,7 +397,7 @@ public class MemoryMaintenanceWorker {
             result = repair.result;
             if (!result.formatOk()) {
                 log.info("摘要草稿格式仍不合格 job={}：终态结束，不再修复也不写检查点", job.id());
-                return settleFailed(job, leaseToken);
+                return settleFailed(job, leaseToken, "FORMAT_INVALID_SUMMARY");
             }
         }
         Outcome outcome;
@@ -467,8 +467,9 @@ public class MemoryMaintenanceWorker {
             }
             result = repair.result;
             if (!result.formatOk()) {
-                log.info("维护提取格式仍不合格 job={}：终态结束，不再修复也不写候选", job.id());
-                return settleFailed(job, leaseToken);
+                log.warn("维护提取格式仍不合格 job={} format={} rawLength={}：终态结束，不再修复也不写候选",
+                        job.id(), result.format(), result.rawText() == null ? 0 : result.rawText().length());
+                return settleFailed(job, leaseToken, "FORMAT_INVALID_" + result.format().name());
             }
         }
         MemoryExtractionWriter.Plan plan;
@@ -519,10 +520,9 @@ public class MemoryMaintenanceWorker {
     }
 
     /** 不重试的终态。格式反复不合格就走这里，任务不会滑进 RETRY 循环（§8.2 第 7 条）。 */
-    private JobResult settleFailed(JobRow job, String leaseToken) throws SQLException {
-        return jobs.settle(job.id(), leaseToken, MemoryTimes.formatMillis(clock.getAsLong()),
-                MemoryJobRepository.STATUS_FAILED, null) == LeaseOutcome.APPLIED
-                ? JobResult.FAILED : JobResult.REJECTED;
+    private JobResult settleFailed(JobRow job, String leaseToken, String errorCode) throws SQLException {
+        return jobs.fail(job.id(), leaseToken, MemoryTimes.formatMillis(clock.getAsLong()), errorCode)
+                == LeaseOutcome.APPLIED ? JobResult.FAILED : JobResult.REJECTED;
     }
 
     /** 开关 / 授权 / 额度 / 版本四道门禁。通过返回 null，否则任务已进等待态或终态。 */

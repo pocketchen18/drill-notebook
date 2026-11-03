@@ -27,22 +27,24 @@ class MemoryConflictResolverTest {
     }
 
     @Test
-    void newerAutoPreferenceReplacesTheOlderAutoOne() {
+    void newerConflictingFactReplacesTheCurrentVersionDirectly() {
         Decision decision = MemoryConflictResolver.decide(candidate("answer.detail", "concise",
                 "以后回答简洁一点。", NOW), Optional.of(active("detailed", "AUTO", NOW - 60_000)), Context.none());
         assertEquals(Action.REPLACE, decision.action());
-        assertEquals("NEWER_AUTO_PREFERENCE", decision.reason());
+        assertEquals("DIRECT_REPLACE", decision.reason());
+        assertEquals("m-1", decision.targetMemoryId());
+        assertEquals(3, decision.targetVersion());
     }
 
     @Test
-    void manuallyProtectedOrPinnedFactsAreNeverOverwrittenAutomatically() {
+    void manualOrPinnedFactsAreNotOverwrittenByAutomaticExtraction() {
         Decision manual = MemoryConflictResolver.decide(candidate("answer.detail", "concise",
                 "以后回答简洁一点。", NOW), Optional.of(active("detailed", "MANUAL", NOW - 60_000)), Context.none());
-        assertEquals(Action.ADD_PENDING, manual.action(), "人工录入的事实只能待确认（§8.3 第三行）");
-        assertEquals("MANUAL_PROTECTED_TARGET", manual.reason());
+        assertEquals(Action.IGNORE, manual.action());
+        assertEquals("MANUAL_PROTECTED", manual.reason());
         ActiveFact pinned = new ActiveFact("m-1", 4, "AUTO", false, true, "detailed", NOW - 60_000, NOW);
-        assertEquals(Action.ADD_PENDING, MemoryConflictResolver.decide(candidate("answer.detail", "concise",
-                "以后回答简洁一点。", NOW), Optional.of(pinned), Context.none()).action(), "置顶同样不许自动覆盖");
+        assertEquals(Action.IGNORE, MemoryConflictResolver.decide(candidate("answer.detail", "concise",
+                "以后回答简洁一点。", NOW), Optional.of(pinned), Context.none()).action());
     }
 
     @Test
@@ -53,8 +55,8 @@ class MemoryConflictResolverTest {
         assertEquals("OLDER_SOURCE_LOSES", decision.reason());
         Decision sameTime = MemoryConflictResolver.decide(candidate("answer.detail", "detailed",
                 "以后讲详细些。", NOW), Optional.of(active("concise", "AUTO", NOW)), Context.none());
-        assertEquals(Action.ADD_PENDING, sameTime.action(), "同刻分不出新旧只能 REVIEW");
-        assertEquals("SAME_SOURCE_TIME", sameTime.reason());
+        assertEquals(Action.REPLACE, sameTime.action());
+        assertEquals("DIRECT_REPLACE", sameTime.reason());
     }
 
     @Test
@@ -68,20 +70,19 @@ class MemoryConflictResolverTest {
     }
 
     @Test
-    void negationAmbiguityGoesToReviewInsteadOfAutoReplace() {
+    void negationIsAddedDirectlyInsteadOfWaitingForConfirmation() {
         Decision decision = MemoryConflictResolver.decide(candidate("answer.order", "concept_first",
                 "不是要先给例子，而是先讲原理。", NOW), Optional.empty(), Context.none());
-        assertEquals(Action.ADD_PENDING, decision.action(), "「不是…而是…」有歧义，不能自动生效");
-        assertEquals("NEGATION_AMBIGUITY", decision.reason());
+        assertEquals(Action.ADD_ACTIVE, decision.action());
+        assertEquals("DIRECT_ADD", decision.reason());
     }
 
     @Test
-    void nothingWithoutAnExplicitLongTermSignalIsWrittenAutomatically() {
+    void aFirstFactIsAddedDirectlyWithoutAnExplicitLongTermSignal() {
         Decision decision = MemoryConflictResolver.decide(candidate("answer.language", "zh", "用中文。", NOW),
                 Optional.empty(), Context.none());
-        assertEquals(Action.ADD_PENDING, decision.action());
-        assertEquals("NO_EXPLICIT_LONG_TERM_EXPRESSION", decision.reason(),
-                "低风险谓词也不够，还要原话里有明确长期表达（§8.3 末段）");
+        assertEquals(Action.ADD_ACTIVE, decision.action(),
+                "没有同族当前值时直接入库，不再为「没说以后」单独攒待确认（P9d 用户裁决）");
         assertEquals(Action.ADD_ACTIVE, MemoryConflictResolver.decide(candidate("answer.language", "zh",
                 "以后都用中文解释。", NOW), Optional.empty(), Context.none()).action());
     }
@@ -103,26 +104,27 @@ class MemoryConflictResolverTest {
     }
 
     @Test
-    void unknownScopeFallsBackToReview() {
-        assertEquals(Action.ADD_PENDING, MemoryConflictResolver.decide(candidate("answer.detail", "concise",
-                "以后回答简洁一点。", NOW), Optional.empty(), new Context(false, false, false, false)).action(),
-                "scope 不确定只能待确认（§8.3 第四行）");
+    void unknownScopeStillAddsDirectly() {
+        assertEquals(Action.ADD_ACTIVE, MemoryConflictResolver.decide(candidate("answer.detail", "concise",
+                "以后回答简洁一点。", NOW), Optional.empty(), new Context(false, false, false, false)).action());
     }
 
     @Test
-    void proposalsAlwaysNeedHumanConfirmationAndNeverTouchFacts() {
+    void replacementSuggestionsReplaceTheTargetAndRetractionsAreIgnored() {
         ValidatedCandidate replace = new ValidatedCandidate("REPLACE_PROPOSAL", "m-ielts", 2, "GOAL", "study.goal",
                 "study.goal:准备托福", "准备托福", "准备托福", "我不准备雅思了，改准备托福。", 51L, 101L, "u0", null, NOW, true,
                 "PROPOSAL_REQUIRES_CONFIRMATION");
         Decision decision = MemoryConflictResolver.decide(replace, Optional.empty(), Context.none());
-        assertEquals(Action.ADD_PROPOSAL, decision.action(), "替换建议只进 proposal，不看见 operation 就执行库更新");
+        assertEquals(Action.REPLACE, decision.action());
+        assertEquals("DIRECT_REPLACE", decision.reason());
         assertEquals("m-ielts", decision.targetMemoryId());
         assertEquals(2, decision.targetVersion());
         ValidatedCandidate retract = new ValidatedCandidate("RETRACT_PROPOSAL", "m-ielts", 2, "GOAL", "study.goal",
                 "study.goal", null, null, "忘记我准备雅思这件事。", 51L, 101L, "u0", null, NOW, true,
                 "PROPOSAL_REQUIRES_CONFIRMATION");
-        assertEquals(Action.ADD_PROPOSAL, MemoryConflictResolver.decide(retract, Optional.empty(), Context.none())
-                .action(), "撤销建议也不许直接删库（§5.1）");
+        Decision ignored = MemoryConflictResolver.decide(retract, Optional.empty(), Context.none());
+        assertEquals(Action.IGNORE, ignored.action());
+        assertEquals("RETRACTION_DISABLED", ignored.reason());
     }
 
     // ---- 夹具 ----

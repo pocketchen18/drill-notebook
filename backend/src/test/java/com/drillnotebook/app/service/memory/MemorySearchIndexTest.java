@@ -309,6 +309,15 @@ class MemorySearchIndexTest {
     }
 
     @Test
+    void cityQuestionRecallsResidenceBackgroundThroughTheFiniteLabelTable() {
+        MemorySearchIndex index = build(List.of(
+                doc(1L, "BACKGROUND", "study.background", "常住杭州", GLOBAL, 0L, null)));
+
+        assertEquals(List.of("m00001"), ids(search(index, "我住在哪个城市？", GLOBAL, 0L).topical()),
+                "居住地问题要能靠有限谓词标签命中背景事实，而不是要求用户复述原文");
+    }
+
+    @Test
     void unrelatedQueryReturnsNoCandidateInsteadOfPaddingThreeFacts() {
         Result result = search(library, "量子色动力学的格点规约怎么写", GLOBAL, 0L);
         assertTrue(result.topical().isEmpty() && result.style().isEmpty(),

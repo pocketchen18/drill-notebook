@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Input, Message, Space, Tag, Typography } from '@arco-design/web-react';
+import { Alert, Button, DatePicker, Input, Message, Space, Tag, Typography } from '@arco-design/web-react';
 import { ApiError } from '../../lib/api';
 import { friendlyMessage } from '../../lib/errors';
 import { editMemoryItem, getMemoryItem } from '../../lib/aiMemoryApi';
+import { memoryKindLabel, memoryStatusLabel, memoryStatusTone, memoryValidUntilLabel } from '../../lib/memoryLabels';
 import type { MemoryFactKeys, MemoryItem, MemoryStatus } from '../../lib/aiMemoryTypes';
 
 /**
@@ -22,6 +23,7 @@ export interface MemoryDetailProps {
   item: MemoryItem;
   onClose: () => void;
   onChanged: () => void;
+  onDelete: (item: MemoryItem) => void;
 }
 
 function Meta(props: { label: string }): JSX.Element {
@@ -37,11 +39,10 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
 
   const [value, setValue] = useState(props.item.value ?? '');
   const [predicate, setPredicate] = useState(props.item.predicate ?? '');
+  const [validUntil, setValidUntil] = useState(props.item.validUntil ?? '');
   const [status, setStatus] = useState<MemoryStatus>(props.item.status);
   const [conflict, setConflict] = useState<MemoryFactKeys | null>(null);
   const [latest, setLatest] = useState<MemoryItem | null>(null);
-  /** 草稿写于哪一版：冲突提示要说这个，不能说当前基线，否则取回后读起来像没冲突。 */
-  const [draftVersion, setDraftVersion] = useState(props.item.version);
   /** 取回最新正文后把它作为新的 CAS 基线，否则用户改完再保存只会一直 409。 */
   const [adopted, setAdopted] = useState<MemoryItem | null>(null);
 
@@ -49,12 +50,14 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
   const corrupt = row.corrupt === true;
   const statusFrozen = !EDITABLE_STATUSES.includes(row.status);
   const sources = row.sources ?? [];
+  const conflictStatusLabel = conflict?.status ? memoryStatusLabel(conflict.status) : '未知状态';
 
   const valueChanged = value !== (row.value ?? '') && value.trim().length > 0;
   const predicateChanged = predicate !== (row.predicate ?? '') && predicate.trim().length > 0;
+  const validUntilChanged = validUntil !== (row.validUntil ?? '');
   const statusChanged = !statusFrozen && status !== row.status;
   // 服务端对没有内容的 PATCH 直接 400，按钮不能让人点了才知道没改动
-  const dirty = valueChanged || predicateChanged || statusChanged;
+  const dirty = valueChanged || predicateChanged || validUntilChanged || statusChanged;
 
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-memory-list'] });
@@ -63,12 +66,23 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
   };
 
   const saveMutation = useMutation({
-    mutationFn: () => editMemoryItem(props.item.memoryId, {
-      expectedVersion: row.version,
-      value: valueChanged ? value : undefined,
-      predicate: predicateChanged ? predicate : undefined,
-      status: statusChanged ? status : undefined
-    }),
+    mutationFn: async () => {
+      let version = row.version;
+      let result;
+      if (valueChanged || predicateChanged || validUntilChanged) {
+        result = await editMemoryItem(props.item.memoryId, {
+          expectedVersion: version,
+          value: valueChanged ? value : undefined,
+          predicate: predicateChanged ? predicate : undefined,
+          validUntil: validUntilChanged ? validUntil : undefined
+        });
+        version = result.version;
+      }
+      if (statusChanged) {
+        result = await editMemoryItem(props.item.memoryId, { expectedVersion: version, status });
+      }
+      return result;
+    },
     onSuccess: () => {
       setConflict(null);
       setAdopted(null);
@@ -79,7 +93,6 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
     onError: (error) => {
       if (error instanceof ApiError && error.code === 'MEMORY_VERSION_CONFLICT') {
         setConflict((error.details ?? { version: 0 }) as MemoryFactKeys);
-        setDraftVersion(row.version);
         Message.warning('这条记忆已被改过，你的草稿保留着');
         return;
       }
@@ -100,21 +113,25 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
     <div className="ai-memory-detail form-stack">
       <div className="ai-memory-meta">
         <Space wrap size="small">
-          <Tag>{row.kind}</Tag>
+          <Tag>{memoryKindLabel(row.kind)}</Tag>
           <Tag color={row.scopeType === 'GLOBAL' ? 'blue' : 'purple'}>
-            {row.scopeType === 'GLOBAL' ? '全局' : `笔记本 ${row.scopeId}`}
+            {row.scopeType === 'GLOBAL' ? '全局' : '笔记本'}
           </Tag>
           <Tag color={row.origin === 'MANUAL' ? 'green' : 'arcblue'}>
             {row.origin === 'MANUAL' ? '人工记录' : '自动整理'}
           </Tag>
           {row.manualProtected && <Tag color="green">人工保护</Tag>}
           {row.pinned && <Tag color="gold">置顶</Tag>}
-          <Tag>{row.status}</Tag>
+          <Tag className={`ai-memory-item-status is-${memoryStatusTone(row.status)}`}>
+            {memoryStatusLabel(row.status)}
+          </Tag>
         </Space>
         <br />
-        <Meta label={`版本 v${row.version} · 记录于 ${row.recordedAt}`} />
-        {row.validUntil && <>{' · '}<Meta label={`有效至 ${row.validUntil}`} /></>}
-        {row.lastConfirmedAt && <>{' · '}<Meta label={`最后确认 ${row.lastConfirmedAt}`} /></>}
+        <Meta label={[
+          `记录于 ${row.recordedAt}`,
+          row.validUntil ? `有效至 ${memoryValidUntilLabel(row.validUntil)}` : null,
+          row.lastConfirmedAt ? `最后确认 ${row.lastConfirmedAt}` : null
+        ].filter(Boolean).join(' · ')} />
       </div>
 
       {corrupt && (
@@ -136,18 +153,37 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
           aria-label="记忆正文"
           disabled={corrupt}
         />
-        <Typography.Text bold>键名</Typography.Text>
+        <Typography.Text bold>名称（可选）</Typography.Text>
         <Input
-          placeholder="例如 answer.style"
+          placeholder="例如 回答风格"
           value={predicate}
           onChange={setPredicate}
           maxLength={120}
           showWordLimit
-          aria-label="记忆键名"
+          aria-label="记忆名称"
           disabled={corrupt}
         />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          只用于区分同类记忆，方便你自己认；留空表示不改名。
+        </Typography.Text>
+        <Typography.Text bold>有效期（可选）</Typography.Text>
+        <DatePicker
+          value={validUntil || undefined}
+          onChange={(dateString) => setValidUntil(dateString
+            ? new Date(`${dateString}T23:59:59`).toISOString()
+            : '')}
+          format="YYYY-MM-DD"
+          allowClear
+          style={{ width: '100%' }}
+          placeholder="留空表示长期有效"
+          aria-label="有效期"
+          disabled={corrupt}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          留空表示长期有效；到期后会自动变成“已过期”。
+        </Typography.Text>
         {statusFrozen
-          ? <Meta label={`状态 ${row.status} 已被服务端冻结，只能作为新版本替换`} />
+          ? <Meta label={`状态「${memoryStatusLabel(row.status)}」已由服务端冻结，只能作为新版本替换`} />
           : (
             <>
               <Typography.Text bold>状态</Typography.Text>
@@ -162,7 +198,7 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
           content={(
             <Space direction="vertical" size={4}>
               <Typography.Text bold>
-                服务端已是 v{conflict.version}（{conflict.status ?? '未知状态'}），你的草稿写于 v{draftVersion}
+                服务端已有更新（{conflictStatusLabel}），你的草稿基于旧内容
               </Typography.Text>
               <Meta label="冲突详情只带元信息，正文不会随错误返回；点下面的按钮才取回最新值。" />
               <Button size="small" loading={fetchLatestMutation.isPending} onClick={() => fetchLatestMutation.mutate()}>
@@ -171,7 +207,7 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
               {latest && (
                 <>
                   <Typography.Text>最新值：{latest.value ?? '（读不出正文）'}</Typography.Text>
-                  <Meta label={`已改用 v${latest.version} 作为基线，保存会以你的草稿覆盖这一版。`} />
+                  <Meta label="已改用最新内容作为基线，保存会以你的草稿覆盖当前内容。" />
                 </>
               )}
             </Space>
@@ -191,7 +227,7 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
                 {source.corrupt || source.quote == null ? '（原话密文不可用）' : source.quote}
               </Typography.Text>
               <br />
-              <Meta label={`会话 ${source.sessionId} · 轮次 ${source.turnId} · 消息 ${source.messageId}`} />
+              <Meta label={`会话：${source.sessionTitle ?? '未知会话'}`} />
             </li>
           ))}
         </ul>
@@ -201,6 +237,7 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
         <Button type="primary" loading={saveMutation.isPending} disabled={corrupt || !dirty} onClick={() => saveMutation.mutate()}>
           保存
         </Button>
+        <Button status="danger" onClick={() => props.onDelete(row)}>删除</Button>
         <Button onClick={props.onClose}>关闭</Button>
       </Space>
     </div>
@@ -219,7 +256,7 @@ function StatusToggle(props: { value: MemoryStatus; onChange: (status: MemorySta
           onClick={() => props.onChange(option)}
           aria-pressed={props.value === option}
         >
-          {option === 'ACTIVE' ? '生效' : '停用'}
+          {option === 'ACTIVE' ? '启用' : '停用'}
         </Button>
       ))}
     </Space>

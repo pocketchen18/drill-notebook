@@ -22,7 +22,8 @@ final class MemoryReviewReasons {
             Map.entry("MODEL_REQUESTED_REVIEW", "模型自己标注了要你确认"),
             Map.entry("PREDICATE_OTHER", "归到「其它」类别，值得你亲眼看一次"),
             Map.entry("SAME_FAMILY_DIFFERENT_VALUE", "同一类里已有别的值，需要你选一个"),
-            Map.entry("CREDENTIAL_VALUE", "看起来含凭据，确认后才写入"));
+            Map.entry("CREDENTIAL_VALUE", "看起来含凭据，确认后才写入"),
+            Map.entry("DIRECT_ADD", "已直接加入，不需要确认"));
 
     private MemoryReviewReasons() {
     }

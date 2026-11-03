@@ -3,11 +3,19 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Empty, Input, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react';
 import { friendlyMessage } from '../../lib/errors';
 import { searchMemoryItems } from '../../lib/aiMemoryApi';
+import {
+  memoryDisplayTitle,
+  memoryKindLabel,
+  memoryScopeLabel,
+  memoryStatusLabel,
+  memoryStatusTone,
+  memoryValidUntilLabel
+} from '../../lib/memoryLabels';
 import type { MemoryItem, MemoryScopeType, MemoryStatus } from '../../lib/aiMemoryTypes';
 
 /**
- * 记忆列表（§12）：状态与作用域筛选、本地搜索、游标分页。展示归它，
- * 增删改的确认弹窗与请求都由 MemoryManager 掌握——列表只上报"要对哪条做什么"。
+ * 记忆列表（§12）：一层平铺展示，状态与作用域只做筛选，不另开审阅区。
+ * 点整行进详情做管理；增删改的确认弹窗与请求都由 MemoryManager 掌握。
  *
  * <p>缓存键带齐 status/scope/scopeId/query/cursor，换筛选不会混进上一页结果。
  * 库锁着时由调用方 `enabled=false` 直接不请求：423 的含义是"解锁后才能看"，
@@ -16,9 +24,9 @@ import type { MemoryItem, MemoryScopeType, MemoryStatus } from '../../lib/aiMemo
 
 export const MEMORY_PAGE_SIZE = 20;
 
-const STATUS_OPTIONS: Array<{ value: MemoryStatus; label: string }> = [
+const STATUS_OPTIONS: Array<{ value: MemoryStatus | 'ALL'; label: string }> = [
+  { value: 'ALL', label: '全部' },
   { value: 'ACTIVE', label: '生效' },
-  { value: 'PENDING', label: '待确认' },
   { value: 'DISABLED', label: '停用' },
   { value: 'SUPERSEDED', label: '已被替换' },
   { value: 'EXPIRED', label: '已过期' }
@@ -36,15 +44,12 @@ export interface MemoryListViewProps {
   /** 锁定或还没建库时不请求：后端会 423，界面要说"解锁后才能看"，不能说"没有记忆"。 */
   enabled: boolean;
   onOpen: (item: MemoryItem) => void;
-  onEdit: (item: MemoryItem) => void;
-  onDelete: (item: MemoryItem) => void;
-  /** 首次空态里的"手动添加"入口（§12 原文要求的两个按钮之一）。 */
+  /** 首次空态里的"手动添加"入口。 */
   onCreate: () => void;
-  onEnableAutoExtract: () => void;
 }
 
 export function MemoryListView(props: MemoryListViewProps): JSX.Element {
-  const [status, setStatus] = useState<MemoryStatus>('ACTIVE');
+  const [status, setStatus] = useState<MemoryStatus | 'ALL'>('ALL');
   const [scope, setScope] = useState<'ALL' | MemoryScopeType>('ALL');
   const [notebookId, setNotebookId] = useState<number>(0);
   const [draftQuery, setDraftQuery] = useState('');
@@ -70,16 +75,16 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
 
   const page = listQuery.data;
   const resetPaging = (): void => setCursorStack([]);
-  // "首次空态"只在该没有任何记忆的自然视角（生效 + 全局 + 无关键词）下成立，
+  // "首次空态"只在没有任何记忆的自然视角（全部状态 + 全局 + 无关键词）下成立，
   // 否则切到"已过期"也会弹那两句引导文案。
-  const firstRun = !query && scope === 'ALL' && status === 'ACTIVE';
+  const firstRun = !query && scope === 'ALL' && status === 'ALL';
 
   return (
     <div className="ai-memory-list">
       <Space wrap size="small" className="ai-memory-filters">
         <Select
           value={status}
-          onChange={(value) => { setStatus(value as MemoryStatus); resetPaging(); }}
+          onChange={(value) => { setStatus(value as MemoryStatus | 'ALL'); resetPaging(); }}
           options={STATUS_OPTIONS}
           aria-label="按状态筛选"
           style={{ width: 130 }}
@@ -102,7 +107,7 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
           />
         )}
         <Input.Search
-          placeholder="在已解锁的记忆里搜索"
+          placeholder="搜索记忆"
           value={draftQuery}
           allowClear
           onChange={setDraftQuery}
@@ -132,7 +137,6 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
               <Empty description="记住你明确表达的偏好和目标，供以后对话参考。" />
               <Space size="small">
                 <Button type="primary" onClick={props.onCreate}>手动添加</Button>
-                <Button onClick={props.onEnableAutoExtract}>开启自动记忆</Button>
               </Space>
             </div>
           )
@@ -141,36 +145,38 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
 
       {props.enabled && page && page.items.length > 0 && (
         <ul className="ai-memory-items" role="list">
-          {page.items.map((item) => (
-            <li key={`${item.memoryId}:${item.version}`} className="ai-memory-item">
-              <button
-                type="button"
-                className="ai-memory-item-main"
-                onClick={() => props.onOpen(item)}
-                aria-label={`查看记忆：${item.value ?? '读不出正文的一行'}`}
-              >
-                <Typography.Text bold>
-                  {item.corrupt ? '（这一行密文不可用）' : item.value ?? '（无正文）'}
-                </Typography.Text>
-                <br />
-                <Typography.Text type="secondary">
-                  {item.kind} · {item.scopeType === 'GLOBAL' ? '全局' : `笔记本 ${item.scopeId}`} · v{item.version}
-                  {item.manualProtected ? ' · 人工保护' : ''}
-                  {item.validUntil ? ` · 有效至 ${item.validUntil.slice(0, 10)}` : ''}
-                </Typography.Text>
-              </button>
-              <Space size="small" className="ai-memory-item-actions">
-                {item.status === 'PENDING' && <Tag color="gold">待确认</Tag>}
-                {item.corrupt && <Tag color="red">密文不可用</Tag>}
-                <Button size="small" type="text" onClick={() => props.onEdit(item)}>编辑</Button>
-                <Button size="small" type="text" status="danger" onClick={() => props.onDelete(item)}>删除</Button>
-              </Space>
-            </li>
-          ))}
+          {page.items.map((item) => {
+            const title = memoryDisplayTitle(item);
+            const expiry = memoryValidUntilLabel(item.validUntil);
+            const scope = memoryScopeLabel(item.scopeType, item.scopeId, props.notebooks);
+            return (
+              <li key={item.memoryId} className="ai-memory-item">
+                <button
+                  type="button"
+                  className="ai-memory-item-main"
+                  onClick={() => props.onOpen(item)}
+                  aria-label={`查看记忆：${title}`}
+                >
+                  <span className="ai-memory-item-title">{title}</span>
+                  <span className="ai-memory-item-sub">
+                    <span>{memoryKindLabel(item.kind)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{scope}</span>
+                  </span>
+                </button>
+                <div className="ai-memory-item-side">
+                  {expiry && <span className="ai-memory-item-expiry">有效至 {expiry}</span>}
+                  <span className={`ai-memory-item-status is-${memoryStatusTone(item.status)}`}>
+                    {memoryStatusLabel(item.status)}
+                  </span>
+                  {item.corrupt && <Tag color="red">密文不可用</Tag>}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
-      {/* 同一屏还有审阅区的翻页，aria-label 带上归属，屏幕阅读器才分得清按的是哪个 */}
       <Space size="small" className="ai-memory-pager">
         <Button
           size="small"
@@ -190,7 +196,7 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
         >
           下一页
         </Button>
-        {page && <Typography.Text type="secondary">本页 {page.items.length} 条 · 库版本 {page.vaultRevision}</Typography.Text>}
+        {page && <Typography.Text type="secondary">本页 {page.items.length} 条</Typography.Text>}
       </Space>
     </div>
   );

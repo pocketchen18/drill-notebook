@@ -128,9 +128,13 @@ describe('AiAssistant 流式会话状态', () => {
     act(() => streamCallbacks?.onMetadata?.({ requestId }));
     await waitFor(() => expect(screen.getByRole('button', { name: '中断生成' })).toBeInTheDocument());
 
+    // 取消会退还为回复预留的字节：容量条必须在同一次交互里重读，而不是等到下一轮定稿（6a 复核观察）
+    const storageReads = (): number => apiGet.mock.calls.filter((call) => call[0] === '/api/ai/history/storage').length;
+    const storageBefore = storageReads();
     fireEvent.click(screen.getByRole('button', { name: '中断生成' }));
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith(`/api/ai/turns/${requestId}/cancel`, {}));
+    await waitFor(() => expect(storageReads()).toBeGreaterThan(storageBefore));
     // 停止后界面恢复可发送：占位与未送达的用户消息一起回滚
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument());
     expect(messageNodes().some((node) => node.textContent?.includes('第二问'))).toBe(false);

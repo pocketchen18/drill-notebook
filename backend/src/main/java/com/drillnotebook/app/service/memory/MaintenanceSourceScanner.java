@@ -392,9 +392,8 @@ public class MaintenanceSourceScanner {
                 }
                 blocks = read.blocks();
                 if (blocks.isEmpty()) {
-                    // 拿不到 USER_AUTHORED 块就没有可绑定的 quote，这轮当不合格来源跳过，不送正文给模型猜
-                    counters.ineligible++;
-                    continue;
+                    // 旧数据没有 sourceBlocks 时，整条用户原文就是唯一可引用的 USER_AUTHORED 块。
+                    blocks = List.of(new SourceBlock("u" + row.userMessageId(), userText));
                 }
             }
             String assistantText = null;
@@ -565,7 +564,7 @@ public class MaintenanceSourceScanner {
 
     /**
      * 取 {@code request_meta.sourceBlocks} 里的 {@code USER_AUTHORED} 块（§4.3）。附件块永远拿不到这个
-     * origin，所以附件正文不可能被当作用户亲口说的话来提取；v2 轮次必有 u0 块，缺块就不是合格来源。
+     * origin，所以附件正文不可能被当作用户亲口说的话来提取；旧数据没有 sourceBlocks 时返回空列表，由调用方兜底。
      */
     private BlockRead authoredBlocks(MaintenanceRow row, String sessionPassword) {
         ChatMessageCipher.Read meta = cipher.read(row.requestMetaCipher(), row.requestMetaCrypto(), sessionPassword);

@@ -8,7 +8,7 @@
 export type MemoryKind = 'PREFERENCE' | 'GOAL' | 'BACKGROUND' | 'TASK';
 export type MemoryScopeType = 'GLOBAL' | 'NOTEBOOK';
 /** 列表可过滤的状态；ACTIVE 是默认值（后端 blank 时按 ACTIVE 处理）。 */
-export type MemoryStatus = 'ACTIVE' | 'PENDING' | 'DISABLED' | 'SUPERSEDED' | 'EXPIRED';
+export type MemoryStatus = 'ACTIVE' | 'DISABLED' | 'SUPERSEDED' | 'EXPIRED';
 export type MemoryOrigin = 'AUTO' | 'MANUAL';
 export type VaultMode = 'fingerprint' | 'password';
 export type ConsentPurpose = 'MEMORY_USE' | 'MEMORY_MAINTENANCE';
@@ -85,6 +85,7 @@ export interface MemorySource {
   sessionId: number;
   turnId: number;
   messageId: number;
+  sessionTitle?: string;
   sourceBlockId?: string;
   sourceCreatedAt?: string;
   /** 来源原话；该行密文不可用时为 null 且 corrupt=true。 */
@@ -226,7 +227,7 @@ export interface MemoryFactKeys {
 export interface MemoryListPage {
   items: MemoryItem[];
   limit: number;
-  status: MemoryStatus;
+  status: MemoryStatus | 'ALL';
   hasMore: boolean;
   nextCursor?: string;
   vaultRevision: number;

@@ -157,6 +157,8 @@ public class ChatStorageService {
         // 契约 §3：实际 message ID 与固定 ID 集合要放进预览；孤立展示行必须被看见才谈得上清理。
         result.put("messageIds", scope.messageIds());
         result.put("turnRequestIds", scope.turnRequestIds());
+        // 复核 N4：界面要让用户"看见孤立行"，就得知道是哪几条，而不是只知道有几条。
+        result.put("incompleteLegacyMessageIds", scope.incompleteLegacyIds());
         // 契约 §3：受影响记忆计数。预览先说清"会连带删掉几条记忆"，确认才不是盲签。
         result.put("affectedEvidence", scope.impact().evidence());
         result.put("affectedProposals", scope.impact().proposals());
@@ -266,6 +268,11 @@ public class ChatStorageService {
 
         List<Long> turnIds() {
             return turns.stream().map(CleanupTurn::turnId).toList();
+        }
+
+        /** 落单的那几条 legacy 行（升序，来自 {@code rows} 的同一份对象）。 */
+        List<Long> incompleteLegacyIds() {
+            return incompleteLegacy.stream().map(CleanupMessage::messageId).toList();
         }
     }
 

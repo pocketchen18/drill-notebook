@@ -126,20 +126,13 @@ describe('AiAssistant 历史分页', () => {
     expect(apiGet).toHaveBeenCalledTimes(before);
   }, 20_000);
 
-  it('只有读不出的历史才出现解锁入口，主密码只进请求体', async () => {
+  it('读不出的历史只留占位，不再要求密码', async () => {
     setContext([row({ id: 1, role: 'user', content: '[加密消息：需要主密码]', readable: false })]);
     renderAssistant();
-    await screen.findByText('这段历史用主密码加密，解锁本会话后才能显示原文');
+    await screen.findByText('[加密消息：需要主密码]');
     expect(screen.queryByText('当前会话还没有消息')).toBeNull();
-
-    fireEvent.change(screen.getByLabelText('解锁本会话历史的主密码'), { target: { value: '主密码-用于历史' } });
-    fireEvent.click(screen.getByRole('button', { name: '解锁本会话' }));
-    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/memory/vault/unlock',
-      { password: '主密码-用于历史', sessionUnlocks: [{ sessionId: 10, password: '主密码-用于历史' }] }));
-    // 密码不出现在任何 GET URL 里
-    expect(apiGet.mock.calls.some((call) => String(call[0]).includes('主密码'))).toBe(false);
-    await waitFor(() => expect(apiGet.mock.calls.filter((call) => String(call[0]) === '/api/ai/sessions/10/history?limit=50').length)
-      .toBeGreaterThanOrEqual(2));
+    expect(screen.queryByLabelText('解锁本会话历史的主密码')).toBeNull();
+    expect(screen.queryByRole('button', { name: '解锁本会话' })).toBeNull();
   });
 
   it('可读的历史不摆解锁入口，也不摆「加载更早」', async () => {

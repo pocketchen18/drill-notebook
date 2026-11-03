@@ -52,7 +52,13 @@ public class AiUpstreamClient {
             String model,
             String apiFormat,
             int maxTokens,
-            boolean disableThinking) {
+            boolean disableThinking,
+            boolean jsonMode) {
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, false);
+        }
 
         public boolean anthropic() {
             return FORMAT_ANTHROPIC.equals(apiFormat);
@@ -327,6 +333,9 @@ public class AiUpstreamClient {
             // 部分兼容网关读取 chat_template_kwargs
             request.put("chat_template_kwargs", Map.of("enable_thinking", false));
             request.put("temperature", 0.2);
+        }
+        if (upstream.jsonMode()) {
+            request.put("response_format", Map.of("type", "json_object"));
         }
         return request;
     }

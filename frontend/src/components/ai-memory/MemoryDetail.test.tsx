@@ -38,18 +38,23 @@ function item(overrides: Record<string, unknown> = {}): MemoryItem {
     value: '先给例子再讲原理',
     corrupt: false,
     sources: [
-      { evidenceId: 'e-1', sessionId: 10, turnId: 41, messageId: 201, quote: '我喜欢先看例子' },
-      { evidenceId: 'e-2', sessionId: 10, turnId: 42, messageId: 203, quote: null, corrupt: true }
+      { evidenceId: 'e-1', sessionId: 10, turnId: 41, messageId: 201, sessionTitle: '数学错题', quote: '我喜欢先看例子' },
+      { evidenceId: 'e-2', sessionId: 10, turnId: 42, messageId: 203, sessionTitle: '数学错题', quote: null, corrupt: true }
     ],
     ...overrides
   } as MemoryItem;
 }
 
-function renderDetail(props: { item: MemoryItem }): void {
+function renderDetail(props: { item: MemoryItem; onDelete?: (item: MemoryItem) => void }): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MemoryDetail item={props.item} onClose={() => undefined} onChanged={() => undefined} />
+      <MemoryDetail
+        item={props.item}
+        onClose={() => undefined}
+        onChanged={() => undefined}
+        onDelete={props.onDelete ?? (() => undefined)}
+      />
     </QueryClientProvider>
   );
 }
@@ -66,7 +71,7 @@ describe('MemoryDetail', () => {
     renderDetail({ item: item({ version: 1 }) });
 
     const area = await screen.findByLabelText('记忆正文');
-    await waitFor(() => expect(screen.getByText('版本 v3 · 记录于 2026-10-12T00:00:00.000Z')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('记录于 2026-10-12T00:00:00.000Z')).toBeTruthy());
     fireEvent.change(area, { target: { value: '先给反例再给正例' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -92,15 +97,15 @@ describe('MemoryDetail', () => {
     fireEvent.change(area, { target: { value: '先给反例再给正例' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    expect(await screen.findByText(/服务端已是 v5/)).toBeTruthy();
-    expect(screen.getByText(/你的草稿写于 v3/)).toBeTruthy();
+    expect(await screen.findByText(/服务端已有更新（启用）/)).toBeTruthy();
+    expect(screen.getByText(/你的草稿基于旧内容/)).toBeTruthy();
     expect(screen.getByText(/冲突详情只带元信息/)).toBeTruthy();
     expect(screen.queryByText('先给结论再给推导')).toBeNull();
     expect((screen.getByLabelText('记忆正文') as HTMLTextAreaElement).value).toBe('先给反例再给正例');
 
     fireEvent.click(screen.getByRole('button', { name: '取回最新正文' }));
     expect(await screen.findByText(/最新值：先给结论再给推导/)).toBeTruthy();
-    expect(screen.getByText(/已改用 v5 作为基线，保存会以你的草稿覆盖这一版/)).toBeTruthy();
+    expect(screen.getByText(/已改用最新内容作为基线，保存会以你的草稿覆盖当前内容/)).toBeTruthy();
 
     apiPatch.mockResolvedValue(item({ version: 6, value: '先给反例再给正例' }));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -134,15 +139,16 @@ describe('MemoryDetail', () => {
 
     expect(await screen.findByText('我喜欢先看例子')).toBeTruthy();
     expect(screen.getByText('（原话密文不可用）')).toBeTruthy();
-    expect(screen.getByText('会话 10 · 轮次 42 · 消息 203')).toBeTruthy();
+    expect(screen.getAllByText('会话：数学错题')).toHaveLength(2);
   });
 
-  it('待确认的状态由服务端判定，界面不提供改状态的按钮', async () => {
-    renderDetail({ item: item({ status: 'PENDING' }) });
+  it('删除把详情里取回的那一版交给上层确认', async () => {
+    const onDelete = vi.fn();
+    renderDetail({ item: item({ version: 3 }), onDelete });
     await screen.findByLabelText('记忆正文');
 
-    expect(screen.getByText(/状态 PENDING 已被服务端冻结/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '生效' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ memoryId: 'm-1', version: 3 }));
   });
 });

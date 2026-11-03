@@ -166,6 +166,7 @@ public class MemoryPolicyService {
     /** GET /memory/settings：脱敏设置 + 两种授权状态 + 实际目标 + 锁定状态（索引状态属 P5）。 */
     public MemoryApiResult snapshot() {
         try {
+            ensureFingerprintUnlocked();
             MemorySettingsRepository.Settings row = current();
             Policy policy = policyOf(row);
             Map<String, Object> body = new LinkedHashMap<>();
@@ -421,6 +422,7 @@ public class MemoryPolicyService {
         if (!row.compressSession()) {
             return new Eligibility(Gate.COMPRESS_DISABLED, "会话压缩开关是关的");
         }
+        ensureFingerprintUnlocked();
         if (memory.readEnvelope().isEmpty()) {
             return new Eligibility(Gate.VAULT_MISSING, "摘要也要本地记忆库保护内容");
         }
@@ -436,6 +438,7 @@ public class MemoryPolicyService {
         if (!row.enabled()) {
             return new Eligibility(Gate.MEMORY_DISABLED, "长期记忆开关是关的");
         }
+        ensureFingerprintUnlocked();
         if (vault.currentKey().isEmpty()) {
             return new Eligibility(Gate.LOCKED, "记忆库锁定中，本轮不提供记忆");
         }
@@ -467,7 +470,22 @@ public class MemoryPolicyService {
 
     // ---- 内部 ----
 
+    /**
+     * 指纹库的钥匙由机器指纹派生，不需要用户输入；打开设置或首次使用时自动解锁，
+     * 让"启用记忆"保持一个开关就够用。password 库仍然要求用户输入主密码。
+     */
+    private void ensureFingerprintUnlocked() throws SQLException {
+        if (vault.currentKey().isPresent() || vault.lockedByUser()) {
+            return;
+        }
+        java.util.Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
+        if (envelope.isPresent() && MemoryCryptoService.MODE_FINGERPRINT.equals(envelope.get().mode())) {
+            vault.unlock(null, java.util.List.of());
+        }
+    }
+
     private Eligibility vaultStateGate() throws SQLException {
+        ensureFingerprintUnlocked();
         if (memory.readEnvelope().isEmpty()) {
             return new Eligibility(Gate.VAULT_MISSING, "还没有记忆库，先创建再录入");
         }

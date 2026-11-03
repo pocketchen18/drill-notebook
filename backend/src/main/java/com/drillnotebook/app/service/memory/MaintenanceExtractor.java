@@ -6,6 +6,7 @@ import com.drillnotebook.app.service.TokenEstimator;
 import com.drillnotebook.app.service.memory.MaintenancePorts.AttemptFailure;
 import com.drillnotebook.app.service.memory.MaintenancePorts.Batch;
 import com.drillnotebook.app.service.memory.MaintenancePorts.ExtractionResult;
+import com.drillnotebook.app.service.memory.MaintenancePorts.SourceBlock;
 import com.drillnotebook.app.service.memory.MaintenancePorts.SourceTurn;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +38,13 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
     static final int MAX_KNOWN_FACTS = 8;
     /** 展示给模型的事实值上限：超长只截断展示，落库用的仍是校验过的原值。 */
     private static final int MAX_SHOWN_VALUE_CODE_POINTS = 160;
+    /**
+     * 用户明确要求记住时，不再把“写不写”交给模型碰运气：命中这些词就兜底落一条。
+     * 顺序从长到短，避免“请记住”先被“记住”拆掉后留下一个孤零零的“请”。
+     */
+    private static final List<String> MEMORY_INTENT_MARKERS = List.of(
+            "请记住", "帮我记住", "让你记住", "加入记忆", "记到记忆", "存到记忆",
+            "记住", "记一下", "记下来", "别忘了", "不要忘记");
 
     private static final Logger log = LoggerFactory.getLogger(MaintenanceExtractor.class);
 
@@ -89,12 +97,129 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
                 inputTokens == null ? null : inputTokens.longValue(),
                 outputTokens == null ? null : outputTokens.longValue());
         Map<String, Integer> shownTargets = targetsOf(facts);
-        MemoryValidator.Outcome outcome = MemoryValidator.validate(result.text(), batch, shownTargets, mapper);
+        String raw = result.text();
+        MemoryValidator.Outcome outcome = MemoryValidator.validate(raw, batch, shownTargets, mapper);
+        if (!outcome.formatOk() && result.reasoning() != null && !result.reasoning().isBlank()) {
+            MemoryValidator.Outcome fromReasoning =
+                    MemoryValidator.validate(result.reasoning(), batch, shownTargets, mapper);
+            if (fromReasoning.formatOk()) {
+                outcome = fromReasoning;
+                raw = result.reasoning();
+            }
+        }
+        if (!outcome.formatOk() && outcome.format() == MemoryValidator.FormatStatus.WRONG_SCHEMA_VERSION && raw != null) {
+            String normalized = MemoryValidator.normalizeSchemaVersion(raw, mapper);
+            if (!normalized.equals(raw)) {
+                MemoryValidator.Outcome upgraded = MemoryValidator.validate(normalized, batch, shownTargets, mapper);
+                if (upgraded.formatOk()) {
+                    outcome = upgraded;
+                    raw = normalized;
+                }
+            }
+        }
+        List<MemoryValidator.ValidatedCandidate> validated =
+                outcome.formatOk() ? outcome.candidates() : List.of();
+        List<MemoryValidator.ValidatedCandidate> forced = memoryIntentCandidates(batch, validated);
+        if (!forced.isEmpty()) {
+            List<MemoryValidator.ValidatedCandidate> merged = new ArrayList<>(validated);
+            merged.addAll(forced);
+            return new ExtractionResult(MemoryValidator.FormatStatus.OK, merged, outcome.rejections(), usage,
+                    shownTargets, raw);
+        }
         if (!outcome.formatOk()) {
-            return ExtractionResult.formatFailure(outcome.format(), usage, shownTargets, result.text());
+            return ExtractionResult.formatFailure(outcome.format(), usage, shownTargets, raw);
         }
         return new ExtractionResult(outcome.format(), outcome.candidates(), outcome.rejections(), usage,
-                shownTargets, result.text());
+                shownTargets, raw);
+    }
+
+    /**
+     * 模型对“请记住”类消息返回空候选时的确定性兜底：只补模型没有覆盖到的用户消息。
+     * 模型已经为该消息产出了候选就不重复补，避免同一条话落两条记忆。
+     */
+    private static List<MemoryValidator.ValidatedCandidate> memoryIntentCandidates(
+            Batch batch, List<MemoryValidator.ValidatedCandidate> already) {
+        Set<Long> covered = new HashSet<>();
+        for (MemoryValidator.ValidatedCandidate candidate : already) {
+            covered.add(candidate.userMessageId());
+        }
+        List<MemoryValidator.ValidatedCandidate> result = new ArrayList<>();
+        for (SourceTurn turn : batch.turns()) {
+            Long userMessageId = turn.userMessageId();
+            if (userMessageId == null || covered.contains(userMessageId)) {
+                continue;
+            }
+            SourceBlock block = intentBlock(turn);
+            if (block == null) {
+                continue;
+            }
+            String quote = clipTo(block.text().strip(), MemoryValidator.MAX_QUOTE_CODE_POINTS);
+            String value = clipTo(memoryValue(block.text()), MemoryValidator.MAX_VALUE_CODE_POINTS);
+            if (value.isBlank()) {
+                continue;
+            }
+            result.add(new MemoryValidator.ValidatedCandidate("ADD", null, null, intentKind(block.text()), "other",
+                    MemoryValidator.familyKey("other", value), value, value, quote, turn.turnId(), userMessageId,
+                    block.blockId(), blockCreatedAt(turn), turn.finishedMillis(), false, null));
+            covered.add(userMessageId);
+            if (result.size() + already.size() >= MemoryValidator.MAX_CANDIDATES) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private static SourceBlock intentBlock(SourceTurn turn) {
+        for (SourceBlock block : turn.blocks()) {
+            String text = block.text();
+            if (text == null) {
+                continue;
+            }
+            for (String marker : MEMORY_INTENT_MARKERS) {
+                if (text.contains(marker)) {
+                    return block;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String memoryValue(String text) {
+        String value = text;
+        for (String marker : MEMORY_INTENT_MARKERS) {
+            value = value.replace(marker, "");
+        }
+        value = value.replaceAll("^[\\s，。！？、：；,.!?:;]+|[\\s，。！？、：；,.!?:;]+$", "");
+        return value.isBlank() ? text.strip() : value.strip();
+    }
+
+    private static String intentKind(String text) {
+        if (containsAny(text, "我叫", "我的名字", "我住", "常住", "来自", "我是")) {
+            return "BACKGROUND";
+        }
+        if (containsAny(text, "以后", "之后", "每次", "回答", "回复", "格式", "语气", "完毕")) {
+            return "PREFERENCE";
+        }
+        return "TASK";
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        for (String needle : needles) {
+            if (text.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String clipTo(String value, int maxCodePoints) {
+        if (value == null) {
+            return "";
+        }
+        if (value.codePointCount(0, value.length()) <= maxCodePoints) {
+            return value;
+        }
+        return value.substring(0, value.offsetByCodePoints(0, maxCodePoints));
     }
 
     /** 交给模型的既有事实集合直接反推出"合法目标表"：伪造 ID 与陈旧版本都在这份集合外。 */
@@ -231,7 +356,7 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
 
     /** 一次带外发目标的调用：目标解析与指纹复验都在 {@link MaintenanceUpstream}，中途换模型就当场停下。 */
     private AiUpstreamClient.Result dispatch(String input) throws AttemptFailure {
-        return upstream.call(MemoryValidator.SYSTEM_PROMPT, input);
+        return upstream.call(MemoryValidator.systemPrompt(), input);
     }
 
     private static String text(Object value) {

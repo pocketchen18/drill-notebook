@@ -169,6 +169,56 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     expect(image.dataBase64).toBe('iVBORw0KGgo=');
   });
 
+  it('一次选 5 个文件也只收 4 个：逐项按已收下的重算门限，拒绝理由只说一次', async () => {
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+
+    Object.defineProperty(File.prototype, 'text', { configurable: true, value: () => Promise.resolve('内容') });
+    const files = Array.from({ length: 5 }, (_, index) => new File(['内容'], `笔记-${index + 1}.md`, { type: 'text/markdown' }));
+    const input = document.querySelector<HTMLInputElement>('input[type=file]');
+    fireEvent.change(input as HTMLInputElement, { target: { files } });
+
+    await screen.findByText('笔记-4.md');
+    expect(document.querySelectorAll('.attachment-chip')).toHaveLength(4);
+    expect(screen.queryByText('笔记-5.md')).toBeNull();
+    expect(await screen.findAllByText('一次最多 4 个附件')).toHaveLength(1);
+  });
+
+  it('同名同时间的两个文件各有各的 key：移除一个不连带另一个', async () => {
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+
+    Object.defineProperty(File.prototype, 'text', { configurable: true, value: () => Promise.resolve('内容') });
+    const files = [0, 1].map(() => new File(['内容'], '同一份.md', { type: 'text/markdown', lastModified: 123 }));
+    const input = document.querySelector<HTMLInputElement>('input[type=file]');
+    fireEvent.change(input as HTMLInputElement, { target: { files } });
+
+    await waitFor(() => expect(document.querySelectorAll('.attachment-chip')).toHaveLength(2));
+    fireEvent.click(screen.getAllByRole('button', { name: '移除同一份.md' })[0]);
+    await waitFor(() => expect(document.querySelectorAll('.attachment-chip')).toHaveLength(1));
+  });
+
+  it('文本门限按本轮合计算：两段单独都合法，加起来超了就收不下第二段', async () => {
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+
+    const big = 'a'.repeat(150_000);
+    Object.defineProperty(File.prototype, 'text', {
+      configurable: true,
+      value: function (this: File) { return Promise.resolve(this.name === '第一段.md' ? big : 'b'.repeat(50_001)); }
+    });
+    const files = [new File(['x'], '第一段.md', { type: 'text/markdown' }), new File(['y'], '第二段.md', { type: 'text/markdown' })];
+    const input = document.querySelector<HTMLInputElement>('input[type=file]');
+    fireEvent.change(input as HTMLInputElement, { target: { files } });
+
+    await screen.findByText('第一段.md');
+    expect(screen.queryByText('第二段.md')).toBeNull();
+    expect(await screen.findByText('文本附件合计不能超过 20 万字')).toBeTruthy();
+  });
+
   it('citation 点击深链到 /notebooks?pageId=', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/ai/chat') {

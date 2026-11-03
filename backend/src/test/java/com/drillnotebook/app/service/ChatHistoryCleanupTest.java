@@ -505,6 +505,7 @@ class ChatHistoryCleanupTest {
         assertEquals(0L, number(preview, "incompleteLegacyCount"));
         assertEquals(1L, number(preview, "excludedMessageCount"), "要如实报成没纳入，不能当它不存在");
         assertTrue(messageIds(preview).isEmpty(), "预览里既没有问句 ID 也没有答句 ID");
+        assertTrue(incompleteIds(preview).isEmpty(), "被劈开的那一对不算残缺组：它整对都不删");
         assertEquals(0L, number(preview, "historyBytes"), "半轮都不许算进待释放字节");
 
         Map<String, Object> result = execute(preview, "op-split");
@@ -529,6 +530,7 @@ class ChatHistoryCleanupTest {
         assertEquals(1L, number(preview, "legacyCount"));
         assertEquals(1L, number(preview, "incompleteLegacyCount"), "凑不成一问一答的落单行要单列");
         assertEquals(List.of(orphan), messageIds(preview));
+        assertEquals(List.of(orphan), incompleteIds(preview), "还要指名道姓说是哪一条，界面才能让用户看见它");
 
         Map<String, Object> result = execute(preview, "op-orphan");
         assertEquals(1L, number(result, "cleanedLegacyRows"));
@@ -570,6 +572,32 @@ class ChatHistoryCleanupTest {
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-2'"),
                 "人工保护的记忆不许被清理顺手删掉");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence"), "来源链接必须一起断干净");
+    }
+
+    /**
+     * N3：受影响建议只数"挂在会被清掉的证据上"的那些。整个库一条都不能算进来，
+     * 预览报的数还必须与实删数一致——否则用户确认时看到的是一份假的清单。
+     */
+    @Test
+    void previewCountsOnlyProposalsAttachedToTheCleanedEvidenceAndTheExecutionAgrees() throws Exception {
+        chat("第一问：这条原话挂着一条建议");
+        chat("第二问：这条原话的建议不在清理范围");
+        List<Long> turnIds = jdbc.queryForList("SELECT id FROM ai_chat_turn ORDER BY id", Long.class);
+        seedVault();
+        seedEvidence("ev-1", turnIds.get(0));
+        seedEvidence("ev-2", turnIds.get(1));
+        seedProposal("p-1", "ev-1", "PENDING");
+        seedProposal("p-2", "ev-2", "PENDING");
+
+        Map<String, Object> preview = preview(lastMessageOf(turnIds.get(0)), 10);
+        assertEquals(1L, number(preview, "affectedEvidence"), "边界只到第一轮");
+        assertEquals(1L, number(preview, "affectedProposals"), "只有挂在 ev-1 上的建议会一起删");
+
+        Map<String, Object> result = execute(preview, "op-proposal");
+        assertEquals(number(preview, "affectedProposals"), number(result, "proposalsDeleted"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE id = 'p-1'"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_proposal WHERE id = 'p-2'"),
+                "范围之外的建议不许被顺手删掉");
     }
 
     // ---------- 夹具 ----------
@@ -664,6 +692,18 @@ class ChatHistoryCleanupTest {
         }
     }
 
+    /** 一条挂在证据上的待审建议：清理该证据时它必须跟着被计数、被删除。 */
+    private void seedProposal(String id, String evidenceId, String status) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            insert(connection, """
+                    INSERT INTO ai_memory_proposal(id, vault_id, session_id, evidence_id, target_memory_id,
+                        target_version, operation, status, version, payload_cipher, crypto_meta, dedup_hmac,
+                        created_at, expires_at)
+                    VALUES (?, 'vault-1', ?, ?, 'mem-target', 1, 'REPLACE_PROPOSAL', ?, 1, 'x', '{}', ?, ?, ?)
+                    """, id, sessionId, evidenceId, status, "dedup-" + id, SEED_AT, "2099-01-01T00:00:00.000Z");
+        }
+    }
+
     /** 一行摘要检查点。密文是占位的：这条用例核的是「清理之后这行还在不在」，不是能不能解密。 */
     private void seedCheckpoint(long throughTurnId) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
@@ -683,7 +723,7 @@ class ChatHistoryCleanupTest {
                         context_generation, source_scope_type, source_scope_id, source_timezone, vault_epoch,
                         policy_revision, target_fingerprint, prompt_version, input_revision, status,
                         created_at, updated_at)
-                    VALUES (?, 'SUMMARY', ?, ?, ?, 1, 'GLOBAL', 0, 'UTC+8', 1, 1, 'fp', 'SESSION_SUMMARY_V2',
+                    VALUES (?, 'SUMMARY', ?, ?, ?, 1, 'GLOBAL', 0, 'UTC+8', 1, 1, 'fp', 'SESSION_SUMMARY_V3',
                         'rev-1', 'QUEUED', ?, ?)
                     """, id, sessionId, fromTurnId, throughTurnId, SEED_AT, SEED_AT);
         }
@@ -715,6 +755,12 @@ class ChatHistoryCleanupTest {
         Object value = preview.get("turnRequestIds");
         assertTrue(value instanceof List<?>, "turnRequestIds 必须是数组，实际：" + value);
         return ((List<?>) value).stream().map(String::valueOf).toList();
+    }
+
+    private List<Long> incompleteIds(Map<String, Object> preview) {
+        Object value = preview.get("incompleteLegacyMessageIds");
+        assertTrue(value instanceof List<?>, "incompleteLegacyMessageIds 必须是数组，实际：" + value);
+        return ((List<?>) value).stream().map(item -> ((Number) item).longValue()).toList();
     }
 
     private static void insert(Connection connection, String sql, Object... args) throws SQLException {

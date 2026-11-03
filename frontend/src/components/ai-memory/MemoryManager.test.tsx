@@ -79,10 +79,6 @@ function proposalPage(proposals: Array<Record<string, unknown>>): Record<string,
   return { proposals, limit: 20, hasMore: false, vaultEpoch: 3, vaultRevision: 2 };
 }
 
-function proposalGetCount(): number {
-  return apiGet.mock.calls.filter((call) => String(call[0]).startsWith('/api/ai/memory/proposals')).length;
-}
-
 function renderPanel(): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
@@ -93,17 +89,15 @@ function renderPanel(): void {
 }
 
 function modal(): HTMLElement {
-  const node = document.querySelector('.arco-modal') as HTMLElement;
+  const nodes = document.querySelectorAll('.arco-modal');
+  const node = nodes[nodes.length - 1] as HTMLElement | undefined;
   expect(node).toBeTruthy();
-  return node;
+  return node as HTMLElement;
 }
 
-/** 已经发出去的列表 /search 请求体，按调用顺序；游标分页只看这份。
- * 审阅区也走 /search（status=PENDING），翻页计数不能把它算进来。 */
 function searchBodies(): Array<{ cursor?: string }> {
   return apiPost.mock.calls
-    .filter((call) => call[0] === '/api/ai/memory/search'
-      && (call[1] as { status?: string }).status !== 'PENDING')
+    .filter((call) => call[0] === '/api/ai/memory/search')
     .map((call) => call[1] as { cursor?: string });
 }
 
@@ -113,6 +107,7 @@ beforeEach(() => {
   apiGet.mockImplementation((url: string) => {
     if (url === '/api/ai/memory/settings') return Promise.resolve(settings());
     if (url === '/api/notebooks') return Promise.resolve([{ id: 7, title: '高等数学' }]);
+    if (url === '/api/ai/memory/items/m-1') return Promise.resolve(item());
     if (url.startsWith('/api/ai/memory/proposals')) return Promise.resolve(proposalPage([]));
     return Promise.resolve({});
   });
@@ -146,12 +141,12 @@ describe('MemoryManager', () => {
 
     renderPanel();
 
-    expect(await screen.findByText(/解锁后才能看到正文/)).toBeTruthy();
+    expect(await screen.findByText(/请在上方解锁后查看/)).toBeTruthy();
     expect(screen.queryByText('这个筛选下没有记忆')).toBeNull();
     await waitFor(() => expect(apiPost).not.toHaveBeenCalled());
   });
 
-  it('还没有任何记忆时给出 §12 的首次空态与两个入口', async () => {
+  it('还没有任何记忆时只给手动添加入口，自动记忆归上方总开关', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/ai/memory/search') {
         return Promise.resolve({ items: [], limit: 20, status: 'ACTIVE', hasMore: false, vaultRevision: 2 });
@@ -162,14 +157,8 @@ describe('MemoryManager', () => {
     renderPanel();
 
     expect(await screen.findByText('记住你明确表达的偏好和目标，供以后对话参考。')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '开启自动记忆' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: '开启自动记忆' }));
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/memory/settings', {
-      revision: 4,
-      autoExtract: true,
-      enabled: true
-    }));
+    expect(screen.getAllByRole('button', { name: '手动添加' }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('button', { name: '开启自动记忆' })).toBeNull();
   });
 
   it('列表在读取中给轻量 Loading，不是一片空白也不是"没有记忆"', async () => {
@@ -187,10 +176,11 @@ describe('MemoryManager', () => {
     expect(await screen.findByText('记住你明确表达的偏好和目标，供以后对话参考。')).toBeTruthy();
   });
 
-  it('删除要先确认，并把 expectedVersion 放在请求体里', async () => {
+  it('删除入口在详情里，确认后把 expectedVersion 放进请求体', async () => {
     renderPanel();
 
-    fireEvent.click(await screen.findByRole('button', { name: '删除' }));
+    fireEvent.click(await screen.findByRole('button', { name: /查看记忆/ }));
+    fireEvent.click(within(modal()).getByRole('button', { name: '删除' }));
     fireEvent.click(within(modal()).getByRole('button', { name: '删除' }));
 
     await waitFor(() => expect(apiDelJson).toHaveBeenCalledWith('/api/ai/memory/items/m-1', {
@@ -216,37 +206,35 @@ describe('MemoryManager', () => {
     expect(await screen.findByText('记忆库已锁定，解锁后才能查看或修改')).toBeTruthy();
   });
 
-  it('手动添加走 POST /items，缺键名时由服务端拒绝并如实报出', async () => {
+  it('手动添加：名称留空时按正文生成名称，用户不必理解内部键', async () => {
     renderPanel();
     await screen.findByText('先给例子再讲原理');
 
     fireEvent.click(screen.getByRole('button', { name: '手动添加' }));
     const form = modal();
-    fireEvent.change(within(form).getByPlaceholderText('例如 answer.style'), { target: { value: 'answer.style' } });
     fireEvent.change(within(form).getByPlaceholderText('要记住的一句话'), { target: { value: '多用图表' } });
     fireEvent.click(within(form).getByRole('button', { name: '保存' }));
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/memory/items', expect.objectContaining({
       kind: 'PREFERENCE',
       scopeType: 'GLOBAL',
-      predicate: 'answer.style',
+      predicate: '多用图表',
       value: '多用图表'
     })));
   });
 
-  it('待确认的行要标出来，不能和生效的混成一堆', async () => {
-    apiPost.mockImplementation((url: string) => {
-      if (url === '/api/ai/memory/search') {
-        return Promise.resolve({
-          items: [item({ status: 'PENDING' })], limit: 20, status: 'PENDING', hasMore: false, vaultRevision: 2
-        });
-      }
-      return Promise.resolve({});
-    });
-
+  it('手动添加：填了名称就用名称，不被正文覆盖', async () => {
     renderPanel();
+    await screen.findByText('先给例子再讲原理');
 
-    expect(await screen.findByText('待确认')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '手动添加' }));
+    const form = modal();
+    fireEvent.change(within(form).getByPlaceholderText('例如 回答风格'), { target: { value: '回答风格' } });
+    fireEvent.change(within(form).getByPlaceholderText('要记住的一句话'), { target: { value: '多用图表' } });
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/memory/items',
+      expect.objectContaining({ predicate: '回答风格', value: '多用图表' })));
   });
 
   it('下一页把服务端游标放进请求体，上一页退回本地游标栈那一页', async () => {
@@ -298,7 +286,7 @@ describe('MemoryManager', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: '手动添加' })[0]);
     const form = modal();
-    fireEvent.change(within(form).getByPlaceholderText('例如 answer.style'), { target: { value: 'api.key' } });
+    fireEvent.change(within(form).getByPlaceholderText('例如 回答风格'), { target: { value: '接口密钥' } });
     fireEvent.change(within(form).getByPlaceholderText('要记住的一句话'), { target: { value: 'sk-live-abc' } });
     fireEvent.click(within(form).getByRole('button', { name: '保存' }));
 
@@ -330,7 +318,6 @@ describe('MemoryManager', () => {
 
     renderPanel();
     await screen.findByText('先给例子再讲原理');
-    const proposalsBefore = proposalGetCount();
 
     fireEvent.click(screen.getByRole('button', { name: '清空全部记忆' }));
     const form = modal();
@@ -341,8 +328,6 @@ describe('MemoryManager', () => {
     fireEvent.click(within(form).getByRole('button', { name: '确认清空' }));
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/memory/clear',
       expect.objectContaining({ confirm: true, expectedVaultEpoch: 5 })));
-    // 清空作废的不只是列表：审阅区那两堆也得重新读，否则删掉的候选还挂在卡片上
-    await waitFor(() => expect(proposalGetCount()).toBeGreaterThan(proposalsBefore));
   });
 
   it('202 表示还在清：拿返回的 epoch 续接下一趟，不当成失败', async () => {

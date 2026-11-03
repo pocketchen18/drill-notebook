@@ -144,7 +144,11 @@ const AUDIT_REASONS = ['NO_AUDIT_SAVED', 'AUDIT_UNREADABLE', 'LEGACY_TURN_WITHOU
 const OMISSION_REASONS = ['BUDGET', 'COVERED_BY_SUMMARY', 'OUTSIDE_SCAN_WINDOW', 'WRONG_GENERATION', 'NON_COMPLETED',
   'SOURCE_DELETED', 'SOURCE_CHANGED', 'LOCKED', 'NOT_AUTHORIZED', 'DUPLICATE', 'ATTACHMENT_POLICY', 'ITEM_LIMIT'];
 const REGIONS = ['SYSTEM', 'MEMORY', 'SESSION_STATE', 'RECENT_TURNS', 'PAGE', 'NOTEBOOK_RAG', 'USER_TEXT', 'TEXT_ATTACHMENT', 'IMAGE'];
-const SELECTED_KINDS = ['MEMORY', 'SUMMARY', 'TURN', 'LEGACY_MESSAGE', 'TEXT_ATTACHMENT', 'IMAGE', 'NOTEBOOK_RAG', 'PAGE'];
+const SELECTED_KINDS = ['MEMORY', 'SUMMARY', 'RESUME_STATE', 'TURN', 'LEGACY_MESSAGE', 'TEXT_ATTACHMENT', 'IMAGE',
+  'NOTEBOOK_RAG', 'PAGE'];
+/** 省略项的 kind 比"来源类别"更宽：HISTORY/LEGACY/ATTACHMENT 来自投影与附件策略，后三类是账本的收敛类别。 */
+const OMISSION_KINDS = ['SUMMARY', 'RESUME_STATE', 'TURN', 'ATTACHMENT', 'LEGACY', 'HISTORY', 'OTHER', 'SELECTION',
+  'DIAGNOSTICS'];
 const PREVIEW_REASONS = ['LOCKED', 'SOURCE_CHANGED', 'SOURCE_DELETED', 'OUTSIDE_SCOPE', 'CHECKPOINT_REPLACED', 'WRONG_GENERATION'];
 
 describe('aiTurnText 检查器码表', () => {
@@ -179,6 +183,14 @@ describe('aiTurnText 检查器码表', () => {
       expect(sourceKindLabel(kind), kind).not.toBe(kind);
     }
     expect(new Set(SELECTED_KINDS.map(sourceKindLabel)).size).toBe(SELECTED_KINDS.length);
+    // 省略项的类别词汇比"来源类别"更宽（HISTORY/LEGACY/ATTACHMENT/OTHER/SELECTION/DIAGNOSTICS），
+    // 漏一个就会在界面上露出英文原样（D164）。LEGACY 与 LEGACY_MESSAGE 同译「旧消息」是故意的，
+    // 所以"两两不同"只在同一张集合内成立。
+    for (const kind of OMISSION_KINDS) {
+      expect(sourceKindLabel(kind), kind).not.toBe(kind);
+    }
+    expect(new Set(OMISSION_KINDS.map(sourceKindLabel)).size).toBe(OMISSION_KINDS.length);
+    expect(sourceKindLabel('LEGACY')).toBe(sourceKindLabel('LEGACY_MESSAGE'));
     // 未知码回落到原样，界面不能替它编一个中文类别
     expect(sourceKindLabel('MYSTERY')).toBe('MYSTERY');
   });
