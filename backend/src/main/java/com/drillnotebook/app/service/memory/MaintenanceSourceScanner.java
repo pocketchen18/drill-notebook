@@ -390,10 +390,11 @@ public class MaintenanceSourceScanner {
                     needsPassword = true;
                     break;
                 }
-                blocks = read.blocks();
-                if (blocks.isEmpty()) {
-                    // 旧数据没有 sourceBlocks 时，整条用户原文就是唯一可引用的 USER_AUTHORED 块。
-                    blocks = List.of(new SourceBlock("u" + row.userMessageId(), userText));
+                blocks = new ArrayList<>(read.blocks());
+                if (blocks.stream().noneMatch(block -> block.text() != null
+                        && block.text().strip().equals(userText.strip()))) {
+                    // 旧数据没有 sourceBlocks，或 sourceBlocks 未包含用户原话时，补一条可引用的 USER_AUTHORED 块。
+                    blocks.add(new SourceBlock("u" + row.userMessageId(), userText));
                 }
             }
             String assistantText = null;

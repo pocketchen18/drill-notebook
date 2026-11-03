@@ -351,7 +351,7 @@ public class MemoryItemService {
         String kind = blank(text(existing.get("kind"))) ? "PREFERENCE" : text(existing.get("kind"));
         String existingPredicate = text(existing.get("predicate"));
         String existingValue = text(existing.get("value"));
-        boolean contentChanged = !existingPredicate.equals(predicate) || !existingValue.equals(value);
+        boolean contentChanged = !existingValue.equals(value);
         String validUntil = edit.validUntil() == null ? active.validUntil()
                 : blank(edit.validUntil()) ? null : clean(edit.validUntil());
         String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil);
@@ -404,9 +404,8 @@ public class MemoryItemService {
     /**
      * 删除整条版本链（§4.4 deleteMemory）：仓储半边在同一事务里删版本、清失去引用的证据、写抑制、
      * 建议置 STALE 并推 epoch；提交后作废旧 epoch 的任务与摘要检查点。
-     * {@code forget=true} 额外把所有会话扫描水位与全局遗忘边界推到当前边界——旧发言从此不再自动提回这条记忆。
      */
-    public MemoryApiResult delete(String memoryId, Integer expectedVersion, boolean forget, String operationId) {
+    public MemoryApiResult delete(String memoryId, Integer expectedVersion, String operationId) {
         if (expectedVersion == null) {
             return MemoryApiResult.error(400, "MEMORY_VERSION_REQUIRED", "删除必须带上读到的 expectedVersion");
         }
@@ -440,15 +439,10 @@ public class MemoryItemService {
             if (deleted.deleted()) {
                 int cancelled = jobs.supersedeBeforeEpoch(deleted.vault().epoch());
                 int contexts = memory.invalidateSessionContextsBelowEpoch(deleted.vault().epoch());
-                if (forget) {
-                    metadata.advanceAllScanWatermarks(ChatSessionMetadataRepository.ScanKind.MEMORY);
-                    metadata.advanceAllScanWatermarks(ChatSessionMetadataRepository.ScanKind.SUMMARY);
-                    policy.advanceHistoryFloor(metadata.globalMaxTurnId());
-                }
                 log.info("记忆已删除: memoryId={}, versions={}, evidence={}, 建议置 STALE={}, 抑制={}, 作废任务={},"
-                                + " 失效检查点={}, forget={}", memoryId, deleted.versionsDeleted(),
+                                + " 失效检查点={}", memoryId, deleted.versionsDeleted(),
                         deleted.evidenceDeleted(), deleted.proposalsStaled(), deleted.suppressionsAdded(),
-                        cancelled, contexts, forget);
+                        cancelled, contexts);
             }
             recordSuccess(dedupeId, Map.of("memoryId", memoryId, "deleted", deleted.deleted()));
             return MemoryApiResult.noContent();

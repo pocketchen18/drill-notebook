@@ -90,9 +90,8 @@ export const getMemoryItem = (memoryId: string) =>
 export const editMemoryItem = (memoryId: string, edit: MemoryItemEdit) =>
   patch<MemoryItem | MemoryStatusEditResult>(`${BASE}/items/${encodeURIComponent(memoryId)}`, edit);
 
-/** forget=true 会同时推进全局遗忘边界，属于不可逆动作，由界面确认后显式传入。 */
-export const deleteMemoryItem = (memoryId: string, expectedVersion: number, forget: boolean, operationId?: string) =>
-  delJson<void>(`${BASE}/items/${encodeURIComponent(memoryId)}`, { expectedVersion, forget, operationId });
+export const deleteMemoryItem = (memoryId: string, expectedVersion: number, operationId?: string) =>
+  delJson<void>(`${BASE}/items/${encodeURIComponent(memoryId)}`, { expectedVersion, operationId });
 
 export const searchMemoryItems = (params: MemorySearchParams) =>
   post<MemoryListPage>(`${BASE}/search`, params);

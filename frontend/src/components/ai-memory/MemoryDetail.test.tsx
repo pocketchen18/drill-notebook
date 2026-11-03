@@ -123,6 +123,16 @@ describe('MemoryDetail', () => {
     expect(apiPatch).not.toHaveBeenCalled();
   });
 
+  it('名称默认与列表标题一致，内部谓词不会被当成名称', async () => {
+    const row = item({ predicate: 'other', value: '之后每次回答结束之后说一个完毕' });
+    apiGet.mockResolvedValue(row);
+    renderDetail({ item: row });
+
+    const name = await screen.findByLabelText('记忆名称');
+    await waitFor(() => expect((name as HTMLInputElement).value).toBe('每次回答结束之后说一个完毕'));
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
   it('密文坏掉的行不猜正文，也不能保存', async () => {
     const corruptRow = { memoryId: 'm-9', corrupt: true, corruptCode: 'MEMORY_CIPHER_CORRUPT', predicate: undefined, value: undefined } as MemoryItem;
     apiGet.mockResolvedValue({ ...item(), ...corruptRow });

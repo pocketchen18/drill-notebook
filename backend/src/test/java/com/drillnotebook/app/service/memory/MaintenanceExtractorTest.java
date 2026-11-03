@@ -91,4 +91,39 @@ class MaintenanceExtractorTest {
         assertEquals("b1", candidate.sourceBlockId());
         assertEquals(text, candidate.quote());
     }
+
+    @Test
+    void explicitRememberRequestReplacesAModelCandidateForTheSameMessage() throws Exception {
+        MaintenanceUpstream upstream = mock(MaintenanceUpstream.class);
+        String text = "之后每次回答结束之后带一个完毕，请记住";
+        String modelCandidate = "{\"operation\":\"ADD\",\"targetMemoryId\":null,\"targetVersion\":null,"
+                + "\"kind\":\"PREFERENCE\",\"predicate\":\"answer.detail\","
+                + "\"value\":\"每次回答结束都要说完毕\",\"quote\":\"" + text + "\","
+                + "\"userMessageId\":101,\"sourceBlockId\":\"b1\","
+                + "\"temporalExpression\":null,\"needsReview\":false}";
+        when(upstream.call(anyString(), anyString())).thenReturn(new AiUpstreamClient.Result(
+                "{\"schemaVersion\":2,\"candidates\":[" + modelCandidate + "]}", null, "stop", true, false, false,
+                AiUpstreamClient.Usage.unknown()));
+        MemoryRepository repository = mock(MemoryRepository.class);
+        when(repository.findPage(anyString(), anyString(), anyString(), anyLong(), isNull(), isNull(), anyInt()))
+                .thenReturn(List.of());
+        MaintenanceExtractor extractor = new MaintenanceExtractor(upstream, repository,
+                mock(MemoryCryptoService.class), new TokenEstimator(MAPPER), MAPPER);
+        MemoryCryptoService.MemoryKey key = new MemoryCryptoService.MemoryKey(new byte[32], new byte[32], "vault",
+                "fingerprint");
+        Batch batch = new Batch(Kind.EXTRACT, 1L, 1L, 1L, 1L, "GLOBAL", 0L, "Asia/Shanghai", 1L, 1L,
+                PreviousSummary.NONE,
+                List.of(new SourceTurn(1L, 1L, 101L, 102L, text, null, 12, 0L,
+                        List.of(new SourceBlock("b1", text)), "2026-10-31T15:50:00Z")),
+                0, 12, "rev", 0L, List.of());
+
+        var result = extractor.extract(batch, key, null);
+
+        assertTrue(result.formatOk());
+        assertEquals(1, result.candidates().size());
+        var candidate = result.candidates().get(0);
+        assertEquals("other", candidate.predicate());
+        assertEquals("之后每次回答结束之后带一个完毕", candidate.value());
+        assertEquals(text, candidate.quote());
+    }
 }

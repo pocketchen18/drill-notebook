@@ -266,7 +266,7 @@ class MemoryControllerTest {
         assertEquals(1, ((List<?>) controller.search(Map.of("status", "DISABLED", "limit", 10)).getBody()
                 .get("items")).size());
 
-        assertEquals(204, controller.deleteItem(memoryId, Map.of("expectedVersion", 2, "forget", true,
+        assertEquals(204, controller.deleteItem(memoryId, Map.of("expectedVersion", 2,
                 "operationId", "op-x")).getStatusCode().value(), "停用中的记忆也要能删掉");
         assertEquals(0L, count("ai_memory_item"));
         assertTrue(controller.status().getBody().toString().contains("AUTO_EXTRACT_DISABLED")

@@ -360,10 +360,13 @@ public class MemoryRepository {
                 return ReplaceResult.conflict(memoryId,
                         findCurrentAnyStatus(connection, vaultId, memoryId).orElse(active));
             }
-            String rowId = draft.rowId();
-            insertFact(connection, draft, memoryId, rowId, expectedVersion + 1);
-            return new ReplaceResult(ReplaceOutcome.REPLACED, memoryId, rowId, expectedVersion + 1,
-                    updateVault(connection, vaultId, false).revision(), null);
+              String rowId = draft.rowId();
+              insertFact(connection, draft, memoryId, rowId, expectedVersion + 1);
+              execute(connection, "INSERT OR IGNORE INTO ai_memory_item_evidence(item_row_id, evidence_id)"
+                      + " SELECT ?, evidence_id FROM ai_memory_item_evidence WHERE item_row_id = ?",
+                      rowId, active.rowId());
+              return new ReplaceResult(ReplaceOutcome.REPLACED, memoryId, rowId, expectedVersion + 1,
+                      updateVault(connection, vaultId, false).revision(), null);
         });
     }
 

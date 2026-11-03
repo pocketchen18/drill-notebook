@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, DatePicker, Input, Message, Modal, Radio, Select, Space, Typography } from '@arco-design/web-react';
+import { Alert, Button, DatePicker, Input, Message, Modal, Radio, Select, Space, Typography } from '@arco-design/web-react';
 import { Plus } from 'lucide-react';
 import { ApiError, get } from '../../lib/api';
 import { friendlyMessage } from '../../lib/errors';
@@ -19,7 +19,7 @@ import { MemoryListView } from './MemoryListView';
  * 记忆管理面板（§12）：列表、详情编辑、手动新增、删除确认与清空。
  *
  * <p>只有库已解锁才请求正文；未解锁时界面说的是"需要解锁"，不会伪装成"没有记忆"。
- * 删除与遗忘都要显式确认，forget=true 会同时推进全局遗忘边界，所以它单独一个勾选。
+ * 删除要显式确认；删除只针对这条记忆，不推进任何全局扫描边界。
  * 清空是全库动作：确认弹窗里必须写清它不动旧备份（§11.3）。</p>
  */
 
@@ -58,7 +58,6 @@ export function MemoryManager(): JSX.Element {
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [addVisible, setAddVisible] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MemoryItem | null>(null);
-  const [forget, setForget] = useState(false);
   const [clearVisible, setClearVisible] = useState(false);
   const [kind, setKind] = useState<MemoryKind>('PREFERENCE');
   const [scopeType, setScopeType] = useState<MemoryScopeType>('GLOBAL');
@@ -80,7 +79,6 @@ export function MemoryManager(): JSX.Element {
     setAddVisible(false);
     setDeleteTarget(null);
     setClearVisible(false);
-    setForget(false);
     setSensitiveConfirmed(false);
     const trigger = triggerRef.current;
     if (trigger instanceof HTMLElement) trigger.focus();
@@ -126,13 +124,12 @@ export function MemoryManager(): JSX.Element {
     mutationFn: () => deleteMemoryItem(
       deleteTarget?.memoryId ?? '',
       deleteTarget?.version ?? 0,
-      forget,
       newOperationId()
     ),
     onSuccess: () => {
       closeAndRestore();
       refreshLists();
-      Message.success(forget ? '这条记忆与其来源证据都已遗忘' : '记忆已删除');
+      Message.success('记忆已删除');
     },
     onError: (error) => Message.error(friendlyMessage(error, '删除失败'))
   });
@@ -317,9 +314,6 @@ export function MemoryManager(): JSX.Element {
           <Typography.Text>
             {deleteTarget?.corrupt ? '（这一行读不出正文）' : deleteTarget?.value ?? '（无正文）'}
           </Typography.Text>
-          <Checkbox checked={forget} onChange={setForget}>
-            同时遗忘来源：推进全局遗忘边界，之后的整理不得再引用更早内容
-          </Checkbox>
         </div>
       </Modal>
 

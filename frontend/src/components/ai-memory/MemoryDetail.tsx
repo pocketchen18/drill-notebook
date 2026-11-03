@@ -4,7 +4,13 @@ import { Alert, Button, DatePicker, Input, Message, Space, Tag, Typography } fro
 import { ApiError } from '../../lib/api';
 import { friendlyMessage } from '../../lib/errors';
 import { editMemoryItem, getMemoryItem } from '../../lib/aiMemoryApi';
-import { memoryKindLabel, memoryStatusLabel, memoryStatusTone, memoryValidUntilLabel } from '../../lib/memoryLabels';
+import {
+  memoryDisplayTitle,
+  memoryKindLabel,
+  memoryStatusLabel,
+  memoryStatusTone,
+  memoryValidUntilLabel
+} from '../../lib/memoryLabels';
 import type { MemoryFactKeys, MemoryItem, MemoryStatus } from '../../lib/aiMemoryTypes';
 
 /**
@@ -38,22 +44,23 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
   });
 
   const [value, setValue] = useState(props.item.value ?? '');
-  const [predicate, setPredicate] = useState(props.item.predicate ?? '');
   const [validUntil, setValidUntil] = useState(props.item.validUntil ?? '');
   const [status, setStatus] = useState<MemoryStatus>(props.item.status);
   const [conflict, setConflict] = useState<MemoryFactKeys | null>(null);
   const [latest, setLatest] = useState<MemoryItem | null>(null);
   /** 取回最新正文后把它作为新的 CAS 基线，否则用户改完再保存只会一直 409。 */
   const [adopted, setAdopted] = useState<MemoryItem | null>(null);
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
 
   const row = adopted ?? detailQuery.data ?? props.item;
+  const predicate = nameDraft ?? memoryDisplayTitle(row);
   const corrupt = row.corrupt === true;
   const statusFrozen = !EDITABLE_STATUSES.includes(row.status);
   const sources = row.sources ?? [];
   const conflictStatusLabel = conflict?.status ? memoryStatusLabel(conflict.status) : '未知状态';
 
   const valueChanged = value !== (row.value ?? '') && value.trim().length > 0;
-  const predicateChanged = predicate !== (row.predicate ?? '') && predicate.trim().length > 0;
+  const predicateChanged = nameDraft !== null && predicate.trim().length > 0;
   const validUntilChanged = validUntil !== (row.validUntil ?? '');
   const statusChanged = !statusFrozen && status !== row.status;
   // 服务端对没有内容的 PATCH 直接 400，按钮不能让人点了才知道没改动
@@ -157,14 +164,14 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
         <Input
           placeholder="例如 回答风格"
           value={predicate}
-          onChange={setPredicate}
+          onChange={(next) => setNameDraft(next.trim() ? next : null)}
           maxLength={120}
           showWordLimit
           aria-label="记忆名称"
           disabled={corrupt}
         />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          只用于区分同类记忆，方便你自己认；留空表示不改名。
+          默认按内容自动生成；修改后会作为这条记忆的名称。
         </Typography.Text>
         <Typography.Text bold>有效期（可选）</Typography.Text>
         <DatePicker

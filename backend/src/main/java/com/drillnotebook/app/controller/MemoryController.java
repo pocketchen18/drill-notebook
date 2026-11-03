@@ -140,13 +140,12 @@ public class MemoryController {
                 string(payload, "status"))));
     }
 
-    /** 删除走 body 传 expectedVersion 与 forget，不放 URL。 */
+    /** 删除走 body 传 expectedVersion 与 operationId，不放 URL。 */
     @DeleteMapping("/items/{memoryId}")
     public ResponseEntity<Map<String, Object>> deleteItem(@PathVariable String memoryId,
             @RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> payload = body == null ? Map.of() : body;
-        boolean forget = Boolean.TRUE.equals(boolOf(payload, "forget"));
-        return map(items.delete(memoryId, intOf(payload, "expectedVersion"), forget, string(payload, "operationId")));
+        return map(items.delete(memoryId, intOf(payload, "expectedVersion"), string(payload, "operationId")));
     }
 
     /**

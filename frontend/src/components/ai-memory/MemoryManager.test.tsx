@@ -185,7 +185,6 @@ describe('MemoryManager', () => {
 
     await waitFor(() => expect(apiDelJson).toHaveBeenCalledWith('/api/ai/memory/items/m-1', {
       expectedVersion: 1,
-      forget: false,
       operationId: expect.any(String)
     }));
   });

@@ -73,12 +73,12 @@ describe('记忆 REST 的请求形状', () => {
     expect(body(0).expectedVersion).toBe(1);
 
     respond(204);
-    await deleteMemoryItem('m/1', 2, true, 'op-1');
+    await deleteMemoryItem('m/1', 2, 'op-1');
 
     expect(calls[0].method).toBe('DELETE');
     expect(calls[0].url).toBe('/api/ai/memory/items/m%2F1');
     expect(calls[0].url).not.toContain('expectedVersion');
-    expect(body(0)).toEqual({ expectedVersion: 2, forget: true, operationId: 'op-1' });
+    expect(body(0)).toEqual({ expectedVersion: 2, operationId: 'op-1' });
   });
 
   it('主密码只进请求体，不进 URL', async () => {
@@ -121,7 +121,7 @@ describe('记忆 REST 的请求形状', () => {
   it('204 不回正文，界面按"没有返回体"处理', async () => {
     respond(204);
 
-    await expect(deleteMemoryItem('m-1', 1, false)).resolves.toBeUndefined();
+    await expect(deleteMemoryItem('m-1', 1)).resolves.toBeUndefined();
   });
 
   it('建议列表的 URL 只带非内容筛选条件，游标原样编码', async () => {

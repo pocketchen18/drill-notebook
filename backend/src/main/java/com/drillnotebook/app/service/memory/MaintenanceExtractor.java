@@ -121,7 +121,16 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
                 outcome.formatOk() ? outcome.candidates() : List.of();
         List<MemoryValidator.ValidatedCandidate> forced = memoryIntentCandidates(batch, validated);
         if (!forced.isEmpty()) {
-            List<MemoryValidator.ValidatedCandidate> merged = new ArrayList<>(validated);
+            Set<Long> forcedMessages = new HashSet<>();
+            for (MemoryValidator.ValidatedCandidate candidate : forced) {
+                forcedMessages.add(candidate.userMessageId());
+            }
+            List<MemoryValidator.ValidatedCandidate> merged = new ArrayList<>();
+            for (MemoryValidator.ValidatedCandidate candidate : validated) {
+                if (!forcedMessages.contains(candidate.userMessageId())) {
+                    merged.add(candidate);
+                }
+            }
             merged.addAll(forced);
             return new ExtractionResult(MemoryValidator.FormatStatus.OK, merged, outcome.rejections(), usage,
                     shownTargets, raw);
@@ -140,9 +149,6 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
     private static List<MemoryValidator.ValidatedCandidate> memoryIntentCandidates(
             Batch batch, List<MemoryValidator.ValidatedCandidate> already) {
         Set<Long> covered = new HashSet<>();
-        for (MemoryValidator.ValidatedCandidate candidate : already) {
-            covered.add(candidate.userMessageId());
-        }
         List<MemoryValidator.ValidatedCandidate> result = new ArrayList<>();
         for (SourceTurn turn : batch.turns()) {
             Long userMessageId = turn.userMessageId();

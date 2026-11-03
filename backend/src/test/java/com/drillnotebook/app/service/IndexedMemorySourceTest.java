@@ -164,7 +164,7 @@ class IndexedMemorySourceTest {
         String memoryId = String.valueOf(created.body().get("memoryId"));
         assertTrue(values(select("GLOBAL", 0L, "我在备考什么")).contains("正在准备雅思考试"));
 
-        assertEquals(204, items.delete(memoryId, 1, false, op("delete")).status());
+        assertEquals(204, items.delete(memoryId, 1, op("delete")).status());
         // 删完再手工录一条同族事实：表里没有 ACTIVE 冲突，但 FAMILY 抑制必须让它进不了注入（F06/S08）
         add("GOAL", "GLOBAL", 0L, "study.goal", "goal-ielts", "正在准备雅思考试", null);
         rebuild();
@@ -180,7 +180,7 @@ class IndexedMemorySourceTest {
         MemoryApiResult second = add("GOAL", "GLOBAL", 0L, "study.goal", "goal-toefl", "同时在准备托福考试", null);
         rebuild();
 
-        assertEquals(204, items.delete(String.valueOf(second.body().get("memoryId")), 1, false, op("delete-ielts"))
+        assertEquals(204, items.delete(String.valueOf(second.body().get("memoryId")), 1, op("delete-ielts"))
                 .status());
         rebuild();
         List<String> remaining = values(select("GLOBAL", 0L, "我的考试目标是什么"));
@@ -300,7 +300,7 @@ class IndexedMemorySourceTest {
             thread.start();
         }
         start.countDown();
-        assertEquals(204, items.delete(deletedId, 1, false, op("delete-concurrent")).status());
+        assertEquals(204, items.delete(deletedId, 1, op("delete-concurrent")).status());
         rebuild();
         done.await();
         for (Thread thread : threads) {
