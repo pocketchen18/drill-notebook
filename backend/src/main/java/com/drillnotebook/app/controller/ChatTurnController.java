@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -30,8 +31,10 @@ public class ChatTurnController {
     }
 
     @GetMapping("/{requestId}")
-    public Map<String, Object> status(@PathVariable String requestId) {
-        return turns.status(requestId);
+    public Map<String, Object> status(@PathVariable String requestId,
+                                      @RequestHeader(value = "X-Chat-Master-Password", required = false)
+                                      String masterPassword) {
+        return turns.status(requestId, masterPassword);
     }
 
     @PostMapping("/{requestId}/cancel")

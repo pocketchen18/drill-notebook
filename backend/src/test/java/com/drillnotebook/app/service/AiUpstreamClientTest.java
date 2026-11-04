@@ -123,6 +123,51 @@ class AiUpstreamClientTest {
     }
 
     @Test
+    void chatCompletionsStreamAcceptsCrlfFrames() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"第一行\"}}]}\r\n\r\n"
+                + "data: [DONE]\r\n\r\n";
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), null, null, idleDeadline());
+        assertEquals("第一行", result.text());
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
+    void chatCompletionsStreamDecodesUtf8SplitAcrossReads() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"跨字节中文\"}}]}\n\n";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        InputStream oneByteAtATime = new InputStream() {
+            private int index;
+
+            @Override
+            public int read() {
+                return index < bytes.length ? bytes[index++] & 0xff : -1;
+            }
+        };
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                oneByteAtATime, null, null, idleDeadline());
+        assertEquals("跨字节中文", result.text());
+    }
+
+    @Test
+    void chatCompletionsStreamJoinsMultilineData() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"多行\"}}]}\n\n";
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), null, null, idleDeadline());
+        assertEquals("多行", result.text());
+    }
+
+    @Test
+    void chatCompletionsStreamStopsAtFirstDone() throws Exception {
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"content\":\"前\"}}]}",
+                "[DONE]",
+                "{\"choices\":[{\"delta\":{\"content\":\"后\"}}]}"), null, null, idleDeadline());
+        assertEquals("前", result.text());
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
     void chatCompletionsStreamReportsProviderUsage() throws Exception {
         AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
                 "{\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}",

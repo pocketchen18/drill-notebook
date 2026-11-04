@@ -32,25 +32,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 30-case development-set extraction evaluation. Disabled in the normal suite; enable with
- * {@code -Dmemory.eval=30 -Dmemory.eval.db=...}. Uses the real configured chat model and the
- * production extraction prompt, but only reads the config and never writes chat/memory rows.
+ * 30/90-case extraction evaluation. Disabled in the normal suite; enable with
+ * {@code -Dmemory.eval=30|90 -Dmemory.eval.db=...}. The 30-case set is the development
+ * set; 90 uses the deterministic holdout fixture. Uses the real configured chat model and
+ * the production extraction prompt, but only reads the config and never writes rows.
  */
 class MemoryDev30EvalTest {
 
     @Test
     void runDevelopmentSet() throws Exception {
-        Assumptions.assumeTrue("30".equals(System.getProperty("memory.eval")),
-                "set -Dmemory.eval=30 to run the paid live-model evaluation");
+        String eval = System.getProperty("memory.eval", "");
+        Assumptions.assumeTrue("30".equals(eval) || "90".equals(eval),
+                "set -Dmemory.eval=30 or 90 to run the paid live-model evaluation");
         Path db = Path.of(System.getProperty("memory.eval.db",
                 "..\\runtime-portable\\data\\study.db")).toAbsolutePath().normalize();
         ObjectMapper mapper = new ObjectMapper();
         Config config = readConfig(db, mapper);
-        System.out.println("eval target=" + config.endpoint() + " model=" + config.model()
+        System.out.println("eval=" + eval + " target=" + config.endpoint() + " model=" + config.model()
                 + " apiFormat=" + config.apiFormat());
-        JsonNode fixture = readFixture(mapper);
+        JsonNode fixture = "90".equals(eval) ? Holdout90Fixtures.root(mapper) : readFixture(mapper);
         ArrayNode cases = (ArrayNode) fixture.get("cases");
-        assertEquals(30, cases.size(), "fixture must contain exactly 30 cases");
+        assertEquals("90".equals(eval) ? 90 : 30, cases.size(),
+                "fixture must contain exactly " + eval + " cases");
 
         AiUpstreamClient client = new AiUpstreamClient(
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build(), mapper);
@@ -72,9 +75,11 @@ class MemoryDev30EvalTest {
         int quoteBad = 0;
         int forbiddenTotal = 0;
         int emptyFalsePositive = 0;
+        Map<String, int[]> byCategory = new LinkedHashMap<>();
 
         for (JsonNode node : cases) {
             String id = node.path("id").asText();
+            String category = node.path("category").asText("uncategorized");
             if (!only.isEmpty() && !only.contains(id)) {
                 continue;
             }
@@ -195,9 +200,18 @@ class MemoryDev30EvalTest {
             if (expectEmpty && !candidates.isEmpty()) {
                 emptyFalsePositive++;
             }
+            int[] categoryStats = byCategory.computeIfAbsent(category, ignored -> new int[5]);
+            categoryStats[0]++;
+            if (schema) {
+                categoryStats[1]++;
+            }
+            categoryStats[2] += expected.size();
+            categoryStats[3] += matched;
+            categoryStats[4] += candidates.size();
 
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", id);
+            row.put("category", category);
             row.put("format", schema ? "OK" : "INVALID");
             row.put("candidates", candidates.size());
             row.put("expected", expected.size());
@@ -235,8 +249,22 @@ class MemoryDev30EvalTest {
         summary.put("quoteErrors", quoteBad);
         summary.put("forbiddenHits", forbiddenTotal);
         summary.put("emptyFalsePositiveCases", emptyFalsePositive);
+        Map<String, Object> categories = new LinkedHashMap<>();
+        for (Map.Entry<String, int[]> entry : byCategory.entrySet()) {
+            int[] stats = entry.getValue();
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("cases", stats[0]);
+            row.put("formatOk", stats[1]);
+            row.put("expectedFacts", stats[2]);
+            row.put("matchedFacts", stats[3]);
+            row.put("candidates", stats[4]);
+            row.put("recall", round(stats[2] == 0 ? 1.0 : (double) stats[3] / stats[2]));
+            row.put("precision", round(stats[4] == 0 ? 1.0 : (double) stats[3] / stats[4]));
+            categories.put(entry.getKey(), row);
+        }
+        summary.put("byCategory", categories);
         summary.put("results", report);
-        Path output = Path.of("target", "memory-dev30-report.json").toAbsolutePath();
+        Path output = Path.of("target", "memory-" + eval + "-report.json").toAbsolutePath();
         Files.createDirectories(output.getParent());
         Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary),
                 StandardCharsets.UTF_8);
@@ -247,7 +275,9 @@ class MemoryDev30EvalTest {
             return;
         }
 
-        assertTrue(formatOk >= 28, "format validity below 28/30: " + formatOk);
+        int formatFloor = "90".equals(eval) ? 84 : 28;
+        assertTrue(formatOk >= formatFloor,
+                "format validity below " + formatFloor + "/" + eval + ": " + formatOk);
         assertTrue(recall >= 0.80, "recall below 80%: " + recall);
         assertTrue(precision >= 0.75, "precision below 75%: " + precision);
         assertEquals(0, forbiddenTotal, "forbidden facts emitted");

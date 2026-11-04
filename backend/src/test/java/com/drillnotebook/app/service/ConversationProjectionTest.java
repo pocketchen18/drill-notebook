@@ -136,6 +136,29 @@ class ConversationProjectionTest {
     }
 
     @Test
+    void v1SummaryCheckpointIsNotUsedAsV2() throws Exception {
+        seedTurns(20);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        SessionContextRepository contexts = org.mockito.Mockito.mock(SessionContextRepository.class);
+        org.mockito.Mockito.when(contexts.read(sessionId)).thenReturn(java.util.Optional.of(
+                new SessionContextRepository.Checkpoint(sessionId, 1L, current - 1, 1L, 0L,
+                        null, null, 40L, "2026-10-12T00:00:00.000Z", 1)));
+        ConversationProjection v1Projection = new ConversationProjection(new ChatHistoryRepository(dataSource),
+                contexts, wiring.metadata(), wiring.cipher(), wiring.memory(), crypto, vault, policy,
+                new TokenEstimator(new ObjectMapper()), new ObjectMapper());
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-v1-summary", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = v1Projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary());
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+        assertTrue(result.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
+    }
+
+    @Test
     void coverageGapKeepsTheUncoveredTurnAsOriginalText() throws Exception {
         seedTurns(10);
         long current = insertRunningTurn();

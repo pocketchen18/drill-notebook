@@ -367,6 +367,9 @@ public class ConversationProjection {
                                     ContextAudit.Builder audit, List<String> notices) throws SQLException {
         if (row.isEmpty()) return null;
         SessionContextRepository.Checkpoint checkpoint = row.get();
+        if (checkpoint.schemaVersion() != 2) {
+            return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, 1);
+        }
         if (checkpoint.contextGeneration() != request.contextGeneration()) {
             return unavailable(audit, notices, ContextAudit.Omission.WRONG_GENERATION, 1);
         }

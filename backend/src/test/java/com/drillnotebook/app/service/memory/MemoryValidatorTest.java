@@ -323,6 +323,14 @@ class MemoryValidatorTest {
         assertEquals("answer.detail", detail.family(), "单值偏好以谓词作同族键");
     }
 
+    @Test
+    void systemPromptAnchorsRelativeDatesToSourceMessageTime() {
+        String prompt = MemoryValidator.systemPrompt();
+        assertTrue(prompt.contains("createdAt"), "提示词必须让模型看到来源创建时间");
+        assertTrue(prompt.contains("sourceTimezone"), "提示词必须让模型看到来源时区");
+        assertTrue(prompt.contains("不得按维护任务执行时刻"), "提示词必须禁止按 job 执行时刻顺延相对日期");
+    }
+
     // ---- 夹具 ----
 
     /** 一条只有来源文本不同的批：id 与 blockId 都固定，方便逐格变异。 */

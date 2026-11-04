@@ -14,6 +14,9 @@ import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository.ArchiveResult;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository.ScanKind;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository.State;
+import com.drillnotebook.app.repository.MemoryJobRepository.JobDraft;
+import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
+import com.drillnotebook.app.repository.MemoryJobRepository.LeaseOutcome;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -103,6 +106,44 @@ class ChatSessionMetadataRepositoryTest {
         State reopened = metadata.read(sessionId).orElseThrow();
         assertFalse(reopened.maintenanceWakePending(), "取消归档与只读打开都不置唤醒");
         assertNull(reopened.archivedAt());
+    }
+
+    @Test
+    void archiveInvalidatesLeasePreservesFactsAndUnarchiveDoesNotWake() throws Exception {
+        insertTurn(sessionId, ChatTurnRepository.STATUS_COMPLETED);
+        jdbc.update("INSERT INTO ai_memory_vault(id, wrapped_dek, wrap_meta, mode, created_at)"
+                + " VALUES ('vault-h10', 'dek', '{}', 'fingerprint', ?)", NOW);
+        jdbc.update("INSERT INTO ai_memory_item(row_id, memory_id, vault_id, version, scope_type, scope_id,"
+                + " kind, predicate_key_hmac, family_key_hmac, value_hmac, status, payload_cipher, crypto_meta,"
+                + " origin, observed_at, recorded_at, last_confirmed_at)"
+                + " VALUES ('row-h10', 'mem-h10', 'vault-h10', 1, 'GLOBAL', 0, 'GOAL', 'p', 'f', 'v',"
+                + " 'ACTIVE', 'x', '{}', 'AUTO', ?, ?, ?)", NOW, NOW, NOW);
+
+        MemoryJobRepository jobs = new MemoryJobRepository(dataSource, immediate);
+        String jobId = jobs.enqueue(new JobDraft(Kind.EXTRACT, sessionId, 1L, 1L, 1L, "GLOBAL", 0,
+                "Asia/Shanghai", 1L, 1L, "target-h10", "prompt-h10", "input-h10", NOW)).jobId();
+        assertSame(LeaseOutcome.APPLIED, jobs.claim(jobId, "lease-h10", STAMP, NOW));
+        metadata.markMaintenanceWake(sessionId);
+        int turnsBefore = count("SELECT COUNT(*) FROM ai_chat_turn");
+        int factsBefore = count("SELECT COUNT(*) FROM ai_memory_item");
+
+        assertSame(ArchiveResult.ARCHIVED, metadata.setArchived(sessionId, true, STAMP));
+
+        State archived = metadata.read(sessionId).orElseThrow();
+        assertFalse(archived.maintenanceWakePending());
+        assertNull(jobs.find(jobId).orElseThrow().leaseToken(), "归档必须抹掉旧 lease");
+        assertEquals(MemoryJobRepository.STATUS_SUPERSEDED, jobs.find(jobId).orElseThrow().status());
+        assertEquals(turnsBefore, count("SELECT COUNT(*) FROM ai_chat_turn"), "历史不因归档删除");
+        assertEquals(factsBefore, count("SELECT COUNT(*) FROM ai_memory_item"), "事实不因归档删除");
+        assertSame(LeaseOutcome.REJECTED, jobs.settle(jobId, "lease-h10", NOW, "COMPLETED", null),
+                "旧 lease 不能提交结果");
+
+        assertSame(ArchiveResult.UNARCHIVED, metadata.setArchived(sessionId, false, null));
+        assertFalse(metadata.read(sessionId).orElseThrow().maintenanceWakePending(),
+                "取消归档与只读打开都不置唤醒");
+        assertTrue(metadata.findPendingMaintenance(10).isEmpty());
+        metadata.markMaintenanceWake(sessionId);
+        assertEquals(1, metadata.findPendingMaintenance(10).size(), "新完成轮次恢复授权调度");
     }
 
     @Test

@@ -239,6 +239,38 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     expect(screen.getByText('没有可用的续接摘要，较早历史按原文进窗口。')).toBeTruthy();
   });
 
+  it('切换到另一会话后不残留上一会话的气泡和记忆徽标', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/ai/config') {
+        return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
+      }
+      if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
+      if (url === '/api/ai/sessions') {
+        return Promise.resolve([{ id: 10, title: 'S1' }, { id: 11, title: 'S2' }]);
+      }
+      if (url.startsWith('/api/ai/sessions/') && url.includes('/history')) {
+        return Promise.resolve(historyPage([]));
+      }
+      if (url === '/api/ai/history/storage') {
+        return Promise.resolve({ historyBytes: 0, reservedHistoryBytes: 0, usedHistoryBytes: 0,
+          historyLimitBytes: 268435456, attachmentBytes: 0, attachmentLimitBytes: 268435456,
+          historyWarning: false, attachmentWarning: false, revision: 1 });
+      }
+      return Promise.resolve({});
+    });
+    renderAssistant();
+    await sendOnce();
+    expect(screen.getByText('ANSWER')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '本轮提供 2 条记忆' })).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('切换会话'));
+    fireEvent.click(await screen.findByText('S2'));
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/ai/sessions/11/history?limit=50'));
+    expect(screen.queryByText('ANSWER')).toBeNull();
+    expect(screen.queryByRole('button', { name: '本轮提供 2 条记忆' })).toBeNull();
+    expect(document.querySelectorAll('.chat-message')).toHaveLength(0);
+  });
+
   it('容量条常驻在输入区上方，一轮定稿后跟着结算再读一次', async () => {
     const storageCalls = (): number => apiGet.mock.calls.filter((call) => call[0] === '/api/ai/history/storage').length;
     renderAssistant();

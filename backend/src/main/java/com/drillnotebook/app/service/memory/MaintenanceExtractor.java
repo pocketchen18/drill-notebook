@@ -276,7 +276,7 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
         }
     }
 
-    private static String blockCreatedAt(SourceTurn turn) {
+    static String blockCreatedAt(SourceTurn turn) {
         return turn.sourceCreatedAt() == null ? MemoryTimes.formatMillis(turn.finishedMillis())
                 : turn.sourceCreatedAt();
     }

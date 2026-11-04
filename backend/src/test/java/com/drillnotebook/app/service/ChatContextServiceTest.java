@@ -112,6 +112,46 @@ class ChatContextServiceTest {
     }
 
     @Test
+    void globalMemoryAddedInOneSessionIsVisibleInANewSession() throws Exception {
+        unlockVault();
+        enableUseConsent();
+        assertEquals(201, items.add(new MemoryItemService.AddInput("GOAL", "GLOBAL", 0L, "考试安排", null, GOAL,
+                null, false, op("add-cross-session"))).status());
+        indexReady();
+
+        jdbc.update("INSERT INTO ai_chat_session(title) VALUES (?)", "新会话");
+        sessionId = jdbc.queryForObject("SELECT MAX(id) FROM ai_chat_session", Long.class);
+
+        ChatContextPlan fresh = plan("内存管理考试怎么复习", Map.of("use", true));
+
+        assertEquals(1, regionCount(fresh, ContextAudit.Region.MEMORY), "新会话必须能读到已有全局记忆（M01）");
+        assertTrue(serialized(fresh).contains(GOAL));
+    }
+
+    @Test
+    void requestLanguageOverrideWinsWithoutChangingLongTermPreference() throws Exception {
+        unlockVault();
+        enableUseConsent();
+        assertEquals(201, items.add(new MemoryItemService.AddInput("PREFERENCE", "GLOBAL", 0L,
+                "answer.language", null, "英文", null, false, op("add-language"))).status());
+        indexReady();
+        int factsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item", Integer.class);
+
+        ChatContextPlan plan = plan("这次请用中文回答，英文偏好先保留", Map.of("use", true));
+
+        assertEquals(1, regionCount(plan, ContextAudit.Region.MEMORY),
+                "长期语言偏好仍要注入，本次请求只覆盖本轮");
+        assertTrue(serialized(plan).contains("英文"), "本次请求不得删除或改写长期偏好");
+        assertEquals(factsBefore, jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item", Integer.class),
+                "装配计划不能顺手写记忆");
+        assertTrue(serialized(plan).contains("执行优先级"),
+                "系统规则必须声明当前明确要求高于记忆");
+        Map<String, Object> last = plan.messages().get(plan.messages().size() - 1);
+        assertEquals("user", last.get("role"));
+        assertTrue(firstBlockText(last).contains("这次请用中文回答"), "当前请求必须固定在最后");
+    }
+
+    @Test
     void notebookScopeReadsOnlyItsOwnFactsAndPageMustMatchTheSession() throws Exception {
         unlockVault();
         enableUseConsent();

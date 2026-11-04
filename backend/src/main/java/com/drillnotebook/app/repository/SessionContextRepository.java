@@ -21,7 +21,7 @@ public class SessionContextRepository {
     /** 一行检查点：revision 用于发送前复核，throughTurnId 只是"已检查至此"的上界，不代表全部已总结。 */
     public record Checkpoint(long sessionId, long revision, long throughTurnId, long contextGeneration,
                              long vaultEpoch, String payloadCipher, String cryptoMeta, long estimatedTokens,
-                             String updatedAt) {
+                             String updatedAt, int schemaVersion) {
     }
 
     private final DataSource dataSource;
@@ -34,7 +34,7 @@ public class SessionContextRepository {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("""
                     SELECT session_id, revision, through_turn_id, context_generation, vault_epoch,
-                           payload_cipher, crypto_meta, estimated_tokens, updated_at
+                           payload_cipher, crypto_meta, estimated_tokens, updated_at, schema_version
                       FROM ai_session_context WHERE session_id = ?
                     """)) {
             statement.setLong(1, sessionId);
@@ -44,7 +44,7 @@ public class SessionContextRepository {
                         result.getLong("through_turn_id"), result.getLong("context_generation"),
                         result.getLong("vault_epoch"), result.getString("payload_cipher"),
                         result.getString("crypto_meta"), result.getLong("estimated_tokens"),
-                        result.getString("updated_at")));
+                        result.getString("updated_at"), result.getInt("schema_version")));
             }
         }
     }
