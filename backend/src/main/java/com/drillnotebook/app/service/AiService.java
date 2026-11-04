@@ -461,7 +461,9 @@ public class AiService {
             emitMetadata(metadataSender, dispatch, lease);
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
-                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking());
+                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
+                    ProviderCapabilities.of(upstream.baseUrl(), upstream.apiFormat(), upstream.model())
+                            .cacheBreakpoints());
             AiUpstreamClient.Result result = upstream().call(target, dispatch.messages(), true, listener,
                     DEFAULT_CALL.timeoutSeconds(), lease.handle());
             chatTurns.settleUsage(attempt, result.usage());
@@ -819,7 +821,9 @@ public class AiService {
             long start = System.currentTimeMillis();
             AiUpstreamClient.Result result = upstream().call(new AiUpstreamClient.Upstream(
                     config.endpoint(), apiKey, config.model(), apiFormatOf(config),
-                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking()), messages, false, null,
+                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
+                    ProviderCapabilities.of(config.endpoint(), apiFormatOf(config), config.model())
+                            .cacheBreakpoints()), messages, false, null,
                     DEFAULT_CALL.timeoutSeconds(), handle);
             log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={}",
                     System.currentTimeMillis() - start,

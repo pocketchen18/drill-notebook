@@ -38,15 +38,20 @@ public class UsageRepository {
 
     /** 厂商回的实际用量；没有数字就是 unknown，绝不拿估算冒充当过的钱。 */
     public record ActualUsage(String usageSource, Integer inputTokens, Integer outputTokens,
-                              Integer cacheReadTokens, Integer cacheWriteTokens) {
-        public static ActualUsage unknown() {
-            return new ActualUsage("unknown", null, null, null, null);
+                              Integer cacheReadTokens, Integer cacheWriteTokens,
+                              boolean cacheReadIncludedInInput) {
+        public ActualUsage(String usageSource, Integer inputTokens, Integer outputTokens,
+                           Integer cacheReadTokens, Integer cacheWriteTokens) {
+            this(usageSource, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, false);
         }
 
-        /** 计费口径：四类 token 都算已花出去的量，缓存读写分开只是为 P10 的厂商差异留位。 */
+        public static ActualUsage unknown() {
+            return new ActualUsage("unknown", null, null, null, null, false);
+        }
+
         public long chargedTokens() {
             return nonNegative(inputTokens) + nonNegative(outputTokens)
-                    + nonNegative(cacheReadTokens) + nonNegative(cacheWriteTokens);
+                    + (cacheReadIncludedInInput ? 0 : nonNegative(cacheReadTokens) + nonNegative(cacheWriteTokens));
         }
 
         public boolean reported() {

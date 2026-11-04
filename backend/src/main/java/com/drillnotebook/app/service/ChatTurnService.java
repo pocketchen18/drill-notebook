@@ -338,7 +338,7 @@ public class ChatTurnService {
     private static ActualUsage actual(AiUpstreamClient.Usage observed) {
         if (observed == null || !observed.reported()) return ActualUsage.unknown();
         return new ActualUsage("provider", observed.inputTokens(), observed.outputTokens(),
-                observed.cacheReadTokens(), observed.cacheWriteTokens());
+                observed.cacheReadTokens(), observed.cacheWriteTokens(), observed.cacheReadIncludedInInput());
     }
 
     /**

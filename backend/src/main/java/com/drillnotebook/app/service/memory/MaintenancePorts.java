@@ -134,9 +134,14 @@ public final class MaintenancePorts {
      * 厂商回的实际用量。两个都为 null 就是"不知道"，由 worker 按 {@code UNKNOWN} 消费预留，
      * 绝不拿估算冒充当过的钱（contracts §2.6）。
      */
-    public record Usage(Long inputTokens, Long outputTokens) {
+    public record Usage(Long inputTokens, Long outputTokens, Long cacheReadTokens, Long cacheWriteTokens,
+                        boolean cacheReadIncludedInInput) {
+        public Usage(Long inputTokens, Long outputTokens) {
+            this(inputTokens, outputTokens, null, null, false);
+        }
+
         public static Usage unknown() {
-            return new Usage(null, null);
+            return new Usage(null, null, null, null, false);
         }
 
         public boolean reported() {

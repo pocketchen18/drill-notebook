@@ -91,11 +91,13 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
             input = encodeInput(batch, facts, repairOf);
         }
         AiUpstreamClient.Result result = dispatch(input);
-        Integer inputTokens = result.usage() == null ? null : result.usage().inputTokens();
-        Integer outputTokens = result.usage() == null ? null : result.usage().outputTokens();
+        AiUpstreamClient.Usage observed = result.usage();
         MaintenancePorts.Usage usage = new MaintenancePorts.Usage(
-                inputTokens == null ? null : inputTokens.longValue(),
-                outputTokens == null ? null : outputTokens.longValue());
+                observed == null || observed.inputTokens() == null ? null : observed.inputTokens().longValue(),
+                observed == null || observed.outputTokens() == null ? null : observed.outputTokens().longValue(),
+                observed == null || observed.cacheReadTokens() == null ? null : observed.cacheReadTokens().longValue(),
+                observed == null || observed.cacheWriteTokens() == null ? null : observed.cacheWriteTokens().longValue(),
+                observed != null && observed.cacheReadIncludedInInput());
         Map<String, Integer> shownTargets = targetsOf(facts);
         String raw = result.text();
         MemoryValidator.Outcome outcome = MemoryValidator.validate(raw, batch, shownTargets, mapper);

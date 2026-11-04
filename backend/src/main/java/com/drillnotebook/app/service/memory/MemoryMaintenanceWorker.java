@@ -841,11 +841,17 @@ public class MemoryMaintenanceWorker {
     /** 没有厂商数字就按 UNKNOWN 消费预留；有的话按实际扣账（§2.6）。 */
     private static ActualUsage actual(Usage usage) {
         if (usage == null || !usage.reported()) return ActualUsage.unknown();
-        return new ActualUsage("provider", toInt(usage.inputTokens()), toInt(usage.outputTokens()), null, null);
+        return new ActualUsage("provider", toInt(usage.inputTokens()), toInt(usage.outputTokens()),
+                toInteger(usage.cacheReadTokens()), toInteger(usage.cacheWriteTokens()),
+                usage.cacheReadIncludedInInput());
     }
 
     private static int toInt(Long value) {
         return value == null || value < 0 ? 0 : value.intValue();
+    }
+
+    private static Integer toInteger(Long value) {
+        return value == null ? null : value.intValue();
     }
 
     /** 认领时的装载请求：范围与身份材料全部取自任务行，保证与排队那次一致。 */
