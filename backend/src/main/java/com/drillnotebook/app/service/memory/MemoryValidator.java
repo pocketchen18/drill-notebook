@@ -180,6 +180,39 @@ public final class MemoryValidator {
             if (!compatible) {
                 return raw;
             }
+            if (root.has("candidates") && root.path("candidates").isArray()) {
+                root.put("schemaVersion", 2);
+                return mapper.writeValueAsString(root);
+            }
+            if (root.has("userMessages") || root.has("scope")) {
+                ObjectNode empty = mapper.createObjectNode();
+                empty.put("schemaVersion", 2);
+                empty.putArray("candidates");
+                return mapper.writeValueAsString(empty);
+            }
+            if (root.has("quote") && root.has("predicate") && root.has("kind")) {
+                ObjectNode candidate = root.deepCopy();
+                if (candidate.path("operation").asText("").isBlank()) {
+                    candidate.put("operation", candidate.hasNonNull("targetMemoryId")
+                            ? "REPLACE_PROPOSAL" : "ADD");
+                }
+                if (!candidate.path("needsReview").isBoolean()) {
+                    candidate.put("needsReview", false);
+                }
+                if (!candidate.has("targetMemoryId")) {
+                    candidate.putNull("targetMemoryId");
+                }
+                if (!candidate.has("targetVersion")) {
+                    candidate.putNull("targetVersion");
+                }
+                if (!candidate.has("temporalExpression")) {
+                    candidate.putNull("temporalExpression");
+                }
+                ObjectNode envelope = mapper.createObjectNode();
+                envelope.put("schemaVersion", 2);
+                envelope.putArray("candidates").add(candidate);
+                return mapper.writeValueAsString(envelope);
+            }
             root.put("schemaVersion", 2);
             return mapper.writeValueAsString(root);
         } catch (Exception error) {

@@ -401,6 +401,15 @@ public class ChatTurnService {
     }
 
     /** 用户停止：置取消标志并关闭上游响应体；正文一个字都没收到时本轮终态是 ABORTED。 */
+    public Optional<String> runningRequestId(long sessionId) {
+        try {
+            return turns.findRunning(sessionId).map(TurnRow::requestId);
+        } catch (SQLException error) {
+            degrade(error);
+            throw reject(503, "STORAGE_UNAVAILABLE", "读取会话运行状态失败", Map.of());
+        }
+    }
+
     public Map<String, Object> cancel(String requestId) {
         TurnRow turn = readTurn(requestId);
         Optional<ActiveTurnRegistry.Handle> handle = registry.find(requestId);

@@ -109,6 +109,30 @@ class MemoryValidatorTest {
     }
 
     @Test
+    void bareCandidateObjectIsWrappedWithSafeDefaults() {
+        String bare = candidate("ADD", "null", "null", "PREFERENCE", "answer.order",
+                "\"example_first\"", QUOTE_SOURCE, String.valueOf(MESSAGE_ID), "\"u0\"", "null", "false")
+                .replace("{\"operation\":\"ADD\",", "{")
+                .replace(",\"needsReview\":false", "");
+        String normalized = MemoryValidator.normalizeSchemaVersion(bare, MAPPER);
+        Outcome outcome = MemoryValidator.validate(normalized, batch(QUOTE_SOURCE), Map.of(), MAPPER);
+        assertEquals(FormatStatus.OK, outcome.format());
+        assertEquals(1, outcome.candidates().size());
+        assertEquals("ADD", outcome.candidates().get(0).operation());
+        assertTrue(!outcome.candidates().get(0).reviewRequired());
+    }
+
+    @Test
+    void echoedInputEnvelopeIsTreatedAsNoCandidates() {
+        String echoed = "{\"schemaVersion\":2,\"scope\":{\"type\":\"GLOBAL\",\"id\":0},"
+                + "\"userMessages\":[],\"existingFacts\":[]}";
+        String normalized = MemoryValidator.normalizeSchemaVersion(echoed, MAPPER);
+        Outcome outcome = MemoryValidator.validate(normalized, batch(QUOTE_SOURCE), Map.of(), MAPPER);
+        assertEquals(FormatStatus.OK, outcome.format());
+        assertTrue(outcome.candidates().isEmpty());
+    }
+
+    @Test
     void unexpectedFieldsAreRejectedAtBothLevels() {
         assertEquals(FormatStatus.UNEXPECTED_FIELD, MemoryValidator.validate(
                 "{\"schemaVersion\":2,\"candidates\":[],\"confidence\":\"0.99\"}", batch(QUOTE_SOURCE), Map.of(),

@@ -239,6 +239,10 @@ public class AiService {
         requireSession(id);
         List<Map<String, Object>> all = sessions.list(true);
         if (all.size() <= 1) throw new IllegalArgumentException("至少保留一个会话");
+        chatTurns.runningRequestId(id).ifPresent(requestId -> {
+            throw new ChatTurnRejectException(409, "SESSION_BUSY", "会话有正在生成的回答，请先停止",
+                    Map.of("runningTurn", requestId));
+        });
         sessions.delete(id);
     }
 
