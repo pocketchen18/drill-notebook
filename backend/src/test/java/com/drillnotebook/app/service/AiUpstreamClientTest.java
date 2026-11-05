@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.repository.ChatStorageSizer;
+import com.drillnotebook.app.repository.UsageRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -122,6 +123,51 @@ class AiUpstreamClientTest {
     }
 
     @Test
+    void chatCompletionsStreamAcceptsCrlfFrames() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"第一行\"}}]}\r\n\r\n"
+                + "data: [DONE]\r\n\r\n";
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), null, null, idleDeadline());
+        assertEquals("第一行", result.text());
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
+    void chatCompletionsStreamDecodesUtf8SplitAcrossReads() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"跨字节中文\"}}]}\n\n";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        InputStream oneByteAtATime = new InputStream() {
+            private int index;
+
+            @Override
+            public int read() {
+                return index < bytes.length ? bytes[index++] & 0xff : -1;
+            }
+        };
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                oneByteAtATime, null, null, idleDeadline());
+        assertEquals("跨字节中文", result.text());
+    }
+
+    @Test
+    void chatCompletionsStreamJoinsMultilineData() throws Exception {
+        String body = "data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"多行\"}}]}\n\n";
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), null, null, idleDeadline());
+        assertEquals("多行", result.text());
+    }
+
+    @Test
+    void chatCompletionsStreamStopsAtFirstDone() throws Exception {
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"content\":\"前\"}}]}",
+                "[DONE]",
+                "{\"choices\":[{\"delta\":{\"content\":\"后\"}}]}"), null, null, idleDeadline());
+        assertEquals("前", result.text());
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
     void chatCompletionsStreamReportsProviderUsage() throws Exception {
         AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
                 "{\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}",
@@ -132,13 +178,42 @@ class AiUpstreamClientTest {
         assertEquals(120, result.usage().inputTokens());
         assertEquals(34, result.usage().outputTokens());
         assertEquals(80, result.usage().cacheReadTokens());
+        assertTrue(result.usage().cacheReadIncludedInInput());
+        assertEquals(120, result.usage().totalInputTokens());
         assertEquals(154, result.usage().inputTokens() + result.usage().outputTokens());
+    }
+
+    @Test
+    void openAiCachedPromptTokensAreNotChargedTwice() throws Exception {
+        AiUpstreamClient.Usage usage = AiUpstreamClient.usageOfChatCompletion(mapper.readTree(
+                "{\"usage\":{\"prompt_tokens\":2000,\"completion_tokens\":100,"
+                        + "\"prompt_tokens_details\":{\"cached_tokens\":1000}}}"));
+        assertEquals(2000, usage.inputTokens());
+        assertEquals(1000, usage.cacheReadTokens());
+        assertEquals(2000, usage.totalInputTokens());
+        UsageRepository.ActualUsage actual = new UsageRepository.ActualUsage("provider", usage.inputTokens(),
+                usage.outputTokens(), usage.cacheReadTokens(), usage.cacheWriteTokens(),
+                usage.cacheReadIncludedInInput());
+        assertEquals(2100, actual.chargedTokens());
+    }
+
+    @Test
+    void anthropicCacheBucketsAreCountedOnTopOfInput() throws Exception {
+        AiUpstreamClient.Usage usage = AiUpstreamClient.usageOfAnthropic(mapper.readTree(
+                "{\"usage\":{\"input_tokens\":100,\"output_tokens\":200,"
+                        + "\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":500}}"));
+        assertEquals(1600, usage.totalInputTokens());
+        UsageRepository.ActualUsage actual = new UsageRepository.ActualUsage("provider", usage.inputTokens(),
+                usage.outputTokens(), usage.cacheReadTokens(), usage.cacheWriteTokens(),
+                usage.cacheReadIncludedInInput());
+        assertEquals(1800, actual.chargedTokens());
     }
 
     @Test
     void anthropicStreamParsesThinkingAndText() throws Exception {
         InputStream body = new ByteArrayInputStream((
-                "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+                "event: message_start\ndata: {\"type\":\"message_start\",\"usage\":{\"input_tokens\":100,"
+                        + "\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":500}}\n\n"
                         + "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"想一想\"}}\n\n"
                         + "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"回答\"}}\n\n"
                         + "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n"
@@ -158,6 +233,10 @@ class AiUpstreamClientTest {
         assertEquals("end_turn", result.finishReason());
         assertTrue(result.terminalObserved(), "message_stop 是 Anthropic 的终止帧");
         assertEquals(7, result.usage().outputTokens());
+        assertEquals(100, result.usage().inputTokens());
+        assertEquals(1000, result.usage().cacheReadTokens());
+        assertEquals(500, result.usage().cacheWriteTokens());
+        assertEquals(1600, result.usage().totalInputTokens());
     }
 
     @Test

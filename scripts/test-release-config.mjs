@@ -20,7 +20,7 @@ const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.repl
 const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
-  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.6.3');
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.0');
   assert.equal(workflow.on.workflow_dispatch.inputs.publish_release.default, false);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.prerelease, true);
   assert.equal(job.defaults.run.shell, 'pwsh');
@@ -43,6 +43,12 @@ test('锁文件安装及前后端测试必须成功后才可打包发布', () =>
   assert.ok(pack > build && release > pack);
   assert.match(steps[pack].run, /--publish never --config\.extraMetadata\.version=/);
   assert.equal(steps[release].if, "github.event_name == 'push' || inputs.publish_release == true");
+  assert.equal(steps[release].with.name, 'Drill Notebook ${{ steps.ver.outputs.tag }}');
+  assert.equal(steps[release].with.fail_on_unmatched_files, true);
+  const artifact = steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(artifact.if, undefined);
+  assert.equal(artifact.with['if-no-files-found'], 'error');
+  assert.ok(existsSync(join(root, 'docs/plans/v0.7.0-release-notes.md')));
 });
 
 test('云端后端使用预装 Maven，保留测试门禁、Java 17 和 JAR 产物路径', () => {

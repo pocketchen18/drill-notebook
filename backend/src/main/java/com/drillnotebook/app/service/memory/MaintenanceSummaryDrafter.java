@@ -163,9 +163,12 @@ public class MaintenanceSummaryDrafter implements MaintenancePorts.SummaryDrafte
     }
 
     private static MaintenancePorts.Usage usageOf(AiUpstreamClient.Result result) {
-        Integer input = result.usage() == null ? null : result.usage().inputTokens();
-        Integer output = result.usage() == null ? null : result.usage().outputTokens();
-        return new MaintenancePorts.Usage(input == null ? null : input.longValue(),
-                output == null ? null : output.longValue());
+        AiUpstreamClient.Usage observed = result.usage();
+        return new MaintenancePorts.Usage(
+                observed == null || observed.inputTokens() == null ? null : observed.inputTokens().longValue(),
+                observed == null || observed.outputTokens() == null ? null : observed.outputTokens().longValue(),
+                observed == null || observed.cacheReadTokens() == null ? null : observed.cacheReadTokens().longValue(),
+                observed == null || observed.cacheWriteTokens() == null ? null : observed.cacheWriteTokens().longValue(),
+                observed != null && observed.cacheReadIncludedInInput());
     }
 }

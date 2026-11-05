@@ -56,6 +56,9 @@ class DataBackupServiceTest {
             statement.execute("CREATE TABLE IF NOT EXISTS marker_table(value TEXT)");
             statement.execute("DELETE FROM marker_table");
             statement.execute("INSERT INTO marker_table(value) VALUES ('original')");
+            statement.execute("CREATE TABLE IF NOT EXISTS schema_version(version INTEGER)");
+            statement.execute("DELETE FROM schema_version");
+            statement.execute("INSERT INTO schema_version(version) VALUES (9)");
         }
     }
 
@@ -151,8 +154,14 @@ class DataBackupServiceTest {
 
         Map<String, Object> staged = service.restoreBackup(name);
         assertThat(staged.get("staged")).isEqualTo(true);
+        assertThat(staged.get("safetyBackup")).isNotNull();
+        assertThat(tempRoot.resolve("backups").resolve(String.valueOf(staged.get("safetyBackup")))).exists();
         assertThat(tempRoot.resolve("data").resolve("study.db.pending-restore")).exists();
-        assertThat(tempRoot.resolve("data").resolve("restore-manifest.json")).exists();
+        Path marker = tempRoot.resolve("data").resolve("restore-manifest.json");
+        assertThat(marker).exists();
+        var markerJson = new ObjectMapper().readTree(marker.toFile());
+        assertThat(markerJson.path("stage").asText()).isEqualTo("PREPARED");
+        assertThat(markerJson.path("schemaVersion").asInt()).isEqualTo(9);
 
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -164,6 +173,18 @@ class DataBackupServiceTest {
         assertThat(tempRoot.resolve("data").resolve("attachments").resolve("1").resolve("a.txt"))
                 .exists()
                 .hasContent("backup-version");
+    }
+
+    @Test
+    void pendingRestoreRejectsDatabaseFromFutureSchema() throws Exception {
+        Path data = tempRoot.resolve("data");
+        Path pending = data.resolve("study.db.pending-restore");
+        Files.writeString(pending, "not-a-real-db");
+        new ObjectMapper().writeValue(data.resolve("restore-manifest.json").toFile(), Map.of("schemaVersion", 999));
+
+        assertThat(PendingRestoreApplier.applyIfPending(data)).isFalse();
+        assertThat(pending).exists();
+        assertThat(markerValue()).isEqualTo("original");
     }
 
     @Test

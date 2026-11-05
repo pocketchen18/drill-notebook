@@ -211,6 +211,23 @@ class ChatTurnServiceLifecycleTest {
     }
 
     @Test
+    void userStopWithOnlyReasoningIsAbortedAndKeepsReasoning() throws Exception {
+        BeginResult begun = service.begin(input(sessionId, "只思考后停止"));
+        service.cancel(begun.lease().requestId());
+
+        FinalResult done = service.finalizeTurn(begun.lease(),
+                UpstreamReply.of("", "先想清楚再回答", "stop"), null);
+
+        assertEquals(ChatTurnRepository.STATUS_ABORTED, done.status());
+        Map<String, Object> body = status(begun.lease().requestId());
+        assertEquals("先想清楚再回答", body.get("reasoning"));
+        assertEquals("DECRYPTED", body.get("reasoningStatus"));
+        assertEquals("", body.get("reply"));
+        assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'ABORTED' AND memory_eligible = 1"));
+        assertEquals(0, ledger.read().reservedHistoryBytes());
+    }
+
+    @Test
     void captureLimitAndProviderLengthBothTruncate() throws Exception {
         BeginResult limited = service.begin(input(sessionId, "触及捕获上限"));
         assertEquals(ChatTurnRepository.STATUS_TRUNCATED,
@@ -317,6 +334,22 @@ class ChatTurnServiceLifecycleTest {
         assertEquals(400, assertThrows(ChatTurnRejectException.class, () -> service.status(future)).status());
         assertEquals(400, assertThrows(ChatTurnRejectException.class,
                 () -> service.status("01a109ca-1100-7000-8000-00000000000")).status(), "非法 ID 直接拒");
+    }
+
+    @Test
+    void statusReturnsPersistedReplyAndReasoningAfterDisconnect() throws Exception {
+        BeginResult begun = service.begin(input(sessionId, "断线后取回完整回答"));
+        service.finalizeTurn(begun.lease(), UpstreamReply.of("完整回答", "思考链", "stop"), null);
+        releaseHandle(begun.lease());
+
+        Map<String, Object> body = service.status(begun.lease().requestId());
+
+        assertEquals(ChatTurnRepository.STATUS_COMPLETED, body.get("status"));
+        assertEquals("完整回答", body.get("reply"));
+        assertEquals("思考链", body.get("reasoning"));
+        assertEquals("DECRYPTED", body.get("replyStatus"));
+        assertEquals("DECRYPTED", body.get("reasoningStatus"));
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"), "查状态不生成、不提取");
     }
 
     @Test

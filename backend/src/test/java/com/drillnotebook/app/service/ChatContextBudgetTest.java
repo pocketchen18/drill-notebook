@@ -170,6 +170,19 @@ class ChatContextBudgetTest {
     }
 
     @Test
+    void oversizedCurrentQuestionWithEmojiAndCodeIsRefusedIntact() {
+        String huge = "```java\n" + "😀".repeat(5000) + "\n```";
+        ChatTurnRejectException error = assertThrows(ChatTurnRejectException.class,
+                () -> fit(projection(List.of()), huge, ContextMemorySource.Selection.EMPTY, List.of(), Map.of(),
+                        List.of(), true, 5000, true));
+
+        assertEquals(413, error.status());
+        assertEquals("CONTEXT_TOO_LARGE", error.code());
+        assertEquals(List.of("USER_TEXT"), error.details().get("categoriesToShorten"),
+                "emoji/代码块同样不能被静默截断");
+    }
+
+    @Test
     void currentImagesAreNeverSilentlyDropped() {
         // 窗口只够两张图的预留（每张 4,096），第三张不能"悄悄少发一张"
         ChatTurnRejectException error = assertThrows(ChatTurnRejectException.class,

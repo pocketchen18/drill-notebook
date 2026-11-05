@@ -112,6 +112,46 @@ class ChatContextServiceTest {
     }
 
     @Test
+    void globalMemoryAddedInOneSessionIsVisibleInANewSession() throws Exception {
+        unlockVault();
+        enableUseConsent();
+        assertEquals(201, items.add(new MemoryItemService.AddInput("GOAL", "GLOBAL", 0L, "考试安排", null, GOAL,
+                null, false, op("add-cross-session"))).status());
+        indexReady();
+
+        jdbc.update("INSERT INTO ai_chat_session(title) VALUES (?)", "新会话");
+        sessionId = jdbc.queryForObject("SELECT MAX(id) FROM ai_chat_session", Long.class);
+
+        ChatContextPlan fresh = plan("内存管理考试怎么复习", Map.of("use", true));
+
+        assertEquals(1, regionCount(fresh, ContextAudit.Region.MEMORY), "新会话必须能读到已有全局记忆（M01）");
+        assertTrue(serialized(fresh).contains(GOAL));
+    }
+
+    @Test
+    void requestLanguageOverrideWinsWithoutChangingLongTermPreference() throws Exception {
+        unlockVault();
+        enableUseConsent();
+        assertEquals(201, items.add(new MemoryItemService.AddInput("PREFERENCE", "GLOBAL", 0L,
+                "answer.language", null, "英文", null, false, op("add-language"))).status());
+        indexReady();
+        int factsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item", Integer.class);
+
+        ChatContextPlan plan = plan("这次请用中文回答，英文偏好先保留", Map.of("use", true));
+
+        assertEquals(1, regionCount(plan, ContextAudit.Region.MEMORY),
+                "长期语言偏好仍要注入，本次请求只覆盖本轮");
+        assertTrue(serialized(plan).contains("英文"), "本次请求不得删除或改写长期偏好");
+        assertEquals(factsBefore, jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item", Integer.class),
+                "装配计划不能顺手写记忆");
+        assertTrue(serialized(plan).contains("执行优先级"),
+                "系统规则必须声明当前明确要求高于记忆");
+        Map<String, Object> last = plan.messages().get(plan.messages().size() - 1);
+        assertEquals("user", last.get("role"));
+        assertTrue(firstBlockText(last).contains("这次请用中文回答"), "当前请求必须固定在最后");
+    }
+
+    @Test
     void notebookScopeReadsOnlyItsOwnFactsAndPageMustMatchTheSession() throws Exception {
         unlockVault();
         enableUseConsent();
@@ -162,6 +202,23 @@ class ChatContextServiceTest {
         assertNotEquals(first.turnId(), afterThird.get(0).sourceTurnId().longValue());
         assertTrue(hasOmission(shifted, ContextAudit.Omission.ATTACHMENT_POLICY, "IMAGE"),
                 "更早的原图仍可按需从历史读取，但本轮没提供就得如实标出来");
+    }
+
+    @Test
+    void historyImagesReplayAfterRestartAndUnlock() throws Exception {
+        unlockVault();
+        ChatTurnService.Lease first = completeTurn("看这张图", "回答一", PNG);
+
+        wiring = ChatLegacyWiring.wire(dataSource, jdbc);
+        stack = ChatContextWiring.wire(dataSource, jdbc, wiring);
+        assertEquals(200, stack.vault().unlock(PASSWORD, List.of(new MemoryVaultService.SessionUnlock(sessionId,
+                PASSWORD))).status(), String.valueOf(stack.vault().status().body()));
+
+        ChatContextPlan plan = plan("图里是什么", Map.of("use", false));
+        List<ContextAudit.Selected> images = selected(plan, "IMAGE");
+        assertEquals(1, images.size(), "重启并重新解锁后，完整历史轮的图片仍可重放");
+        assertEquals(first.turnId(), images.get(0).sourceTurnId().longValue());
+        assertTrue(serialized(plan).contains("data:image/png;base64," + PNG));
     }
 
     @Test

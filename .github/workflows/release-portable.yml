@@ -2,7 +2,7 @@ name: Build portable pre-release
 
 # 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 两种触发方式：
-#   1) 打标签推送：git tag v0.6.3 && git push origin v0.6.3  → 自动编译并发布 v0.6.3 预发行版
+#   1) 打标签推送：git tag v0.7.0 && git push origin v0.7.0  → 自动编译并发布 v0.7.0 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
 # 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '预发行版本号（含 v 前缀），例如 v0.6.3'
+        description: '预发行版本号（含 v 前缀），例如 v0.7.0'
         required: true
-        default: 'v0.6.3'
+        default: 'v0.7.0'
       publish_release:
         description: '是否发布为 GitHub Pre-release（关闭则仅上传构建产物）'
         type: boolean
@@ -131,20 +131,29 @@ jobs:
           $zip | ForEach-Object { Write-Host $_.FullName }
 
       # 标签推送时必发；手动触发时按 publish_release 开关（严格匹配布尔）决定是否发预发行版
+      - name: 校验 v0.7.0 发布说明
+        if: startsWith(steps.ver.outputs.tag, 'v0.7.0')
+        run: |
+          $notes = 'docs\plans\v0.7.0-release-notes.md'
+          if (-not (Test-Path -LiteralPath $notes)) { throw "缺少发布说明：$notes" }
+          Write-Host "发布说明：$notes"
+
       - name: 发布 GitHub Release（预发行版）
         if: github.event_name == 'push' || inputs.publish_release == true
         uses: softprops/action-gh-release@v2
         with:
+          name: Drill Notebook ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}
           prerelease: true
+          fail_on_unmatched_files: true
           generate_release_notes: true
           files: dist/Drill-Notebook-*-win-x64-portable.zip
 
-      # 手动触发时只上传构建产物，方便先自测流水线
-      - name: 上传构建产物（手动触发时）
-        if: github.event_name == 'workflow_dispatch'
+      # 标签发布与手动触发都保留构建产物，便于下载自测和回查。
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable
           path: dist/Drill-Notebook-*-win-x64-portable.zip
           if-no-files-found: error
+          retention-days: 14

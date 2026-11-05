@@ -293,6 +293,25 @@ class MemoryMaintenanceWorkerTest {
     }
 
     @Test
+    void revokingConsentBetweenSendAndCommitDiscardsTheResult() throws Exception {
+        harness.readyForMaintenance();
+        harness.seedTurns(4, TURN_CHARS);
+        harness.wake();
+        harness.drain();
+        String jobId = harness.onlyJob().id();
+        harness.extractor.willInvoke(
+                () -> harness.policy.revokeConsent(MemoryPolicyService.PURPOSE_MAINTENANCE));
+
+        MemoryMaintenanceWorker.Drain drain = harness.drainWhenDue();
+
+        assertEquals(1, drain.rejected(), "授权撤销后旧结果必须被租约/CAS 拒绝（§5.1）");
+        assertEquals(0, drain.committed());
+        assertEquals(MemoryJobRepository.STATUS_SUPERSEDED, harness.job(jobId).status());
+        assertEquals(0L, harness.memoryWatermark(), "结果被丢弃时水位也不能动");
+        assertEquals(1, harness.extractor.calls(), "外发确实发生过，只是结果不许落库");
+    }
+
+    @Test
     void sourceEditedWhileRetryingSupersedesTheStaleBatchAndRequeuesFreshly() throws Exception {
         harness.readyForMaintenance();
         harness.seedTurns(4, TURN_CHARS);
@@ -941,6 +960,29 @@ class MemoryMaintenanceWorkerTest {
     }
 
     // ---- 重试与失败 ----
+
+    @Test
+    void rateLimitThenServerErrorThenSuccessCommitsWithoutRepeatingTheBatch() throws Exception {
+        harness.readyForMaintenance();
+        harness.seedTurns(4, TURN_CHARS);
+        harness.wake();
+        harness.drain();
+        String jobId = harness.onlyJob().id();
+
+        harness.extractor.willFail("UPSTREAM_429", true);
+        assertEquals(1, harness.drainWhenDue().retried());
+
+        harness.extractor.willFail("UPSTREAM_500", true);
+        assertEquals(1, harness.drainJobWhenDue(jobId).retried());
+
+        harness.extractor.willReturn(1, 0);
+        MemoryMaintenanceWorker.Drain done = harness.drainJobWhenDue(jobId);
+
+        assertEquals(1, done.committed(), "第三次成功只提交一次");
+        assertEquals(MemoryJobRepository.STATUS_COMPLETED, harness.job(jobId).status());
+        assertEquals(3, harness.extractor.calls(), "429、5xx、成功各一次");
+        assertEquals(3, harness.spend().attempts(), "每次外发都占一次尝试");
+    }
 
     @Test
     void retryBackoffFollowsThirtyThenOneHundredTwentySeconds() throws Exception {

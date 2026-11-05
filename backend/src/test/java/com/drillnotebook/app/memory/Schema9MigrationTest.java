@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
+import com.drillnotebook.app.repository.ChatHistoryRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -111,6 +112,39 @@ class Schema9MigrationTest {
 
         assertTrue(existsSnapshot(), "跨版本升级必须先留一致性快照");
         assertForeignKeysClean();
+    }
+
+    @Test
+    void legacyMessagesStayTurnlessAndAreNeverMaintenanceSources() throws Exception {
+        JdbcTemplate legacy = Schema9Fixture.createV8Database(dataSource);
+        Schema9Fixture.seedV8Data(legacy);
+        new DatabaseInitializer(dataSource, paths()).initialize();
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        ChatHistoryRepository history = new ChatHistoryRepository(dataSource);
+
+        assertEquals(3, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ai_chat_message WHERE turn_id IS NULL", Integer.class));
+        assertEquals(3, history.legacyBatch(1L, Long.MAX_VALUE, 10).size());
+        assertTrue(history.maintenanceRange(1L, 0L, Long.MAX_VALUE, 100).isEmpty());
+    }
+
+    @Test
+    void sixHundredLegacyMessagesSurviveMigrationWithoutBeingScanned() throws Exception {
+        JdbcTemplate legacy = Schema9Fixture.createV8Database(dataSource);
+        Schema9Fixture.seedV8Data(legacy);
+        for (int id = 4; id <= 600; id++) {
+            legacy.update("INSERT INTO ai_chat_message(id, session_id, role, content, created_at)"
+                    + " VALUES (?, 1, 'user', ?, '2026-01-03 00:00:00')", id, "旧消息" + id);
+        }
+        new DatabaseInitializer(dataSource, paths()).initialize();
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        ChatHistoryRepository history = new ChatHistoryRepository(dataSource);
+
+        assertEquals(600, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_message", Integer.class));
+        assertEquals(600, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ai_chat_message WHERE turn_id IS NULL", Integer.class));
+        assertEquals(600, history.legacyBatch(1L, Long.MAX_VALUE, 1000).size());
+        assertTrue(history.maintenanceRange(1L, 0L, Long.MAX_VALUE, 1000).isEmpty());
     }
 
     @Test

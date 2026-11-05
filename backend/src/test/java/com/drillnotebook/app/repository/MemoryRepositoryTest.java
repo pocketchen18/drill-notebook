@@ -530,6 +530,26 @@ class MemoryRepositoryTest {
         assertFalse(missing.deleted());
     }
 
+    @Test
+    void purgingNotebookScopeLeavesGlobalFactsAndInvalidatesBoundContexts() throws Exception {
+        var notebook = memory.add(new NewMemory("row-nb", VAULT, "NOTEBOOK", 42, "GOAL", "pred-nb", "fam-nb",
+                "v-nb", MemoryRepository.STATUS_ACTIVE, "payload-nb", "{}", "AUTO", false, false,
+                null, null, NOW, NOW, NOW));
+        var global = memory.add(memory("f-global", "v-global", MemoryRepository.STATUS_ACTIVE, "AUTO"));
+        jdbc.update("UPDATE ai_chat_session SET memory_scope_type = 'NOTEBOOK', memory_notebook_id = 42,"
+                + " context_generation = 5 WHERE id = ?", sessionId);
+        long revisionBefore = vault().revision();
+
+        int deleted = memory.purgeNotebookScope(VAULT, 42);
+
+        assertEquals(1, deleted);
+        assertTrue(memory.findCurrent(VAULT, notebook.memoryId()).isEmpty());
+        assertTrue(memory.findCurrent(VAULT, global.memoryId()).isPresent());
+        assertEquals(revisionBefore + 1, vault().revision(), "删除笔记本记忆要推进 revision");
+        assertEquals(6L, jdbc.queryForObject("SELECT context_generation FROM ai_chat_session WHERE id = ?",
+                Long.class, sessionId), "绑定该笔记本的会话上下文要失效");
+    }
+
     // ---- helpers ----
 
     private NewMemory memory(String family, String valueHmac, String status, String origin) {

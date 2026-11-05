@@ -101,6 +101,21 @@ class MemoryJobRepositoryTest {
     }
 
     @Test
+    void queuedJobSurvivesRepositoryRestartBeforeClaim() throws Exception {
+        String id = jobs.enqueue(draft("input-1")).jobId();
+
+        MemoryJobRepository restarted = new MemoryJobRepository(dataSource, new ImmediateTransaction(dataSource));
+        List<JobRow> claimable = restarted.findClaimable(NOW, 10);
+
+        assertEquals(1, claimable.size(), "claim 前重启后 QUEUED 任务仍在新实例可见");
+        assertEquals(id, claimable.get(0).id());
+        assertEquals(MemoryJobRepository.STATUS_QUEUED, claimable.get(0).status());
+        assertEquals(LeaseOutcome.APPLIED, restarted.claim(id, "lease-restart", LATER, NOW));
+        assertEquals(1, count());
+        assertEquals(MemoryJobRepository.STATUS_CLAIMED, jobs.find(id).orElseThrow().status());
+    }
+
+    @Test
     void pendingQueuedRangeIsMergedInsteadOfDuplicated() throws Exception {
         EnqueueResult first = jobs.enqueue(draft("input-1"));
         EnqueueResult wider = jobs.enqueue(draft("input-2", 1L, 6L));

@@ -298,6 +298,39 @@ public class MemoryRepository {
         });
     }
 
+    /**
+     * 删除某本笔记本作用域下的全部记忆派生行。笔记本删除会同时删掉页面/索引，
+     * NOTEBOOK scope 的 fact 若留着就会指向不存在的 notebookId；这里把 fact、证据链接、
+     * 针对这些 fact 的候选、suppression、扫描 job 一并清掉，并失效绑定该笔记本的会话上下文。
+     *
+     * @return 删除的 fact 行数
+     */
+    public int purgeNotebookScope(String vaultId, long notebookId) throws SQLException {
+        return immediate.execute(connection -> {
+            requireVault(connection, vaultId);
+            execute(connection, "DELETE FROM ai_memory_item_evidence WHERE item_row_id IN ("
+                    + "SELECT row_id FROM ai_memory_item WHERE vault_id = ? AND scope_type = 'NOTEBOOK'"
+                    + " AND scope_id = ?)", vaultId, notebookId);
+            int proposals = execute(connection, "DELETE FROM ai_memory_proposal WHERE target_memory_id IN ("
+                    + "SELECT memory_id FROM ai_memory_item WHERE vault_id = ? AND scope_type = 'NOTEBOOK'"
+                    + " AND scope_id = ?)", vaultId, notebookId);
+            int suppressions = execute(connection, "DELETE FROM ai_memory_suppression"
+                    + " WHERE vault_id = ? AND scope_type = 'NOTEBOOK' AND scope_id = ?", vaultId, notebookId);
+            int jobs = execute(connection, "DELETE FROM ai_memory_job"
+                    + " WHERE source_scope_type = 'NOTEBOOK' AND source_scope_id = ?", notebookId);
+            int facts = execute(connection, "DELETE FROM ai_memory_item"
+                    + " WHERE vault_id = ? AND scope_type = 'NOTEBOOK' AND scope_id = ?", vaultId, notebookId);
+            execute(connection, "DELETE FROM ai_memory_evidence WHERE id NOT IN"
+                    + " (SELECT evidence_id FROM ai_memory_item_evidence)");
+            execute(connection, "UPDATE ai_chat_session SET context_generation = context_generation + 1"
+                    + " WHERE memory_scope_type = 'NOTEBOOK' AND memory_notebook_id = ?", notebookId);
+            if (facts > 0 || proposals > 0 || suppressions > 0 || jobs > 0) {
+                updateVault(connection, vaultId, false);
+            }
+            return facts;
+        });
+    }
+
     // ---- 事实 ----
 
     /**

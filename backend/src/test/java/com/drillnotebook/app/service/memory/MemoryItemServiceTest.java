@@ -435,6 +435,8 @@ class MemoryItemServiceTest {
                         + " vault_epoch, payload_cipher, crypto_meta, estimated_tokens, updated_at)"
                         + " VALUES (?, 1, ?, 1, 1, 'ctx', '{}', 20, ?)", sessionId, turn, MemoryTimes.now());
         long epochBefore = memory.readVault(vaultId).orElseThrow().epoch();
+        jdbc.update("INSERT INTO ai_chat_message(session_id, role, content) VALUES (?, 'user', ?)",
+                sessionId, "原始用户消息");
 
         MemoryApiResult deleted = items.delete(memoryId, 1, "op-del-1");
         assertEquals(204, deleted.status());
@@ -453,6 +455,9 @@ class MemoryItemServiceTest {
         assertEquals(0L, scanWatermark("memory_scan_after_turn"), "删除不动会话扫描水位");
         assertEquals(0L, scanWatermark("summary_scan_after_turn"));
         assertEquals(0L, policy.policyOf(policy.current()).memoryHistoryFloor(), "删除不动全局边界");
+        assertEquals(1L, count("ai_chat_message"), "只删记忆，不动原会话消息");
+        assertEquals(1L, count("ai_chat_turn"), "原会话轮次仍可读");
+        assertEquals(1L, count("ai_chat_session"), "原会话本身仍保留");
 
         assertEquals(200, items.list(null, null, null, null, null, null).status(), "删空后列表仍可用");
     }

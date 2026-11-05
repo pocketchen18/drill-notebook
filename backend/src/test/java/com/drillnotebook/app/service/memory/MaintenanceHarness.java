@@ -638,6 +638,7 @@ final class MaintenanceHarness {
         private long hangMillis;
         private MaintenancePorts.Batch lastBatch;
         private String lastRepairOf;
+        private Runnable duringExtract;
 
         /** 上游原文回放：{@code MemoryValidator.validate} 在本批真实来源上跑完 §5 才交给写入器。 */
         private record BodyReplay(String body, Map<String, Integer> knownTargets) {
@@ -709,6 +710,10 @@ final class MaintenanceHarness {
             script.add(action);
         }
 
+        void invokeDuringExtract(Runnable action) {
+            duringExtract = action;
+        }
+
         /** 模拟上游悬挂：本次调用先把假时钟推过租约再返回，用来测"悬挂的结果不许提交"。 */
         void hangFor(long millis) {
             hangMillis = millis;
@@ -743,6 +748,11 @@ final class MaintenanceHarness {
             lastBatch = batch;
             lastRepairOf = repairOf;
             calls.incrementAndGet();
+            if (duringExtract != null) {
+                Runnable action = duringExtract;
+                duringExtract = null;
+                action.run();
+            }
             if (hangMillis > 0) {
                 clock.addAndGet(hangMillis);
                 hangMillis = 0;

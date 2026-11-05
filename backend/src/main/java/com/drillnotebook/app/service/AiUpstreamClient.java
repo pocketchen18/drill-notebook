@@ -19,6 +19,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -36,6 +38,7 @@ public class AiUpstreamClient {
     public static final String FORMAT_ANTHROPIC = "anthropic";
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
+    private static final Set<String> CACHE_UNSUPPORTED = ConcurrentHashMap.newKeySet();
 
     private final HttpClient http;
     private final ObjectMapper mapper;
@@ -53,11 +56,28 @@ public class AiUpstreamClient {
             String apiFormat,
             int maxTokens,
             boolean disableThinking,
-            boolean jsonMode) {
+            boolean jsonMode,
+            boolean cacheBreakpoints,
+            Runnable onCacheFallback) {
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode, boolean cacheBreakpoints) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, cacheBreakpoints, () -> { });
+        }
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, false);
+        }
 
         public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
                         boolean disableThinking) {
-            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, false);
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, false, false);
+        }
+
+        public Upstream withCacheBreakpoints(boolean enabled) {
+            return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, enabled,
+                    onCacheFallback);
         }
 
         public boolean anthropic() {
@@ -85,13 +105,44 @@ public class AiUpstreamClient {
      * 缺字段一律 unknown，绝不拿估算值冒充当过的钱。
      */
     public record Usage(String source, Integer inputTokens, Integer outputTokens, Integer cacheReadTokens,
-                        Integer cacheWriteTokens) {
+                        Integer cacheWriteTokens, boolean cacheReadIncludedInInput) {
+        /** 旧形态默认按 Anthropic 口径：缓存读是 input 之外的独立桶。 */
+        public Usage(String source, Integer inputTokens, Integer outputTokens, Integer cacheReadTokens,
+                     Integer cacheWriteTokens) {
+            this(source, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, false);
+        }
+
         public static Usage unknown() {
-            return new Usage("unknown", null, null, null, null);
+            return new Usage("unknown", null, null, null, null, false);
         }
 
         public boolean reported() {
             return "provider".equals(source) && (inputTokens != null || outputTokens != null);
+        }
+
+        public boolean hasAny() {
+            return inputTokens != null || outputTokens != null || cacheReadTokens != null
+                    || cacheWriteTokens != null;
+        }
+
+        /** 流式事件可能分块携带 input/cache 与 output；只覆盖本次真的带了的字段。 */
+        public Usage merge(Usage next) {
+            if (next == null || !"provider".equals(next.source)) return this;
+            return new Usage("provider",
+                    next.inputTokens != null ? next.inputTokens : inputTokens,
+                    next.outputTokens != null ? next.outputTokens : outputTokens,
+                    next.cacheReadTokens != null ? next.cacheReadTokens : cacheReadTokens,
+                    next.cacheWriteTokens != null ? next.cacheWriteTokens : cacheWriteTokens,
+                    next.cacheReadIncludedInInput || cacheReadIncludedInInput);
+        }
+
+        /** 去重后的输入总量：OpenAI 的 cached 是 prompt 子集，Anthropic 的缓存读写是独立桶。 */
+        public Integer totalInputTokens() {
+            if (inputTokens == null && cacheReadTokens == null && cacheWriteTokens == null) return null;
+            int input = inputTokens == null ? 0 : Math.max(0, inputTokens);
+            int read = cacheReadTokens == null ? 0 : Math.max(0, cacheReadTokens);
+            int write = cacheWriteTokens == null ? 0 : Math.max(0, cacheWriteTokens);
+            return input + (cacheReadIncludedInInput ? 0 : read + write);
         }
     }
 
@@ -110,12 +161,42 @@ public class AiUpstreamClient {
     }
 
     /**
-     * 调用上游。{@code handle} 非空时它同时承担"用户停止"和"总期限到期"两个中断源：
-     * 期限覆盖建连、响应头与响应体读取，到期或取消都立刻关闭响应体，读取循环与结果提交前各查一次（§7.2.2）。
-     * 只有句柄 claim 到终态的那条路径才允许交出结果，取消后晚到的正文不再算 COMPLETED。
+     * 调用上游。缓存断点只在显式能力开启时发送；若上游明确以 400 拒绝 cache 字段，
+     * 仅降级一次并去掉断点重发，401/429/断流不走这里。
      */
     public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
                        int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
+        Upstream effective = cacheUnsupported(upstream) ? upstream.withCacheBreakpoints(false) : upstream;
+        try {
+            return callOnce(effective, messages, stream, listener, timeoutSeconds, handle);
+        } catch (IllegalArgumentException error) {
+            if (effective.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
+                rememberCacheUnsupported(upstream);
+                upstream.onCacheFallback().run();
+                return callOnce(upstream.withCacheBreakpoints(false), messages, stream, listener, timeoutSeconds, handle);
+            }
+            throw error;
+        }
+    }
+
+    static void resetCacheCapabilityForTests() {
+        CACHE_UNSUPPORTED.clear();
+    }
+
+    private static boolean cacheUnsupported(Upstream upstream) {
+        return upstream.cacheBreakpoints() && CACHE_UNSUPPORTED.contains(cacheCapabilityKey(upstream));
+    }
+
+    private static void rememberCacheUnsupported(Upstream upstream) {
+        CACHE_UNSUPPORTED.add(cacheCapabilityKey(upstream));
+    }
+
+    private static String cacheCapabilityKey(Upstream upstream) {
+        return upstream.apiFormat() + "|" + upstream.baseUrl() + "|" + upstream.model();
+    }
+
+    private Result callOnce(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
+                            int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
         boolean anthropic = upstream.anthropic();
         String target = anthropic ? anthropicMessagesUrl(upstream.baseUrl()) : chatCompletionsUrl(upstream.baseUrl());
         Map<String, Object> request = anthropic
@@ -327,6 +408,10 @@ public class AiUpstreamClient {
         request.put("model", upstream.model());
         request.put("messages", messages);
         request.put("stream", stream);
+        if (stream && ProviderCapabilities.of(upstream.baseUrl(), upstream.apiFormat(), upstream.model())
+                .streamUsage()) {
+            request.put("stream_options", Map.of("include_usage", true));
+        }
         request.put("max_tokens", upstream.maxTokens());
         if (upstream.disableThinking()) {
             request.put("enable_thinking", false);
@@ -344,7 +429,16 @@ public class AiUpstreamClient {
         AnthropicPayload payload = toAnthropic(messages);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", upstream.model());
-        if (!payload.system().isBlank()) request.put("system", payload.system());
+        if (!payload.system().isBlank()) {
+            if (upstream.cacheBreakpoints()) {
+                request.put("system", List.of(Map.of(
+                        "type", "text",
+                        "text", payload.system(),
+                        "cache_control", Map.of("type", "ephemeral"))));
+            } else {
+                request.put("system", payload.system());
+            }
+        }
         request.put("messages", payload.messages());
         request.put("max_tokens", Math.max(upstream.maxTokens(), 1024));
         request.put("stream", stream);
@@ -481,7 +575,7 @@ public class AiUpstreamClient {
         Integer cacheRead = intOrNull(details.path("cached_tokens"));
         Integer cacheWrite = intOrNull(details.path("cache_write_tokens"));
         if (input == null && output == null && cacheRead == null && cacheWrite == null) return Usage.unknown();
-        return new Usage("provider", input, output, cacheRead, cacheWrite);
+        return new Usage("provider", input, output, cacheRead, cacheWrite, true);
     }
 
     /** Anthropic 风格用量：缓存读/写分开计费，缺失即 null（不折算进 input）。 */
@@ -525,7 +619,7 @@ public class AiUpstreamClient {
                 }
                 throwIfUpstreamError(node);
                 Usage parsed = usageOfChatCompletion(node);
-                if (parsed.reported()) usage[0] = parsed;
+                if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
                 JsonNode delta = node.path("choices").path(0).path("delta");
                 String reasoningKept = capture.keepReasoning(delta.path("reasoning_content").asText(""));
                 if (!reasoningKept.isEmpty() && listener != null && !listener.onDelta("reasoning", reasoningKept)) {
@@ -590,7 +684,7 @@ public class AiUpstreamClient {
             throwIfUpstreamError(node);
             String type = node.path("type").asText(eventName);
             Usage parsed = usageOfAnthropic(node);
-            if (parsed.reported()) usage[0] = parsed;
+            if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
             if ("content_block_delta".equals(type)) {
                 JsonNode delta = node.path("delta");
                 String deltaType = delta.path("type").asText("");
@@ -611,7 +705,7 @@ public class AiUpstreamClient {
                 String stopReason = node.path("delta").path("stop_reason").asText("");
                 if (!stopReason.isEmpty()) finish[0] = stopReason;
                 Usage tail = usageOfAnthropic(node);
-                if (tail.reported()) usage[0] = tail;
+                if (tail.hasAny()) usage[0] = usage[0].merge(tail);
             } else if ("message_stop".equals(type)) {
                 terminal[0] = true;
             } else if ("error".equals(type)) {
@@ -787,6 +881,14 @@ public class AiUpstreamClient {
         ResponseTooLargeException() {
             super("上游响应体超过 8 MiB 硬上限");
         }
+    }
+
+    static boolean isCacheUnsupported(String message) {
+        if (message == null || !message.contains("HTTP 400")) return false;
+        String text = message.toLowerCase(Locale.ROOT);
+        return text.contains("cache_control")
+                || (text.contains("cache") && (text.contains("unsupported") || text.contains("not supported")
+                || text.contains("unknown") || text.contains("不支持") || text.contains("未知")));
     }
 
     static String errorMessage(int status, String body) {

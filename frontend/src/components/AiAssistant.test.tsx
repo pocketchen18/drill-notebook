@@ -274,4 +274,25 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     // notice 不阻止输入
     expect(screen.getByPlaceholderText(/提问/)).not.toBeDisabled();
   });
+
+  it('非流式回复落库失败时明确显示未保存', async () => {
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/ai/chat') {
+        return Promise.resolve({
+          reply: 'ANSWER',
+          sessionId: 10,
+          stateDurable: false,
+          persistenceStatus: 'failed'
+        });
+      }
+      return Promise.resolve({});
+    });
+    setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    renderAssistant();
+    await typeAndSend('你好');
+
+    expect(await screen.findByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('这一轮没有正常落库，历史记录可能不完整')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/提问/)).not.toBeDisabled();
+  });
 });

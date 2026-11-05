@@ -25,6 +25,11 @@ import org.springframework.stereotype.Component;
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
     private static final int SCHEMA_VERSION = 9;
+
+    /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
+    public static int currentSchemaVersion() {
+        return SCHEMA_VERSION;
+    }
     private static final DateTimeFormatter SNAPSHOT_STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC);
     private final DataSource dataSource;

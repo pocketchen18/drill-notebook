@@ -338,7 +338,7 @@ public class ChatTurnService {
     private static ActualUsage actual(AiUpstreamClient.Usage observed) {
         if (observed == null || !observed.reported()) return ActualUsage.unknown();
         return new ActualUsage("provider", observed.inputTokens(), observed.outputTokens(),
-                observed.cacheReadTokens(), observed.cacheWriteTokens());
+                observed.cacheReadTokens(), observed.cacheWriteTokens(), observed.cacheReadIncludedInInput());
     }
 
     /**
@@ -362,6 +362,10 @@ public class ChatTurnService {
 
     /** 状态查询：只读，绝不触发重新生成或重新提取。 */
     public Map<String, Object> status(String requestId) {
+        return status(requestId, null);
+    }
+
+    public Map<String, Object> status(String requestId, String masterPassword) {
         TurnRow turn = readTurn(requestId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("requestId", turn.requestId());
@@ -375,6 +379,13 @@ public class ChatTurnService {
         body.put("active", registry.isActive(requestId));
         body.put("retryOf", turn.retryOf());
         body.put("contentDeleted", turn.contentDeletedAt() != null);
+        ChatMessageCipher.Read reply = readPart(turn.assistantMessageId(), false, masterPassword);
+        ChatMessageCipher.Read reasoning = readPart(turn.assistantMessageId(), true, masterPassword);
+        body.put("reply", reply.status() == ChatMessageCipher.ReadStatus.DECRYPTED ? reply.value() : null);
+        body.put("reasoning", reasoning.status() == ChatMessageCipher.ReadStatus.DECRYPTED
+                ? reasoning.value() : null);
+        body.put("replyStatus", reply.status().name());
+        body.put("reasoningStatus", reasoning.status().name());
         return body;
     }
 
@@ -401,6 +412,15 @@ public class ChatTurnService {
     }
 
     /** 用户停止：置取消标志并关闭上游响应体；正文一个字都没收到时本轮终态是 ABORTED。 */
+    public Optional<String> runningRequestId(long sessionId) {
+        try {
+            return turns.findRunning(sessionId).map(TurnRow::requestId);
+        } catch (SQLException error) {
+            degrade(error);
+            throw reject(503, "STORAGE_UNAVAILABLE", "读取会话运行状态失败", Map.of());
+        }
+    }
+
     public Map<String, Object> cancel(String requestId) {
         TurnRow turn = readTurn(requestId);
         Optional<ActiveTurnRegistry.Handle> handle = registry.find(requestId);
@@ -620,6 +640,21 @@ public class ChatTurnService {
         } catch (SQLException error) {
             degrade(error);
             return "[加密消息：无法解密]";
+        }
+    }
+
+    private ChatMessageCipher.Read readPart(Long messageId, boolean reasoning, String masterPassword) {
+        if (messageId == null) return new ChatMessageCipher.Read(ChatMessageCipher.ReadStatus.EMPTY, null);
+        try {
+            return turns.findMessage(messageId)
+                    .map(row -> reasoning
+                            ? cipher.read(row.reasoningCipher(), row.reasoningMeta(), masterPassword)
+                            : cipher.readLegacy(row.content(), row.contentCipher(), row.contentMeta(),
+                                    masterPassword))
+                    .orElse(new ChatMessageCipher.Read(ChatMessageCipher.ReadStatus.EMPTY, null));
+        } catch (SQLException error) {
+            degrade(error);
+            return new ChatMessageCipher.Read(ChatMessageCipher.ReadStatus.UNREADABLE, null);
         }
     }
 

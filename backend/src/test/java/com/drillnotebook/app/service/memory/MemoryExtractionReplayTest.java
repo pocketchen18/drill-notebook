@@ -7,12 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository.JobRow;
+import com.drillnotebook.app.repository.MemoryOperationRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.service.memory.MemoryCryptoService.MemoryKey;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -338,6 +340,31 @@ class MemoryExtractionReplayTest {
         assertEquals("NO_VALID_CANDIDATES", job.outcomeCode());
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_proposal"), "版本对不上不猜目标（§5）");
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item"));
+    }
+
+    @Test
+    void userEditDuringOutboundRejectsStaleReplacementAndKeepsNewerVersion() throws Exception {
+        harness.readyForExtraction();
+        apply("以后每次回答详细一些", "answer.detail", "detailed", "以后每次回答详细一些");
+        long turn = harness.seedTurn("以后回答怎么舒服，简洁点", "好");
+        Map<String, Integer> known = harness.activeTargets();
+        String memoryId = known.keySet().iterator().next();
+        int version = known.get(memoryId);
+        MemoryItemService items = new MemoryItemService(harness.crypto, harness.memory, harness.vault,
+                harness.policy, new MemoryOperationRepository(harness.dataSource, harness.immediate),
+                harness.proposals, harness.suppressions, harness.jobs, harness.metadata);
+        AtomicReference<MemoryApiResult> edit = new AtomicReference<>();
+
+        harness.extractor.invokeDuringExtract(() -> edit.set(items.edit(memoryId,
+                new MemoryItemService.EditInput(version, null, null, "concise", null, null))));
+        JobRow job = extract(turn, body(candidate("REPLACE_PROPOSAL", "answer.detail", "very concise",
+                "以后回答怎么舒服", harness.userMessageId(turn), memoryId, version, false)), known);
+
+        assertEquals(200, edit.get().status(), "并发编辑先成功");
+        assertEquals("NO_VALID_CANDIDATES", job.outcomeCode(), "v1 的结果不能覆盖 v2");
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_memory_item"), "v1 SUPERSEDED + v2 ACTIVE");
+        assertEquals(1, itemCount(MemoryRepository.STATUS_ACTIVE));
+        assertEquals(2, number(onlyItem(MemoryRepository.STATUS_ACTIVE).get("version")));
     }
 
     @Test
