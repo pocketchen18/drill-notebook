@@ -368,6 +368,7 @@ public class ConversationProjection {
         if (row.isEmpty()) return null;
         SessionContextRepository.Checkpoint checkpoint = row.get();
         if (checkpoint.schemaVersion() != 2) {
+            checkpoints.delete(request.sessionId());
             return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, 1);
         }
         if (checkpoint.contextGeneration() != request.contextGeneration()) {

@@ -19,6 +19,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -36,6 +38,7 @@ public class AiUpstreamClient {
     public static final String FORMAT_ANTHROPIC = "anthropic";
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
+    private static final Set<String> CACHE_UNSUPPORTED = ConcurrentHashMap.newKeySet();
 
     private final HttpClient http;
     private final ObjectMapper mapper;
@@ -54,7 +57,13 @@ public class AiUpstreamClient {
             int maxTokens,
             boolean disableThinking,
             boolean jsonMode,
-            boolean cacheBreakpoints) {
+            boolean cacheBreakpoints,
+            Runnable onCacheFallback) {
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode, boolean cacheBreakpoints) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, cacheBreakpoints, () -> { });
+        }
 
         public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
                         boolean disableThinking, boolean jsonMode) {
@@ -67,7 +76,8 @@ public class AiUpstreamClient {
         }
 
         public Upstream withCacheBreakpoints(boolean enabled) {
-            return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, enabled);
+            return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, enabled,
+                    onCacheFallback);
         }
 
         public boolean anthropic() {
@@ -156,14 +166,33 @@ public class AiUpstreamClient {
      */
     public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
                        int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
+        Upstream effective = cacheUnsupported(upstream) ? upstream.withCacheBreakpoints(false) : upstream;
         try {
-            return callOnce(upstream, messages, stream, listener, timeoutSeconds, handle);
+            return callOnce(effective, messages, stream, listener, timeoutSeconds, handle);
         } catch (IllegalArgumentException error) {
-            if (upstream.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
+            if (effective.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
+                rememberCacheUnsupported(upstream);
+                upstream.onCacheFallback().run();
                 return callOnce(upstream.withCacheBreakpoints(false), messages, stream, listener, timeoutSeconds, handle);
             }
             throw error;
         }
+    }
+
+    static void resetCacheCapabilityForTests() {
+        CACHE_UNSUPPORTED.clear();
+    }
+
+    private static boolean cacheUnsupported(Upstream upstream) {
+        return upstream.cacheBreakpoints() && CACHE_UNSUPPORTED.contains(cacheCapabilityKey(upstream));
+    }
+
+    private static void rememberCacheUnsupported(Upstream upstream) {
+        CACHE_UNSUPPORTED.add(cacheCapabilityKey(upstream));
+    }
+
+    private static String cacheCapabilityKey(Upstream upstream) {
+        return upstream.apiFormat() + "|" + upstream.baseUrl() + "|" + upstream.model();
     }
 
     private Result callOnce(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,

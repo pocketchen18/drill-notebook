@@ -49,7 +49,15 @@ public class SessionContextRepository {
         }
     }
 
-    /** 检查点 CAS 结果。{@code CONFLICT} 表示这份结果已经过时，必须整份放弃而不是覆盖新值。 */
+    public int delete(long sessionId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "DELETE FROM ai_session_context WHERE session_id = ?")) {
+            statement.setLong(1, sessionId);
+            return statement.executeUpdate();
+        }
+    }
+
     public enum SaveOutcome { APPLIED, CONFLICT }
 
     /**

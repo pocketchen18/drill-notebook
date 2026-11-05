@@ -76,6 +76,11 @@ public class AiConfigRepository {
                 """, key, provider, endpoint, model, encryptedKey, keyMeta, params);
     }
 
+    public void updateParams(String purpose, String params) {
+        String key = purpose == null || purpose.isBlank() ? PURPOSE_CHAT : purpose.trim();
+        jdbc.update("UPDATE ai_config SET params = ? WHERE purpose = ?", params, key);
+    }
+
     public record ConfigRow(
             String purpose,
             String provider,

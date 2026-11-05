@@ -347,6 +347,28 @@ class ConversationProjectionTest {
     }
 
     @Test
+    void corruptSummaryPayloadFallsBackToOriginalTurnsInsteadOfFailingChat() throws Exception {
+        seedTurns(6);
+        long current = insertRunningTurn();
+        createVault();
+        enableSummaryAuthorization();
+        checkpoint(1L, 6L, 1L, coverage(1, 6));
+        var bad = crypto.encrypt(vault.currentKey().orElseThrow(), "ai_session_context",
+                String.valueOf(sessionId), 1L, "{not-json");
+        jdbc.update("UPDATE ai_session_context SET payload_cipher = ?, crypto_meta = ? WHERE session_id = ?",
+                bad.cipher(), bad.cryptoMeta(), sessionId);
+
+        ContextAudit.Builder audit = new ContextAudit.Builder("plan-corrupt-summary", TokenEstimator.VERSION);
+        ConversationProjection.Projection result = projection.project(
+                new ConversationProjection.Request(sessionId, current, 1L, "", 2400), audit);
+
+        assertNull(result.summary(), "坏 JSON 不能伪造摘要");
+        assertEquals(Integer.valueOf(1), omission(audit, result, ContextAudit.Omission.SOURCE_CHANGED, "SUMMARY"));
+        assertTrue(result.notices().contains(ConversationProjection.NOTICE_SUMMARY_UNAVAILABLE));
+        assertEquals(6, result.candidates().size(), "摘要坏掉后聊天仍可用原文历史");
+    }
+
+    @Test
     void checkpointFromAnotherGenerationOrEpochIsIgnored() throws Exception {
         seedTurns(6);
         long current = insertRunningTurn();

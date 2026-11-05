@@ -172,9 +172,14 @@ public class AiService {
         // API 格式：chat_completions（默认）| anthropic；流式开关：默认开
         String apiFormat = normalizeApiFormat(string(body, "apiFormat", ""));
         boolean streaming = body.get("streaming") == null || Boolean.parseBoolean(String.valueOf(body.get("streaming")));
+        AiConfigRepository.ConfigRow previous = configs.find(purpose);
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("apiFormat", apiFormat);
         params.put("streaming", streaming);
+        if (previous != null && Boolean.FALSE.equals(paramsOf(previous).get("cacheBreakpoints"))
+                && endpoint.equals(previous.endpoint()) && model.equals(previous.model())) {
+            params.put("cacheBreakpoints", false);
+        }
         String paramsJson;
         try {
             paramsJson = mapper.writeValueAsString(params);
@@ -466,8 +471,8 @@ public class AiService {
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
-                    ProviderCapabilities.of(upstream.baseUrl(), upstream.apiFormat(), upstream.model())
-                            .cacheBreakpoints());
+                    cacheBreakpointsEnabled(config, upstream.baseUrl(), upstream.apiFormat(), upstream.model()),
+                    () -> persistCacheUnsupported(config));
             AiUpstreamClient.Result result = upstream().call(target, dispatch.messages(), true, listener,
                     DEFAULT_CALL.timeoutSeconds(), lease.handle());
             chatTurns.settleUsage(attempt, result.usage());
@@ -799,12 +804,27 @@ public class AiService {
     }
 
     private Map<String, Object> paramsOf(AiConfigRepository.ConfigRow config) {
-        if (config.params() == null || config.params().isBlank()) return Map.of();
+        if (config == null || config.params() == null || config.params().isBlank()) return Map.of();
         try {
             return mapper.readValue(config.params(), new TypeReference<Map<String, Object>>() {
             });
         } catch (Exception error) {
             return Map.of();
+        }
+    }
+
+    private boolean cacheBreakpointsEnabled(AiConfigRepository.ConfigRow config, String baseUrl, String apiFormat, String model) {
+        if (Boolean.FALSE.equals(paramsOf(config).get("cacheBreakpoints"))) return false;
+        return ProviderCapabilities.of(baseUrl, apiFormat, model).cacheBreakpoints();
+    }
+
+    private void persistCacheUnsupported(AiConfigRepository.ConfigRow config) {
+        try {
+            Map<String, Object> params = new LinkedHashMap<>(paramsOf(config));
+            params.put("cacheBreakpoints", false);
+            configs.updateParams(config.purpose(), mapper.writeValueAsString(params));
+        } catch (Exception error) {
+            log.warn("记录缓存能力降级失败", error);
         }
     }
 
@@ -826,8 +846,8 @@ public class AiService {
             AiUpstreamClient.Result result = upstream().call(new AiUpstreamClient.Upstream(
                     config.endpoint(), apiKey, config.model(), apiFormatOf(config),
                     DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
-                    ProviderCapabilities.of(config.endpoint(), apiFormatOf(config), config.model())
-                            .cacheBreakpoints()), messages, false, null,
+                    cacheBreakpointsEnabled(config, config.endpoint(), apiFormatOf(config), config.model()),
+                    () -> persistCacheUnsupported(config)), messages, false, null,
                     DEFAULT_CALL.timeoutSeconds(), handle);
             log.info("AI 响应：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={}",
                     System.currentTimeMillis() - start,

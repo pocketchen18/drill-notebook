@@ -9,8 +9,10 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -21,6 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AiUpstreamClientCacheTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final AiUpstreamClient client = new AiUpstreamClient(java.net.http.HttpClient.newHttpClient(), mapper);
+
+    @BeforeEach
+    void resetCacheCapability() {
+        AiUpstreamClient.resetCacheCapabilityForTests();
+    }
 
     private static AiUpstreamClient.Upstream anthropic(String baseUrl, boolean cacheBreakpoints) {
         return new AiUpstreamClient.Upstream(baseUrl, "k", "claude-sonnet-4-5",
@@ -84,6 +91,44 @@ class AiUpstreamClientCacheTest {
             assertEquals(2, requests.get());
             assertTrue(firstBody.get().contains("cache_control"));
             assertFalse(secondBody.get().contains("cache_control"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void cacheField400DisablesBreakpointForLaterCalls() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        AtomicReference<String> firstBody = new AtomicReference<>();
+        AtomicReference<String> laterBody = new AtomicReference<>();
+        AtomicBoolean fallbackNotified = new AtomicBoolean();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/messages", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            int call = requests.incrementAndGet();
+            if (call == 1) {
+                firstBody.set(body);
+                respond(exchange, 400, "{\"error\":{\"message\":\"cache_control unsupported\"}}");
+            } else {
+                if (call >= 3) laterBody.set(body);
+                respond(exchange, 200, "{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],"
+                        + "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}");
+            }
+        });
+        server.start();
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+            AiUpstreamClient.Upstream first = new AiUpstreamClient.Upstream(baseUrl, "k", "claude-sonnet-4-5",
+                    AiUpstreamClient.FORMAT_ANTHROPIC, 512, false, false, true,
+                    () -> fallbackNotified.set(true));
+            assertEquals("ok", client.call(first, messages("问题"), false, null, 10).text());
+            AiUpstreamClient other = new AiUpstreamClient(java.net.http.HttpClient.newHttpClient(), mapper);
+            assertEquals("ok", other.call(anthropic(baseUrl, true), messages("再问"), false, null, 10).text());
+
+            assertEquals(3, requests.get(), "首次 400 + 降级重试 + 后续调用");
+            assertTrue(fallbackNotified.get());
+            assertTrue(firstBody.get().contains("cache_control"));
+            assertFalse(laterBody.get().contains("cache_control"), "后续调用不应再次试探 cache 字段");
         } finally {
             server.stop(0);
         }

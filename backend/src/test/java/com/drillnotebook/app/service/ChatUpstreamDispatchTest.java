@@ -117,6 +117,34 @@ class ChatUpstreamDispatchTest {
     }
 
     @Test
+    void concurrentNormalAndStreamRequestsShareOneTurnAndOneDispatch() throws Exception {
+        server.hangAfterFirstDelta();
+        String requestId = UuidV7.generate(System.currentTimeMillis());
+        Map<String, Object> body = Map.of("protocolVersion", 2, "requestId", requestId,
+                "sessionId", sessionId, "input", Map.of("userText", "并发也只发一次"));
+        java.util.concurrent.CountDownLatch firstDelta = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CompletableFuture<AiService.ChatResult> streaming =
+                java.util.concurrent.CompletableFuture.supplyAsync(() -> ai.chatStream(body, (type, text) -> {
+                    if ("text".equals(type)) firstDelta.countDown();
+                    return true;
+                }));
+
+        assertTrue(firstDelta.await(5, java.util.concurrent.TimeUnit.SECONDS), "流式请求必须先进入 RUNNING");
+        ChatTurnRejectException conflict = assertThrows(ChatTurnRejectException.class, () -> ai.chat(body));
+        assertEquals(409, conflict.status());
+        assertEquals("SESSION_BUSY", conflict.code());
+        assertEquals(1, server.bodies().size(), "同一 requestId 只能外发一次");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE request_id = '" + requestId + "'"),
+                "两条路径只共享一轮");
+
+        server.close();
+        streaming.handle((result, error) -> null).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(1, server.bodies().size());
+        assertFalse("RUNNING".equals(jdbc.queryForObject(
+                "SELECT status FROM ai_chat_turn WHERE request_id = ?", String.class, requestId)));
+    }
+
+    @Test
     void replayedTurnDoesNotDispatchAgain() throws Exception {
         Map<String, Object> body = v2("同一份请求发两次");
         ai.chat(body);

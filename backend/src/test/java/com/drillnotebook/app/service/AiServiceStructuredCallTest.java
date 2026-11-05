@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.drillnotebook.app.repository.AiConfigRepository;
@@ -13,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class AiServiceStructuredCallTest {
     private final AiService service = new AiService(null, null, null, new ObjectMapper(), null, null, null, null);
@@ -56,6 +60,27 @@ class AiServiceStructuredCallTest {
         );
         assertFalse(request.containsKey("enable_thinking"));
         assertEquals(4096, request.get("max_tokens"));
+    }
+
+    @Test
+    void savingSameProviderKeepsPersistedCacheFallback() throws Exception {
+        String endpoint = "https://api.anthropic.com/v1";
+        String model = "claude-sonnet-4-5";
+        AiConfigRepository configs = mock(AiConfigRepository.class);
+        AiConfigRepository.ConfigRow previous = new AiConfigRepository.ConfigRow(
+                "chat", "custom", endpoint, model, null, null,
+                "{\"apiFormat\":\"anthropic\",\"streaming\":true,\"cacheBreakpoints\":false}");
+        when(configs.find("chat")).thenReturn(previous);
+        when(configs.find("import")).thenReturn(null);
+        when(configs.find("memory")).thenReturn(null);
+        AiService service = new AiService(configs, null, null, new ObjectMapper(), null, null, null, null);
+
+        service.saveConfig(Map.of("purpose", "chat", "provider", "custom", "endpoint", endpoint,
+                "model", model, "apiFormat", "anthropic", "streaming", true));
+
+        ArgumentCaptor<String> params = ArgumentCaptor.forClass(String.class);
+        verify(configs).upsert(eq("chat"), eq("custom"), eq(endpoint), eq(model), isNull(), isNull(), params.capture());
+        assertTrue(params.getValue().contains("\"cacheBreakpoints\":false"));
     }
 
     @Test

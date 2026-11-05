@@ -205,6 +205,23 @@ class ChatContextServiceTest {
     }
 
     @Test
+    void historyImagesReplayAfterRestartAndUnlock() throws Exception {
+        unlockVault();
+        ChatTurnService.Lease first = completeTurn("看这张图", "回答一", PNG);
+
+        wiring = ChatLegacyWiring.wire(dataSource, jdbc);
+        stack = ChatContextWiring.wire(dataSource, jdbc, wiring);
+        assertEquals(200, stack.vault().unlock(PASSWORD, List.of(new MemoryVaultService.SessionUnlock(sessionId,
+                PASSWORD))).status(), String.valueOf(stack.vault().status().body()));
+
+        ChatContextPlan plan = plan("图里是什么", Map.of("use", false));
+        List<ContextAudit.Selected> images = selected(plan, "IMAGE");
+        assertEquals(1, images.size(), "重启并重新解锁后，完整历史轮的图片仍可重放");
+        assertEquals(first.turnId(), images.get(0).sourceTurnId().longValue());
+        assertTrue(serialized(plan).contains("data:image/png;base64," + PNG));
+    }
+
+    @Test
     void historyWithoutTheMasterPasswordIsNotProvidedAtAll() throws Exception {
         completeTurn("看这张图", "回答一", PNG);
         // 本轮没有主密码：上一轮连正文都解不开，历史就只能整轮缺席，不能塞"（图片不可用）"这类占位
