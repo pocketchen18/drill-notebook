@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { beforeEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { clearViewState } from './lib/viewState';
 
 // 视图状态改为 localStorage 持久化后，测试之间必须隔离存储，
@@ -28,3 +28,13 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
     dispatchEvent: () => false
   });
 }
+
+// Arco 的 Message 挂在 body 上的独立 React 根里，RTL 的 cleanup 碰不到它：
+// 它自己的过渡定时器会在 jsdom 拆完之后才回调，报 "window is not defined"。
+// 用例本身仍然是绿的，但每轮验证都被这类脏错误污染，所以收尾时显式清空并等过渡走完。
+afterEach(async () => {
+  if (!document.querySelector('.arco-message-wrapper')) return;
+  const { Message } = await import('@arco-design/web-react');
+  Message.clear();
+  await new Promise((resolve) => setTimeout(resolve, 350));
+});

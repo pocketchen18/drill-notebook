@@ -1,5 +1,6 @@
 package com.drillnotebook.app.service;
 
+import com.drillnotebook.app.repository.ChatStorageSizer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -18,6 +19,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 统一上游 AI 客户端：支持 OpenAI (Chat Completions) 与 Anthropic (Messages) 两种 API 格式，
@@ -29,6 +38,7 @@ public class AiUpstreamClient {
     public static final String FORMAT_ANTHROPIC = "anthropic";
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
+    private static final Set<String> CACHE_UNSUPPORTED = ConcurrentHashMap.newKeySet();
 
     private final HttpClient http;
     private final ObjectMapper mapper;
@@ -45,15 +55,96 @@ public class AiUpstreamClient {
             String model,
             String apiFormat,
             int maxTokens,
-            boolean disableThinking) {
+            boolean disableThinking,
+            boolean jsonMode,
+            boolean cacheBreakpoints,
+            Runnable onCacheFallback) {
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode, boolean cacheBreakpoints) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, cacheBreakpoints, () -> { });
+        }
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, false);
+        }
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, false, false);
+        }
+
+        public Upstream withCacheBreakpoints(boolean enabled) {
+            return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, enabled,
+                    onCacheFallback);
+        }
 
         public boolean anthropic() {
             return FORMAT_ANTHROPIC.equals(apiFormat);
         }
     }
 
-    /** 上游返回的最终结果：text=正文，reasoning=思考链（可能为空），finishReason=原始停止原因。 */
-    public record Result(String text, String reasoning, String finishReason) {}
+    /**
+     * 上游返回的最终结果（§7.2 第 4 条要求统一带终态标记）：
+     * text=正文，reasoning=思考链（可空），finishReason=厂商停止原因或本地判定，
+     * terminalObserved=是否看到终止帧/终止字段，captureLimited=是否触及回复捕获上限，
+     * downstreamGone=前端连接已断（等同于用户主动停止），usage=厂商用量或 unknown。
+     */
+    public record Result(String text, String reasoning, String finishReason, boolean terminalObserved,
+                         boolean captureLimited, boolean downstreamGone, Usage usage) {
+
+        /** 旧的三参形态：结构化调用方只关心正文，其余按"正常结束、无用量信息"补齐。 */
+        public Result(String text, String reasoning, String finishReason) {
+            this(text, reasoning, finishReason, true, false, false, Usage.unknown());
+        }
+    }
+
+    /**
+     * 一次外发的用量（contracts §2.6）：只有厂商明确回了数字才算 provider，
+     * 缺字段一律 unknown，绝不拿估算值冒充当过的钱。
+     */
+    public record Usage(String source, Integer inputTokens, Integer outputTokens, Integer cacheReadTokens,
+                        Integer cacheWriteTokens, boolean cacheReadIncludedInInput) {
+        /** 旧形态默认按 Anthropic 口径：缓存读是 input 之外的独立桶。 */
+        public Usage(String source, Integer inputTokens, Integer outputTokens, Integer cacheReadTokens,
+                     Integer cacheWriteTokens) {
+            this(source, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, false);
+        }
+
+        public static Usage unknown() {
+            return new Usage("unknown", null, null, null, null, false);
+        }
+
+        public boolean reported() {
+            return "provider".equals(source) && (inputTokens != null || outputTokens != null);
+        }
+
+        public boolean hasAny() {
+            return inputTokens != null || outputTokens != null || cacheReadTokens != null
+                    || cacheWriteTokens != null;
+        }
+
+        /** 流式事件可能分块携带 input/cache 与 output；只覆盖本次真的带了的字段。 */
+        public Usage merge(Usage next) {
+            if (next == null || !"provider".equals(next.source)) return this;
+            return new Usage("provider",
+                    next.inputTokens != null ? next.inputTokens : inputTokens,
+                    next.outputTokens != null ? next.outputTokens : outputTokens,
+                    next.cacheReadTokens != null ? next.cacheReadTokens : cacheReadTokens,
+                    next.cacheWriteTokens != null ? next.cacheWriteTokens : cacheWriteTokens,
+                    next.cacheReadIncludedInInput || cacheReadIncludedInInput);
+        }
+
+        /** 去重后的输入总量：OpenAI 的 cached 是 prompt 子集，Anthropic 的缓存读写是独立桶。 */
+        public Integer totalInputTokens() {
+            if (inputTokens == null && cacheReadTokens == null && cacheWriteTokens == null) return null;
+            int input = inputTokens == null ? 0 : Math.max(0, inputTokens);
+            int read = cacheReadTokens == null ? 0 : Math.max(0, cacheReadTokens);
+            int write = cacheWriteTokens == null ? 0 : Math.max(0, cacheWriteTokens);
+            return input + (cacheReadIncludedInInput ? 0 : read + write);
+        }
+    }
 
     /**
      * 流式监听器：每收到一个增量被调用一次。
@@ -63,8 +154,49 @@ public class AiUpstreamClient {
         boolean onDelta(String type, String text);
     }
 
-    /** 调用上游。stream=true 时逐 delta 回调 listener（可传 null 等价于只累积）。 */
-    public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener, int timeoutSeconds) {
+    /** 调用上游（无取消句柄：结构化解析、测活等一次性内部调用）。 */
+    public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
+                       int timeoutSeconds) {
+        return call(upstream, messages, stream, listener, timeoutSeconds, null);
+    }
+
+    /**
+     * 调用上游。缓存断点只在显式能力开启时发送；若上游明确以 400 拒绝 cache 字段，
+     * 仅降级一次并去掉断点重发，401/429/断流不走这里。
+     */
+    public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
+                       int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
+        Upstream effective = cacheUnsupported(upstream) ? upstream.withCacheBreakpoints(false) : upstream;
+        try {
+            return callOnce(effective, messages, stream, listener, timeoutSeconds, handle);
+        } catch (IllegalArgumentException error) {
+            if (effective.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
+                rememberCacheUnsupported(upstream);
+                upstream.onCacheFallback().run();
+                return callOnce(upstream.withCacheBreakpoints(false), messages, stream, listener, timeoutSeconds, handle);
+            }
+            throw error;
+        }
+    }
+
+    static void resetCacheCapabilityForTests() {
+        CACHE_UNSUPPORTED.clear();
+    }
+
+    private static boolean cacheUnsupported(Upstream upstream) {
+        return upstream.cacheBreakpoints() && CACHE_UNSUPPORTED.contains(cacheCapabilityKey(upstream));
+    }
+
+    private static void rememberCacheUnsupported(Upstream upstream) {
+        CACHE_UNSUPPORTED.add(cacheCapabilityKey(upstream));
+    }
+
+    private static String cacheCapabilityKey(Upstream upstream) {
+        return upstream.apiFormat() + "|" + upstream.baseUrl() + "|" + upstream.model();
+    }
+
+    private Result callOnce(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
+                            int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
         boolean anthropic = upstream.anthropic();
         String target = anthropic ? anthropicMessagesUrl(upstream.baseUrl()) : chatCompletionsUrl(upstream.baseUrl());
         Map<String, Object> request = anthropic
@@ -81,28 +213,122 @@ public class AiUpstreamClient {
             builder.header("Authorization", "Bearer " + upstream.apiKey());
         }
         HttpRequest httpRequest = builder.build();
+        Deadline deadline = new Deadline(Math.max(timeoutSeconds, 1) + 1L);
+        if (handle != null) handle.bindAbortHook(deadline::expire);
+        if (stopped(handle, deadline)) {
+            // 排队期间用户已经点了停止：连一个字节都不必发出去（§7.3 服务端 token 与前端 abort 同效）
+            deadline.cancel();
+            return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+        }
         HttpResponse<InputStream> response;
         try {
             response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
         } catch (java.net.http.HttpTimeoutException error) {
+            deadline.cancel();
             throw new IllegalArgumentException("AI 请求超时（" + timeoutSeconds + " 秒），请换更快模型或加大超时");
         } catch (IOException error) {
+            deadline.cancel();
             throw new IllegalArgumentException("AI 服务连接失败：" + error.getMessage());
         } catch (InterruptedException error) {
+            deadline.cancel();
             Thread.currentThread().interrupt();
             throw new IllegalArgumentException("AI 请求被中断");
         }
-        try (InputStream body = response.body()) {
+        InputStream body = response.body();
+        deadline.attach(body);
+        // 尚未取得响应体时取消只能靠 HttpRequest.timeout；刚取得时若已取消/到期，立即关闭，一字节都不读
+        if (stopped(handle, deadline)) {
+            deadline.cancel();
+            close(body);
+            return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+        }
+        try {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalArgumentException(errorMessage(response.statusCode(), readAll(body)));
+                // 错误体只取到上限就停：不能为了拼一句错误信息而无界读
+                throw new IllegalArgumentException(errorMessage(response.statusCode(), readForError(body)));
             }
-            return anthropic
-                    ? (stream ? consumeAnthropicStream(body, listener) : parseAnthropicResponse(body))
-                    : (stream ? consumeChatCompletionStream(body, listener) : parseChatCompletionResponse(body));
+            Result result = anthropic
+                    ? (stream ? consumeAnthropicStream(body, listener, handle, deadline)
+                    : parseAnthropicResponse(readBounded(body)))
+                    : (stream ? consumeChatCompletionStream(body, listener, handle, deadline)
+                    : parseChatCompletionResponse(readBounded(body)));
+            if (stopped(handle, deadline)) {
+                // 已经收到的部分照常交回，但绝不能算成正常完成（§7.2.2 竞争只留一个终态）
+                return new Result(result.text(), result.reasoning(), reason(handle, deadline), false,
+                        result.captureLimited(), true, result.usage());
+            }
+            return result;
         } catch (IllegalArgumentException error) {
             throw error;
+        } catch (ResponseTooLargeException error) {
+            // 超限只给空正文 + TRUNCATED 标记，不冒充"正常但没内容"（§2.7）
+            return new Result("", "", "OUTPUT_CAPTURE_LIMIT", false, true, false, Usage.unknown());
         } catch (IOException error) {
+            // 到期或取消会表现为读失败：这是"无终止帧"，不是上游正常完成
+            if (stopped(handle, deadline)) {
+                return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+            }
             throw new IllegalArgumentException("AI 响应读取失败：" + error.getMessage());
+        } finally {
+            deadline.cancel();
+            close(body);
+            if (handle != null) handle.bindAbortHook(null);
+        }
+    }
+
+    private static boolean stopped(ActiveTurnRegistry.Handle handle, Deadline deadline) {
+        return deadline.expired() || (handle != null && handle.cancelRequested());
+    }
+
+    private static String reason(ActiveTurnRegistry.Handle handle, Deadline deadline) {
+        if (handle != null && handle.cancelRequested()) return "aborted";
+        return deadline.expired() ? "deadline" : "stream_error";
+    }
+
+    private static void close(java.io.Closeable value) {
+        if (value == null) return;
+        try {
+            value.close();
+        } catch (IOException ignored) {
+            // 关闭失败不掩盖原始结果
+        }
+    }
+
+    /**
+     * 总期限看门狗（§7.2.2）：到期就关闭已附上的响应体，让阻塞中的读取立刻失败。
+     * 单线程守护调度器，一次调用一个任务，取消路径与 finally 都会撤销，不留悬空任务。
+     */
+    static final class Deadline {
+        private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "ai-upstream-deadline");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        private final AtomicBoolean expired = new AtomicBoolean();
+        private final AtomicReference<InputStream> attached = new AtomicReference<>();
+        private final ScheduledFuture<?> future;
+
+        Deadline(long seconds) {
+            this.future = WATCHDOG.schedule(this::expire, seconds, TimeUnit.SECONDS);
+        }
+
+        void attach(InputStream body) {
+            attached.set(body);
+            if (expired.get()) close(body);
+        }
+
+        void expire() {
+            expired.set(true);
+            close(attached.get());
+        }
+
+        boolean expired() {
+            return expired.get();
+        }
+
+        void cancel() {
+            future.cancel(false);
         }
     }
 
@@ -182,12 +408,19 @@ public class AiUpstreamClient {
         request.put("model", upstream.model());
         request.put("messages", messages);
         request.put("stream", stream);
+        if (stream && ProviderCapabilities.of(upstream.baseUrl(), upstream.apiFormat(), upstream.model())
+                .streamUsage()) {
+            request.put("stream_options", Map.of("include_usage", true));
+        }
         request.put("max_tokens", upstream.maxTokens());
         if (upstream.disableThinking()) {
             request.put("enable_thinking", false);
             // 部分兼容网关读取 chat_template_kwargs
             request.put("chat_template_kwargs", Map.of("enable_thinking", false));
             request.put("temperature", 0.2);
+        }
+        if (upstream.jsonMode()) {
+            request.put("response_format", Map.of("type", "json_object"));
         }
         return request;
     }
@@ -196,7 +429,16 @@ public class AiUpstreamClient {
         AnthropicPayload payload = toAnthropic(messages);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", upstream.model());
-        if (!payload.system().isBlank()) request.put("system", payload.system());
+        if (!payload.system().isBlank()) {
+            if (upstream.cacheBreakpoints()) {
+                request.put("system", List.of(Map.of(
+                        "type", "text",
+                        "text", payload.system(),
+                        "cache_control", Map.of("type", "ephemeral"))));
+            } else {
+                request.put("system", payload.system());
+            }
+        }
         request.put("messages", payload.messages());
         request.put("max_tokens", Math.max(upstream.maxTokens(), 1024));
         request.put("stream", stream);
@@ -219,7 +461,33 @@ public class AiUpstreamClient {
             }
             out.add(Map.of("role", role, "content", toAnthropicBlocks(content)));
         }
-        return new AnthropicPayload(system.toString().strip(), out);
+        return new AnthropicPayload(system.toString().strip(), mergeConsecutiveUserTurns(out));
+    }
+
+    /**
+     * Anthropic 不接受连续两条同角色消息，而 §9.3 的顺序天然是"数据块 + 当前输入"两条连续 user：
+     * 这里把它们并成一条多块消息，<b>块与块的先后顺序原样保留</b>，当前请求仍然是最后一个块。
+     */
+    static List<Map<String, Object>> mergeConsecutiveUserTurns(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> merged = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            boolean sameRole = !merged.isEmpty()
+                    && "user".equals(message.get("role"))
+                    && "user".equals(merged.get(merged.size() - 1).get("role"));
+            if (!sameRole) {
+                merged.add(message);
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> previous = (List<Map<String, Object>>) merged.get(merged.size() - 1)
+                    .get("content");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> current = (List<Map<String, Object>>) message.get("content");
+            List<Map<String, Object>> blocks = new ArrayList<>(previous);
+            blocks.addAll(current);
+            merged.set(merged.size() - 1, Map.of("role", "user", "content", List.copyOf(blocks)));
+        }
+        return List.copyOf(merged);
     }
 
     static List<Map<String, Object>> toAnthropicBlocks(Object content) {
@@ -271,18 +539,19 @@ public class AiUpstreamClient {
 
     // ---------- 响应解析 ----------
 
-    private Result parseChatCompletionResponse(InputStream body) throws IOException {
-        JsonNode root = mapper.readTree(body);
+    private Result parseChatCompletionResponse(String raw) throws IOException {
+        JsonNode root = mapper.readTree(raw);
         throwIfUpstreamError(root);
         String finishReason = root.path("choices").path(0).path("finish_reason").asText("");
         JsonNode message = root.path("choices").path(0).path("message");
         String text = extractText(message);
         String reasoning = message.path("reasoning_content").asText("");
-        return new Result(text, reasoning, finishReason);
+        return new Result(text, reasoning, finishReason, !finishReason.isEmpty() || !text.isEmpty(),
+                false, false, usageOfChatCompletion(root));
     }
 
-    private Result parseAnthropicResponse(InputStream body) throws IOException {
-        JsonNode root = mapper.readTree(body);
+    private Result parseAnthropicResponse(String raw) throws IOException {
+        JsonNode root = mapper.readTree(raw);
         throwIfUpstreamError(root);
         StringBuilder text = new StringBuilder();
         StringBuilder reasoning = new StringBuilder();
@@ -291,47 +560,121 @@ public class AiUpstreamClient {
             if ("text".equals(type)) text.append(block.path("text").asText(""));
             else if ("thinking".equals(type)) reasoning.append(block.path("thinking").asText(""));
         }
-        return new Result(text.toString(), reasoning.toString(), root.path("stop_reason").asText(""));
+        String stopReason = root.path("stop_reason").asText("");
+        return new Result(text.toString(), reasoning.toString(), stopReason, !stopReason.isEmpty(),
+                false, false, usageOfAnthropic(root));
+    }
+
+    /** OpenAI 风格用量：只有厂商回了数字才算 provider，缓存写入字段并非所有网关都有。 */
+    static Usage usageOfChatCompletion(JsonNode root) {
+        JsonNode usage = root.path("usage");
+        if (usage.isMissingNode() || usage.isNull()) return Usage.unknown();
+        Integer input = intOrNull(usage.path("prompt_tokens"));
+        Integer output = intOrNull(usage.path("completion_tokens"));
+        JsonNode details = usage.path("prompt_tokens_details");
+        Integer cacheRead = intOrNull(details.path("cached_tokens"));
+        Integer cacheWrite = intOrNull(details.path("cache_write_tokens"));
+        if (input == null && output == null && cacheRead == null && cacheWrite == null) return Usage.unknown();
+        return new Usage("provider", input, output, cacheRead, cacheWrite, true);
+    }
+
+    /** Anthropic 风格用量：缓存读/写分开计费，缺失即 null（不折算进 input）。 */
+    static Usage usageOfAnthropic(JsonNode root) {
+        JsonNode usage = root.path("usage");
+        if (usage.isMissingNode() || usage.isNull()) return Usage.unknown();
+        Integer input = intOrNull(usage.path("input_tokens"));
+        Integer output = intOrNull(usage.path("output_tokens"));
+        Integer cacheRead = intOrNull(usage.path("cache_read_input_tokens"));
+        Integer cacheWrite = intOrNull(usage.path("cache_creation_input_tokens"));
+        if (input == null && output == null && cacheRead == null && cacheWrite == null) return Usage.unknown();
+        return new Usage("provider", input, output, cacheRead, cacheWrite);
+    }
+
+    private static Integer intOrNull(JsonNode node) {
+        if (node == null || !node.isNumber()) return null;
+        return node.asInt();
     }
 
     /** Chat Completions SSE：choices[0].delta.content / reasoning_content，data: [DONE] 结束。 */
-    private Result consumeChatCompletionStream(InputStream body, StreamListener listener) throws IOException {
-        StringBuilder text = new StringBuilder();
-        StringBuilder reasoning = new StringBuilder();
+    Result consumeChatCompletionStream(InputStream body, StreamListener listener,
+                                       ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
+        Capture capture = new Capture();
         String[] finish = {""};
-        readSse(body, (eventName, data) -> {
-            if ("[DONE]".equals(data.trim())) return false;
-            JsonNode node;
-            try {
-                node = mapper.readTree(data);
-            } catch (IOException error) {
-                return true; // 跳过无法解析的行
-            }
-            throwIfUpstreamError(node);
-            JsonNode delta = node.path("choices").path(0).path("delta");
-            String reasoningDelta = delta.path("reasoning_content").asText("");
-            if (!reasoningDelta.isEmpty()) {
-                reasoning.append(reasoningDelta);
-                if (listener != null && !listener.onDelta("reasoning", reasoningDelta)) return false;
-            }
-            String textDelta = delta.path("content").asText("");
-            if (!textDelta.isEmpty()) {
-                text.append(textDelta);
-                if (listener != null && !listener.onDelta("text", textDelta)) return false;
-            }
-            String finishReason = node.path("choices").path(0).path("finish_reason").asText("");
-            if (!finishReason.isEmpty()) finish[0] = finishReason;
-            return true;
-        });
-        return new Result(text.toString(), reasoning.toString(), finish[0]);
+        Usage[] usage = {Usage.unknown()};
+        boolean[] terminal = {false};
+        boolean[] downstreamGone = {false};
+        boolean[] readInterrupted = {false};
+        try {
+            readSse(body, (eventName, data) -> {
+                if (stopped(handle, deadline)) return false;
+                if ("[DONE]".equals(data.trim())) {
+                    terminal[0] = true;
+                    return false;
+                }
+                JsonNode node;
+                try {
+                    node = mapper.readTree(data);
+                } catch (IOException error) {
+                    return true; // 跳过无法解析的行
+                }
+                throwIfUpstreamError(node);
+                Usage parsed = usageOfChatCompletion(node);
+                if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
+                JsonNode delta = node.path("choices").path(0).path("delta");
+                String reasoningKept = capture.keepReasoning(delta.path("reasoning_content").asText(""));
+                if (!reasoningKept.isEmpty() && listener != null && !listener.onDelta("reasoning", reasoningKept)) {
+                    downstreamGone[0] = true;
+                    return false;
+                }
+                String textKept = capture.keepText(delta.path("content").asText(""));
+                if (!textKept.isEmpty() && listener != null && !listener.onDelta("text", textKept)) {
+                    downstreamGone[0] = true;
+                    return false;
+                }
+                String finishReason = node.path("choices").path(0).path("finish_reason").asText("");
+                if (!finishReason.isEmpty()) {
+                    finish[0] = finishReason;
+                    terminal[0] = true;
+                }
+                return !capture.limited();
+            });
+        } catch (IOException interrupted) {
+            // 到期/取消会关掉响应体，让读流直接失败：已经收到的半句仍要交回，不能当成什么都没发生
+            if (!stopped(handle, deadline)) throw interrupted;
+            readInterrupted[0] = true;
+        }
+        return new Result(capture.text(), capture.reasoning(), finish[0], terminal[0], capture.limited(),
+                downstreamGone[0] || readInterrupted[0], usage[0]);
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
-    private Result consumeAnthropicStream(InputStream body, StreamListener listener) throws IOException {
-        StringBuilder text = new StringBuilder();
-        StringBuilder reasoning = new StringBuilder();
+    Result consumeAnthropicStream(InputStream body, StreamListener listener,
+                                  ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
+        Capture capture = new Capture();
         String[] finish = {""};
+        Usage[] usage = {Usage.unknown()};
+        boolean[] terminal = {false};
+        boolean[] downstreamGone = {false};
+        boolean[] readInterrupted = {false};
+        try {
+            consumeAnthropicEvents(body, listener, handle, deadline, capture, finish, usage, terminal,
+                    downstreamGone);
+        } catch (IOException interrupted) {
+            // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
+            if (!stopped(handle, deadline)) throw interrupted;
+            readInterrupted[0] = true;
+        }
+        return new Result(capture.text(), capture.reasoning(), finish[0],
+                terminal[0] || !finish[0].isEmpty(), capture.limited(),
+                downstreamGone[0] || readInterrupted[0], usage[0]);
+    }
+
+    private void consumeAnthropicEvents(InputStream body, StreamListener listener,
+                                        ActiveTurnRegistry.Handle handle, Deadline deadline, Capture capture,
+                                        String[] finish, Usage[] usage, boolean[] terminal,
+                                        boolean[] downstreamGone) throws IOException {
         readSse(body, (eventName, data) -> {
+            if (stopped(handle, deadline)) return false;
             JsonNode node;
             try {
                 node = mapper.readTree(data);
@@ -340,29 +683,92 @@ public class AiUpstreamClient {
             }
             throwIfUpstreamError(node);
             String type = node.path("type").asText(eventName);
+            Usage parsed = usageOfAnthropic(node);
+            if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
             if ("content_block_delta".equals(type)) {
                 JsonNode delta = node.path("delta");
                 String deltaType = delta.path("type").asText("");
                 if ("thinking_delta".equals(deltaType)) {
-                    String chunk = delta.path("thinking").asText("");
-                    if (!chunk.isEmpty()) {
-                        reasoning.append(chunk);
-                        if (listener != null && !listener.onDelta("reasoning", chunk)) return false;
+                    String kept = capture.keepReasoning(delta.path("thinking").asText(""));
+                    if (!kept.isEmpty() && listener != null && !listener.onDelta("reasoning", kept)) {
+                        downstreamGone[0] = true;
+                        return false;
                     }
                 } else if ("text_delta".equals(deltaType)) {
-                    String chunk = delta.path("text").asText("");
-                    if (!chunk.isEmpty()) {
-                        text.append(chunk);
-                        if (listener != null && !listener.onDelta("text", chunk)) return false;
+                    String kept = capture.keepText(delta.path("text").asText(""));
+                    if (!kept.isEmpty() && listener != null && !listener.onDelta("text", kept)) {
+                        downstreamGone[0] = true;
+                        return false;
                     }
                 }
             } else if ("message_delta".equals(type)) {
                 String stopReason = node.path("delta").path("stop_reason").asText("");
                 if (!stopReason.isEmpty()) finish[0] = stopReason;
+                Usage tail = usageOfAnthropic(node);
+                if (tail.hasAny()) usage[0] = usage[0].merge(tail);
+            } else if ("message_stop".equals(type)) {
+                terminal[0] = true;
+            } else if ("error".equals(type)) {
+                throw new IllegalArgumentException("AI 服务返回错误：" + node.path("error").path("message").asText("未知"));
             }
-            return true;
+            return !capture.limited();
         });
-        return new Result(text.toString(), reasoning.toString(), finish[0]);
+    }
+
+    /**
+     * 正文与思考链共用同一个捕获额度（contracts §2.7、执行方案 §7.4-3）：
+     * 超过 1 MiB 原始 UTF-8 就停止累加并关闭上游，保留的必须停在完整码点边界上。
+     */
+    private static final class Capture {
+        private final StringBuilder text = new StringBuilder();
+        private final StringBuilder reasoning = new StringBuilder();
+        private long used;
+        private boolean limited;
+
+        String keepText(String chunk) {
+            return keep(chunk, text);
+        }
+
+        String keepReasoning(String chunk) {
+            return keep(chunk, reasoning);
+        }
+
+        private String keep(String chunk, StringBuilder target) {
+            if (limited || chunk == null || chunk.isEmpty()) return "";
+            StringBuilder kept = new StringBuilder();
+            for (int offset = 0; offset < chunk.length(); ) {
+                int codePoint = chunk.codePointAt(offset);
+                long bytes = utf8Length(codePoint);
+                if (used + bytes > ChatStorageSizer.OUTPUT_CAPTURE_RAW_BYTES) {
+                    limited = true;
+                    break;
+                }
+                used += bytes;
+                kept.appendCodePoint(codePoint);
+                target.appendCodePoint(codePoint);
+                offset += Character.charCount(codePoint);
+            }
+            return kept.toString();
+        }
+
+        String text() {
+            return text.toString();
+        }
+
+        String reasoning() {
+            return reasoning.toString();
+        }
+
+        boolean limited() {
+            return limited;
+        }
+
+        private static long utf8Length(int codePoint) {
+            if (codePoint <= 0x7F) return 1;
+            if (codePoint <= 0x7FF) return 2;
+            if (codePoint <= 0xFFFF) return 3;
+            return 4;
+        }
     }
 
     interface SseHandler {
@@ -434,8 +840,55 @@ public class AiUpstreamClient {
         }
     }
 
-    private static String readAll(InputStream body) throws IOException {
-        return new String(body.readAllBytes(), StandardCharsets.UTF_8);
+    /**
+     * 响应体硬上限读取（contracts §2.7）：先给 8 MiB 原始上限再解析，禁止无上限 readAllBytes。
+     * 超限不再冒充正常空回复——交回空正文并标 TRUNCATED/OUTPUT_CAPTURE_LIMIT。
+     */
+    private static final long MAX_RAW_RESPONSE_BYTES = 8L * 1024 * 1024;
+    private static final long MAX_ERROR_BODY_BYTES = 1024 * 1024;
+
+    static String readBounded(InputStream body) throws IOException {
+        byte[] buffer = new byte[8192];
+        java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
+        long total = 0;
+        int read;
+        while ((read = body.read(buffer)) != -1) {
+            if (total + read > MAX_RAW_RESPONSE_BYTES) {
+                throw new ResponseTooLargeException();
+            }
+            total += read;
+            kept.write(buffer, 0, read);
+        }
+        return kept.toString(StandardCharsets.UTF_8);
+    }
+
+    /** 错误响应体只读到 1 MiB（文案后面还要压成 240 码点），不能为了拼错误信息而无限占内存。 */
+    static String readForError(InputStream body) throws IOException {
+        byte[] buffer = new byte[8192];
+        java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
+        long total = 0;
+        int read;
+        while (total < MAX_ERROR_BODY_BYTES && (read = body.read(buffer)) != -1) {
+            int take = (int) Math.min(read, MAX_ERROR_BODY_BYTES - total);
+            kept.write(buffer, 0, take);
+            total += take;
+        }
+        return kept.toString(StandardCharsets.UTF_8);
+    }
+
+    /** 响应体超过 8 MiB 上限：调用方按捕获超限处理，不继续吃内存。 */
+    static final class ResponseTooLargeException extends IOException {
+        ResponseTooLargeException() {
+            super("上游响应体超过 8 MiB 硬上限");
+        }
+    }
+
+    static boolean isCacheUnsupported(String message) {
+        if (message == null || !message.contains("HTTP 400")) return false;
+        String text = message.toLowerCase(Locale.ROOT);
+        return text.contains("cache_control")
+                || (text.contains("cache") && (text.contains("unsupported") || text.contains("not supported")
+                || text.contains("unknown") || text.contains("不支持") || text.contains("未知")));
     }
 
     static String errorMessage(int status, String body) {

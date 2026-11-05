@@ -15,7 +15,11 @@ Keep the resulting `jre/` directory at the repository root while packaging. The 
 From the repository root, the checked-in packaging command validates this directory and creates the portable artifact:
 
 ```powershell
-npm run package:portable
+npm run package:portable -- -Rebuild -Version v0.6.3
 ```
 
 The builder copies `jre/` into the packaged resources. The source `jre/` directory is intentionally not committed because it is a generated binary runtime.
+
+Use PowerShell 7 and run the [local quality gates](testing/TESTING_GUIDELINES.md) before packaging; the local packaging script does not run tests. `-Rebuild` refreshes existing build outputs. The default version is `0.6.3`; `-Version` accepts it with or without the `v` prefix and sets both the application metadata and ZIP filename. Packaging never publishes a release.
+
+The GitHub workflow installs locked dependencies with `npm ci`, runs release-configuration tests and both frontend/backend test suites, then builds and packages. Tag pushes publish a **pre-release**; manual runs only upload artifacts unless `publish_release` is enabled.

@@ -206,6 +206,16 @@ docs/**
 !docs/session-curve.md
 !docs/testing/
 !docs/testing/**
+# Public v0.7 planning documents (user-requested release evidence)
+!docs/plans/
+!docs/plans/**
+# Persistent eval fixtures and live-eval sources are part of the release evidence.
+!backend/src/test/resources/eval/
+!backend/src/test/resources/eval/**
+!backend/src/test/java/com/drillnotebook/app/eval/
+!backend/src/test/java/com/drillnotebook/app/eval/**
+# Live-eval reports are generated artifacts, even if copied outside target/.
+memory-*-report.json
 # Design specs / implementation plans stay local
 docs/superpowers/
 # 本地编辑器验收页：只用于在真浏览器里复现交互问题，不入库

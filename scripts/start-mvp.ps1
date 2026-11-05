@@ -153,14 +153,21 @@ $electronStale = Test-Stale -SourcePaths @(
 ) -OutputFile $electronEntry
 
 $buildFrontendAndElectron = $Rebuild -or $frontendStale -or $electronStale
-$buildBackend = $Rebuild -or [string]::IsNullOrWhiteSpace($backendJar)
+# Same staleness rule for the backend jar: a plain `npm start` used to reuse
+# backend/target/*.jar forever, so backend fixes silently never ran (symptom:
+# the UI sends status=ALL but the old jar answers "不支持的状态过滤: ALL").
+$backendStale = [string]::IsNullOrWhiteSpace($backendJar) -or (Test-Stale -SourcePaths @(
+    (Join-Path $workspace 'backend\src'),
+    (Join-Path $workspace 'backend\pom.xml')
+) -OutputFile $backendJar)
+$buildBackend = $Rebuild -or $backendStale
 
 if ($CheckOnly) {
     if ($buildFrontendAndElectron) {
         throw "Frontend/Electron build is missing. Run npm start or npm run build. Expected: $frontendEntry and $electronEntry"
     }
     if ($buildBackend) {
-        throw "Backend jar is missing. Run npm start or npm run build:backend. Expected under backend\target"
+        throw "Backend jar is missing or older than backend sources. Run npm start or npm run build:backend. Expected under backend\target"
     }
     Write-Host 'Drill Notebook startup check passed.' -ForegroundColor Green
     Write-Host "Workspace: $workspace"

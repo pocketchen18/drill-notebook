@@ -1,6 +1,8 @@
 package com.drillnotebook.app.service;
 
+import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.config.PortablePathResolver;
+import com.drillnotebook.app.config.SnapshotService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -11,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
@@ -26,7 +30,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
-import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -52,13 +55,13 @@ public class DataBackupService {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneId.systemDefault());
 
     private final PortablePathResolver paths;
-    private final DataSource dataSource;
+    private final SnapshotService snapshots;
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    public DataBackupService(PortablePathResolver paths, DataSource dataSource, ObjectMapper mapper) {
+    public DataBackupService(PortablePathResolver paths, SnapshotService snapshots, ObjectMapper mapper) {
         this.paths = paths;
-        this.dataSource = dataSource;
+        this.snapshots = snapshots;
         this.mapper = mapper;
     }
 
@@ -199,7 +202,8 @@ public class DataBackupService {
         Path snapshot = paths.data().resolve("backup-snapshot.db");
         try {
             Files.createDirectories(target.getParent());
-            vacuumeInto(snapshot);
+            Files.deleteIfExists(snapshot);
+            snapshots.vacuumInto(snapshot);
             try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(target))) {
                 putManifest(zip, lite);
                 putFile(zip, DB_ZIP_ENTRY, snapshot);
@@ -221,19 +225,11 @@ public class DataBackupService {
         }
     }
 
-    /** SQLite 在线一致性快照：VACUUM INTO 读取的是单个事务快照，不受 WAL 影响。 */
-    private void vacuumeInto(Path snapshot) throws SQLException, IOException {
-        Files.deleteIfExists(snapshot);
-        String literal = snapshot.toString().replace("'", "''");
-        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            statement.execute("VACUUM INTO '" + literal + "'");
-        }
-    }
-
     private void putManifest(ZipOutputStream zip, boolean lite) throws IOException {
         Map<String, Object> manifest = new LinkedHashMap<>();
         manifest.put("app", "drill-notebook");
         manifest.put("createdAt", Instant.now().toString());
+        manifest.put("schemaVersion", DatabaseInitializer.currentSchemaVersion());
         manifest.put("mode", lite ? "lite" : "full");
         manifest.put("includesAttachments", !lite);
         zip.putNextEntry(new ZipEntry(MANIFEST_ZIP_ENTRY));
@@ -382,6 +378,7 @@ public class DataBackupService {
         Path pendingAttachments = dataDir.resolve(PENDING_ATTACHMENTS);
         boolean lite = true;
         boolean sawDb = false;
+        String safetyBackup = null;
         try {
             Files.deleteIfExists(pendingDb);
             if (Files.exists(pendingAttachments)) deleteRecursively(pendingAttachments);
@@ -408,10 +405,17 @@ public class DataBackupService {
             }
             if (!sawDb) throw new IllegalArgumentException("备份包缺少数据库文件（study.db），无法恢复");
 
+            int schemaVersion = validateStagedDatabase(pendingDb);
+            Map<String, Object> safety = createBackup(null);
+            safetyBackup = String.valueOf(safety.get("name"));
+
             Map<String, Object> marker = new LinkedHashMap<>();
             marker.put("from", name == null ? "（导入文件）" : name);
             marker.put("at", Instant.now().toString());
             marker.put("lite", lite);
+            marker.put("schemaVersion", schemaVersion);
+            marker.put("stage", "PREPARED");
+            marker.put("preRestoreBackup", safetyBackup);
             mapper.writeValue(dataDir.resolve(RESTORE_MARKER).toFile(), marker);
         } catch (IOException | RuntimeException error) {
             try { Files.deleteIfExists(pendingDb); } catch (IOException ignored) { /* 清理半成品 */ }
@@ -422,7 +426,37 @@ public class DataBackupService {
                 "staged", true,
                 "from", name == null ? "（导入文件）" : name,
                 "lite", lite,
+                "safetyBackup", safetyBackup,
                 "message", "恢复内容已就绪，重启应用后生效");
+    }
+
+    private int validateStagedDatabase(Path stagedDb) {
+        String url = "jdbc:sqlite:file:" + stagedDb.toAbsolutePath().toString().replace('\\', '/') + "?mode=ro";
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            try (ResultSet check = statement.executeQuery("PRAGMA integrity_check")) {
+                if (!check.next() || !"ok".equalsIgnoreCase(check.getString(1))) {
+                    throw new IllegalArgumentException("备份数据库完整性校验失败");
+                }
+            }
+            int version = 0;
+            try (ResultSet table = statement.executeQuery(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'")) {
+                if (table.next()) {
+                    try (ResultSet row = statement.executeQuery("SELECT version FROM schema_version LIMIT 1")) {
+                        if (row.next()) version = row.getInt(1);
+                    }
+                }
+            }
+            int current = DatabaseInitializer.currentSchemaVersion();
+            if (version > current) {
+                throw new IllegalArgumentException("备份数据库结构版本 " + version
+                        + " 高于当前支持的 " + current + "，拒绝恢复");
+            }
+            return version;
+        } catch (SQLException error) {
+            throw new IllegalArgumentException("备份数据库无法校验：" + error.getMessage(), error);
+        }
     }
 
     /** 处理单个 zip 条目；返回更新后的 lite 标记。 */

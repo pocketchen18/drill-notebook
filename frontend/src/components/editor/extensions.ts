@@ -15,6 +15,7 @@ export const MathBlock = Node.create({
   addAttributes: () => ({ latex: { default: 'E=mc^2' } }),
   parseHTML: () => [{ tag: 'div[data-math-block]' }],
   renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-math-block': '' })],
+  renderText: ({ node }) => `$$${String(node.attrs.latex ?? '')}$$`,
   addNodeView: () => ReactNodeViewRenderer(MathNode),
   addInputRules: () => [new InputRule({
     find: /\$\$([^$\n]+)\$\$$/,
@@ -33,6 +34,7 @@ export const MathInline = Node.create({
   addAttributes: () => ({ latex: { default: 'E=mc^2' } }),
   parseHTML: () => [{ tag: 'span[data-math-inline]' }],
   renderHTML: ({ HTMLAttributes }) => ['span', mergeAttributes(HTMLAttributes, { 'data-math-inline': '' })],
+  renderText: ({ node }) => `$${String(node.attrs.latex ?? '')}$`,
   addNodeView: () => ReactNodeViewRenderer(MathInlineNode),
   addInputRules: () => [new InputRule({
     find: /(?<!\$)\$([^$\n]+)\$$/,

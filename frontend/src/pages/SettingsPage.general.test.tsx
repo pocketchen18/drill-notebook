@@ -60,6 +60,10 @@ beforeEach(() => {
   useUiStore.getState().setThemeMode('light');
   window.location.hash = '';
   vi.restoreAllMocks();
+  // 这里只验证提示调用，不测试 Arco 动画；真实消息定时器会在 jsdom 销毁后触发 setState。
+  for (const type of ['success', 'info', 'warning', 'error'] as const) {
+    vi.spyOn(Message, type).mockImplementation(() => () => {});
+  }
 });
 
 describe('SettingsPage 常规分区', () => {
@@ -140,7 +144,7 @@ describe('SettingsPage 常规分区', () => {
   });
 
   it('SET-5: a combo already used by another global action is rejected', () => {
-    // 只记录调用，保留真实实现：不依赖 Arco Message 的返回类型
+    // 校验冲突提示的调用内容，消息显示由 Arco 自身负责。
     const warn = vi.spyOn(Message, 'warning');
     renderPage();
     const row = shortcutRow('切换深浅主题');

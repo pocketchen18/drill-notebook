@@ -9,7 +9,7 @@ import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.model.Citation;
 import com.drillnotebook.app.model.RetrievalHit;
 import com.drillnotebook.app.model.RetrievalQuery;
-import com.drillnotebook.app.repository.AiChatSessionRepository;
+import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.EmbeddingJobRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
@@ -41,6 +41,7 @@ class HybridRetrievalServiceTest {
     private static final String SPACE = "a".repeat(64);
     private static final int DIMS = 4;
 
+    private SQLiteDataSource dataSource;
     private JdbcTemplate jdbc;
     private NotebookRepository notebooks;
     private RetrievalIndexRepository retrievalIndex;
@@ -56,7 +57,7 @@ class HybridRetrievalServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         var root = Files.createTempDirectory("hybrid-retrieval-test");
-        SQLiteDataSource dataSource = new SQLiteDataSource();
+        dataSource = new SQLiteDataSource();
         dataSource.setUrl("jdbc:sqlite:" + root.resolve("study.db"));
         new DatabaseInitializer(dataSource).initialize();
         jdbc = new JdbcTemplate(dataSource);
@@ -185,7 +186,7 @@ class HybridRetrievalServiceTest {
         for (int chunk = 1; chunk <= 5; chunk++) {
             Citation citation = new Citation("NOTEBOOK", 1, chunk, chunk,
                     "t" + chunk, "", "s" + chunk, List.of("bm25"), chunk, null, null);
-            bm25.add(new RetrievalHit(citation, "text" + chunk, chunk, 0));
+            bm25.add(new RetrievalHit(citation, "text" + chunk, chunk, 0, null));
         }
         List<HybridRetrievalService.VectorRanked> vector = List.of(
                 new HybridRetrievalService.VectorRanked(4, 4, 0, 0.99),
@@ -517,12 +518,16 @@ class HybridRetrievalServiceTest {
         });
         server.start();
         capturedBodies.clear();
+        ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         AiService service = new AiService(
                 new AiConfigRepository(jdbc),
-                new AiChatSessionRepository(jdbc),
+                wiring.sessions(),
                 new ApiKeyEncryptor(),
                 mapper,
-                lexical);
+                lexical,
+                wiring.turnService(),
+                wiring.cipher(),
+                null);
         service.saveConfig(Map.of(
                 "provider", "custom",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort(),

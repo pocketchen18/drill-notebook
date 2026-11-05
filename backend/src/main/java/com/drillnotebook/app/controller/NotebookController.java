@@ -4,6 +4,8 @@ import com.drillnotebook.app.model.QuestionRecord;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.QuestionRepository;
 import com.drillnotebook.app.service.NoteIndexingService;
+import com.drillnotebook.app.service.memory.MemoryNotebookCleanupService;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -24,8 +26,15 @@ public class NotebookController {
     private final NotebookRepository notebooks;
     private final QuestionRepository questions;
     private final NoteIndexingService indexing;
+    private final MemoryNotebookCleanupService memoryCleanup;
 
-    public NotebookController(NotebookRepository notebooks, QuestionRepository questions, NoteIndexingService indexing) { this.notebooks = notebooks; this.questions = questions; this.indexing = indexing; }
+    public NotebookController(NotebookRepository notebooks, QuestionRepository questions, NoteIndexingService indexing,
+                              MemoryNotebookCleanupService memoryCleanup) {
+        this.notebooks = notebooks;
+        this.questions = questions;
+        this.indexing = indexing;
+        this.memoryCleanup = memoryCleanup;
+    }
 
     @GetMapping("/notebooks")
     public List<Map<String, Object>> list() {
@@ -45,7 +54,15 @@ public class NotebookController {
     @PutMapping("/notebooks/{id}")
     public Map<String, Object> update(@PathVariable long id, @RequestBody Map<String, Object> body) { findNotebook(id); notebooks.update(id, required(body, "title")); return notebooks.find(id); }
     @DeleteMapping("/notebooks/{id}")
-    public void delete(@PathVariable long id) { findNotebook(id); indexing.deleteNotebook(id); }
+    public void delete(@PathVariable long id) {
+        findNotebook(id);
+        try {
+            memoryCleanup.purge(id);
+        } catch (SQLException error) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "清除笔记本记忆失败", error);
+        }
+        indexing.deleteNotebook(id);
+    }
 
     @GetMapping("/notebooks/{id}/pages")
     public List<Map<String, Object>> pages(@PathVariable long id) { findNotebook(id); return notebooks.findPages(id); }

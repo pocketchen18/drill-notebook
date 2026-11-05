@@ -20,7 +20,8 @@ describe('custom editor block cancellation', () => {
   ])('Escape cancels %s edits even when blur follows', async (_label, Component, attrs, inputLabel, previewSelector) => {
     const updateAttributes = vi.fn();
     const { container } = render(<Component {...nodeProps(attrs, updateAttributes)} />);
-    fireEvent.click(container.querySelector(previewSelector)!);
+    if (Component === MathNode) fireEvent.doubleClick(container.querySelector(previewSelector)!);
+    else fireEvent.click(container.querySelector(previewSelector)!);
     const input = await screen.findByRole('textbox', { name: inputLabel });
     fireEvent.change(input, { target: { value: 'temporary change' } });
     fireEvent.keyDown(input, { key: 'Escape' });
@@ -31,7 +32,7 @@ describe('custom editor block cancellation', () => {
   it('Escape cancels inline LaTeX instead of committing the stale draft', async () => {
     const updateAttributes = vi.fn();
     const { container } = render(<MathInlineNode {...nodeProps({ latex: 'x^2' }, updateAttributes)} />);
-    fireEvent.click(container.querySelector('.math-inline.is-preview')!);
+    fireEvent.doubleClick(container.querySelector('.math-inline.is-preview')!);
     const input = await screen.findByRole('textbox', { name: '编辑行内 LaTeX' });
     fireEvent.change(input, { target: { value: 'x^3' } });
     fireEvent.keyDown(input, { key: 'Escape' });

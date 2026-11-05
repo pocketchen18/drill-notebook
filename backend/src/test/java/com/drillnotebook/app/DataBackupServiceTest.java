@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.drillnotebook.app.config.PendingRestoreApplier;
 import com.drillnotebook.app.config.PortablePathResolver;
+import com.drillnotebook.app.config.SnapshotService;
+import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.service.DataBackupService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -22,15 +24,18 @@ import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteDataSource;
 
 class DataBackupServiceTest {
     private static final String APP_ROOT_PROPERTY = "app.root";
 
-    @TempDir
-    Path tempRoot;
+    /**
+     * 不用 @TempDir：JUnit 扩展收尾删目录时正好撞上 SQLite 文件的 Windows「待删除」状态，
+     * 会以可观概率抛 "Failed to close extension context"，污染整轮全量验证。
+     * TestWorkspace 落在 APP_ROOT/tmp 且带重试，顺带不再往系统 %TEMP% 留垃圾。
+     */
+    private Path tempRoot;
 
     private String previousRoot;
     private SQLiteDataSource dataSource;
@@ -39,24 +44,29 @@ class DataBackupServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         previousRoot = System.getProperty(APP_ROOT_PROPERTY);
+        tempRoot = TestWorkspace.scratchDirectory("backup-test-");
         System.setProperty(APP_ROOT_PROPERTY, tempRoot.toString());
         Files.createDirectories(tempRoot.resolve("data"));
         SQLiteConfig config = new SQLiteConfig();
         config.setJournalMode(SQLiteConfig.JournalMode.WAL);
         dataSource = new SQLiteDataSource(config);
         dataSource.setUrl("jdbc:sqlite:" + tempRoot.resolve("data").resolve("study.db"));
-        service = new DataBackupService(new PortablePathResolver(), dataSource, new ObjectMapper());
+        service = new DataBackupService(new PortablePathResolver(), new SnapshotService(dataSource), new ObjectMapper());
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             statement.execute("CREATE TABLE IF NOT EXISTS marker_table(value TEXT)");
             statement.execute("DELETE FROM marker_table");
             statement.execute("INSERT INTO marker_table(value) VALUES ('original')");
+            statement.execute("CREATE TABLE IF NOT EXISTS schema_version(version INTEGER)");
+            statement.execute("DELETE FROM schema_version");
+            statement.execute("INSERT INTO schema_version(version) VALUES (9)");
         }
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
         if (previousRoot != null) System.setProperty(APP_ROOT_PROPERTY, previousRoot);
         else System.clearProperty(APP_ROOT_PROPERTY);
+        TestWorkspace.deleteRecursively(tempRoot);
     }
 
     private String markerValue() throws Exception {
@@ -144,8 +154,14 @@ class DataBackupServiceTest {
 
         Map<String, Object> staged = service.restoreBackup(name);
         assertThat(staged.get("staged")).isEqualTo(true);
+        assertThat(staged.get("safetyBackup")).isNotNull();
+        assertThat(tempRoot.resolve("backups").resolve(String.valueOf(staged.get("safetyBackup")))).exists();
         assertThat(tempRoot.resolve("data").resolve("study.db.pending-restore")).exists();
-        assertThat(tempRoot.resolve("data").resolve("restore-manifest.json")).exists();
+        Path marker = tempRoot.resolve("data").resolve("restore-manifest.json");
+        assertThat(marker).exists();
+        var markerJson = new ObjectMapper().readTree(marker.toFile());
+        assertThat(markerJson.path("stage").asText()).isEqualTo("PREPARED");
+        assertThat(markerJson.path("schemaVersion").asInt()).isEqualTo(9);
 
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -157,6 +173,18 @@ class DataBackupServiceTest {
         assertThat(tempRoot.resolve("data").resolve("attachments").resolve("1").resolve("a.txt"))
                 .exists()
                 .hasContent("backup-version");
+    }
+
+    @Test
+    void pendingRestoreRejectsDatabaseFromFutureSchema() throws Exception {
+        Path data = tempRoot.resolve("data");
+        Path pending = data.resolve("study.db.pending-restore");
+        Files.writeString(pending, "not-a-real-db");
+        new ObjectMapper().writeValue(data.resolve("restore-manifest.json").toFile(), Map.of("schemaVersion", 999));
+
+        assertThat(PendingRestoreApplier.applyIfPending(data)).isFalse();
+        assertThat(pending).exists();
+        assertThat(markerValue()).isEqualTo("original");
     }
 
     @Test

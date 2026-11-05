@@ -11,18 +11,30 @@ async function baseUrl(): Promise<string> {
 
 /**
  * API 错误：对外暴露稳定的 code 与面向用户的 message；
- * 原始堆栈/details 仅在 console 中记录，不展示给用户。
+ * 原始堆栈仅在 console 中记录，不展示给用户。
  */
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  /** 记忆 REST 的 {retryable?,details?}：409 的 details 带服务端最新 metadata，界面要拿它跟草稿对照。 */
+  readonly retryable?: boolean;
+  readonly details?: unknown;
 
-  constructor(code: string, message: string, status: number) {
+  constructor(code: string, message: string, status: number, extra: { retryable?: unknown; details?: unknown } = {}) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
+    if (typeof extra.retryable === 'boolean') this.retryable = extra.retryable;
+    if (extra.details !== undefined) this.details = extra.details;
   }
+}
+
+function readField(payload: unknown, key: string): unknown {
+  if (payload && typeof payload === 'object' && key in payload) {
+    return (payload as Record<string, unknown>)[key];
+  }
+  return undefined;
 }
 
 function extractCode(payload: unknown): string {
@@ -31,6 +43,10 @@ function extractCode(payload: unknown): string {
   }
   if (payload && typeof payload === 'object' && 'error' in payload) {
     return String((payload as { error: unknown }).error);
+  }
+  // 记忆 REST 走 {code,message,retryable?,details?}，不经过全局异常处理器，键名与聊天侧不同
+  if (payload && typeof payload === 'object' && 'code' in payload) {
+    return String((payload as { code: unknown }).code);
   }
   return 'unknown';
 }
@@ -65,8 +81,11 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     const code = extractCode(payload);
     const message = extractMessage(payload, response.status);
     // 内部日志：保留 code/message/status，便于排查
-    console.warn('[api] request failed', { path, code, status, message });
-    throw new ApiError(code, message, response.status);
+    console.warn('[api] request failed', { path, code, status: response.status, message });
+    throw new ApiError(code, message, response.status, {
+      retryable: readField(payload, 'retryable'),
+      details: readField(payload, 'details')
+    });
   }
   return payload as T;
 }
@@ -74,7 +93,12 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 export const get = <T>(path: string) => apiRequest<T>(path);
 export const post = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'POST', body: JSON.stringify(body) });
 export const put = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'PUT', body: JSON.stringify(body) });
+export const patch = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 export const del = <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' });
+
+/** 带请求体的 DELETE：删除凭据与 expectedVersion 之类不能进 URL 的字段（记忆条目即此类）。 */
+export const delJson = <T>(path: string, body: unknown) =>
+  apiRequest<T>(path, { method: 'DELETE', body: JSON.stringify(body) });
 
 /** multipart 上传（如备份导入）；Content-Type 由浏览器按 FormData 自动设置。 */
 export function postForm<T>(path: string, form: FormData): Promise<T> {

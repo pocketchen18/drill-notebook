@@ -68,7 +68,7 @@ public class RetrievalService {
                     row.corpusType(), row.corpusId(), row.sourceId(), row.chunkId(),
                     row.title(), row.headingPath(), buildSnippet(row.text(), normalized),
                     BM25_MATCH_TYPES, i + 1, null, null);
-            hits.add(new RetrievalHit(citation, row.text(), row.sourceId(), row.chunkIndex()));
+            hits.add(new RetrievalHit(citation, row.text(), row.sourceId(), row.chunkIndex(), row.contentHash()));
         }
         return List.copyOf(hits);
     }

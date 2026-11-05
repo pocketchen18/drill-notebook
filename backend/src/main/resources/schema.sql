@@ -370,3 +370,275 @@ CREATE TABLE IF NOT EXISTS note_attachment (
 );
 
 CREATE INDEX IF NOT EXISTS idx_attachment_page ON note_attachment(page_id);
+
+-- ============================================================
+-- v9: AI 跨会话记忆（schema9）
+--
+-- 时间列一律无 SQL 默认值：由服务端写入 ISO-8601 UTC 且固定毫秒精度
+-- （uuuu-MM-dd'T'HH:mm:ss.SSS'Z'），保证字典序 == 时间序。旧表的
+-- datetime('now') 值只与同格式列比较，不跨格式排序。
+-- 逻辑容量账本（ai_chat_storage）计的是落库字节，不是物理磁盘上限。
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS ai_memory_vault (
+    id TEXT PRIMARY KEY,
+    singleton INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1),
+    wrapped_dek TEXT NOT NULL,
+    wrap_meta TEXT NOT NULL,
+    crypto_version INTEGER NOT NULL DEFAULT 1,
+    mode TEXT NOT NULL CHECK (mode IN ('fingerprint', 'password')),
+    epoch INTEGER NOT NULL DEFAULT 1,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    auto_extract INTEGER NOT NULL DEFAULT 0 CHECK (auto_extract IN (0, 1)),
+    compress_session INTEGER NOT NULL DEFAULT 0 CHECK (compress_session IN (0, 1)),
+    auto_apply_low_risk INTEGER NOT NULL DEFAULT 1 CHECK (auto_apply_low_risk IN (0, 1)),
+    policy_json TEXT NOT NULL,
+    use_consent_fingerprint TEXT,
+    maintenance_consent_fingerprint TEXT,
+    consented_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_chat_turn (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL UNIQUE,
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    retry_of TEXT,
+    status TEXT NOT NULL CHECK (status IN
+        ('RUNNING', 'COMPLETED', 'ABORTED', 'TRUNCATED', 'FAILED', 'INTERRUPTED')),
+    request_meta_cipher TEXT,
+    request_meta_crypto TEXT,
+    user_message_id INTEGER REFERENCES ai_chat_message(id) ON DELETE SET NULL,
+    assistant_message_id INTEGER REFERENCES ai_chat_message(id) ON DELETE SET NULL,
+    context_generation INTEGER NOT NULL,
+    source_scope_type TEXT NOT NULL CHECK (source_scope_type IN ('GLOBAL', 'NOTEBOOK')),
+    source_scope_id INTEGER NOT NULL,
+    source_timezone TEXT NOT NULL,
+    runtime_generation TEXT NOT NULL,
+    memory_eligible INTEGER NOT NULL DEFAULT 0,
+    memory_policy_revision INTEGER,
+    source_revision INTEGER NOT NULL DEFAULT 1,
+    stored_history_bytes INTEGER NOT NULL DEFAULT 0 CHECK (stored_history_bytes >= 0),
+    reserved_history_bytes INTEGER NOT NULL DEFAULT 0 CHECK (reserved_history_bytes >= 0),
+    content_deleted_at TEXT,
+    finish_reason TEXT,
+    persistence_status TEXT NOT NULL DEFAULT 'pending',
+    result_meta_cipher TEXT,
+    result_meta_crypto TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    CHECK (content_deleted_at IS NOT NULL OR
+        (request_meta_cipher IS NOT NULL AND request_meta_crypto IS NOT NULL)),
+    CHECK ((source_scope_type = 'GLOBAL' AND source_scope_id = 0) OR
+        (source_scope_type = 'NOTEBOOK' AND source_scope_id > 0))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_turn_running_session
+    ON ai_chat_turn(session_id) WHERE status = 'RUNNING';
+CREATE INDEX IF NOT EXISTS idx_ai_turn_session_id ON ai_chat_turn(session_id, id);
+
+CREATE TABLE IF NOT EXISTS ai_chat_attachment (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL REFERENCES ai_chat_turn(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('TEXT', 'IMAGE')),
+    payload_cipher BLOB NOT NULL,
+    crypto_meta TEXT NOT NULL,
+    byte_length INTEGER NOT NULL CHECK (byte_length =
+        length(payload_cipher) + length(CAST(crypto_meta AS BLOB))),
+    created_at TEXT NOT NULL,
+    UNIQUE(turn_id, block_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_item (
+    row_id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    vault_id TEXT NOT NULL REFERENCES ai_memory_vault(id),
+    version INTEGER NOT NULL CHECK (version > 0),
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('GLOBAL', 'NOTEBOOK')),
+    scope_id INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL CHECK (kind IN ('PREFERENCE', 'GOAL', 'BACKGROUND', 'TASK')),
+    predicate_key_hmac TEXT NOT NULL,
+    family_key_hmac TEXT NOT NULL,
+    value_hmac TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('ACTIVE', 'PENDING', 'SUPERSEDED', 'DISABLED', 'EXPIRED')),
+    payload_cipher TEXT NOT NULL,
+    crypto_meta TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('AUTO', 'MANUAL')),
+    manual_protected INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    valid_from TEXT,
+    valid_until TEXT,
+    observed_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    last_confirmed_at TEXT NOT NULL,
+    UNIQUE(memory_id, version),
+    CHECK ((scope_type = 'GLOBAL' AND scope_id = 0) OR
+        (scope_type = 'NOTEBOOK' AND scope_id > 0))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_one_active_family
+    ON ai_memory_item(vault_id, scope_type, scope_id, family_key_hmac) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_memory_scope_status
+    ON ai_memory_item(vault_id, scope_type, scope_id, status);
+
+CREATE TABLE IF NOT EXISTS ai_memory_evidence (
+    id TEXT PRIMARY KEY,
+    vault_id TEXT NOT NULL REFERENCES ai_memory_vault(id),
+    session_id INTEGER REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    turn_id INTEGER REFERENCES ai_chat_turn(id) ON DELETE SET NULL,
+    message_id INTEGER REFERENCES ai_chat_message(id) ON DELETE SET NULL,
+    source_block_id TEXT NOT NULL,
+    source_hmac TEXT NOT NULL,
+    quote_cipher TEXT NOT NULL,
+    crypto_meta TEXT NOT NULL,
+    source_created_at TEXT NOT NULL,
+    UNIQUE(vault_id, source_hmac)
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_item_evidence (
+    item_row_id TEXT NOT NULL REFERENCES ai_memory_item(row_id) ON DELETE CASCADE,
+    evidence_id TEXT NOT NULL REFERENCES ai_memory_evidence(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_row_id, evidence_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_proposal (
+    id TEXT PRIMARY KEY,
+    vault_id TEXT NOT NULL REFERENCES ai_memory_vault(id),
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    source_turn_id INTEGER REFERENCES ai_chat_turn(id) ON DELETE SET NULL,
+    evidence_id TEXT REFERENCES ai_memory_evidence(id) ON DELETE SET NULL,
+    target_memory_id TEXT NOT NULL,
+    target_version INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('REPLACE_PROPOSAL', 'RETRACT_PROPOSAL')),
+    status TEXT NOT NULL CHECK (status IN ('PENDING', 'ACCEPTED', 'REJECTED', 'STALE')),
+    version INTEGER NOT NULL DEFAULT 1,
+    payload_cipher TEXT NOT NULL,
+    crypto_meta TEXT NOT NULL,
+    dedup_hmac TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    UNIQUE(vault_id, dedup_hmac)
+);
+
+CREATE TABLE IF NOT EXISTS ai_session_context (
+    session_id INTEGER PRIMARY KEY REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 2 CHECK (schema_version = 2),
+    through_turn_id INTEGER NOT NULL,
+    context_generation INTEGER NOT NULL,
+    vault_epoch INTEGER NOT NULL,
+    payload_cipher TEXT NOT NULL,
+    crypto_meta TEXT NOT NULL,
+    estimated_tokens INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_job (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('EXTRACT', 'SUMMARY')),
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    from_turn_id INTEGER NOT NULL,
+    through_turn_id INTEGER NOT NULL,
+    context_generation INTEGER NOT NULL,
+    source_scope_type TEXT NOT NULL CHECK (source_scope_type IN ('GLOBAL', 'NOTEBOOK')),
+    source_scope_id INTEGER NOT NULL,
+    source_timezone TEXT NOT NULL,
+    vault_epoch INTEGER NOT NULL,
+    policy_revision INTEGER NOT NULL,
+    target_fingerprint TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    input_revision TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('QUEUED', 'CLAIMED', 'RETRY', 'WAITING_UNLOCK',
+        'WAITING_CONSENT', 'PAUSED_BUDGET', 'COMPLETED', 'SUPERSEDED', 'FAILED')),
+    lease_token TEXT,
+    lease_until TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    outcome_code TEXT CHECK (outcome_code IS NULL OR outcome_code IN
+        ('APPLIED', 'NO_NEW_INFORMATION', 'NO_VALID_CANDIDATES', 'NO_COMPRESSION_GAIN',
+         'SOURCE_DELETED', 'SOURCE_TOO_LARGE')),
+    next_run_at TEXT,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(kind, session_id, from_turn_id, through_turn_id, input_revision, policy_revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_job_poll ON ai_memory_job(status, next_run_at);
+
+CREATE TABLE IF NOT EXISTS ai_memory_suppression (
+    vault_id TEXT NOT NULL REFERENCES ai_memory_vault(id),
+    scope_type TEXT NOT NULL,
+    scope_id INTEGER NOT NULL,
+    suppression_kind TEXT NOT NULL CHECK (suppression_kind IN ('FAMILY', 'PREDICATE', 'EVIDENCE')),
+    key_hmac TEXT NOT NULL,
+    source_through_turn_id INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (vault_id, scope_type, scope_id, suppression_kind, key_hmac)
+);
+
+CREATE TABLE IF NOT EXISTS ai_memory_operation (
+    operation_id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    target_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS', 'COMPLETED')),
+    result_meta TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage_attempt (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL,
+    context_plan_id TEXT,
+    purpose TEXT NOT NULL CHECK (purpose IN
+        ('CHAT', 'MEMORY_EXTRACT', 'SESSION_SUMMARY', 'FORMAT_REPAIR')),
+    target_fingerprint TEXT NOT NULL,
+    budget_date TEXT NOT NULL,
+    budget_timezone TEXT NOT NULL,
+    reserved_tokens INTEGER NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    usage_source TEXT NOT NULL CHECK (usage_source IN ('provider', 'estimate', 'unknown')),
+    state TEXT NOT NULL CHECK (state IN ('RESERVED', 'SENT', 'SETTLED', 'UNKNOWN', 'RELEASED')),
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage_daily (
+    budget_date TEXT NOT NULL,
+    budget_timezone TEXT NOT NULL,
+    target_fingerprint TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    charged_tokens INTEGER NOT NULL DEFAULT 0,
+    reserved_tokens INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    unknown_attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (budget_date, budget_timezone, target_fingerprint, purpose)
+);
+
+CREATE TABLE IF NOT EXISTS ai_chat_storage (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL DEFAULT 1,
+    history_limit_bytes INTEGER NOT NULL DEFAULT 268435456 CHECK (history_limit_bytes > 0),
+    attachment_limit_bytes INTEGER NOT NULL DEFAULT 268435456 CHECK (attachment_limit_bytes > 0),
+    history_bytes INTEGER NOT NULL DEFAULT 0 CHECK (history_bytes >= 0),
+    reserved_history_bytes INTEGER NOT NULL DEFAULT 0 CHECK (reserved_history_bytes >= 0),
+    attachment_bytes INTEGER NOT NULL DEFAULT 0 CHECK (attachment_bytes >= 0)
+);
+
+INSERT OR IGNORE INTO ai_chat_storage(id) VALUES (1);

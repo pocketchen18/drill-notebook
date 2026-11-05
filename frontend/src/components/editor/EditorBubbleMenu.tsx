@@ -26,7 +26,7 @@ import {
 import { FloatingLayer, editorChromeBottom, type AnchorRect } from './floating';
 import { MenuPopover, type MenuSection } from './MenuPopover';
 import { BLOCK_KIND_LABEL, BLOCK_KIND_OPTIONS } from './commandCatalog';
-import { blockAtSelection, currentBlockKind, duplicateBlock, turnInto, type BlockKind, type NotebookKeymapStorage } from './blockCommands';
+import { blockAtSelection, currentBlockKind, duplicateBlock, editSelectedMathBlock, turnInto, type BlockKind, type NotebookKeymapStorage } from './blockCommands';
 import { TEXT_COLORS, TEXT_COLOR_LABELS, isTextColor, type TextColor } from './textColors';
 import { canOpenExternally, normalizeHref, openExternalLink } from './links';
 
@@ -35,10 +35,12 @@ interface BubbleSnapshot {
   readonly editable: boolean;
   readonly empty: boolean;
   readonly nodeSelection: boolean;
+  readonly blockMath: boolean;
   readonly cellSelection: boolean;
   readonly inCode: boolean;
   readonly singleBlock: boolean;
   readonly inlineMath: boolean;
+  readonly mixedInlineMath: boolean;
   readonly from: number;
   readonly to: number;
   readonly blockKind: BlockKind;
@@ -67,19 +69,32 @@ function inlineMathInSelection(editor: Editor): { from: number; to: number; late
   return only && only.from === from && only.to === to ? only : null;
 }
 
+function selectionContainsInlineMath(editor: Editor): boolean {
+  const { from, to } = editor.state.selection;
+  let found = false;
+  editor.state.doc.nodesBetween(from, to, (node) => {
+    if (node.type.name === 'mathInline') found = true;
+    return !found;
+  });
+  return found;
+}
+
 function snapshotOf(editor: Editor): BubbleSnapshot {
   const { selection } = editor.state;
   const textColor = editor.getAttributes('textColor').color;
   const highlightColor = editor.getAttributes('highlight').color;
+  const inlineMath = inlineMathInSelection(editor) !== null;
   return {
     focused: editor.isFocused,
     editable: editor.isEditable,
     empty: selection.empty,
     nodeSelection: selection instanceof NodeSelection,
+    blockMath: selection instanceof NodeSelection && selection.node.type.name === 'mathBlock',
     cellSelection: selection instanceof CellSelection,
     inCode: editor.isActive('codeBlock'),
     singleBlock: selection.$from.sameParent(selection.$to),
-    inlineMath: inlineMathInSelection(editor) !== null,
+    inlineMath,
+    mixedInlineMath: !inlineMath && selectionContainsInlineMath(editor),
     from: selection.from,
     to: selection.to,
     blockKind: currentBlockKind(editor),
@@ -193,6 +208,20 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
   const [selecting, setSelecting] = useState(false);
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
+  const [focusTarget, setFocusTarget] = useState<EventTarget | null>(() => document.activeElement);
+
+  useEffect(() => {
+    // 公式预览是 contenteditable=false 的可聚焦按钮，持焦时 editor.isFocused 为 false。
+    // 监听真实焦点边界，避免把仍在公式上的焦点误判为离开编辑器，也不让源码框弹出块浮窗。
+    const onFocusIn = (event: FocusEvent): void => setFocusTarget(event.target);
+    const onFocusOut = (event: FocusEvent): void => setFocusTarget(event.relatedTarget);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
 
   useEffect(() => {
     const storage = editor.storage.notebookKeymap as NotebookKeymapStorage | undefined;
@@ -266,6 +295,8 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
       else chain().deleteRange({ from: existing.from, to: existing.to }).run();
       return;
     }
+    // 混合选区中的公式源码存于 attrs，textBetween 会跳过它；不能用剩余文字覆盖整个选区。
+    if (selectionContainsInlineMath(editor)) return;
     const { from, to } = editor.state.selection;
     const latex = editor.state.doc.textBetween(from, to, ' ').trim();
     // 选区内没有文字（整块图片或公式被选中）时直接放过，否则会拿空公式盖掉原内容
@@ -273,7 +304,12 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
     chain().insertContentAt({ from, to }, { type: 'mathInline', attrs: { latex } }).run();
   };
 
-  const formatVisible = mode === 'format' && snapshot.editable && snapshot.focused && !snapshot.empty
+  const selectedMathDOM = snapshot.blockMath ? editor.view.nodeDOM(snapshot.from) : null;
+  const mathPreviewFocused = focusTarget instanceof Element && focusTarget.matches('.math-block.is-preview')
+    && selectedMathDOM?.contains(focusTarget);
+  const mathToolsFocused = focusTarget instanceof Node && bubbleRef.current?.contains(focusTarget);
+  const selectionFocused = snapshot.focused || Boolean(snapshot.blockMath && (mathPreviewFocused || mathToolsFocused));
+  const formatVisible = mode === 'format' && snapshot.editable && selectionFocused && !snapshot.empty
     && !snapshot.cellSelection && !snapshot.inCode && !selecting;
   const linkCardVisible = mode === 'format' && snapshot.focused && snapshot.empty && snapshot.linkHref !== null && !selecting;
 
@@ -366,6 +402,7 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
           </form>
         ) : snapshot.nodeSelection ? (
           <>
+            {snapshot.blockMath ? <BubbleButton label="编辑公式" icon={<Pencil size={15} />} shortcut="Enter" onClick={() => { editSelectedMathBlock(editor); }} /> : null}
             <BubbleButton label="复制副本" icon={<Copy size={15} />} shortcut="Ctrl+D" onClick={() => { duplicateBlock(editor, blockAtSelection(editor.state)); }} />
             <BubbleButton label="删除" icon={<Trash2 size={15} />} danger title="删除选中块" onClick={() => { chain().deleteSelection().run(); }} />
           </>
@@ -387,7 +424,7 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }): JSX.Element | 
             </BubbleMenuButton>
             <BubbleButton label="上标" icon={<Superscript size={15} />} active={snapshot.superscript} shortcut="Ctrl+." onClick={() => { chain().toggleSuperscript().run(); }} />
             <BubbleButton label="下标" icon={<Subscript size={15} />} active={snapshot.subscript} shortcut="Ctrl+," onClick={() => { chain().toggleSubscript().run(); }} />
-            <BubbleButton label="转为行内公式" icon={<Radical size={15} />} active={snapshot.inlineMath} disabled={!snapshot.singleBlock} onClick={toInlineMath} />
+            <BubbleButton label="转为行内公式" icon={<Radical size={15} />} active={snapshot.inlineMath} disabled={!snapshot.singleBlock || snapshot.mixedInlineMath} title={snapshot.mixedInlineMath ? '请仅选择普通文字，或单独选择一个公式进行还原' : undefined} onClick={toInlineMath} />
             <BubbleButton label="清除格式" icon={<RemoveFormatting size={15} />} shortcut="Ctrl+\" onClick={() => { chain().unsetAllMarks().run(); }} />
             <Divider />
             <BubbleButton label="删除" icon={<Trash2 size={15} />} danger title="删除选中内容" onClick={() => { chain().deleteSelection().run(); }} />

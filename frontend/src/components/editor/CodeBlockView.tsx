@@ -5,6 +5,7 @@ import { common, createLowlight } from 'lowlight';
 import latex from 'highlight.js/lib/languages/latex';
 import matlab from 'highlight.js/lib/languages/matlab';
 import { Check, Copy } from 'lucide-react';
+import { turnInto, type MathSpan } from './blockCommands';
 
 const lowlight = createLowlight(common);
 lowlight.register({ latex, matlab });
@@ -119,7 +120,20 @@ export function CodeBlockView({ node, updateAttributes }: NodeViewProps): JSX.El
 export const NotebookCodeBlock = CodeBlockLowlight.extend({
   addAttributes() {
     const parent = (this.parent?.() ?? {}) as Record<string, Record<string, unknown>>;
-    return { ...parent, language: { ...(parent.language ?? {}), default: null } };
+    return {
+      ...parent,
+      language: { ...(parent.language ?? {}), default: null },
+      // 公式来源只随文档 JSON 保存、不进 HTML：转代码块时记下每个 $…$ 片段的位置，
+      // 转回正文时按位置+字面校验后重建公式节点，避免用正则去猜边界。无来源时存 null。
+      mathSpans: { default: null as MathSpan[] | null, renderHTML: () => ({}) }
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      ...this.parent?.(),
+      // 保留父扩展的 Tab / Enter 等行为，切换类型则与工具栏走同一条安全事务。
+      'Mod-Alt-c': () => turnInto(this.editor, this.editor.isActive('codeBlock') ? 'paragraph' : 'codeBlock')
+    };
   },
   addNodeView() {
     return ReactNodeViewRenderer(CodeBlockView);
