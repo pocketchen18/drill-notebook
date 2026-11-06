@@ -1,6 +1,8 @@
 # v0.7.1 AI 记忆工具：后端规格
 
-状态：`search_memories` 与通用工具框架已实现（工作树，未提交）；`list_memories`、`create_memory`、`update_memory` 待实现。
+状态：`search_memories` 与通用工具框架已实现并提交（3819da9）；`list_memories`、`create_memory`、`update_memory` 待实现。
+
+需求基线：[requirements.md](requirements.md)。
 
 ## 1. 目标与边界
 

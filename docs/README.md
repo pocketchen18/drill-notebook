@@ -10,14 +10,14 @@
 
 ## 1. 状态文档
 
-状态文档只写**已真实落地并验证**的内容，不写计划、不写进行中的半成品。
+状态文档只写**已真实落地并验证**的内容；功能清单可以保留当前规划摘要用于指路，完整需求与步骤放在施工文档。
 
 | 文档 | 内容 |
 |---|---|
 | [../README.md](../README.md) | 项目定位、技术栈、功能说明、操作逻辑、开发命令、约束 |
 | [../AGENTS.md](../AGENTS.md) | AI 代理工作约束：文件权限、PowerShell、便携落盘、提交边界 |
 | [../DESIGN.md](../DESIGN.md) | 视觉与交互契约：设计令牌、布局、组件与编辑约定 |
-| [features.md](features.md) | 功能清单：当前 MVP 核心闭环、当前版本、下一迭代、后续候选、Non-Goals |
+| [features.md](features.md) | 功能清单：当前 MVP 核心闭环、当前规划摘要、后续候选、Non-Goals；历史版本见 README §1 |
 | [data-model.md](data-model.md) | 当前数据库表与关键约束（schema 9）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [api-contracts.md](api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [architecture.md](architecture.md) | 进程边界、前端分层、后端领域、便携与测试 |
@@ -43,13 +43,14 @@
 
 | 文档 | 内容 |
 |---|---|
+| `requirements.md` | 当前版本的功能需求：目标、范围、验收口径、Non-Goals |
 | `ui-ux.md` | 页面结构、表单字段、交互状态流、验收表现；需人工审阅确认 |
 | `spec.md` | 基于确认后的 UI/UX 补齐的最小数据变更、API 契约与后端核心逻辑 |
 | `plan.md` | 颗粒度清晰、限制修改文件范围、可逐步验证的执行清单 |
 
 规则：
 
-1. 先定 UI/UX，人工确认后再写后端 spec 与 plan。
+1. 先定需求，再定 UI/UX；人工确认后再写后端 spec 与 plan。
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能验收完成、状态文档同步后，整个目录移入 `docs/archive/<version>/`，不留在活跃上下文。
 
