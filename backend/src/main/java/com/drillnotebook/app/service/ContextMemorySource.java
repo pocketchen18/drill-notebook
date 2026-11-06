@@ -24,27 +24,41 @@ public interface ContextMemorySource {
 
     /** 一条候选事实：正文已解密，只到组装器为止，绝不写进审计或元数据。 */
     record Fact(String memoryId, int version, String kind, String predicate, String value, String scopeType,
-                long scopeId) {
+                long scopeId, Long validUntilEpochMilli) {
+        /** 旧调用方不关心有效期时保持兼容；null 表示永不过期。 */
+        public Fact(String memoryId, int version, String kind, String predicate, String value, String scopeType,
+                    long scopeId) {
+            this(memoryId, version, kind, predicate, value, scopeType, scopeId, null);
+        }
     }
 
-    /** 选择结果：入选事实 + 诊断（看了多少候选、是否因超时降级）。 */
+    /** 选择结果：入选事实 + 诊断（看了多少候选、是否因超时降级、快照是否残缺）。 */
     record Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline,
-                     Availability availability) {
-        public static final Selection EMPTY = new Selection(List.of(), List.of(), 0, false, Availability.READY);
+                     Availability availability, boolean truncated, int corruptRows) {
+        public static final Selection EMPTY = new Selection(List.of(), List.of(), 0, false, Availability.READY,
+                false, 0);
 
         public Selection {
             topical = topical == null ? List.of() : List.copyOf(topical);
             style = style == null ? List.of() : List.copyOf(style);
             availability = availability == null ? Availability.READY : availability;
+            corruptRows = Math.max(0, corruptRows);
         }
 
         /** P4 时期的四参数构造保持可用：没有快照概念的调用方默认"记忆区可用"。 */
         public Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline) {
-            this(topical, style, candidatesSeen, degradedByDeadline, Availability.READY);
+            this(topical, style, candidatesSeen, degradedByDeadline, Availability.READY, false, 0);
+        }
+
+        /** P5 早期只带可用状态的五参数构造保持可用。 */
+        public Selection(List<Fact> topical, List<Fact> style, int candidatesSeen, boolean degradedByDeadline,
+                         Availability availability) {
+            this(topical, style, candidatesSeen, degradedByDeadline, availability, false, 0);
         }
 
         public static Selection unavailable(Availability availability) {
-            return new Selection(List.of(), List.of(), 0, availability == Availability.TIMEOUT, availability);
+            return new Selection(List.of(), List.of(), 0, availability == Availability.TIMEOUT, availability,
+                    false, 0);
         }
     }
 
@@ -60,6 +74,10 @@ public interface ContextMemorySource {
         /** 记忆库未解锁或没有库。 */
         LOCKED,
         /** 检索超过总时限：本轮不使用记忆（§9.1-7）。 */
-        TIMEOUT
+        TIMEOUT,
+        /** 本轮请求没有打开记忆使用开关。 */
+        NOT_REQUESTED,
+        /** 策略或授权不允许本轮使用记忆。 */
+        DENIED
     }
 }

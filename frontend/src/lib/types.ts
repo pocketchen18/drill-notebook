@@ -103,6 +103,8 @@ export interface AiModelSlot {
   apiFormat?: 'chat_completions' | 'anthropic';
   /** 是否流式传输（默认开）。 */
   streaming?: boolean;
+  /** 是否允许模型调用工具（如 search_memories）；仅对话槽位使用。 */
+  readonly tools?: boolean;
 }
 
 /**

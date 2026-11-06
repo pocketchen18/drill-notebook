@@ -4,13 +4,20 @@ import com.drillnotebook.app.repository.ChatStorageSizer;
 import com.drillnotebook.app.repository.UsageRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -370,5 +377,284 @@ class AiUpstreamClientTest {
         assertTrue(notFound.contains("Base URL"));
         // 超长错误体只留 240 码点摘要，不能把整段塞进日志和响应
         assertTrue(AiUpstreamClient.errorMessage(500, "x".repeat(1024 * 1024)).length() < 400);
+    }
+
+    @Test
+    void toolDefinitionsAreAddedOnlyWhenPresent() {
+        List<Map<String, Object>> messages = List.of(Map.of("role", "user", "content", "你好"));
+        AiUpstreamClient.Upstream chat = new AiUpstreamClient.Upstream("https://x/v1", "k", "m",
+                AiUpstreamClient.FORMAT_CHAT_COMPLETIONS, 128, false);
+        AiUpstreamClient.Upstream anthropic = new AiUpstreamClient.Upstream("https://x", "k", "m",
+                AiUpstreamClient.FORMAT_ANTHROPIC, 128, false);
+        AiUpstreamClient.ToolDefinition tool = searchTool();
+
+        assertFalse(client.buildChatCompletionRequest(chat, messages, false).containsKey("tools"),
+                "没有工具时请求体保持旧形态");
+        assertFalse(client.buildAnthropicRequest(anthropic, messages, false).containsKey("tools"));
+
+        JsonNode chatTools = mapper.valueToTree(
+                client.buildChatCompletionRequest(chat, messages, false, List.of(tool)).get("tools"));
+        assertEquals("function", chatTools.get(0).path("type").asText());
+        assertEquals("search", chatTools.get(0).path("function").path("name").asText());
+        assertEquals("string", chatTools.get(0).path("function").path("parameters")
+                .path("properties").path("q").path("type").asText());
+
+        JsonNode anthropicTools = mapper.valueToTree(
+                client.buildAnthropicRequest(anthropic, messages, false, List.of(tool)).get("tools"));
+        assertEquals("search", anthropicTools.get(0).path("name").asText());
+        assertEquals("object", anthropicTools.get(0).path("input_schema").path("type").asText());
+    }
+
+    @Test
+    void toolDefinitionParametersAreDeeplyImmutable() {
+        Map<String, Object> nested = new LinkedHashMap<>();
+        nested.put("type", "string");
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", Map.of("q", nested));
+        AiUpstreamClient.ToolDefinition definition = new AiUpstreamClient.ToolDefinition("search", null, schema);
+
+        nested.put("type", "number");
+        schema.put("extra", true);
+
+        assertEquals("", definition.description());
+        Map<?, ?> properties = (Map<?, ?>) definition.parameters().get("properties");
+        assertEquals("string", ((Map<?, ?>) properties.get("q")).get("type"));
+        assertFalse(definition.parameters().containsKey("extra"));
+        assertThrows(UnsupportedOperationException.class, () -> definition.parameters().put("x", "y"));
+    }
+
+    @Test
+    void anthropicRequestPairsToolUseWithToolResultAndMergesAdjacentTurns() {
+        List<Map<String, Object>> messages = List.of(
+                Map.of("role", "system", "content", "系统"),
+                Map.of("role", "user", "content", "问题"),
+                assistantToolCall("call_1", "search", "{\"q\":\"笔记\"}"),
+                Map.of("role", "tool", "tool_call_id", "call_1", "content", "结果"),
+                Map.of("role", "user", "content", "继续"));
+
+        Map<String, Object> request = client.buildAnthropicRequest(
+                new AiUpstreamClient.Upstream("https://x", "k", "m", AiUpstreamClient.FORMAT_ANTHROPIC, 128, false),
+                messages, false, List.of(searchTool()));
+
+        JsonNode turns = mapper.valueToTree(request.get("messages"));
+        assertEquals(3, turns.size(), "user / assistant / user(tool_result+text)");
+        assertEquals("user", turns.get(0).path("role").asText());
+        assertEquals("assistant", turns.get(1).path("role").asText());
+
+        JsonNode use = turns.get(1).path("content").get(0);
+        assertEquals("tool_use", use.path("type").asText());
+        assertEquals("call_1", use.path("id").asText());
+        assertEquals("search", use.path("name").asText());
+        assertEquals("笔记", use.path("input").path("q").asText());
+
+        JsonNode tail = turns.get(2).path("content");
+        assertEquals(2, tail.size(), "tool_result 必须排在同一个 user 消息的最前面");
+        assertEquals("tool_result", tail.get(0).path("type").asText());
+        assertEquals("call_1", tail.get(0).path("tool_use_id").asText());
+        assertEquals("结果", tail.get(0).path("content").asText());
+        assertEquals("继续", tail.get(1).path("text").asText());
+    }
+
+    @Test
+    void chatCompletionJsonParsesCompleteToolCalls() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, 200, "{\"choices\":[{\"message\":{\"content\":null,\"tool_calls\":["
+                    + "{\"id\":\"call_1\",\"type\":\"function\",\"function\":"
+                    + "{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"笔记\\\"}\"}}]},"
+                    + "\"finish_reason\":\"tool_calls\"}],"
+                    + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}");
+        });
+        server.start();
+        try {
+            AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "k", "m",
+                    AiUpstreamClient.FORMAT_CHAT_COMPLETIONS, 128, false);
+            AiUpstreamClient.Result result = client.callWithTools(upstream,
+                    List.of(Map.of("role", "user", "content", "查一下")), List.of(searchTool()),
+                    false, null, 10, null);
+
+            assertEquals(1, result.toolCalls().size());
+            assertEquals("call_1", result.toolCalls().get(0).id());
+            assertEquals("search", result.toolCalls().get(0).name());
+            assertEquals("{\"q\":\"笔记\"}", result.toolCalls().get(0).arguments());
+            assertEquals("", result.text(), "工具调用绝不能混进正文");
+            assertEquals("tool_calls", result.finishReason());
+            assertTrue(result.terminalObserved());
+            assertEquals(10, result.usage().inputTokens());
+            assertTrue(requestBody.get().contains("\"tools\""));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void anthropicJsonParsesToolUseBlocks() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/messages", exchange -> respond(exchange, 200,
+                "{\"content\":[{\"type\":\"text\",\"text\":\"先查\"},"
+                        + "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search\","
+                        + "\"input\":{\"q\":\"笔记\"}}],"
+                        + "\"stop_reason\":\"tool_use\","
+                        + "\"usage\":{\"input_tokens\":8,\"output_tokens\":4}}"));
+        server.start();
+        try {
+            AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "k", "m",
+                    AiUpstreamClient.FORMAT_ANTHROPIC, 128, false);
+            AiUpstreamClient.Result result = client.callWithTools(upstream,
+                    List.of(Map.of("role", "user", "content", "查一下")), List.of(searchTool()),
+                    false, null, 10, null);
+
+            assertEquals("先查", result.text());
+            assertEquals(1, result.toolCalls().size());
+            assertEquals("toolu_1", result.toolCalls().get(0).id());
+            assertEquals("search", result.toolCalls().get(0).name());
+            assertEquals("{\"q\":\"笔记\"}", result.toolCalls().get(0).arguments());
+            assertEquals("tool_use", result.finishReason());
+            assertEquals(8, result.usage().inputTokens());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void chatCompletionStreamBuffersArgumentsByCallIndexUntilDone() throws Exception {
+        List<String> listenerTypes = new ArrayList<>();
+        List<String> listenerText = new ArrayList<>();
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"content\":\"先查\"}}]}",
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\","
+                        + "\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\"}}]}}]}",
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"type\":\"function\","
+                        + "\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"k\\\":\"}}]}}]}",
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                        + "\"function\":{\"arguments\":\"\\\"a\\\"}\"}}]}}]}",
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,"
+                        + "\"function\":{\"arguments\":\"\\\"b\\\"}\"}}]}}]}",
+                "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+                "[DONE]"), (type, chunk) -> {
+                    listenerTypes.add(type);
+                    listenerText.add(chunk);
+                    return true;
+                }, null, idleDeadline());
+
+        assertEquals(2, result.toolCalls().size());
+        assertEquals("call_a", result.toolCalls().get(0).id());
+        assertEquals("search", result.toolCalls().get(0).name());
+        assertEquals("{\"q\":\"a\"}", result.toolCalls().get(0).arguments());
+        assertEquals("call_b", result.toolCalls().get(1).id());
+        assertEquals("{\"k\":\"b\"}", result.toolCalls().get(1).arguments());
+        assertEquals("先查", result.text());
+        assertEquals(List.of("text"), listenerTypes, "工具参数不得走 text/reasoning 回调");
+        assertEquals(List.of("先查"), listenerText);
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
+    void chatCompletionStreamDropsToolCallsWithoutTerminalFrame() throws Exception {
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}"),
+                null, null, idleDeadline());
+
+        assertEquals(0, result.toolCalls().size(), "没有终止帧就不能把半截调用交给执行器");
+        assertFalse(result.terminalObserved());
+    }
+
+    @Test
+    void streamedToolCallsAreBoundedToThreeAndFourKibArguments() throws Exception {
+        List<String> events = new ArrayList<>();
+        for (int index = 0; index < 4; index++) {
+            events.add("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":" + index
+                    + ",\"id\":\"call_" + index + "\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}");
+        }
+        events.add("[DONE]");
+        AiUpstreamClient.Result capped = client.consumeChatCompletionStream(
+                sse(events.toArray(String[]::new)), null, null, idleDeadline());
+        assertEquals(3, capped.toolCalls().size(), "单次响应最多 3 个工具调用");
+
+        AiUpstreamClient.Result rejected = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"" + "a".repeat(5000)
+                        + "\\\"}\"}}]}}]}",
+                "[DONE]"), null, null, idleDeadline());
+        assertEquals(0, rejected.toolCalls().size(), "超过 4 KiB 的参数必须整体拒绝");
+    }
+
+    @Test
+    void malformedStreamedToolArgumentsFailClosed() throws Exception {
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"function\":{\"name\":\"search\",\"arguments\":\"not-json\"}}]}}]}",
+                "[DONE]"), null, null, idleDeadline());
+        assertEquals(0, result.toolCalls().size());
+        assertTrue(result.terminalObserved());
+    }
+
+    @Test
+    void anthropicStreamBuffersInputJsonDeltasUntilMessageStop() throws Exception {
+        List<String> listenerTypes = new ArrayList<>();
+        String body = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,"
+                + "\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search\",\"input\":{}}}\n\n"
+                + "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\":\"}}\n\n"
+                + "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"笔记\\\"}\"}}\n\n"
+                + "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+                + "event: message_delta\ndata: {\"type\":\"message_delta\","
+                + "\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"
+                + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+        AiUpstreamClient.Result result = client.consumeAnthropicStream(
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), (type, chunk) -> {
+                    listenerTypes.add(type);
+                    return true;
+                }, null, idleDeadline());
+
+        assertEquals(1, result.toolCalls().size());
+        assertEquals("toolu_1", result.toolCalls().get(0).id());
+        assertEquals("search", result.toolCalls().get(0).name());
+        assertEquals("{\"q\":\"笔记\"}", result.toolCalls().get(0).arguments());
+        assertEquals("tool_use", result.finishReason());
+        assertTrue(result.terminalObserved());
+        assertTrue(listenerTypes.isEmpty(), "工具参数不得走 text/reasoning 回调");
+    }
+
+    @Test
+    void cancelledStreamDoesNotExposeBufferedToolCalls() throws Exception {
+        ActiveTurnRegistry.Handle handle = new ActiveTurnRegistry.Handle("req-tool-cancel", 1L);
+        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+                "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                        + "\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}",
+                "{\"choices\":[{\"delta\":{\"content\":\"继续\"}}]}",
+                "[DONE]"), (type, chunk) -> {
+                    handle.requestCancel();
+                    return true;
+                }, handle, idleDeadline());
+
+        assertTrue(handle.cancelRequested());
+        assertEquals(0, result.toolCalls().size(), "取消后不得执行任何工具调用");
+    }
+
+    private static AiUpstreamClient.ToolDefinition searchTool() {
+        return new AiUpstreamClient.ToolDefinition("search", "查笔记本",
+                Map.of("type", "object", "properties", Map.of("q", Map.of("type", "string"))));
+    }
+
+    private static Map<String, Object> assistantToolCall(String id, String name, String arguments) {
+        return Map.of("role", "assistant", "content", "", "tool_calls", List.of(
+                Map.of("id", id, "type", "function",
+                        "function", Map.of("name", name, "arguments", arguments))));
+    }
+
+    private static void respond(HttpExchange exchange, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(status, bytes.length);
+        exchange.getResponseBody().write(bytes);
+        exchange.close();
     }
 }

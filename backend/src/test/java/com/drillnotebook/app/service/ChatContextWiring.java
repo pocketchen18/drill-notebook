@@ -33,7 +33,8 @@ public final class ChatContextWiring {
                         ChatContextAssembler assembler, ContextBudgeter budgeter, IndexedMemorySource memories,
                         MemoryIndexService indexes, MemoryCryptoService crypto, MemoryVaultService vault,
                         MemoryPolicyService policy, ChatHistoryRepository historyRepo,
-                        SessionContextRepository checkpoints, ChatAttachmentReader attachmentReader) {
+                        SessionContextRepository checkpoints, ChatAttachmentReader attachmentReader,
+                        MemorySearchTool memorySearchTool) {
     }
 
     public static Stack wire(DataSource dataSource, JdbcTemplate jdbc, ChatLegacyWiring.Wiring wiring) {
@@ -59,6 +60,7 @@ public final class ChatContextWiring {
         IndexedMemorySource memories = new IndexedMemorySource(indexes, wiring.memory());
         ChatContextService contexts = new ChatContextService(projection, assembler, budgeter, memories,
                 wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo);
+        MemorySearchTool memorySearchTool = new MemorySearchTool(contexts);
         ChatHistoryService history = new ChatHistoryService(historyRepo, wiring.metadata(), wiring.cipher(), vault);
         ChatStorageService storage = new ChatStorageService(wiring.ledger(), historyRepo, wiring.metadata(),
                 wiring.turns(), wiring.memory(), operations, mapper);
@@ -66,6 +68,6 @@ public final class ChatContextWiring {
                 wiring.cipher(), attachmentReader, wiring.memory(), crypto, vault, checkpoints,
                 new RetrievalIndexRepository(jdbc), mapper);
         return new Stack(contexts, history, storage, inspector, estimator, projection, assembler, budgeter, memories,
-                indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader);
+                indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader, memorySearchTool);
     }
 }
