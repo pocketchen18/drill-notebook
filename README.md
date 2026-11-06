@@ -167,7 +167,7 @@
 
 发行后修正（已纳入 v0.7.0 预发行）：同一便携目录重复双击 EXE，只恢复并聚焦已运行窗口；启动期间重复打开也不会再拉起后端或清理原实例资源。已有 v0.6.3 发行包不包含此修正，v0.7.0 预发行包含；回归步骤见 [QA 清单](docs/testing/QA_CHECKLIST.md)模块十三。
 
-### 1.12 v0.7.0（预发行）
+### 1.12 v0.7.0（AI 记忆系统）
 
 | 功能 | 说明 |
 |---|---|
@@ -178,8 +178,7 @@
 
 ### 1.13 明确后置（未作为当前目标）
 
-- 知识图谱、完整考试模拟、多人协作  
-- SQLCipher 整库加密、自然语言改写日期控件等  
+当前 MVP 核心闭环、下一迭代与 Non-Goals 统一维护在 [docs/features.md](docs/features.md)，本节不再单独维护列表。
 
 ---
 
@@ -451,8 +450,14 @@ GitHub 的 `release-portable.yml` 使用 `npm ci`，发布配置回归、前后�
 
 ## 5. 文档索引
 
+文档按生命周期分为状态文档、施工文档与交接记忆，规则见 [docs/README.md](docs/README.md)。
+
 | 文档 | 内容 |
 |---|---|
+| [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
+| [docs/features.md](docs/features.md) | 功能清单：MVP 核心闭环、v0.7.0、v0.7.1、后续候选、Non-Goals |
+| [docs/data-model.md](docs/data-model.md) | 已落地数据模型与关键约束（schema 9） |
+| [docs/api-contracts.md](docs/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/architecture.md](docs/architecture.md) | 架构、模块边界、数据与主题 |
 | [docs/import-formats.md](docs/import-formats.md) | PDF / JSON 等导入格式 |
 | [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | 知识点 Markdown 导入 |
@@ -462,6 +467,9 @@ GitHub 的 `release-portable.yml` 使用 `npm ci`，发布配置回归、前后�
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 | [docs/ai-summary.md](docs/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 | [docs/ai-retrieval.md](docs/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
+| [docs/work/v0.7.1-ai-memory-tools/](docs/work/v0.7.1-ai-memory-tools/) | 当前施工文档：AI 记忆工具 UI/UX、后端规格、执行计划 |
+| [docs/plans/v0.7.0-release-notes.md](docs/plans/v0.7.0-release-notes.md) | v0.7.0 发行记录与升级说明 |
+| [docs/archive/v0.7.0/](docs/archive/v0.7.0/) | v0.7.0 施工文档与验收证据（只读归档） |
 | [docs/testing/QA_CHECKLIST.md](docs/testing/QA_CHECKLIST.md) | 功能验收与回归测试手册（分模块用例表） |
 | [docs/testing/TESTING_GUIDELINES.md](docs/testing/TESTING_GUIDELINES.md) | 测试编写规范与提交前三道质量门禁 |
 | [docs/testing/BUG_REPORT_TEMPLATE.md](docs/testing/BUG_REPORT_TEMPLATE.md) | 缺陷报告模板 |

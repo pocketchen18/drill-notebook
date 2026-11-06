@@ -204,11 +204,19 @@ docs/**
 !docs/architecture.md
 !docs/review-srs.md
 !docs/session-curve.md
+!docs/README.md
+!docs/features.md
+!docs/data-model.md
+!docs/api-contracts.md
 !docs/testing/
 !docs/testing/**
-# Public v0.7 planning documents (user-requested release evidence)
+!docs/work/
+!docs/work/**
+!docs/archive/
+!docs/archive/**
+# Release records: the release gate reads this exact path.
 !docs/plans/
-!docs/plans/**
+!docs/plans/v0.7.0-release-notes.md
 # Persistent eval fixtures and live-eval sources are part of the release evidence.
 !backend/src/test/resources/eval/
 !backend/src/test/resources/eval/**
