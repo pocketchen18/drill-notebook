@@ -72,6 +72,40 @@ class ChatUpstreamDispatchTest {
     }
 
     @Test
+    void applyingAnotherModelDuringPreparationOnlyAffectsTheNextTurn() throws Exception {
+        var configs = new AiConfigRepository(jdbc);
+        var connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), new ObjectMapper());
+        connections.view();
+        var initial = configs.connections().read();
+        String providerId = initial.providers().get(0).id();
+        // 夹具返回普通 JSON；流式入口同样支持模型关闭 streaming 的配置。
+        connections.saveModels(null, initial.chatModelId(), Map.of("revision", initial.revision(), "modelId", "stub-model",
+                "streaming", false, "tools", false, "maxOutputTokens", 1000, "reasoningEfforts", List.of("low", "high"), "defaultReasoningEffort", "high"));
+        connections.saveModels(providerId, null, Map.of("revision", connections.view().get("revision"), "modelId", "next-model",
+                "streaming", false, "tools", false, "maxOutputTokens", 300));
+        String next = configs.connections().read().providers().get(0).models().get(1).id();
+        var switched = new java.util.concurrent.atomic.AtomicBoolean();
+
+        ai.chatStream(v2("本轮保持原配置"), (type, text) -> true, metadata -> {
+            if (!switched.compareAndSet(false, true)) return;
+            connections.bind(Map.of("revision", connections.view().get("revision"), "purpose", "chat", "modelId", next));
+            assertEquals("CONFIG_BUSY", assertThrows(ChatTurnRejectException.class, () -> connections.delete(
+                    initial.chatModelId(), false, Map.of("revision", connections.view().get("revision")))).code());
+        });
+        assertTrue(switched.get());
+        ai.chat(v2("下一轮使用新配置"));
+
+        var mapper = new ObjectMapper();
+        assertEquals("stub-model", mapper.readTree(server.bodies().get(0)).path("model").asText());
+        assertEquals(1000, mapper.readTree(server.bodies().get(0)).path("max_tokens").asInt());
+        assertEquals("high", mapper.readTree(server.bodies().get(0)).path("reasoning_effort").asText());
+        assertEquals("next-model", mapper.readTree(server.bodies().get(1)).path("model").asText());
+        assertEquals(300, mapper.readTree(server.bodies().get(1)).path("max_tokens").asInt());
+        assertFalse(mapper.readTree(server.bodies().get(1)).has("reasoning_effort"));
+        connections.delete(initial.chatModelId(), false, Map.of("revision", connections.view().get("revision")));
+    }
+
+    @Test
     void followUpTurnActuallyResendsThePreviousImage() throws Exception {
         Map<String, Object> first = ai.chat(withImage("看这张图", PNG_A));
         Map<String, Object> second = ai.chat(v2("图里第二个标记是什么"));

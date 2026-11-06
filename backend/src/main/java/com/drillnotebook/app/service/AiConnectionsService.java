@@ -1,0 +1,406 @@
+package com.drillnotebook.app.service;
+
+import com.drillnotebook.app.repository.AiConfigRepository;
+import com.drillnotebook.app.repository.AiConnectionsStore;
+import com.drillnotebook.app.repository.AiConnectionsStore.Model;
+import com.drillnotebook.app.repository.AiConnectionsStore.Provider;
+import com.drillnotebook.app.repository.AiConnectionsStore.State;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.UnaryOperator;
+import org.springframework.stereotype.Service;
+
+@Service
+public class AiConnectionsService {
+    private final AiConfigRepository configs;
+    private final AiConnectionsStore store;
+    private final ApiKeyEncryptor keys;
+    private final ObjectMapper mapper;
+    private final AiUpstreamClient upstream;
+    private final java.util.concurrent.ConcurrentHashMap<String, ActiveTurnRegistry.Handle> tests = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long> cancelledTests = new LinkedHashMap<>();
+    private final java.util.Set<String> verifyingModels = new java.util.HashSet<>();
+
+    public AiConnectionsService(AiConfigRepository configs, ApiKeyEncryptor keys, ObjectMapper mapper) {
+        this.configs = configs;
+        this.store = configs.connections();
+        this.keys = keys;
+        this.mapper = mapper;
+        this.upstream = new AiUpstreamClient(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), mapper);
+    }
+
+    private State state() { return store.initialize(this::migrate); }
+    public Map<String, Object> view() { synchronized (AiConnectionUsage.LOCK) { return view(state()); } }
+    public List<AiModelPresets.Preset> presets(String providerId) {
+        synchronized (AiConnectionUsage.LOCK) { return AiModelPresets.forProvider(provider(state(), providerId)); }
+    }
+
+    private State migrate() {
+        List<Provider> providers = new ArrayList<>();
+        String chat = null;
+        String imported = null;
+        for (String purpose : List.of("chat", "import")) {
+            var row = configs.findLegacy(purpose);
+            if (row == null || (blank(row.endpoint()) && blank(row.model()) && blank(row.encryptedKey()))) continue;
+            Map<String, Object> params = new LinkedHashMap<>(AiModelLimits.params(row));
+            String format = AiService.apiFormatOf(row);
+            params.putIfAbsent("streaming", true);
+            params.putIfAbsent("tools", ProviderCapabilities.of(row.endpoint(), format, row.model()).tools());
+            String modelId = uuid();
+            Model model = new Model(modelId, row.model() == null ? "" : row.model().trim(), "", "", params);
+            providers.add(new Provider(uuid(), "chat".equals(purpose) ? "原主模型" : "原导入兜底", format,
+                    row.endpoint() == null ? "" : row.endpoint(), "mock://local".equals(row.endpoint()) ? "none" : "api_key",
+                    row.encryptedKey(), row.keyMeta(), List.of(model)));
+            if ("chat".equals(purpose)) chat = modelId; else imported = modelId;
+        }
+        return new State(1, providers, chat, imported);
+    }
+
+    public Map<String, Object> saveProvider(String id, Map<String, Object> body) {
+        return mutate(body, state -> {
+            Provider old = id == null ? null : provider(state, id);
+            String name = text(body, "name", 60, true);
+            if (state.providers().stream().anyMatch(p -> p.name().equals(name) && !p.id().equals(id))) invalid("供应商名称已存在");
+            String endpoint = text(body, "endpoint", 2048, true);
+            if (!(old != null && "mock://local".equals(old.endpoint()) && endpoint.equals(old.endpoint()))) {
+                try {
+                    URI uri = URI.create(endpoint);
+                    if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                            || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
+                        invalid("Base URL 须为不含账号密码、查询参数或片段的 HTTP(S) 地址");
+                    }
+                } catch (IllegalArgumentException error) { invalid("Base URL 须为不含账号密码、查询参数或片段的 HTTP(S) 地址"); }
+            }
+            String format = AiService.normalizeApiFormat(text(body, "apiFormat", 40, true));
+            String auth = text(body, "authMode", 20, true);
+            if (!List.of("api_key", "none").contains(auth)) invalid("请选择认证方式");
+            String encrypted = old == null ? null : old.encryptedKey();
+            String metadata = old == null ? null : old.keyMeta();
+            if ("none".equals(auth)) { encrypted = null; metadata = null; }
+            else if (body.containsKey("apiKey")) {
+                String raw = text(body, "apiKey", 8192, true);
+                String password = text(body, "masterPassword", 8192, false);
+                try {
+                    var value = keys.encrypt(raw, password.isBlank() ? keys.fingerprintMaterial() : password,
+                            password.isBlank() ? "fingerprint" : "password");
+                    encrypted = value.encrypted();
+                    metadata = json(Map.of("salt", value.salt(), "iv", value.iv(), "kdf", "Argon2id", "algorithm", "AES-256-GCM", "mode", value.mode()));
+                } catch (Exception error) { throw new IllegalArgumentException("密钥加密失败，请重试"); }
+            }
+            if ("api_key".equals(auth) && blank(encrypted)) invalid("请输入 API Key，或选择无需密钥");
+            List<Model> models = old == null ? List.of() : old.models();
+            if (old != null && (!old.endpoint().equals(endpoint) || !old.apiFormat().equals(format)
+                    || !old.authMode().equals(auth) || body.containsKey("apiKey"))) {
+                models = models.stream().map(model -> {
+                    Map<String, Object> params = new LinkedHashMap<>(model.params());
+                    if (!old.endpoint().equals(endpoint) || !old.apiFormat().equals(format)) params.remove("cacheBreakpoints");
+                    params.remove("verification"); params.remove("visionVerified");
+                    return new Model(model.id(), model.modelId(), model.name(), model.group(), params);
+                }).toList();
+            }
+            Provider saved = new Provider(old == null ? uuid() : id, name, format, endpoint, auth, encrypted, metadata, models);
+            List<Provider> providers = new ArrayList<>(state.providers());
+            if (old == null) providers.add(saved); else providers.set(providers.indexOf(old), saved);
+            return new State(state.revision(), providers, state.chatModelId(), state.importModelId());
+        });
+    }
+
+    public Map<String, Object> saveModels(String providerId, String modelId, Map<String, Object> body) {
+        return mutate(body, state -> {
+            Provider owner = modelId == null ? provider(state, providerId) : owner(state, modelId);
+            List<Model> models = new ArrayList<>(owner.models());
+            if (body.get("modelIds") instanceof List<?> ids && modelId == null) {
+                if (ids.isEmpty() || ids.size() > 200) invalid("一次请选择 1–200 个模型");
+                for (Object raw : ids) {
+                    String upstreamId = text(Map.of("modelId", raw), "modelId", 240, true);
+                    if (models.stream().noneMatch(m -> m.modelId().equals(upstreamId))) {
+                        models.add(model(owner, null, Map.of("modelId", upstreamId)));
+                    }
+                }
+            } else {
+                Model old = modelId == null ? null : state.model(modelId);
+                Model saved = model(owner, old, body);
+                if (models.stream().anyMatch(m -> m.modelId().equals(saved.modelId()) && !m.id().equals(modelId))) invalid("此供应商已添加相同模型 ID");
+                if (old == null) models.add(saved); else models.set(models.indexOf(old), saved);
+            }
+            if (models.size() > 500) invalid("单个供应商最多保存 500 个模型");
+            return replace(state, owner, new Provider(owner.id(), owner.name(), owner.apiFormat(), owner.endpoint(),
+                    owner.authMode(), owner.encryptedKey(), owner.keyMeta(), models));
+        });
+    }
+
+    public Map<String, Object> verifyAndAdd(String providerId, Map<String, Object> body) {
+        String requestId = text(body, "requestId", 80, true);
+        if (!(body.get("model") instanceof Map<?, ?>)) invalid("请提供待验证模型");
+        Map<String, Object> draft = mapper.convertValue(body.get("model"), new com.fasterxml.jackson.core.type.TypeReference<>() { });
+        Provider provider;
+        Model candidate;
+        long revision;
+        String key;
+        AiConnectionUsage usage;
+        ActiveTurnRegistry.Handle handle = new ActiveTurnRegistry.Handle(requestId, 0);
+        synchronized (AiConnectionUsage.LOCK) {
+            State state = state(); provider = provider(state, providerId);
+            String modelId = text(draft, "modelId", 240, true);
+            Model existing = provider.models().stream().filter(m -> m.modelId().equals(modelId)).findFirst().orElse(null);
+            if (existing != null) return Map.of("added", true, "existing", true, "modelId", existing.id(), "connections", view(state));
+            if (!(body.get("revision") instanceof Number expected) || expected.longValue() != state.revision()) throw AiConnectionsStore.conflict();
+            if (provider.models().size() >= 500) invalid("单个供应商最多保存 500 个模型");
+            candidate = model(provider, null, draft); ready(provider, candidate); revision = state.revision();
+            if ("mock://local".equals(provider.endpoint())) invalid("本地演示连接不执行联网验证");
+            key = provider.id() + "/" + candidate.modelId();
+            if (verifyingModels.contains(key) || tests.size() >= 20) invalid("此模型正在验证，或验证任务过多，请稍后重试");
+            if (tests.putIfAbsent(requestId, handle) != null) invalid("此验证请求仍在进行");
+            pruneCancelledTests();
+            if (cancelledTests.remove(requestId) != null) handle.requestCancel();
+            verifyingModels.add(key); usage = AiConnectionUsage.acquireProvider(providerId);
+        }
+        try (usage) {
+            var reasoning = AiReasoningSettings.read(candidate.params(), provider.apiFormat());
+            int output = candidate.params().get("maxOutputTokens") instanceof Number n ? Math.min(n.intValue(), 4096) : 4096;
+            var target = new AiUpstreamClient.Upstream(provider.endpoint(), decrypt(provider, body), candidate.modelId(), provider.apiFormat(), output, false).withReasoning(reasoning);
+            var verification = new AiModelVerifier(upstream, mapper).verify(target, handle);
+            synchronized (AiConnectionUsage.LOCK) {
+                if (handle.cancelRequested()) return Map.of("added", false, "cancelled", true, "verification", verification);
+                if (!verification.text().passed()) return Map.of("added", false, "verification", verification);
+                State latest = state();
+                if (latest.revision() != revision) throw AiConnectionsStore.conflict();
+                Map<String, Object> params = new LinkedHashMap<>(candidate.params());
+                params.put("tools", verification.tools().passed());
+                params.put("visionVerified", verification.image().passed());
+                params.put("verification", mapper.convertValue(verification, Map.class));
+                Model saved = new Model(candidate.id(), candidate.modelId(), candidate.name(), candidate.group(), params);
+                List<Model> models = new ArrayList<>(provider.models()); models.add(saved);
+                var next = replace(latest, provider, new Provider(provider.id(), provider.name(), provider.apiFormat(), provider.endpoint(),
+                        provider.authMode(), provider.encryptedKey(), provider.keyMeta(), models));
+                return Map.of("added", true, "modelId", saved.id(), "verification", verification, "connections", view(store.save(next, revision)));
+            }
+        } finally {
+            synchronized (AiConnectionUsage.LOCK) { tests.remove(requestId, handle); verifyingModels.remove(key); }
+        }
+    }
+
+    private Model model(Provider provider, Model old, Map<String, Object> body) {
+        String id = text(body, "modelId", 240, true);
+        if (old != null && !old.modelId().equals(id)) invalid("已保存的模型 ID 不可修改，请添加新模型");
+        Map<String, Object> params = new LinkedHashMap<>(old == null ? Map.of() : old.params());
+        var preset = AiModelPresets.match(provider, id);
+        if (old == null && preset != null) {
+            params.put("presetId", preset.id()); params.put("presetVersion", AiModelPresets.version());
+            if (preset.contextWindow() != null) params.put("contextWindow", preset.contextWindow());
+            if (preset.maxOutputTokens() != null) params.put("maxOutputTokens", preset.maxOutputTokens());
+            params.put("reasoningControl", preset.reasoningControl()); params.put("reasoningEfforts", preset.reasoningEfforts());
+        }
+        params.put("streaming", bool(body, "streaming", !Boolean.FALSE.equals(params.get("streaming"))));
+        params.put("tools", bool(body, "tools", params.get("tools") instanceof Boolean flag ? flag : ProviderCapabilities.of(provider.endpoint(), provider.apiFormat(), id).tools()));
+        for (String field : List.of("contextWindow", "maxInputTokens", "maxOutputTokens")) {
+            if (!body.containsKey(field)) continue;
+            Object value = body.get(field);
+            if (value == null || "".equals(value)) params.remove(field);
+            else {
+                if (!(value instanceof Number number) || number.doubleValue() != number.longValue()
+                        || number.longValue() < 1 || number.longValue() > Integer.MAX_VALUE) invalid("Token 上限须为 1–2147483647 的整数");
+                params.put(field, ((Number) value).intValue());
+            }
+        }
+        if (params.get("contextWindow") instanceof Number window) {
+            for (String field : List.of("maxInputTokens", "maxOutputTokens")) {
+                if (params.get(field) instanceof Number max && max.intValue() > window.intValue()) invalid("输入/输出上限分别不得大于上下文窗口");
+            }
+        }
+        for (String field : AiReasoningSettings.FIELDS) if (body.containsKey(field)) params.put(field, body.get(field));
+        AiReasoningSettings reasoning = AiReasoningSettings.read(params, provider.apiFormat());
+        reasoning.putInto(params);
+        if (reasoning.budget() != null && params.get("maxOutputTokens") instanceof Number limit && reasoning.budget() >= limit.intValue()) invalid("思考预算须小于最大输出 Token");
+        String name = body.containsKey("name") ? text(body, "name", 80, false) : old != null ? old.name() : preset == null ? "" : preset.name();
+        String group = body.containsKey("group") ? text(body, "group", 40, false) : old == null ? "" : old.group();
+        return new Model(old == null ? uuid() : old.id(), id, name, group, params);
+    }
+
+    public Map<String, Object> bind(Map<String, Object> body) {
+        return mutate(body, state -> {
+            String purpose = text(body, "purpose", 10, true);
+            if (!List.of("chat", "import").contains(purpose)) invalid("用途必须是主模型或导入兜底");
+            String id = body.get("modelId") == null ? null : text(body, "modelId", 80, true);
+            if (id == null && "chat".equals(purpose)) invalid("请选择主模型");
+            if (id != null) ready(owner(state, id), state.model(id));
+            return new State(state.revision(), state.providers(), "chat".equals(purpose) ? id : state.chatModelId(),
+                    "import".equals(purpose) ? id : state.importModelId());
+        });
+    }
+
+    public Map<String, Object> delete(String id, boolean isProvider, Map<String, Object> body) {
+        return mutate(body, state -> {
+            Provider owner = isProvider ? provider(state, id) : owner(state, id);
+            if (isProvider && AiConnectionUsage.providerActive(id)) throw new ChatTurnRejectException(409, "CONFIG_BUSY", "仍有任务使用此配置，完成后再删除", Map.of());
+            List<Model> removed = isProvider ? owner.models() : List.of(state.model(id));
+            for (Model model : removed) {
+                if (model.id().equals(state.chatModelId()) || model.id().equals(state.importModelId())) {
+                    throw new ChatTurnRejectException(409, "CONFIG_IN_USE", "此配置仍被使用，请先应用其他模型或恢复导入跟随", Map.of());
+                }
+                if (AiConnectionUsage.active(model.id())) {
+                    throw new ChatTurnRejectException(409, "CONFIG_BUSY", "仍有任务使用此配置，完成后再删除", Map.of());
+                }
+            }
+            if (isProvider) return new State(state.revision(), state.providers().stream().filter(p -> !p.id().equals(id)).toList(), state.chatModelId(), state.importModelId());
+            return replace(state, owner, new Provider(owner.id(), owner.name(), owner.apiFormat(), owner.endpoint(), owner.authMode(),
+                    owner.encryptedKey(), owner.keyMeta(), owner.models().stream().filter(m -> !m.id().equals(id)).toList()));
+        });
+    }
+
+    public List<String> discover(String providerId, Map<String, Object> body) {
+        Provider provider;
+        AiConnectionUsage usage;
+        synchronized (AiConnectionUsage.LOCK) {
+            provider = provider(state(), providerId);
+            usage = AiConnectionUsage.acquireProvider(providerId);
+        }
+        try (usage) {
+            ready(provider, null);
+            if ("mock://local".equals(provider.endpoint())) invalid("本地演示连接请手动添加模型");
+            return upstream.listModels(new AiUpstreamClient.Upstream(provider.endpoint(), decrypt(provider, body), "", provider.apiFormat(), 256, true));
+        }
+    }
+
+    public Map<String, Object> test(String modelId, Map<String, Object> body) {
+        AiConfigRepository.ConfigRow config;
+        Provider provider;
+        AiConnectionUsage usage;
+        synchronized (AiConnectionUsage.LOCK) {
+            State state = state();
+            provider = owner(state, modelId);
+            ready(provider, state.model(modelId));
+            config = store.resolve(new State(state.revision(), state.providers(), modelId, null), "chat");
+            usage = AiConnectionUsage.acquire(config);
+        }
+        try (usage) {
+            String requestId = body.get("requestId") == null ? uuid() : text(body, "requestId", 80, true);
+            ActiveTurnRegistry.Handle handle = new ActiveTurnRegistry.Handle(requestId, 0);
+            synchronized (AiConnectionUsage.LOCK) {
+                if (tests.putIfAbsent(requestId, handle) != null) throw new ChatTurnRejectException(409, "TEST_BUSY", "此测试仍在运行", Map.of());
+                pruneCancelledTests();
+                if (cancelledTests.remove(requestId) != null) handle.requestCancel();
+            }
+            try {
+                String prompt = text(body, "prompt", 2000, true);
+                List<Map<String, Object>> messages = List.of(Map.of("role", "user", "content", prompt));
+                AiReasoningSettings reasoning = AiReasoningSettings.from(config);
+                int output = AiModelLimits.output(config, reasoning.specified() ? 4096 : 256);
+                AiModelLimits.validate(config, messages, List.of(), output);
+                long start = System.currentTimeMillis();
+                if ("mock://local".equals(provider.endpoint())) return Map.of("reply", "pong（本地演示）", "elapsedMs", 0);
+                var target = new AiUpstreamClient.Upstream(provider.endpoint(), decrypt(provider, body), config.model(), provider.apiFormat(), output, false).withReasoning(reasoning);
+                var result = upstream.call(target, messages, false, null, 30, handle);
+                if (handle.cancelRequested()) invalid("测试已取消");
+                if (blank(result.text())) invalid("服务未返回正文，请检查模型 ID 或重试");
+                return Map.of("reply", result.text(), "elapsedMs", System.currentTimeMillis() - start);
+            } finally { tests.remove(requestId, handle); }
+        }
+    }
+
+    public Map<String, Object> cancelTest(String id) {
+        if (id == null || id.length() > 80) invalid("无效的验证请求 ID");
+        synchronized (AiConnectionUsage.LOCK) {
+            ActiveTurnRegistry.Handle handle = tests.get(id);
+            if (handle != null) handle.requestCancel();
+            else { pruneCancelledTests(); cancelledTests.put(id, System.currentTimeMillis()); }
+            return Map.of("cancelled", true);
+        }
+    }
+
+    private void pruneCancelledTests() {
+        long cutoff = System.currentTimeMillis() - 120_000;
+        cancelledTests.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+        while (cancelledTests.size() >= 128) cancelledTests.remove(cancelledTests.keySet().iterator().next());
+    }
+
+    private String decrypt(Provider provider, Map<String, Object> body) {
+        if ("none".equals(provider.authMode())) return "";
+        try {
+            var meta = mapper.readTree(provider.keyMeta());
+            String material = "password".equals(meta.path("mode").asText())
+                    ? text(body, "masterPassword", 8192, true) : keys.fingerprintMaterial();
+            return keys.decrypt(provider.encryptedKey(), meta.path("salt").asText(), meta.path("iv").asText(), material);
+        } catch (Exception error) { throw new IllegalArgumentException("密钥无法解密，请提供主密码或更换此连接密钥"); }
+    }
+
+    private Map<String, Object> mutate(Map<String, Object> body, UnaryOperator<State> update) {
+        synchronized (AiConnectionUsage.LOCK) {
+            State state = state();
+            if (!(body.get("revision") instanceof Number revision) || revision.longValue() != state.revision()) throw AiConnectionsStore.conflict();
+            return view(store.save(update.apply(state), state.revision()));
+        }
+    }
+
+    private Map<String, Object> view(State state) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("revision", state.revision());
+        result.put("chatModelId", state.chatModelId());
+        result.put("importModelId", state.importModelId());
+        result.put("providers", state.providers().stream().map(p -> {
+            Map<String, Object> view = new LinkedHashMap<>();
+            view.put("id", p.id()); view.put("name", p.name()); view.put("endpoint", p.endpoint());
+            view.put("apiFormat", p.apiFormat()); view.put("authMode", p.authMode());
+            view.put("hasKey", !blank(p.encryptedKey()));
+            view.put("needsPassword", p.keyMeta() != null && p.keyMeta().contains("\"password\""));
+            view.put("models", p.models().stream().map(m -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", m.id()); item.put("modelId", m.modelId()); item.put("name", m.name()); item.put("group", m.group());
+                for (String key : List.of("streaming", "tools", "contextWindow", "maxInputTokens", "maxOutputTokens")) item.put(key, m.params().get(key));
+                item.put("reasoningControl", m.params().getOrDefault("reasoningControl", "effort"));
+                item.put("reasoningEfforts", m.params().getOrDefault("reasoningEfforts", List.of()));
+                item.put("defaultReasoningEffort", m.params().get("defaultReasoningEffort"));
+                item.put("thinkingBudgetTokens", m.params().get("thinkingBudgetTokens"));
+                item.put("preset", AiModelPresets.match(p, m.modelId()));
+                item.put("presetVersion", m.params().get("presetVersion"));
+                item.put("visionVerified", m.params().get("visionVerified"));
+                item.put("verification", m.params().get("verification"));
+                return item;
+            }).toList());
+            return view;
+        }).toList());
+        return result;
+    }
+    private static State replace(State state, Provider old, Provider value) {
+        return new State(state.revision(), state.providers().stream().map(p -> p.id().equals(old.id()) ? value : p).toList(), state.chatModelId(), state.importModelId());
+    }
+    private static Provider provider(State state, String id) {
+        Provider provider = state.provider(id);
+        if (provider == null) throw new ChatTurnRejectException(404, "CONFIG_NOT_FOUND", "供应商已不存在，请重载", Map.of());
+        return provider;
+    }
+    private static Provider owner(State state, String id) {
+        Provider provider = state.owner(id);
+        if (provider == null) throw new ChatTurnRejectException(404, "CONFIG_NOT_FOUND", "模型已不存在，请重载", Map.of());
+        return provider;
+    }
+    private static void ready(Provider provider, Model model) {
+        if (blank(provider.endpoint()) || ("api_key".equals(provider.authMode()) && blank(provider.encryptedKey())) || (model != null && blank(model.modelId()))) {
+            invalid("此配置待补全，请检查连接地址、密钥和模型 ID");
+        }
+    }
+    private static String text(Map<String, Object> body, String key, int limit, boolean required) {
+        String value = body.get(key) == null ? "" : String.valueOf(body.get(key)).trim();
+        if (value.length() > limit || (required && value.isBlank())) invalid(key + " 必填且不能超过 " + limit + " 字");
+        return value;
+    }
+    private static boolean bool(Map<String, Object> body, String key, boolean fallback) {
+        if (!body.containsKey(key)) return fallback;
+        if (!(body.get(key) instanceof Boolean)) invalid(key + " 必须为开或关");
+        return Boolean.TRUE.equals(body.get(key));
+    }
+    private static boolean blank(String value) { return value == null || value.isBlank(); }
+    private static String uuid() { return UUID.randomUUID().toString(); }
+    private static void invalid(String message) { throw new IllegalArgumentException(message); }
+    private String json(Object value) {
+        try { return mapper.writeValueAsString(value); }
+        catch (Exception error) { throw new IllegalArgumentException("配置序列化失败", error); }
+    }
+}

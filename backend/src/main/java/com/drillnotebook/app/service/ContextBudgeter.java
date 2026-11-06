@@ -47,7 +47,13 @@ public class ContextBudgeter {
     /** 计划身份与厂商窗口：窗口是否由用户显式配置决定要不要报 WINDOW_UNSET。 */
     public record Target(String planId, long sessionId, long contextGeneration, long historyRevision,
                          Long summaryRevision, Long vaultEpoch, Long vaultRevision, long policyRevision,
-                         int contextWindow, boolean windowKnown) {
+                         int contextWindow, boolean windowKnown, int maxInputTokens, int outputReserve) {
+        public Target(String planId, long sessionId, long contextGeneration, long historyRevision,
+                      Long summaryRevision, Long vaultEpoch, Long vaultRevision, long policyRevision,
+                      int contextWindow, boolean windowKnown) {
+            this(planId, sessionId, contextGeneration, historyRevision, summaryRevision, vaultEpoch, vaultRevision,
+                    policyRevision, contextWindow, windowKnown, Integer.MAX_VALUE, OUTPUT_RESERVE_TOKENS);
+        }
     }
 
     /** 一次 fit 的可变工作集：只在这里减，序列化与审计都从它读。 */
@@ -96,7 +102,7 @@ public class ContextBudgeter {
         int window = target.contextWindow() > 0 ? target.contextWindow() : DEFAULT_CONTEXT_WINDOW_TOKENS;
         int margin = Math.max(MIN_SAFETY_MARGIN_TOKENS, window / 10);
         int allowedInput = Math.min(ChatContextAssembler.USER_TEXT_BUDGET,
-                window - OUTPUT_RESERVE_TOKENS - margin);
+                Math.min(target.maxInputTokens(), window - target.outputReserve() - margin));
         int userTokens = estimator.estimateText(draft.userText());
         if (userTokens > allowedInput) {
             // 当前问题永不静默截断：请用户缩短或改成引用片段（§9.2、T05）
@@ -120,7 +126,7 @@ public class ContextBudgeter {
             // 图像成本已按每张 4,096 单独从窗口里扣除
             estimated = estimator.estimateSerialized(countable(messages));
             limit = Math.min(ChatContextPlan.INPUT_BUDGET_TOKENS,
-                    window - OUTPUT_RESERVE_TOKENS - margin - kept.imageTokens());
+                    Math.min(target.maxInputTokens(), window - target.outputReserve() - margin) - kept.imageTokens());
             if (estimated <= limit) break;
             if (attempt == MAX_FIT_ATTEMPTS) throw tooLarge(describeOverflow(kept), estimated, limit, kept);
             if (!trim(kept, estimated - limit, audit)) {

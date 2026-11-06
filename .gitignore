@@ -39,7 +39,7 @@ embedding-worker/target/
 # CodeGraph local index & daemon artifacts (db / shm / wal / log / pid)
 .codegraph/
 
-# Root-level captures are local QA evidence; checked-in media belongs in docs/ or resources/.
+# Root-level captures are local QA evidence; application media belongs in resources/.
 /*.png
 /*.jpg
 /*.jpeg
@@ -214,6 +214,15 @@ docs/**
 !docs/work/**
 !docs/archive/
 !docs/archive/**
+# 文档截图与预览图片仅保留本地；放在上述重新包含规则之后。
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/docs/**/*.webp
+/docs/**/*.gif
+/docs/**/*.bmp
+/docs/**/*.avif
+/docs/**/*.svg
 # Release records: the release gate reads this exact path.
 !docs/plans/
 !docs/plans/v0.7.0-release-notes.md

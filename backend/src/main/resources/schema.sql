@@ -2,6 +2,12 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ai_connections (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,
+    document TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS question_bank (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

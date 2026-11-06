@@ -1,0 +1,436 @@
+<div id="dn-ai-review" aria-label="AI 连接设置交互草图">
+  <style>
+    #dn-ai-review { --dn-canvas: light-dark(#f4f6fa,#131519); --dn-panel: light-dark(#ffffff,#1b1e24); --dn-pane: light-dark(#f6f8fb,#20242b); --dn-text: light-dark(#1e2433,#e2e6ee); --dn-muted: light-dark(#6b7385,#98a2b3); --dn-line: light-dark(#e4e7ee,#2a2f38); --dn-accent: light-dark(#2f54eb,#8da2ff); --dn-fill: light-dark(#2f54eb,#4b6bf0); --dn-on-fill: light-dark(#ffffff,#ffffff); --dn-selected: light-dark(#eef2ff,#1f2a4d); --dn-error: light-dark(#bf2631,#ff9090); --dn-side: 218px; --dn-row: 16px; color: var(--dn-text); font: 14px/1.55 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei",sans-serif; text-align: left; }
+    #dn-ai-review * { box-sizing: border-box; }
+    #dn-ai-review [hidden] { display: none !important; }
+    #dn-ai-review button, #dn-ai-review input, #dn-ai-review select { font: inherit; color: inherit; }
+    #dn-ai-review button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 12px; border: 1px solid var(--dn-line); border-radius: 7px; background: var(--dn-panel); white-space: normal; }
+    #dn-ai-review button:hover:not(:disabled) { background: var(--dn-pane); }
+    #dn-ai-review button:disabled { opacity: .55; cursor: not-allowed; }
+    #dn-ai-review button.dn-primary { background: var(--dn-fill); border-color: var(--dn-fill); color: var(--dn-on-fill); }
+    #dn-ai-review button.dn-link { border-color: transparent; background: transparent; color: var(--dn-accent); padding-inline: 4px; }
+    #dn-ai-review button.dn-icon { padding: 6px 9px; }
+    #dn-ai-review input:not([type=checkbox]), #dn-ai-review select { width: 100%; min-width: 0; min-height: 37px; padding: 7px 10px; border: 1px solid var(--dn-line); border-radius: 7px; background: var(--dn-panel); }
+    #dn-ai-review input[readonly] { background: var(--dn-pane); color: var(--dn-muted); }
+    #dn-ai-review input::placeholder { color: var(--dn-muted); opacity: 1; }
+    #dn-ai-review h2, #dn-ai-review h3, #dn-ai-review p { margin: 0; }
+    #dn-ai-review h2 { font-size: 18px; font-weight: 600; }
+    #dn-ai-review h3 { font-size: 14px; font-weight: 600; }
+    #dn-ai-review .dn-muted { color: var(--dn-muted); font-size: 12px; }
+    #dn-ai-review .dn-wrap { overflow-wrap: anywhere; min-width: 0; }
+    #dn-ai-review .dn-window { border: 1px solid var(--dn-line); border-radius: 12px; background: var(--dn-canvas); overflow: clip; }
+    #dn-ai-review .dn-chrome { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 110px 10px 18px; background: var(--dn-panel); border-bottom: 1px solid var(--dn-line); flex-wrap: wrap; }
+    #dn-ai-review .dn-chrome strong { font-weight: 600; }
+    #dn-ai-review .dn-body { display: grid; grid-template-columns: 56px minmax(0,1fr); }
+    #dn-ai-review .dn-rail { display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 18px 4px; background: var(--dn-panel); border-right: 1px solid var(--dn-line); font-size: 11px; color: var(--dn-muted); }
+    #dn-ai-review .dn-rail span { display: grid; justify-items: center; gap: 4px; padding: 8px 2px; border-radius: 6px; }
+    #dn-ai-review .dn-rail span:last-child { color: var(--dn-accent); background: var(--dn-selected); }
+    #dn-ai-review .dn-page { min-width: 0; padding: 18px; container-type: inline-size; }
+    #dn-ai-review .dn-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; font-size: 13px; color: var(--dn-muted); }
+    #dn-ai-review .dn-tabs span { padding: 6px 12px; border-radius: 7px; }
+    #dn-ai-review .dn-tabs .dn-current { color: var(--dn-accent); background: var(--dn-selected); font-weight: 600; }
+    #dn-ai-review .dn-usage { display: grid; grid-template-columns: 76px minmax(0,1fr); gap: 5px 14px; padding: 14px 16px; background: var(--dn-panel); border: 1px solid var(--dn-line); border-radius: 9px; margin-bottom: 14px; font-size: 13px; }
+    #dn-ai-review .dn-usage-label { padding-top: 5px; color: var(--dn-muted); }
+    #dn-ai-review .dn-usage-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+    #dn-ai-review .dn-usage-line button { min-height: 27px; padding-block: 1px; font-size: 13px; text-align: left; justify-content: start; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-work { display: grid; grid-template-columns: var(--dn-side) minmax(0,1fr); min-height: 490px; background: var(--dn-panel); border: 1px solid var(--dn-line); border-radius: 9px; }
+    #dn-ai-review .dn-providers { padding: 16px 10px; background: var(--dn-pane); border-right: 1px solid var(--dn-line); border-radius: 9px 0 0 9px; min-width: 0; }
+    #dn-ai-review .dn-side-title { margin: 0 6px 12px; font-weight: 600; }
+    #dn-ai-review .dn-providers input { margin-bottom: 12px; }
+    #dn-ai-review .dn-provider { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; text-align: left; padding: 11px 10px; border-color: transparent; background: transparent; }
+    #dn-ai-review .dn-provider[aria-pressed=true] { color: var(--dn-accent); background: var(--dn-selected); }
+    #dn-ai-review .dn-provider-info { display: grid; gap: 3px; min-width: 0; }
+    #dn-ai-review .dn-provider-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-add-provider { margin-top: 14px; width: 100%; font-size: 13px; }
+    #dn-ai-review .dn-content { min-width: 0; padding: 22px; }
+    #dn-ai-review .dn-heading, #dn-ai-review .dn-row, #dn-ai-review .dn-toolbar, #dn-ai-review .dn-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    #dn-ai-review .dn-heading { margin-bottom: 20px; }
+    #dn-ai-review .dn-provider-actions { position: relative; }
+    #dn-ai-review .dn-provider-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; display: grid; min-width: 150px; padding: 5px; border: 1px solid var(--dn-line); border-radius: 8px; background: var(--dn-panel); box-shadow: 0 6px 18px #0002; }
+    #dn-ai-review .dn-provider-menu button { justify-content: start; border: 0; }
+    #dn-ai-review .dn-connection { border-bottom: 1px solid var(--dn-line); padding-bottom: 20px; margin-bottom: 22px; }
+    #dn-ai-review .dn-connection-summary { margin-top: 10px; display: grid; gap: 4px; font-size: 13px; }
+    #dn-ai-review .dn-toolbar { justify-content: start; margin-bottom: 12px; }
+    #dn-ai-review .dn-toolbar input { flex: 1 1 130px; width: 150px; }
+    #dn-ai-review .dn-toolbar button { padding-inline: 9px; font-size: 12px; }
+    #dn-ai-review .dn-list-hint { margin: -3px 0 12px; }
+    #dn-ai-review .dn-group { border: 1px solid var(--dn-line); border-radius: 8px; margin-top: 10px; }
+    #dn-ai-review .dn-group summary { padding: 9px 12px; background: var(--dn-pane); font-size: 12px; border-radius: 8px; }
+    #dn-ai-review .dn-model { padding: var(--dn-row) 12px; border-top: 1px solid var(--dn-line); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    #dn-ai-review .dn-model-name { border: 0; padding: 0; min-height: 35px; display: grid; justify-content: start; justify-items: start; gap: 3px; text-align: left; background: transparent; flex: 1 1 120px; min-width: 0; }
+    #dn-ai-review .dn-model-name strong { font-weight: 600; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-model-name code { font: 12px/1.4 Consolas,monospace; color: var(--dn-muted); overflow-wrap: anywhere; }
+    #dn-ai-review .dn-model-side { display: flex; justify-content: end; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+    #dn-ai-review .dn-model-side button { font-size: 12px; min-height: 30px; }
+    #dn-ai-review .dn-tag { padding: 2px 7px; border-radius: 4px; color: var(--dn-accent); background: var(--dn-selected); font-size: 11px; white-space: nowrap; }
+    #dn-ai-review .dn-config-tags { font-size: 11px; color: var(--dn-muted); }
+    #dn-ai-review .dn-split { display: flex; gap: 0; }
+    #dn-ai-review .dn-split button { border-radius: 6px 0 0 6px; }
+    #dn-ai-review .dn-split button:last-child { border-left: 0; border-radius: 0 6px 6px 0; padding: 5px; min-width: 27px; }
+    #dn-ai-review .dn-inline-menu { flex: 1 1 100%; display: flex; gap: 6px; flex-wrap: wrap; justify-content: end; padding: 6px 0; }
+    #dn-ai-review .dn-section { padding: 20px 0; border-bottom: 1px solid var(--dn-line); }
+    #dn-ai-review .dn-section:first-child { padding-top: 0; }
+    #dn-ai-review .dn-form-grid { display: grid; gap: 14px; margin-top: 16px; }
+    #dn-ai-review .dn-field { display: grid; gap: 6px; font-size: 13px; }
+    #dn-ai-review .dn-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    #dn-ai-review .dn-toggle-row { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 15px 0; }
+    #dn-ai-review .dn-toggle-row + .dn-toggle-row { border-top: 1px solid var(--dn-line); }
+    #dn-ai-review .dn-toggle-copy { display: grid; gap: 5px; }
+    #dn-ai-review .dn-toggle-copy strong { font-size: 13px; font-weight: 600; }
+    #dn-ai-review .dn-switch { flex: 0 0 38px; width: 38px; height: 22px; appearance: none; background: var(--dn-muted); border: 1px solid transparent; border-radius: 20px; position: relative; }
+    #dn-ai-review .dn-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--dn-panel); transition: transform .15s; }
+    #dn-ai-review .dn-switch:checked { background: var(--dn-fill); }
+    #dn-ai-review .dn-switch:checked::after { transform: translateX(16px); background: var(--dn-on-fill); }
+    #dn-ai-review .dn-advanced { padding-top: 18px; }
+    #dn-ai-review .dn-advanced summary { font-size: 13px; }
+    #dn-ai-review .dn-actions { justify-content: end; padding-top: 22px; }
+    #dn-ai-review .dn-empty { padding: 30px 10px; text-align: center; color: var(--dn-muted); }
+    #dn-ai-review .dn-notice { margin-top: 12px; padding: 10px 12px; border-radius: 6px; background: var(--dn-selected); color: var(--dn-accent); font-size: 12px; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-error { color: var(--dn-error); font-size: 12px; margin-top: 10px; }
+    #dn-ai-review .dn-confirm { background: var(--dn-pane); border: 1px solid var(--dn-line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    #dn-ai-review .dn-confirm p { margin-bottom: 12px; }
+    #dn-ai-review .dn-confirm .dn-actions { padding: 0; }
+    #dn-ai-review .dn-modal-stage { border: 1px solid var(--dn-line); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: var(--dn-pane); }
+    #dn-ai-review .dn-pick { display: flex; align-items: center; gap: 8px; padding: 10px 0; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-pick input { accent-color: var(--dn-accent); }
+    #dn-ai-review .dn-preset-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 14px; }
+    #dn-ai-review .dn-reasoning-field { display: grid; gap: 7px; max-width: 340px; margin-top: 14px; }
+    #dn-ai-review .dn-level-picker { position: relative; min-width: 0; }
+    #dn-ai-review .dn-level-trigger { width: 100%; justify-content: space-between; text-align: left; }
+    #dn-ai-review .dn-level-trigger > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    #dn-ai-review .dn-level-popup { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: 100%; display: flex; flex-direction: column; border: 1px solid var(--dn-line); border-radius: 9px; background: var(--dn-panel); box-shadow: 0 8px 24px light-dark(#0002,#0007); overflow: hidden; }
+    #dn-ai-review .dn-level-popup.dn-above { top: auto; bottom: calc(100% + 6px); }
+    #dn-ai-review .dn-level-search { padding: 8px; flex-shrink: 0; }
+    #dn-ai-review .dn-level-options { min-height: 36px; overflow-y: auto; padding: 0 5px 5px; }
+    #dn-ai-review .dn-level-option { display: flex; align-items: center; gap: 10px; border-radius: 5px; padding: 7px 10px; }
+    #dn-ai-review .dn-level-option:hover, #dn-ai-review .dn-level-option:focus-within { background: var(--dn-pane); }
+    #dn-ai-review .dn-level-option input { appearance: none; flex: 0 0 17px; width: 17px; height: 17px; display: grid; place-items: center; margin: 0; color: var(--dn-text); }
+    #dn-ai-review .dn-level-option input:checked::after { content: '✓'; }
+    #dn-ai-review .dn-level-footer { flex-shrink: 0; padding: 9px 8px; border-top: 1px solid var(--dn-line); }
+    #dn-ai-review .dn-level-footer label { display: grid; gap: 5px; }
+    #dn-ai-review .dn-level-empty { padding: 12px; }
+    #dn-ai-review .dn-discovery-copy { display: grid; gap: 4px; flex: 1; }
+    @media (max-width: 820px) { #dn-ai-review .dn-content { padding: 16px; } #dn-ai-review .dn-page { padding: 12px; } }
+    @container (max-width: 760px) { #dn-ai-review .dn-work { grid-template-columns: minmax(0,1fr); } #dn-ai-review .dn-providers { border-right: 0; border-bottom: 1px solid var(--dn-line); border-radius: 9px 9px 0 0; } #dn-ai-review .dn-provider { padding-block: 8px; } }
+    @media (max-width: 670px) { #dn-ai-review .dn-body { grid-template-columns: minmax(0,1fr); } #dn-ai-review .dn-rail { display: none; } #dn-ai-review .dn-usage { grid-template-columns: 1fr; gap: 2px; } #dn-ai-review .dn-usage-label { padding-top: 0; } }
+    @media (max-width: 430px) { #dn-ai-review .dn-field-pair { grid-template-columns: 1fr; } #dn-ai-review .dn-chrome { padding-right: 98px; font-size: 12px; } #dn-ai-review .dn-tabs { gap: 3px; } #dn-ai-review .dn-tabs span { padding: 5px 6px; font-size: 12px; } #dn-ai-review .dn-content { padding: 12px; } #dn-ai-review .dn-model-side { justify-content: start; } #dn-ai-review .dn-model-name { flex-basis: 100%; } }
+    @media (pointer: coarse) { #dn-ai-review button { min-height: 44px; } #dn-ai-review input:not([type=checkbox]), #dn-ai-review select { font-size: 16px; } #dn-ai-review .dn-model-side button { min-height: 44px; } }
+    @media (prefers-reduced-motion: reduce) { #dn-ai-review .dn-switch::after { transition: none; } }
+  </style>
+  <div class="dn-window">
+    <div class="dn-chrome"><i data-lucide="notebook-pen" aria-hidden="true"></i><strong>Drill Notebook</strong><span class="dn-muted">/ 设置</span><span class="dn-muted">交互草图 · 示例数据</span></div>
+    <div class="dn-body">
+      <aside class="dn-rail" aria-label="应用导航示意"><span><i data-lucide="library" aria-hidden="true"></i>题库</span><span><i data-lucide="notebook" aria-hidden="true"></i>笔记</span><span><i data-lucide="calendar-days" aria-hidden="true"></i>复习</span><span><i data-lucide="settings" aria-hidden="true"></i>设置</span></aside>
+      <div class="dn-page">
+        <div class="dn-tabs" aria-label="设置分区示意"><span>常规</span><span class="dn-current">AI 连接</span><span>记忆</span><span>嵌入与检索</span><span>学习与复习</span><span>数据管理</span></div>
+        <div class="dn-usage" id="dn-usage"></div>
+        <div class="dn-work">
+          <aside class="dn-providers" aria-label="供应商">
+            <div class="dn-side-title">供应商</div>
+            <input id="dn-provider-search" aria-label="搜索供应商" placeholder="搜索供应商">
+            <div id="dn-providers"></div>
+            <button type="button" class="dn-add-provider cursor-interaction" data-action="add-provider"><i data-lucide="plus" aria-hidden="true"></i>添加供应商</button>
+          </aside>
+          <main class="dn-content" id="dn-main" aria-label="供应商详情"></main>
+        </div>
+        <div id="dn-status" class="dn-notice" role="status" aria-live="polite" hidden></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('dn-ai-review');
+      const main = root.querySelector('#dn-main');
+      const providerList = root.querySelector('#dn-providers');
+      const status = root.querySelector('#dn-status');
+      const effortOrder = ['none','minimal','low','medium','high','xhigh','max'];
+      const presets = {
+        'study-reasoner': { name: '深度分析', context: '131072', output: '16384', levels: ['low','medium','high','xhigh','max'] },
+        'quick-reader': { name: '快速阅读', context: '65536', output: '8192', levels: ['low','medium','high'] }
+      };
+      const makeModel = (id, name, group, streaming = true, tools = false) => {
+        const preset = presets[id];
+        return { id, name: name || preset?.name || id, group, streaming, tools, context: preset?.context ?? '', input: '', output: preset?.output ?? '',
+          levels: [...(preset?.levels ?? [])], defaultEffort: '', control: 'effort', thinkingBudget: '', preset: preset ? id : '' };
+      };
+      const providers = [
+        { id: 'study', name: '学习网关', format: 'OpenAI Chat Completions', url: 'https://study.example.invalid/v1', models: [makeModel('study-chat','通用对话','常用',true,true), makeModel('study-reasoner','深度分析','常用')] },
+        { id: 'backup', name: '备用网关', format: 'Anthropic Messages', url: 'https://backup.example.invalid', models: [makeModel('backup-chat','备用对话','常用'), makeModel('long-reader','长文阅读','阅读')] },
+        { id: 'local', name: '本地服务', format: 'OpenAI Chat Completions', url: 'http://127.0.0.1:1234/v1', models: [] }
+      ];
+      let selected = 'study', applied = ['study','study-chat'], imported = null, editing = null, original = '', query = '', activeMenu = '', pending = null, connection = null;
+      let effortSearch = '', publishedState = '';
+      const design = { sidebar: 218, compact: false };
+      const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      const current = () => providers.find(p => p.id === selected);
+      const modelName = (p, id) => { const m = p.models.find(m => m.id === id); return m ? m.name || m.id : '未设置'; };
+      const bindingName = binding => { const p = binding && providers.find(p => p.id === binding[0]); return p ? `${p.name} / ${modelName(p,binding[1])}` : '未设置'; };
+      const same = (binding,p,id) => Boolean(binding && binding[0] === p && binding[1] === id);
+      const dirty = () => Boolean(editing && JSON.stringify(editing) !== original);
+      const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+      const button = (label, action, extra = '', cls = '') => `<button type="button" class="cursor-interaction ${cls}" data-action="${action}" ${extra}>${label}</button>`;
+      function icons() { if (globalThis.lucide) globalThis.lucide.createIcons({ attrs: { width: 16, height: 16 } }); }
+      function say(message) { status.hidden = false; status.textContent = message; }
+      function persist() {
+        if (!globalThis.openai?.setWidgetState) return;
+        const state = { modelContent: { main: bindingName(applied), import: imported ? bindingName(imported) : '跟随主模型', openPage: editing ? '模型设置' : '模型列表', reasoning: editing ? { model: editing.id, levels: editing.levels, defaultLevel: editing.defaultEffort || '自动（服务默认）' } : null }, privateContent: { selected, applied, imported, draft: editing, original, effortSearch } };
+        publishedState = JSON.stringify(state);
+        globalThis.openai.setWidgetState(state).catch(() => {});
+      }
+      function restore(saved) {
+        const state = saved?.privateContent;
+        const valid = b => Array.isArray(b) && providers.some(p => p.id === b[0] && p.models.some(m => m.id === b[1]));
+        if (!state) return;
+        if (providers.some(p => p.id === state.selected)) selected = state.selected;
+        if (valid(state.applied)) applied = state.applied;
+        imported = valid(state.imported) ? state.imported : null;
+        if (state.draft && Array.isArray(state.draft.levels) && typeof state.original === 'string' && (state.draft.isNew || current().models.some(m => m.id === state.draft.id))) {
+          editing = { ...state.draft, levels: effortOrder.filter(level => state.draft.levels.includes(level)) };
+          if (!editing.levels.includes(editing.defaultEffort)) editing.defaultEffort = '';
+          original = state.original;
+          effortSearch = typeof state.effortSearch === 'string' ? state.effortSearch : '';
+        }
+      }
+      function renderTop() {
+        root.querySelector('#dn-usage').innerHTML = `<div class="dn-usage-label">当前使用</div><div><div class="dn-usage-line"><span>主模型</span>${button(esc(bindingName(applied)),'locate-main','','dn-link')}</div><div class="dn-usage-line"><span class="dn-muted">导入兜底</span>${imported ? button(esc(bindingName(imported)),'locate-import','','dn-link') + button('恢复跟随','follow','','dn-link') : '<span>跟随主模型</span>'}</div></div>`;
+        const filter = root.querySelector('#dn-provider-search').value.trim().toLowerCase();
+        providerList.innerHTML = providers.filter(p => `${p.name} ${p.url}`.toLowerCase().includes(filter)).map(p => `<button type="button" class="dn-provider cursor-interaction" data-action="select-provider" data-provider="${p.id}" aria-pressed="${p.id === selected}"><span class="dn-provider-info"><span class="dn-provider-name">${esc(p.name)}</span><span class="dn-muted">${p.models.length} 个模型</span></span><span>${applied?.[0] === p.id ? '<span class="dn-tag">主</span>' : ''}${imported?.[0] === p.id ? '<span class="dn-tag">导入</span>' : ''}</span></button>`).join('') || '<p class="dn-muted">没有匹配的供应商</p>';
+      }
+      function modelRows() {
+        const p = current();
+        const matches = p.models.filter(m => `${m.name} ${m.id} ${m.group}`.toLowerCase().includes(query.toLowerCase()));
+        if (!matches.length) return `<div class="dn-empty">${p.models.length ? '没有匹配的模型' : '添加模型，或从供应商获取'}</div>`;
+        const groups = [...new Set(matches.map(m => m.group || '未分组'))].sort((a,b) => a === '未分组' ? 1 : b === '未分组' ? -1 : a.localeCompare(b,'zh'));
+        return groups.map(g => `<details class="dn-group" open><summary class="cursor-interaction">${esc(g)} · ${matches.filter(m => (m.group || '未分组') === g).length}</summary>${matches.filter(m => (m.group || '未分组') === g).map(m => {
+          const id = esc(m.id), isMain = same(applied,p.id,m.id), isImport = same(imported,p.id,m.id);
+          return `<div class="dn-model"><button type="button" class="dn-model-name cursor-interaction" data-action="edit" data-id="${id}"><strong>${esc(m.name || m.id)}</strong>${m.name && m.name !== m.id ? `<code>${id}</code>` : ''}</button><div class="dn-model-side"><span class="dn-config-tags">${[m.streaming ? '流式' : '',m.tools ? '工具' : ''].filter(Boolean).join(' · ')}</span>${isMain ? '<span class="dn-tag">主模型</span>' : ''}${isImport ? '<span class="dn-tag">导入</span>' : ''}<div class="dn-split">${button(isMain ? '已应用' : '应用','apply',`data-id="${id}" ${isMain ? 'disabled' : ''}`,isMain ? '' : 'dn-primary')}${button(icon('chevron-down'),'menu',`data-id="${id}" aria-label="${esc(m.name || m.id)}的其他应用用途" aria-expanded="${activeMenu === m.id}"`)}</div>${button(icon('settings-2') + '设置','edit',`data-id="${id}"`)}${button(icon('ellipsis'),'more',`data-id="${id}" aria-label="${esc(m.name || m.id)}的更多操作"`)}</div>${activeMenu === m.id ? `<div class="dn-inline-menu">${button('用于导入兜底','import',`data-id="${id}" ${isImport ? 'disabled' : ''}`)}</div>` : ''}${activeMenu === `more:${m.id}` ? `<div class="dn-inline-menu">${button('测试连接','test',`data-id="${id}"`)}${button('删除模型','delete-model',`data-id="${id}"`)}</div>` : ''}</div>`;
+        }).join('')}</details>`).join('');
+      }
+      function renderList() {
+        const p = current();
+        main.innerHTML = `<div class="dn-heading"><div class="dn-wrap"><h2>${esc(p.name)}</h2><span class="dn-muted">${esc(p.format)} · ${p.models.length} 个模型</span></div><div class="dn-provider-actions">${button(icon('ellipsis'),'provider-more','aria-label="供应商更多操作" aria-haspopup="menu" aria-expanded="false"','dn-icon')}</div></div><section class="dn-connection"><h3>连接信息</h3><div class="dn-connection-summary"><span>${esc(p.format)}</span><span class="dn-wrap dn-muted">${esc(p.url)}</span><span class="dn-muted">${p.id === 'local' ? '无需密钥' : '密钥已配置'}</span></div></section><div class="dn-toolbar"><h3>模型</h3><input id="dn-model-search" aria-label="搜索模型名称或 ID" placeholder="搜索名称或 ID" value="${esc(query)}">${button(icon('refresh-cw') + '获取模型','fetch')}${button(icon('plus') + '添加','add-model')}</div><p class="dn-list-hint dn-muted">应用将切换主模型，用于对话、总结与学习计划。</p><div id="dn-models">${modelRows()}</div>`;
+      }
+      function openEditor(id) {
+        const p = current(), m = p.models.find(m => m.id === id);
+        editing = m ? { ...m, levels: [...m.levels], isNew: false } : { ...makeModel('','',''), isNew: true };
+        effortSearch = '';
+        original = JSON.stringify(editing); activeMenu = ''; connection = null; render();
+        main.querySelector(editing.isNew ? '#dn-edit-id' : '#dn-edit-name').focus();
+      }
+      function renderEditor() {
+        const p = current(), m = editing;
+        main.innerHTML = `<div class="dn-heading">${button(icon('arrow-left') + '返回模型列表','back','','dn-link')}<span class="dn-muted dn-wrap">${esc(p.name)} / ${m.isNew ? '添加模型' : esc(m.name || m.id)}</span></div><form id="dn-model-form"><section class="dn-section"><h2>${m.isNew ? '添加模型' : '模型设置'}</h2><div class="dn-form-grid"><label class="dn-field">所属供应商<input readonly value="${esc(p.name)}"></label><label class="dn-field">模型 ID<input id="dn-edit-id" name="id" value="${esc(m.id)}" ${m.isNew ? 'required' : 'readonly'} placeholder="供应商提供的准确模型 ID"></label><div class="dn-field-pair"><label class="dn-field">模型名称<input id="dn-edit-name" name="name" maxlength="80" value="${esc(m.name)}" placeholder="留空使用模型 ID"></label><label class="dn-field">分组名称<input name="group" maxlength="40" value="${esc(m.group)}" placeholder="未分组"></label></div></div></section><section class="dn-section"><h3>输出与工具</h3><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>流式输出</strong><span class="dn-muted">开启后逐步显示回答。</span></span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="streaming" aria-label="流式输出" ${m.streaming ? 'checked' : ''}></label><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>允许工具调用</strong><span class="dn-muted">允许模型使用应用已提供并获授权的工具。</span>${same(imported,p.id,m.id) ? '<span class="dn-muted">仅对主模型对话生效，导入解析不调用记忆工具。</span>' : ''}</span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="tools" aria-label="允许工具调用" ${m.tools ? 'checked' : ''}></label></section><details class="dn-advanced"><summary class="cursor-interaction">上下文与输出上限（可选）</summary><div class="dn-form-grid">${[['context','上下文窗口'],['input','最大输入 Token'],['output','最大输出 Token']].map(([key,label]) => `<label class="dn-field">${label}<input type="number" min="1" step="1" name="${key}" value="${esc(m[key])}" placeholder="未指定 · 沿用应用现有策略"></label>`).join('')}<p class="dn-muted">自定义上限不会突破应用的任务限制。</p></div></details><div id="dn-form-error" class="dn-error" role="alert" hidden></div>${same(applied,p.id,m.id) || same(imported,p.id,m.id) ? '<p class="dn-muted" style="margin-top:18px">保存后从下一次请求生效，当前任务继续使用原配置。</p>' : ''}<div class="dn-actions">${button('取消','back')}<button type="button" data-action="save-form" class="dn-primary cursor-interaction">${m.isNew ? '保存模型' : '保存模型设置'}</button></div></form>`;
+        main.querySelectorAll('.dn-section')[1].insertAdjacentHTML('beforebegin', reasoningMarkup());
+        main.querySelector('#dn-level-search').value = effortSearch;
+        refreshEffort();
+      }
+      function levelLabel(levels) {
+        if (!levels.length) return '未设置';
+        const parts = [];
+        let start = 0;
+        for (let i = 1; i <= levels.length; i++) {
+          if (i < levels.length && effortOrder.indexOf(levels[i]) === effortOrder.indexOf(levels[i - 1]) + 1) continue;
+          const run = levels.slice(start, i);
+          parts.push(...(run.length >= 3 ? [`${run[0]} → ${run[run.length - 1]}`] : run));
+          start = i;
+        }
+        return parts.join(', ');
+      }
+      function reasoningMarkup() {
+        const preset = presets[editing.preset];
+        return `<section class="dn-section" id="dn-reasoning"><h3>思考设置</h3><div class="dn-preset-note dn-muted"><span>${preset ? `参考预设：${esc(preset.name)}` : '未匹配预设'}</span><span id="dn-preset-custom"></span></div><div class="dn-reasoning-field"><span id="dn-level-label">思考等级</span><div class="dn-level-picker">${button('<span id="dn-level-summary"></span>' + icon('chevron-down'),'effort-open','id="dn-level-trigger" aria-labelledby="dn-level-label dn-level-summary" aria-haspopup="dialog" aria-expanded="false" aria-controls="dn-level-popup"','dn-level-trigger')}<div class="dn-level-popup" id="dn-level-popup" role="dialog" aria-label="配置思考等级" hidden><div class="dn-level-search"><input id="dn-level-search" aria-label="搜索思考等级" placeholder="搜索思考等级…" autocomplete="off"></div><div class="dn-level-options" role="group" aria-label="可用思考等级">${effortOrder.map(level => `<label class="dn-level-option cursor-interaction" data-level="${level}"><input type="checkbox" name="effort-level" value="${level}" aria-label="${level}"><span>${level}</span></label>`).join('')}<p class="dn-level-empty dn-muted" id="dn-level-empty" hidden>没有匹配的等级</p></div><div class="dn-level-footer"><label class="dn-muted">默认等级<select id="dn-default-effort" aria-label="默认等级"></select></label></div></div></div><p class="dn-muted" id="dn-effort-summary"></p><p class="dn-muted" id="dn-effort-message" role="status" hidden></p></div><details class="dn-advanced"><summary class="cursor-interaction">高级兼容设置</summary><div class="dn-form-grid"><label class="dn-field">控制方式<select id="dn-control" aria-label="思考控制方式">${[['unknown','未知'],['none','无思考能力'],['fixed','支持思考但不可调'],['effort','强度档位'],['budget','预算控制']].map(([value,label]) => `<option value="${value}" ${editing.control === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="dn-field" id="dn-budget-field" ${editing.control === 'budget' ? '' : 'hidden'}>思考 Token 预算<input name="thinkingBudget" type="number" min="1" step="1" value="${esc(editing.thinkingBudget)}" placeholder="留空沿用服务默认"></label><div>${button('恢复预设资料','restore-preset',preset ? '' : 'disabled')}</div></div></details></section>`;
+      }
+      function refreshEffort(message) {
+        if (!editing || !main.querySelector('#dn-reasoning')) return;
+        const trigger = main.querySelector('#dn-level-trigger');
+        trigger.disabled = editing.control !== 'effort';
+        const labels = { unknown: '未设置', none: '无思考能力', fixed: '由模型决定', budget: '使用预算控制' };
+        main.querySelector('#dn-level-summary').textContent = editing.control === 'effort' ? levelLabel(editing.levels) : labels[editing.control];
+        trigger.setAttribute('data-tooltip', editing.levels.length ? editing.levels.join(', ') : '尚未声明可用的思考等级');
+        main.querySelectorAll('[name="effort-level"]').forEach(input => { input.checked = editing.levels.includes(input.value); input.closest('label').hidden = !input.value.includes(effortSearch.toLowerCase()); });
+        main.querySelector('#dn-level-empty').hidden = effortOrder.some(level => level.includes(effortSearch.toLowerCase()));
+        const select = main.querySelector('#dn-default-effort');
+        select.innerHTML = `<option value="">自动（服务默认）</option>${editing.levels.map(level => `<option value="${level}">${level}</option>`).join('')}`;
+        select.value = editing.defaultEffort;
+        select.disabled = !editing.levels.length;
+        main.querySelector('#dn-effort-summary').textContent = editing.control === 'effort' ? `默认：${editing.defaultEffort || '自动（服务默认）'}` : editing.control === 'unknown' ? '可在高级兼容设置中补充此连接的思考控制方式。' : '';
+        const preset = presets[editing.preset];
+        main.querySelector('#dn-preset-custom').textContent = preset && (editing.control !== 'effort' || JSON.stringify(editing.levels) !== JSON.stringify(preset.levels) || editing.context !== preset.context || editing.output !== preset.output) ? '已自定义' : '';
+        main.querySelector('#dn-budget-field').hidden = editing.control !== 'budget';
+        if (message !== undefined) { const el = main.querySelector('#dn-effort-message'); el.textContent = message; el.hidden = !message; }
+      }
+      function closeEffort(focus = false) {
+        const popup = main.querySelector('#dn-level-popup');
+        if (!popup || popup.hidden) return;
+        popup.hidden = true;
+        const trigger = main.querySelector('#dn-level-trigger');
+        trigger.setAttribute('aria-expanded','false');
+        if (focus) trigger.focus();
+      }
+      function positionEffort() {
+        const popup = main.querySelector('#dn-level-popup');
+        if (!popup || popup.hidden) return;
+        const rect = main.querySelector('#dn-level-trigger').getBoundingClientRect();
+        const below = window.innerHeight - rect.bottom - 18, above = rect.top - 18;
+        const flip = below < 400 && above > below;
+        popup.classList.toggle('dn-above',flip);
+        popup.style.maxHeight = `${Math.max(180,Math.min(440,flip ? above : below))}px`;
+      }
+      function saveEditor() {
+        const p = current(), m = { ...editing, id: editing.id.trim(), name: editing.name.trim(), group: editing.group.trim() };
+        let error = '';
+        if (!m.id) error = '请输入模型 ID。';
+        else if (m.isNew && p.models.some(item => item.id === m.id)) error = '该供应商已添加相同模型 ID。';
+        for (const field of ['context','input','output']) if (m[field] !== '' && (!Number.isSafeInteger(Number(m[field])) || Number(m[field]) <= 0)) error = 'Token 上限需要填写正整数，或留空。';
+        if (m.context && ((m.input && Number(m.input) > Number(m.context)) || (m.output && Number(m.output) > Number(m.context)))) error = '输入或输出上限不能大于上下文窗口。';
+        if (m.control === 'budget' && m.thinkingBudget && (!Number.isSafeInteger(Number(m.thinkingBudget)) || Number(m.thinkingBudget) <= 0)) error = '思考预算需要填写正整数，或留空。';
+        if (error) { const el = main.querySelector('#dn-form-error'); el.hidden = false; el.textContent = error; return false; }
+        const isNew = m.isNew; delete m.isNew;
+        if (isNew) p.models.push(m); else p.models[p.models.findIndex(item => item.id === m.id)] = m;
+        editing = null; original = ''; say('已保存模型设置（草图演示），应用用途保持不变。'); return true;
+      }
+      function guard(action) {
+        if (!dirty() && !connection) { action(); return; }
+        pending = action;
+        main.querySelector('.dn-confirm')?.remove();
+        main.insertAdjacentHTML('afterbegin',`<div class="dn-confirm" role="alert"><p>有未保存的修改</p><div class="dn-actions">${button('继续编辑','stay')}${button('放弃修改','discard')}${button('保存并继续','save-continue','','dn-primary')}</div></div>`);
+        main.querySelector('[data-action=stay]').focus();
+      }
+      function showConnection(add) {
+        connection = { add };
+        const p = add ? { name: '', format: 'OpenAI Chat Completions', url: '' } : current();
+        main.innerHTML = `${add ? '' : button(icon('arrow-left') + '返回模型列表','cancel-connection')}<div class="dn-heading"><div><h2 tabindex="-1">${add ? '添加供应商' : '编辑连接'}</h2>${add ? '' : `<p class="dn-muted">${esc(p.name)}</p>`}</div></div><form id="dn-connection-form"><div class="dn-form-grid"><label class="dn-field">供应商名称<input name="name" maxlength="60" required value="${esc(p.name)}" placeholder="例如：备用网关"></label><label class="dn-field">API 格式<select name="format"><option ${p.format.startsWith('OpenAI') ? 'selected' : ''}>OpenAI Chat Completions</option><option ${p.format.startsWith('Anthropic') ? 'selected' : ''}>Anthropic Messages</option></select></label><label class="dn-field">Base URL<input name="url" type="url" required value="${esc(p.url)}" placeholder="https://example.invalid/v1"></label><p class="dn-muted">草图仅演示连接信息，请勿输入真实密钥；此处使用示例认证状态。</p></div><div id="dn-connection-error" class="dn-error" role="alert" hidden></div><div class="dn-actions">${button('取消','cancel-connection')}<button type="button" data-action="save-form" class="dn-primary cursor-interaction">保存连接</button></div></form>`;
+        icons(); main.querySelector(add ? 'input' : 'h2').focus();
+      }
+      function saveConnection() {
+        const data = new FormData(main.querySelector('#dn-connection-form'));
+        const name = String(data.get('name')).trim(), url = String(data.get('url')).trim();
+        let error = '';
+        try { const value = new URL(url); if (!['http:','https:'].includes(value.protocol) || value.username || value.password || value.search || value.hash) error = '请填写有效的 HTTP(S) 基础地址。'; } catch { error = '请填写有效的 HTTP(S) 基础地址。'; }
+        if (!name) error = '请输入供应商名称。';
+        if (providers.some(p => p.name === name && (connection.add || p.id !== selected))) error = '供应商名称已存在。';
+        if (error) { const el = main.querySelector('#dn-connection-error'); el.hidden = false; el.textContent = error; return false; }
+        if (connection.add) { selected = `demo-${Date.now()}`; providers.push({ id: selected, name, url, format: String(data.get('format')), models: [] }); }
+        else Object.assign(current(), { name, url, format: String(data.get('format')) });
+        connection = null; say('连接信息已保存（草图演示）。'); return true;
+      }
+      function fetchModels() {
+        main.querySelector('.dn-modal-stage')?.remove();
+        const candidates = ['study-chat','study-reasoner','quick-reader','custom-chat'];
+        main.insertAdjacentHTML('afterbegin',`<section class="dn-modal-stage" aria-label="获取模型示例"><div class="dn-row"><h3>从 ${esc(current().name)} 添加模型</h3>${button('关闭','close-stage')}</div><p class="dn-muted">示例返回列表，匹配的资料将在添加时填入。</p>${candidates.map(id => { const exists = current().models.some(m => m.id === id), preset = presets[id]; return `<label class="dn-pick"><input type="checkbox" name="discovery" value="${id}" ${exists ? 'disabled' : ''}><span class="dn-discovery-copy"><span>${id}</span><span class="dn-muted">${exists ? '已添加' : preset ? `已匹配预设 · ${preset.name} · 思考等级 ${levelLabel(preset.levels)}` : '未匹配预设，可手动配置'}</span></span></label>`; }).join('')}<div class="dn-actions">${button('添加所选','add-discovered','','dn-primary')}</div></section>`);
+      }
+      function render() { renderTop(); if (editing) renderEditor(); else renderList(); icons(); }
+      root.addEventListener('input', event => {
+        const target = event.target;
+        if (target.id === 'dn-provider-search') { renderTop(); return; }
+        if (target.id === 'dn-model-search') { query = target.value; root.querySelector('#dn-models').innerHTML = modelRows(); icons(); return; }
+        if (target.id === 'dn-level-search') { effortSearch = target.value; refreshEffort(); return; }
+        if (target.name === 'effort-level') {
+          editing.levels = effortOrder.filter(level => level === target.value ? target.checked : editing.levels.includes(level));
+          let notice = '';
+          if (editing.defaultEffort && !editing.levels.includes(editing.defaultEffort)) { editing.defaultEffort = ''; notice = '已移除默认等级，改用服务默认。'; }
+          refreshEffort(notice); persist(); return;
+        }
+        if (target.id === 'dn-default-effort') { editing.defaultEffort = target.value; refreshEffort(''); persist(); return; }
+        if (target.id === 'dn-control') {
+          editing.control = target.value;
+          let notice = '';
+          if (editing.control !== 'effort' && editing.defaultEffort) { editing.defaultEffort = ''; notice = '控制方式已改变，默认等级恢复为服务默认。'; }
+          closeEffort(); refreshEffort(notice); persist(); return;
+        }
+        if (editing && target.closest('#dn-model-form') && target.name) editing[target.name] = target.type === 'checkbox' ? target.checked : target.value;
+        if (editing) refreshEffort();
+      });
+      root.addEventListener('submit', event => {
+        event.preventDefault();
+        if (event.target.getAttribute('id') === 'dn-model-form' && saveEditor()) { render(); persist(); }
+        else if (event.target.getAttribute('id') === 'dn-connection-form' && saveConnection()) { render(); persist(); }
+      });
+      root.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); const popup = main.querySelector('#dn-level-popup'); if (popup && !popup.hidden) { closeEffort(true); return; } if (pending) { pending = null; main.querySelector('.dn-confirm')?.remove(); } else if (editing || connection) guard(() => { editing = null; connection = null; render(); }); else { activeMenu = ''; render(); } } });
+      document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#dn-ai-review .dn-level-picker')) closeEffort(); });
+      window.addEventListener('resize', positionEffort);
+      root.addEventListener('click', event => {
+        const submit = event.target.closest('button[data-action="save-form"]');
+        if (submit) {
+          event.preventDefault();
+          const form = submit.closest('form');
+          if (!form.checkValidity()) { form.reportValidity(); return; }
+          if (form.getAttribute('id') === 'dn-model-form' ? saveEditor() : saveConnection()) { render(); persist(); }
+          return;
+        }
+        const el = event.target.closest('button[data-action]'); if (!el || el.disabled) return;
+        const action = el.dataset.action, id = el.dataset.id;
+        if (action === 'effort-open') {
+          const popup = main.querySelector('#dn-level-popup');
+          if (!popup.hidden) closeEffort(true);
+          else { popup.hidden = false; el.setAttribute('aria-expanded','true'); positionEffort(); main.querySelector('#dn-level-search').focus(); }
+        }
+        if (action === 'restore-preset') {
+          const preset = presets[editing.preset];
+          if (preset) {
+            editing.levels = [...preset.levels]; editing.control = 'effort'; editing.context = preset.context; editing.output = preset.output;
+            const removed = editing.defaultEffort && !editing.levels.includes(editing.defaultEffort);
+            if (removed) editing.defaultEffort = '';
+            render(); refreshEffort(removed ? '预设已恢复，默认等级改用服务默认。' : '已恢复预设资料，保存后生效。');
+          }
+        }
+        const select = provider => { selected = provider; editing = null; connection = null; query = ''; activeMenu = ''; render(); persist(); };
+        if (action === 'select-provider') guard(() => select(el.dataset.provider));
+        if (action === 'locate-main' || action === 'locate-import') { const binding = action === 'locate-main' ? applied : imported; if (binding) guard(() => { root.querySelector('#dn-provider-search').value = ''; select(binding[0]); }); }
+        if (action === 'edit') openEditor(id);
+        if (action === 'add-model') openEditor(null);
+        if (action === 'back') guard(() => { editing = null; render(); persist(); });
+        if (action === 'apply' || action === 'import') { if (action === 'apply') applied = [selected,id]; else imported = [selected,id]; activeMenu = ''; render(); say(`已${action === 'apply' ? '应用主模型' : '指定导入兜底'}：${bindingName([selected,id])}，从下一次请求生效（草图演示）。`); persist(); }
+        if (action === 'follow') guard(() => { editing = null; connection = null; imported = null; render(); say('导入兜底已恢复跟随主模型（草图演示）。'); persist(); });
+        if (action === 'menu' || action === 'more') { const key = action === 'menu' ? id : `more:${id}`; activeMenu = activeMenu === key ? '' : key; root.querySelector('#dn-models').innerHTML = modelRows(); icons(); }
+        if (action === 'stay') { pending = null; main.querySelector('.dn-confirm')?.remove(); }
+        if (action === 'discard') { const next = pending; pending = null; editing = null; connection = null; next?.(); }
+        if (action === 'save-continue') { if (editing ? saveEditor() : saveConnection()) { const next = pending; pending = null; next?.(); persist(); } }
+        if (action === 'add-provider') guard(() => { editing = null; showConnection(true); });
+        if (action === 'edit-connection') showConnection(false);
+        if (action === 'cancel-connection') guard(() => { connection = null; render(); });
+        if (action === 'fetch') fetchModels();
+        if (action === 'close-stage') main.querySelector('.dn-modal-stage')?.remove();
+        if (action === 'add-discovered') { const picked = [...main.querySelectorAll('input[name=discovery]:checked')]; for (const choice of picked) current().models.push(makeModel(choice.value,'','')); render(); say(`已添加 ${picked.length} 个示例模型，命中预设的资料已自动填入。`); }
+        if (action === 'test') {
+          main.querySelector('.dn-modal-stage')?.remove();
+          main.insertAdjacentHTML('afterbegin',`<section class="dn-modal-stage"><div class="dn-row"><h3>测试连接 · ${esc(modelName(current(),id))}</h3>${button('关闭','close-stage')}</div><label class="dn-field" style="margin-top:12px">测试提示词<input value="你好，请回复 pong。"></label><p class="dn-muted">草图仅展示结果，不发送请求或产生用量。</p><div class="dn-actions">${button('演示通过','test-result','','dn-primary')}${button('演示失败','test-fail')}</div></section>`);
+        }
+        if (action === 'test-result') say('示例测试通过 · 820ms · pong。基础请求可用不代表工具能力已验证。');
+        if (action === 'test-fail') say('示例测试失败 · 认证失败，请检查此供应商的密钥或权限。当前主模型保持不变。');
+        if (action === 'delete-model') {
+          if (same(applied,selected,id) || same(imported,selected,id)) say('此模型仍被使用，请先应用其他模型，或恢复导入跟随。');
+          else { main.querySelector('.dn-modal-stage')?.remove(); main.insertAdjacentHTML('afterbegin',`<section class="dn-modal-stage"><h3>删除模型 ${esc(modelName(current(),id))}？</h3><div class="dn-actions">${button('取消','close-stage')}${button('确认删除','confirm-delete',`data-id="${esc(id)}"`)}</div></section>`); }
+        }
+        if (action === 'confirm-delete') { current().models = current().models.filter(m => m.id !== id); activeMenu = ''; render(); say('示例模型已删除。'); }
+        if (action === 'provider-more') {
+          const menu = main.querySelector('.dn-provider-menu');
+          if (menu) { menu.remove(); el.setAttribute('aria-expanded', 'false'); }
+          else { el.setAttribute('aria-expanded', 'true'); el.parentElement.insertAdjacentHTML('beforeend', `<div class="dn-provider-menu" role="menu" aria-label="供应商操作">${button('编辑连接','edit-connection','role="menuitem"')}${button('删除供应商','delete-provider','role="menuitem"')}</div>`); }
+        }
+        if (action === 'delete-provider') {
+          main.querySelector('.dn-provider-menu')?.remove();
+          main.querySelector('[data-action="provider-more"]')?.setAttribute('aria-expanded', 'false');
+          if (applied?.[0] === selected || imported?.[0] === selected) say('此供应商仍被使用，请先切换主模型或导入兜底。');
+          else { main.querySelector('.dn-modal-stage')?.remove(); main.insertAdjacentHTML('afterbegin', `<section class="dn-modal-stage"><h3>删除 ${esc(current().name)}？</h3><p class="dn-muted">将移除连接、示例密钥和 ${current().models.length} 个模型。</p><div class="dn-actions">${button('取消','close-stage')}${button('确认删除','confirm-delete-provider')}</div></section>`); }
+        }
+        if (action === 'confirm-delete-provider') { providers.splice(providers.findIndex(p => p.id === selected),1); select(applied[0]); say('示例供应商已删除。'); }
+        icons();
+      });
+      const savedState = globalThis.openai?.widgetState;
+      restore(savedState);
+      if (!savedState?.privateContent) {
+        const sample = providers[0].models.find(model => model.id === 'study-reasoner');
+        editing = { ...sample, levels: [...sample.levels], isNew: false };
+        original = JSON.stringify(editing);
+      }
+      render();
+      window.addEventListener('openai:set_globals', event => { const state = event.detail?.globals?.widgetState; if (state && JSON.stringify(state) !== publishedState && !dirty() && !connection) { restore(state); render(); } });
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => { root.style.setProperty('--dn-side',`${design.sidebar}px`); root.style.setProperty('--dn-row',design.compact ? '10px' : '16px'); } });
+        tweak.addSlider(design,'sidebar',{ label: '供应商栏宽度', min: 190, max: 250, step: 2, unit: 'px' });
+        tweak.addToggle(design,'compact',{ label: '紧凑模型行' });
+      }
+    })();
+  </script>
+</div>

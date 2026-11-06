@@ -99,6 +99,7 @@ export interface AiModelSlot {
   endpoint: string;
   model: string;
   hasKey: boolean;
+  authMode?: 'api_key' | 'none';
   /** API 格式：chat_completions（默认）| anthropic。 */
   apiFormat?: 'chat_completions' | 'anthropic';
   /** 是否流式传输（默认开）。 */

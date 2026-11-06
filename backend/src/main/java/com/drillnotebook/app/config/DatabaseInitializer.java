@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 9;
+    private static final int SCHEMA_VERSION = 10;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -60,7 +60,7 @@ public class DatabaseInitializer {
             statement.execute("PRAGMA busy_timeout = 5000");
         }
         Integer current = readCurrentVersion();
-        // 版本前置检查必须在任何 DDL 之前：高版本库不能偷偷降级到 9。
+        // 版本前置检查必须在任何 DDL 之前，不能降级未来版本。
         if (current != null && current > SCHEMA_VERSION) {
             throw new IllegalStateException("数据库结构版本 " + current + " 高于本程序支持的 "
                     + SCHEMA_VERSION + "，请升级程序后再打开该数据目录。");

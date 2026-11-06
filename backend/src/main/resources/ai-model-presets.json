@@ -1,0 +1,1617 @@
+{
+  "version": "2026-11-07",
+  "sources": [
+    "https://github.com/coulsontl/ai-toolbox/blob/main/tauri/resources/preset_models.json",
+    "https://github.com/farion1231/cc-switch/blob/main/src/config/presetModelMetadata.ts"
+  ],
+  "note": "Bundled reference metadata, not a guarantee of endpoint capabilities. Native SDK variants are never forwarded; explicit settings override presets.",
+  "models": [
+    {
+      "id": "MiniMax-M3.1-Flash",
+      "name": "MiniMax M3.1 Flash",
+      "vendor": "minimax",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "minimax/MiniMax-M3.1-Flash"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 512000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3",
+      "vendor": "minimax",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "minimax/MiniMax-M3"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 512000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "MiniMax M2.7",
+      "vendor": "minimax",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "minimax/MiniMax-M2.7"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "MiniMax-M2.5",
+      "name": "MiniMax M2.5",
+      "vendor": "minimax",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "minimax/MiniMax-M2.5"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "agnes-3.0-flash",
+      "name": "Agnes 3.0 Flash",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 524288,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "glm-5",
+      "name": "GLM 5",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "glm-5.3",
+      "name": "GLM 5.3",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5.3"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "glm-5.3-flashx",
+      "name": "GLM 5.3 FlashX",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5.3-flashx"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "glm-5.3-flash",
+      "name": "GLM 5.3 Flash",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5.3-flash"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "glm-5.2",
+      "name": "GLM 5.2",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5.2"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "glm-5.1",
+      "name": "GLM 5.1",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5.1"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "glm-5-turbo",
+      "name": "GLM 5 Turbo",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-5-turbo"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.8-max",
+      "name": "Qwen3.8 Max",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.8-max"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.8-flash",
+      "name": "Qwen3.8 Flash",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.8-flash"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.7-max",
+      "name": "Qwen3.7 Max",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.7-max"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.7-plus",
+      "name": "Qwen3.7 Plus",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.7-plus"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3-coder-plus",
+      "name": "Qwen3 Coder Plus",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3-coder-plus"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3-max",
+      "name": "Qwen3 Max",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3-max"
+      ],
+      "contextWindow": 262144,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.6-plus",
+      "name": "Qwen3.6 Plus",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.6-plus"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "qwen3.5-plus",
+      "name": "Qwen3.5 Plus",
+      "vendor": "qwen",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "qwen/qwen3.5-plus"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "kimi-k3",
+      "name": "Kimi K3",
+      "vendor": "moonshot",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "moonshot/kimi-k3"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "name": "Kimi K2.7 Code",
+      "vendor": "moonshot",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "moonshot/kimi-k2.7-code"
+      ],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6",
+      "vendor": "moonshot",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "moonshot/kimi-k2.6"
+      ],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi K2.5",
+      "vendor": "moonshot",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "moonshot/kimi-k2.5"
+      ],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "step-3.7-flash",
+      "name": "Step 3.7 Flash",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "step-3.5-flash-2603",
+      "name": "Step 3.5 Flash 2603",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "step-3.5-flash",
+      "name": "Step 3.5 Flash",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "mimo-v2.6-pro",
+      "name": "MiMo V2.6 Pro",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "mimo-v2.6-flash",
+      "name": "MiMo V2.6 Flash",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "mimo-v2.5-pro",
+      "name": "MiMo V2.5 Pro",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "mimo-v2.5",
+      "name": "MiMo V2.5",
+      "vendor": "compatible",
+      "apiFormat": "chat_completions",
+      "aliases": [],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "MiniMax-M2.1",
+      "name": "Minimax M2.1",
+      "vendor": "minimax",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "minimax/MiniMax-M2.1"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "glm-4.7",
+      "name": "GLM 4.7",
+      "vendor": "zhipu",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "zhipu/glm-4.7"
+      ],
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v4.1-flash"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v4-flash"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash-0731",
+      "name": "DeepSeek V4 Flash 0731",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v4-flash-0731"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v4-pro"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "deepseek-v4-pro-0813",
+      "name": "DeepSeek V4 Pro 0813",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v4-pro-0813"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "deepseek-v3.2",
+      "name": "DeepSeek V3.2",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-v3.2"
+      ],
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "deepseek-chat",
+      "name": "DeepSeek Chat",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-chat"
+      ],
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "deepseek-reasoner",
+      "name": "DeepSeek Reasoner",
+      "vendor": "deepseek",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "deepseek/deepseek-reasoner"
+      ],
+      "contextWindow": 128000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-4-argon"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.8-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.7-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.6-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.5-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash Lite",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.5-flash-lite"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro Preview",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.1-pro-preview"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3.1-flash-lite"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash Lite",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.5-flash-lite"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "name": "Gemini 3 Flash Preview",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-3-flash-preview"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.5-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.5-pro"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.5-flash-image",
+      "name": "Gemini 2.5 Flash Image",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.5-flash-image"
+      ],
+      "contextWindow": 32768,
+      "maxOutputTokens": 32768,
+      "reasoningControl": "effort",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "name": "Gemini 2.0 Flash",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.0-flash"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 8192,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-2.0-flash-lite",
+      "name": "Gemini 2.0 Flash Lite",
+      "vendor": "google",
+      "apiFormat": "google",
+      "aliases": [
+        "google/gemini-2.0-flash-lite"
+      ],
+      "contextWindow": 1048576,
+      "maxOutputTokens": 8192,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-6-astra"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-6.1-sol"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-6-sol"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-6-luna"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.6-sol"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.6-terra"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.6-luna"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-5.5",
+      "name": "GPT-5.5",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.5"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.4",
+      "name": "GPT-5.4",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.4"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "name": "GPT-5.4 Pro",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.4-pro"
+      ],
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "name": "GPT-5.4 mini",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.4-mini"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "name": "GPT-5.4 nano",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.4-nano"
+      ],
+      "contextWindow": null,
+      "maxOutputTokens": null,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "name": "GPT-5.3 Codex",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.3-codex"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "name": "GPT-5.3 Codex Spark",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.3-codex-spark"
+      ],
+      "contextWindow": 128000,
+      "maxOutputTokens": 32000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5.2",
+      "name": "GPT-5.2",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.2"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "name": "GPT-5.2 Codex",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.2-codex"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.1",
+      "name": "GPT-5.1",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.1"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5.1-codex",
+      "name": "GPT-5.1 Codex",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.1-codex"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "name": "GPT-5.1 Codex Mini",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.1-codex-mini"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5.1-codex-max",
+      "name": "GPT-5.1 Codex Max",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5.1-codex-max"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5",
+      "name": "GPT-5",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5-codex-mini",
+      "name": "GPT-5 Codex Mini",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5-codex-mini"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT-5 Mini",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5-mini"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-5-nano",
+      "name": "GPT-5 Nano",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-5-nano"
+      ],
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gpt-4.1",
+      "name": "GPT-4.1",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-4.1"
+      ],
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "name": "GPT-4.1 mini",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-4.1-mini"
+      ],
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "name": "GPT-4.1 nano",
+      "vendor": "openai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "openai/gpt-4.1-nano"
+      ],
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "reasoningControl": "none",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7",
+      "vendor": "xai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "xai/grok-4.7"
+      ],
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "grok-4.6",
+      "name": "Grok 4.6",
+      "vendor": "xai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "xai/grok-4.6"
+      ],
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "grok-4.5",
+      "name": "Grok 4.5",
+      "vendor": "xai",
+      "apiFormat": "chat_completions",
+      "aliases": [
+        "xai/grok-4.5"
+      ],
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-fable-5-1"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-fable-5",
+      "name": "Claude Fable 5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-fable-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-5-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-sonnet-5-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-sonnet-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-4-8",
+      "name": "Claude Opus 4.8",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-4-8"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-4-7",
+      "name": "Claude Opus 4.7",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-4-7"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-opus-4-6",
+      "name": "Claude Opus 4.6",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-4-6"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-sonnet-4-6"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "name": "Claude Opus 4.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-4-5-20251101"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "name": "Claude Sonnet 4.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-sonnet-4-5-20250929"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-haiku-5-5"
+      ],
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "name": "Claude Haiku 4.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-haiku-4-5-20251001"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "gemini-claude-opus-4-5-thinking",
+      "name": "Antigravity - Claude Opus 4.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/gemini-claude-opus-4-5-thinking"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "id": "gemini-claude-sonnet-4-5-thinking",
+      "name": "Antigravity - Claude Sonnet 4.5",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/gemini-claude-sonnet-4-5-thinking"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "claude-opus-4-1",
+      "name": "Claude Opus 4.1 (latest)",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-opus-4-1"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "claude-sonnet-4-0",
+      "name": "Claude Sonnet 4 (latest)",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-sonnet-4-0"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    },
+    {
+      "id": "claude-3-7-sonnet-latest",
+      "name": "Claude Sonnet 3.7 (latest)",
+      "vendor": "anthropic",
+      "apiFormat": "anthropic",
+      "aliases": [
+        "anthropic/claude-3-7-sonnet-latest"
+      ],
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoningControl": "budget",
+      "reasoningEfforts": []
+    }
+  ]
+}

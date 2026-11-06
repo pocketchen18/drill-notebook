@@ -1,0 +1,109 @@
+.ai-connections { container-type: inline-size; color: var(--text); }
+.connection-current { padding: 18px 22px; border-bottom: 1px solid var(--line); background: var(--subtle-bg); }
+.connection-current > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 30px; }
+.connection-current > div > span { color: var(--muted); width: 65px; flex-shrink: 0; font-size: 12px; }
+.connection-current button:not(.arco-btn) { color: var(--accent); border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer; overflow-wrap: anywhere; font: inherit; }
+.connection-current strong { font-size: 13px; font-weight: 500; }
+.connection-current p { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.connection-layout { display: grid; grid-template-columns: 215px minmax(0, 1fr); min-height: 470px; }
+.connection-providers { padding: 20px 14px; background: var(--sider-bg); border-right: 1px solid var(--line); min-width: 0; }
+.ai-connections h2 { font-size: 18px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.ai-connections h3 { font-size: 14px; font-weight: 600; margin: 0 0 14px; }
+.ai-connections h3 small { color: var(--muted); margin-left: 5px; font-weight: 400; }
+.connection-provider-list { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; max-height: 520px; overflow-y: auto; }
+.connection-provider { display: flex; gap: 8px; align-items: center; border: 1px solid transparent; background: transparent; padding: 11px 9px; border-radius: var(--radius-md); color: var(--text); text-align: left; cursor: pointer; width: 100%; }
+.connection-provider > svg { color: var(--muted); flex-shrink: 0; }
+.connection-provider > span:not(.arco-tag) { flex: 1; min-width: 0; }
+.connection-provider strong { display: block; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.connection-provider small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+.connection-provider:hover { background: var(--hover-bg); }
+.connection-provider.selected { background: var(--accent-soft); border-color: var(--accent-border); }
+.connection-provider.selected strong { color: var(--accent); }
+.connection-provider:focus-visible, .connection-model-name:focus-visible, .connection-group-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.connection-detail { min-width: 0; padding: 24px; }
+.connection-detail-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.connection-detail-heading > div { min-width: 0; }
+.connection-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 6px 0; }
+.connection-summary { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding-bottom: 22px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+.connection-summary > div { min-width: 0; }
+.connection-summary strong { font-size: 13px; }
+.connection-summary p { margin: 8px 0 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.connection-summary span { font-size: 12px; color: var(--muted); }
+.connection-model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.connection-model-toolbar h3 { margin: 0 8px 0 0; }
+.connection-model-toolbar > .arco-input-inner-wrapper { flex: 1; min-width: 150px; width: auto; }
+.connection-group { margin-top: 18px; }
+.connection-group-title { display: flex; gap: 6px; align-items: center; width: 100%; padding: 7px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; text-align: left; }
+.connection-group-title > span { margin-left: auto; }
+.connection-group-title .closed { transform: rotate(-90deg); }
+.connection-model-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-height: 66px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.connection-model-name { flex: 1; min-width: 110px; padding: 3px 0; background: transparent; border: 0; color: var(--text); text-align: left; cursor: pointer; }
+.connection-model-name strong, .connection-model-name code { display: block; overflow-wrap: anywhere; }
+.connection-model-name strong { font-size: 13px; font-weight: 600; }
+.connection-model-name code { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.connection-model-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 11px; color: var(--muted); }
+.connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.connection-actions.end { justify-content: flex-end; margin-top: 18px; }
+.connection-actions > .arco-input-wrapper { flex: 1; min-width: 120px; }
+.connection-form { max-width: 640px; margin: 0 auto; }
+.connection-form h3 { margin-top: 22px; }
+.connection-field { display: flex; flex-direction: column; gap: 7px; margin: 15px 0; }
+.connection-field > label, .connection-field > span { font-size: 13px; color: var(--label); }
+.connection-field .arco-select { width: 100%; }
+.connection-field .connection-actions > .arco-input { flex: 1; width: auto; min-width: 120px; }
+.connection-setting { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.connection-setting strong { font-size: 13px; font-weight: 600; }
+.connection-setting p { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.connection-setting .arco-switch { flex-shrink: 0; }
+.connection-limits { margin-top: 20px; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+.connection-limits summary { font-size: 13px; cursor: pointer; padding: 8px 0; }
+.connection-editor > h2 { margin-top: 20px; outline: none; }
+.connection-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 16px; color: var(--muted); text-align: center; gap: 12px; }
+.connection-empty h2 { color: var(--text); }
+.connection-error { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.connection-error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; background: var(--danger-soft); color: var(--danger); font-size: 13px; }
+.connection-result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow-y: auto; background: var(--subtle-bg); padding: 12px; font: inherit; font-size: 13px; border-radius: var(--radius-sm); }
+.connection-verifications { max-height: 55vh; overflow-y: auto; }
+.connection-verification { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.connection-check-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.connection-check-heading strong { overflow-wrap: anywhere; min-width: 0; }
+.connection-check-heading > span { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.connection-checks { margin: 12px 0 0; padding: 10px 12px; background: var(--subtle-bg); border-radius: var(--radius-sm); font-size: 13px; }
+.connection-checks > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 1fr); gap: 12px; padding: 5px 0; }
+.connection-checks dt { color: var(--muted); }
+.connection-checks dd { margin: 0; color: var(--text); }
+.connection-checks dd small { display: block; margin-top: 4px; color: var(--muted); }
+.connection-checks .connection-check-pass { color: var(--accent); }
+.connection-discovery { max-height: 350px; overflow-y: auto; margin-top: 12px; }
+.connection-discovery > div { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.connection-preset-match { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.connection-effort-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: min(100%, 340px); min-height: 34px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-bg); padding: 7px 12px; color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+.connection-effort-trigger:disabled { cursor: not-allowed; color: var(--muted); background: var(--subtle-bg); }
+.connection-effort-popup { position: fixed; z-index: 1100; display: flex; flex-direction: column; background: var(--panel-bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); overflow: hidden; }
+.connection-effort-search { padding: 8px; flex-shrink: 0; }
+.connection-effort-search input, .connection-native-select { box-sizing: border-box; width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 9px; color: var(--text); background: var(--panel-bg); font: inherit; font-size: 13px; }
+.connection-native-select:disabled { color: var(--muted); }
+.connection-effort-options { min-height: 34px; overflow-y: auto; padding: 0 5px 5px; }
+.connection-effort-option { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 5px 9px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
+.connection-effort-option:hover, .connection-effort-option:focus-within { background: var(--hover-bg); }
+.connection-effort-option input { accent-color: var(--accent-fill); margin: 0; width: 15px; height: 15px; }
+.connection-effort-option:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.connection-effort-option small { margin-left: auto; font-size: 11px; }
+.connection-effort-footer { flex-shrink: 0; padding: 10px; border-top: 1px solid var(--line); }
+.connection-effort-footer label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+@container (max-width: 759px) {
+  .connection-layout { grid-template-columns: minmax(0, 1fr); }
+  .connection-providers { border-right: 0; border-bottom: 1px solid var(--line); }
+  .connection-provider-list { flex-direction: row; overflow-x: auto; max-height: none; padding: 3px; }
+  .connection-provider { flex: 0 0 200px; }
+  .connection-providers > .arco-btn { width: auto; }
+  .connection-detail { padding: 20px 16px; }
+  .connection-model-row > .connection-actions { margin-left: auto; }
+}
+@container (max-width: 480px) {
+  .connection-model-toolbar > .arco-input-inner-wrapper { flex-basis: 100%; }
+  .connection-model-row > .connection-model-name { flex-basis: 60%; }
+  .connection-model-row > .connection-actions { width: 100%; justify-content: flex-end; }
+  .connection-current { padding: 14px 16px; }
+  .connection-current > div > span { width: 100%; }
+}

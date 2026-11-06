@@ -312,6 +312,19 @@ class ChatContextServiceTest {
         return begun.lease();
     }
 
+    @Test
+    void modelInputLimitUsesFitAndNeverTruncatesCurrentQuestion() throws Exception {
+        String input = "当前问题".repeat(100);
+        ChatTurnService.Lease lease = beginTurn(input, null, PASSWORD);
+        try {
+            assertThrows(ChatTurnRejectException.class, () -> stack.contexts().plan(lease, input, List.of(),
+                    Map.of(), Map.of("use", false), 32000, true, 100, 64));
+            ChatContextPlan plan = stack.contexts().plan(lease, input, List.of(), Map.of(), Map.of("use", false),
+                    32000, true, 3000, 64);
+            assertTrue(serialized(plan).contains(input));
+        } finally { wiring.turnService().abandon(lease, "test-cleanup"); }
+    }
+
     private ChatContextPlan plan(String userText, Map<String, Object> memoryOptions) throws Exception {
         return plan(userText, memoryOptions, Map.of());
     }
