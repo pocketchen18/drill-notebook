@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.repository.ChatStorageSizer;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -39,6 +40,8 @@ public class AiUpstreamClient {
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final Set<String> CACHE_UNSUPPORTED = ConcurrentHashMap.newKeySet();
+    private static final int MAX_TOOL_CALLS = 3;
+    private static final int MAX_TOOL_ARGUMENT_BYTES = 4 * 1024;
 
     private final HttpClient http;
     private final ObjectMapper mapper;
@@ -92,12 +95,34 @@ public class AiUpstreamClient {
      * downstreamGone=前端连接已断（等同于用户主动停止），usage=厂商用量或 unknown。
      */
     public record Result(String text, String reasoning, String finishReason, boolean terminalObserved,
-                         boolean captureLimited, boolean downstreamGone, Usage usage) {
+                         boolean captureLimited, boolean downstreamGone, Usage usage, List<ToolCall> toolCalls) {
+
+        public Result {
+            toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+        }
+
+        /** 兼容旧形态：本次响应没有工具调用。 */
+        public Result(String text, String reasoning, String finishReason, boolean terminalObserved,
+                      boolean captureLimited, boolean downstreamGone, Usage usage) {
+            this(text, reasoning, finishReason, terminalObserved, captureLimited, downstreamGone, usage, List.of());
+        }
 
         /** 旧的三参形态：结构化调用方只关心正文，其余按"正常结束、无用量信息"补齐。 */
         public Result(String text, String reasoning, String finishReason) {
             this(text, reasoning, finishReason, true, false, false, Usage.unknown());
         }
+    }
+
+    /** 一份工具定义：名称、说明与 JSON Schema 参数（深冻结，调用方之后改原 Map 不影响本次请求）。 */
+    public record ToolDefinition(String name, String description, Map<String, Object> parameters) {
+        public ToolDefinition {
+            description = description == null ? "" : description;
+            parameters = freeze(parameters == null ? Map.of() : parameters);
+        }
+    }
+
+    /** 一次完整的模型工具调用：arguments 是模型给出的原始 JSON 参数串。 */
+    public record ToolCall(String id, String name, String arguments) {
     }
 
     /**
@@ -166,14 +191,23 @@ public class AiUpstreamClient {
      */
     public Result call(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
                        int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
+        return callWithTools(upstream, messages, List.of(), stream, listener, timeoutSeconds, handle);
+    }
+
+    /** 带工具定义的调用；tools 为空时请求体与旧路径逐字节一致。 */
+    public Result callWithTools(Upstream upstream, List<Map<String, Object>> messages, List<ToolDefinition> tools,
+                                boolean stream, StreamListener listener, int timeoutSeconds,
+                                ActiveTurnRegistry.Handle handle) {
+        List<ToolDefinition> safeTools = sanitizeTools(tools);
         Upstream effective = cacheUnsupported(upstream) ? upstream.withCacheBreakpoints(false) : upstream;
         try {
-            return callOnce(effective, messages, stream, listener, timeoutSeconds, handle);
+            return callOnce(effective, messages, safeTools, stream, listener, timeoutSeconds, handle);
         } catch (IllegalArgumentException error) {
             if (effective.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
                 rememberCacheUnsupported(upstream);
                 upstream.onCacheFallback().run();
-                return callOnce(upstream.withCacheBreakpoints(false), messages, stream, listener, timeoutSeconds, handle);
+                return callOnce(upstream.withCacheBreakpoints(false), messages, safeTools, stream, listener,
+                        timeoutSeconds, handle);
             }
             throw error;
         }
@@ -195,13 +229,14 @@ public class AiUpstreamClient {
         return upstream.apiFormat() + "|" + upstream.baseUrl() + "|" + upstream.model();
     }
 
-    private Result callOnce(Upstream upstream, List<Map<String, Object>> messages, boolean stream, StreamListener listener,
-                            int timeoutSeconds, ActiveTurnRegistry.Handle handle) {
+    private Result callOnce(Upstream upstream, List<Map<String, Object>> messages, List<ToolDefinition> tools,
+                            boolean stream, StreamListener listener, int timeoutSeconds,
+                            ActiveTurnRegistry.Handle handle) {
         boolean anthropic = upstream.anthropic();
         String target = anthropic ? anthropicMessagesUrl(upstream.baseUrl()) : chatCompletionsUrl(upstream.baseUrl());
         Map<String, Object> request = anthropic
-                ? buildAnthropicRequest(upstream, messages, stream)
-                : buildChatCompletionRequest(upstream, messages, stream);
+                ? buildAnthropicRequest(upstream, messages, stream, tools)
+                : buildChatCompletionRequest(upstream, messages, stream, tools);
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(target))
                 .timeout(Duration.ofSeconds(Math.max(timeoutSeconds, 1)))
                 .header("Content-Type", "application/json")
@@ -255,7 +290,7 @@ public class AiUpstreamClient {
             if (stopped(handle, deadline)) {
                 // 已经收到的部分照常交回，但绝不能算成正常完成（§7.2.2 竞争只留一个终态）
                 return new Result(result.text(), result.reasoning(), reason(handle, deadline), false,
-                        result.captureLimited(), true, result.usage());
+                        result.captureLimited(), true, result.usage(), List.of());
             }
             return result;
         } catch (IllegalArgumentException error) {
@@ -404,6 +439,11 @@ public class AiUpstreamClient {
     // ---------- 请求体构建 ----------
 
     Map<String, Object> buildChatCompletionRequest(Upstream upstream, List<Map<String, Object>> messages, boolean stream) {
+        return buildChatCompletionRequest(upstream, messages, stream, List.of());
+    }
+
+    Map<String, Object> buildChatCompletionRequest(Upstream upstream, List<Map<String, Object>> messages, boolean stream,
+                                                   List<ToolDefinition> tools) {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", upstream.model());
         request.put("messages", messages);
@@ -422,11 +462,20 @@ public class AiUpstreamClient {
         if (upstream.jsonMode()) {
             request.put("response_format", Map.of("type", "json_object"));
         }
+        if (!tools.isEmpty()) {
+            request.put("tools", chatTools(tools));
+        }
         return request;
     }
 
     Map<String, Object> buildAnthropicRequest(Upstream upstream, List<Map<String, Object>> messages, boolean stream) {
-        AnthropicPayload payload = toAnthropic(messages);
+        return buildAnthropicRequest(upstream, messages, stream, List.of());
+    }
+
+    Map<String, Object> buildAnthropicRequest(Upstream upstream, List<Map<String, Object>> messages, boolean stream,
+                                              List<ToolDefinition> tools) {
+        boolean toolAware = !tools.isEmpty() || hasToolMessages(messages);
+        AnthropicPayload payload = toolAware ? toAnthropicWithTools(messages) : toAnthropic(messages);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", upstream.model());
         if (!payload.system().isBlank()) {
@@ -442,7 +491,48 @@ public class AiUpstreamClient {
         request.put("messages", payload.messages());
         request.put("max_tokens", Math.max(upstream.maxTokens(), 1024));
         request.put("stream", stream);
+        if (!tools.isEmpty()) {
+            request.put("tools", anthropicTools(tools));
+        }
         return request;
+    }
+
+    static List<Map<String, Object>> chatTools(List<ToolDefinition> tools) {
+        List<Map<String, Object>> out = new ArrayList<>(tools.size());
+        for (ToolDefinition tool : tools) {
+            out.add(Map.of("type", "function", "function", Map.of(
+                    "name", tool.name(),
+                    "description", tool.description(),
+                    "parameters", tool.parameters())));
+        }
+        return List.copyOf(out);
+    }
+
+    static List<Map<String, Object>> anthropicTools(List<ToolDefinition> tools) {
+        List<Map<String, Object>> out = new ArrayList<>(tools.size());
+        for (ToolDefinition tool : tools) {
+            out.add(Map.of("name", tool.name(), "description", tool.description(),
+                    "input_schema", tool.parameters()));
+        }
+        return List.copyOf(out);
+    }
+
+    static List<ToolDefinition> sanitizeTools(List<ToolDefinition> tools) {
+        if (tools == null || tools.isEmpty()) return List.of();
+        List<ToolDefinition> out = new ArrayList<>(tools.size());
+        for (ToolDefinition tool : tools) {
+            if (tool == null || tool.name() == null || tool.name().isBlank()) continue;
+            out.add(tool);
+        }
+        return List.copyOf(out);
+    }
+
+    private static boolean hasToolMessages(List<Map<String, Object>> messages) {
+        for (Map<String, Object> message : messages) {
+            if ("tool".equals(String.valueOf(message.get("role")))) return true;
+            if (message.get("tool_calls") instanceof List<?> calls && !calls.isEmpty()) return true;
+        }
+        return false;
     }
 
     record AnthropicPayload(String system, List<Map<String, Object>> messages) {}
@@ -486,6 +576,84 @@ public class AiUpstreamClient {
             List<Map<String, Object>> blocks = new ArrayList<>(previous);
             blocks.addAll(current);
             merged.set(merged.size() - 1, Map.of("role", "user", "content", List.copyOf(blocks)));
+        }
+        return List.copyOf(merged);
+    }
+
+    /**
+     * 带工具续接的 OpenAI → Anthropic 翻译：assistant.tool_calls 变 tool_use 块，role=tool 变
+     * user 的 tool_result 块，调用与结果按 id 成对；相邻同角色（含多个 tool_result）合并成一条消息。
+     */
+    AnthropicPayload toAnthropicWithTools(List<Map<String, Object>> messages) {
+        StringBuilder system = new StringBuilder();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            String role = String.valueOf(message.get("role"));
+            Object content = message.get("content");
+            if ("system".equals(role)) {
+                String text = openAiText(content);
+                if (!text.isBlank()) system.append(text).append("\n\n");
+                continue;
+            }
+            if ("tool".equals(role)) {
+                Map<String, Object> block = new LinkedHashMap<>();
+                block.put("type", "tool_result");
+                Object id = message.get("tool_call_id");
+                block.put("tool_use_id", id == null ? "" : String.valueOf(id));
+                block.put("content", openAiText(content));
+                out.add(Map.of("role", "user", "content", List.of(block)));
+                continue;
+            }
+            if ("assistant".equals(role) && message.get("tool_calls") instanceof List<?> calls && !calls.isEmpty()) {
+                List<Map<String, Object>> blocks = new ArrayList<>();
+                String text = openAiText(content);
+                if (!text.isBlank()) blocks.add(Map.of("type", "text", "text", text));
+                for (Object raw : calls) {
+                    if (!(raw instanceof Map<?, ?> call)) continue;
+                    Map<?, ?> function = call.get("function") instanceof Map<?, ?> value ? value : Map.of();
+                    Map<String, Object> block = new LinkedHashMap<>();
+                    block.put("type", "tool_use");
+                    block.put("id", call.get("id") == null ? "" : String.valueOf(call.get("id")));
+                    block.put("name", function.get("name") == null ? "" : String.valueOf(function.get("name")));
+                    block.put("input", readArguments(function.get("arguments")));
+                    blocks.add(block);
+                }
+                if (blocks.isEmpty()) blocks.add(Map.of("type", "text", "text", ""));
+                out.add(Map.of("role", "assistant", "content", List.copyOf(blocks)));
+                continue;
+            }
+            out.add(Map.of("role", role, "content", toAnthropicBlocks(content)));
+        }
+        return new AnthropicPayload(system.toString().strip(), mergeSameRoleTurns(out));
+    }
+
+    private Map<String, Object> readArguments(Object raw) {
+        if (raw instanceof Map<?, ?> map) return freeze(map);
+        String text = raw == null ? "" : String.valueOf(raw).trim();
+        if (text.isEmpty()) return Map.of();
+        try {
+            return freeze(mapper.readValue(text, new TypeReference<Map<String, Object>>() { }));
+        } catch (IOException error) {
+            return Map.of();
+        }
+    }
+
+    static List<Map<String, Object>> mergeSameRoleTurns(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> merged = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            if (merged.isEmpty() || !String.valueOf(message.get("role"))
+                    .equals(merged.get(merged.size() - 1).get("role"))) {
+                merged.add(message);
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> previous = (List<Map<String, Object>>) merged.get(merged.size() - 1)
+                    .get("content");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> current = (List<Map<String, Object>>) message.get("content");
+            List<Map<String, Object>> blocks = new ArrayList<>(previous);
+            blocks.addAll(current);
+            merged.set(merged.size() - 1, Map.of("role", message.get("role"), "content", List.copyOf(blocks)));
         }
         return List.copyOf(merged);
     }
@@ -546,8 +714,26 @@ public class AiUpstreamClient {
         JsonNode message = root.path("choices").path(0).path("message");
         String text = extractText(message);
         String reasoning = message.path("reasoning_content").asText("");
-        return new Result(text, reasoning, finishReason, !finishReason.isEmpty() || !text.isEmpty(),
-                false, false, usageOfChatCompletion(root));
+        List<ToolCall> toolCalls = parseChatToolCalls(message.path("tool_calls"));
+        return new Result(text, reasoning, finishReason,
+                !finishReason.isEmpty() || !text.isEmpty() || !toolCalls.isEmpty(),
+                false, false, usageOfChatCompletion(root), toolCalls);
+    }
+
+    private List<ToolCall> parseChatToolCalls(JsonNode calls) {
+        if (calls == null || !calls.isArray()) return List.of();
+        List<ToolCall> out = new ArrayList<>();
+        for (JsonNode call : calls) {
+            if (out.size() >= MAX_TOOL_CALLS) break;
+            JsonNode function = call.path("function");
+            JsonNode argumentNode = function.path("arguments");
+            String arguments = argumentNode.isTextual() ? argumentNode.asText("")
+                    : argumentNode.isObject() ? writeJsonValue(argumentNode) : "";
+            ToolCall toolCall = validatedToolCall(call.path("id").asText(""),
+                    function.path("name").asText(""), arguments);
+            if (toolCall != null) out.add(toolCall);
+        }
+        return List.copyOf(out);
     }
 
     private Result parseAnthropicResponse(String raw) throws IOException {
@@ -555,14 +741,50 @@ public class AiUpstreamClient {
         throwIfUpstreamError(root);
         StringBuilder text = new StringBuilder();
         StringBuilder reasoning = new StringBuilder();
+        List<ToolCall> toolCalls = new ArrayList<>();
         for (JsonNode block : root.path("content")) {
             String type = block.path("type").asText("");
-            if ("text".equals(type)) text.append(block.path("text").asText(""));
-            else if ("thinking".equals(type)) reasoning.append(block.path("thinking").asText(""));
+            if ("text".equals(type)) {
+                text.append(block.path("text").asText(""));
+            } else if ("thinking".equals(type)) {
+                reasoning.append(block.path("thinking").asText(""));
+            } else if ("tool_use".equals(type) && toolCalls.size() < MAX_TOOL_CALLS) {
+                JsonNode input = block.path("input");
+                ToolCall toolCall = validatedToolCall(block.path("id").asText(""),
+                        block.path("name").asText(""),
+                        input.isMissingNode() || input.isNull() ? "{}" : writeJsonValue(input));
+                if (toolCall != null) toolCalls.add(toolCall);
+            }
         }
         String stopReason = root.path("stop_reason").asText("");
-        return new Result(text.toString(), reasoning.toString(), stopReason, !stopReason.isEmpty(),
-                false, false, usageOfAnthropic(root));
+        return new Result(text.toString(), reasoning.toString(), stopReason,
+                !stopReason.isEmpty() || !toolCalls.isEmpty(),
+                false, false, usageOfAnthropic(root), List.copyOf(toolCalls));
+    }
+
+    private ToolCall validatedToolCall(String id, String name, String arguments) {
+        if (id == null || id.isBlank() || name == null || name.isBlank()) return null;
+        String payload = arguments == null ? "" : arguments;
+        if (payload.isEmpty() || utf8Bytes(payload) > MAX_TOOL_ARGUMENT_BYTES) return null;
+        try {
+            JsonNode parsed = mapper.readTree(payload);
+            if (parsed == null || !parsed.isObject()) return null;
+        } catch (IOException error) {
+            return null;
+        }
+        return new ToolCall(id, name, payload);
+    }
+
+    private String writeJsonValue(JsonNode node) {
+        try {
+            return mapper.writeValueAsString(node);
+        } catch (IOException error) {
+            return "";
+        }
+    }
+
+    private static int utf8Bytes(String value) {
+        return value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
     }
 
     /** OpenAI 风格用量：只有厂商回了数字才算 provider，缓存写入字段并非所有网关都有。 */
@@ -599,6 +821,7 @@ public class AiUpstreamClient {
     Result consumeChatCompletionStream(InputStream body, StreamListener listener,
                                        ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
         Capture capture = new Capture();
+        ToolCallStream toolStream = new ToolCallStream();
         String[] finish = {""};
         Usage[] usage = {Usage.unknown()};
         boolean[] terminal = {false};
@@ -631,6 +854,16 @@ public class AiUpstreamClient {
                     downstreamGone[0] = true;
                     return false;
                 }
+                JsonNode toolDeltas = delta.path("tool_calls");
+                if (toolDeltas.isArray()) {
+                    for (JsonNode toolDelta : toolDeltas) {
+                        int index = toolDelta.path("index").asInt(0);
+                        JsonNode function = toolDelta.path("function");
+                        toolStream.open(index, toolDelta.path("id").asText(""),
+                                function.path("name").asText(""));
+                        toolStream.append(index, function.path("arguments").asText(""));
+                    }
+                }
                 String finishReason = node.path("choices").path(0).path("finish_reason").asText("");
                 if (!finishReason.isEmpty()) {
                     finish[0] = finishReason;
@@ -643,36 +876,41 @@ public class AiUpstreamClient {
             if (!stopped(handle, deadline)) throw interrupted;
             readInterrupted[0] = true;
         }
+        List<ToolCall> toolCalls = terminal[0] && !downstreamGone[0] && !readInterrupted[0]
+                ? toolStream.finish() : List.of();
         return new Result(capture.text(), capture.reasoning(), finish[0], terminal[0], capture.limited(),
-                downstreamGone[0] || readInterrupted[0], usage[0]);
+                downstreamGone[0] || readInterrupted[0], usage[0], toolCalls);
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
     Result consumeAnthropicStream(InputStream body, StreamListener listener,
                                   ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
         Capture capture = new Capture();
+        ToolCallStream toolStream = new ToolCallStream();
         String[] finish = {""};
         Usage[] usage = {Usage.unknown()};
         boolean[] terminal = {false};
         boolean[] downstreamGone = {false};
         boolean[] readInterrupted = {false};
         try {
-            consumeAnthropicEvents(body, listener, handle, deadline, capture, finish, usage, terminal,
+            consumeAnthropicEvents(body, listener, handle, deadline, capture, toolStream, finish, usage, terminal,
                     downstreamGone);
         } catch (IOException interrupted) {
             // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
             if (!stopped(handle, deadline)) throw interrupted;
             readInterrupted[0] = true;
         }
+        boolean complete = (terminal[0] || !finish[0].isEmpty()) && !downstreamGone[0] && !readInterrupted[0];
         return new Result(capture.text(), capture.reasoning(), finish[0],
                 terminal[0] || !finish[0].isEmpty(), capture.limited(),
-                downstreamGone[0] || readInterrupted[0], usage[0]);
+                downstreamGone[0] || readInterrupted[0], usage[0],
+                complete ? toolStream.finish() : List.of());
     }
 
     private void consumeAnthropicEvents(InputStream body, StreamListener listener,
                                         ActiveTurnRegistry.Handle handle, Deadline deadline, Capture capture,
-                                        String[] finish, Usage[] usage, boolean[] terminal,
-                                        boolean[] downstreamGone) throws IOException {
+                                        ToolCallStream toolStream, String[] finish, Usage[] usage,
+                                        boolean[] terminal, boolean[] downstreamGone) throws IOException {
         readSse(body, (eventName, data) -> {
             if (stopped(handle, deadline)) return false;
             JsonNode node;
@@ -685,7 +923,13 @@ public class AiUpstreamClient {
             String type = node.path("type").asText(eventName);
             Usage parsed = usageOfAnthropic(node);
             if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
-            if ("content_block_delta".equals(type)) {
+            if ("content_block_start".equals(type)) {
+                JsonNode block = node.path("content_block");
+                if ("tool_use".equals(block.path("type").asText(""))) {
+                    toolStream.open(node.path("index").asInt(0), block.path("id").asText(""),
+                            block.path("name").asText(""));
+                }
+            } else if ("content_block_delta".equals(type)) {
                 JsonNode delta = node.path("delta");
                 String deltaType = delta.path("type").asText("");
                 if ("thinking_delta".equals(deltaType)) {
@@ -700,6 +944,8 @@ public class AiUpstreamClient {
                         downstreamGone[0] = true;
                         return false;
                     }
+                } else if ("input_json_delta".equals(deltaType)) {
+                    toolStream.append(node.path("index").asInt(0), delta.path("partial_json").asText(""));
                 }
             } else if ("message_delta".equals(type)) {
                 String stopReason = node.path("delta").path("stop_reason").asText("");
@@ -769,6 +1015,74 @@ public class AiUpstreamClient {
             if (codePoint <= 0xFFFF) return 3;
             return 4;
         }
+    }
+
+    /** 流式工具调用缓冲：按 index 拼接分片参数，只有终止帧到达后才产出完整调用。 */
+    private final class ToolCallStream {
+        private final Map<Integer, ToolCallDraft> drafts = new LinkedHashMap<>();
+
+        void open(int index, String id, String name) {
+            ToolCallDraft draft = drafts.get(index);
+            if (draft == null) {
+                if (drafts.size() >= MAX_TOOL_CALLS) return;
+                draft = new ToolCallDraft();
+                drafts.put(index, draft);
+            }
+            if (id != null && !id.isBlank()) draft.id = id;
+            if (name != null && !name.isBlank()) draft.name = name;
+        }
+
+        void append(int index, String fragment) {
+            if (fragment == null || fragment.isEmpty()) return;
+            ToolCallDraft draft = drafts.get(index);
+            if (draft == null) {
+                if (drafts.size() >= MAX_TOOL_CALLS) return;
+                draft = new ToolCallDraft();
+                drafts.put(index, draft);
+            }
+            if (draft.oversized) return;
+            if (utf8Bytes(draft.arguments.toString()) + utf8Bytes(fragment) > MAX_TOOL_ARGUMENT_BYTES) {
+                draft.oversized = true;
+                return;
+            }
+            draft.arguments.append(fragment);
+        }
+
+        List<ToolCall> finish() {
+            List<ToolCall> out = new ArrayList<>();
+            for (ToolCallDraft draft : drafts.values()) {
+                if (out.size() >= MAX_TOOL_CALLS) break;
+                ToolCall call = draft.oversized ? null
+                        : validatedToolCall(draft.id, draft.name, draft.arguments.toString());
+                if (call != null) out.add(call);
+            }
+            return List.copyOf(out);
+        }
+    }
+
+    private static final class ToolCallDraft {
+        private String id = "";
+        private String name = "";
+        private final StringBuilder arguments = new StringBuilder();
+        private boolean oversized;
+    }
+
+    static Map<String, Object> freeze(Map<?, ?> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            copy.put(String.valueOf(entry.getKey()), freezeValue(entry.getValue()));
+        }
+        return java.util.Collections.unmodifiableMap(copy);
+    }
+
+    private static Object freezeValue(Object value) {
+        if (value instanceof Map<?, ?> map) return freeze(map);
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            for (Object item : list) copy.add(freezeValue(item));
+            return java.util.Collections.unmodifiableList(copy);
+        }
+        return value;
     }
 
     interface SseHandler {

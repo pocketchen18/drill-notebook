@@ -66,6 +66,7 @@ export function AiModelSlotCard({ purpose, title, description }: {
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [streaming, setStreaming] = useState(true);
+  const [tools, setTools] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [testPrompt, setTestPrompt] = useState('你好，请回复 pong。');
   const [testModel, setTestModel] = useState('');
@@ -79,6 +80,7 @@ export function AiModelSlotCard({ purpose, title, description }: {
     setEndpoint(slot.endpoint || '');
     setModel(slot.model || '');
     if (typeof slot.streaming === 'boolean') setStreaming(slot.streaming);
+    if (typeof slot.tools === 'boolean') setTools(slot.tools);
   }, [slot]);
 
   const saveMutation = useMutation({
@@ -88,6 +90,7 @@ export function AiModelSlotCard({ purpose, title, description }: {
       model,
       apiFormat,
       streaming,
+      ...(purpose === 'chat' ? { tools } : {}),
       apiKey: apiKey || undefined
     }),
     onSuccess: () => {
@@ -200,6 +203,20 @@ export function AiModelSlotCard({ purpose, title, description }: {
           <Switch checked={streaming} onChange={setStreaming} />
           <Typography.Text type="secondary">开启后支持流式输出与思考链展示</Typography.Text>
         </div>
+        {purpose === 'chat' ? (
+          <div className="ai-slot-field ai-slot-field-inline">
+            <span id="ai-slot-tools-label">工具调用</span>
+            <Switch
+              aria-labelledby="ai-slot-tools-label"
+              aria-describedby="ai-slot-tools-help"
+              checked={tools}
+              onChange={setTools}
+            />
+            <Typography.Text type="secondary" id="ai-slot-tools-help">
+              自定义端点需显式开启；开启后模型可调用 search_memories 检索已保存的记忆。
+            </Typography.Text>
+          </div>
+        ) : null}
       </div>
 
       <Space>
