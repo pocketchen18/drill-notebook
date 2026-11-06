@@ -86,7 +86,7 @@ public class IndexedMemorySource implements ContextMemorySource {
                     result.scanned());
         }
         return new Selection(facts(result.topical()), facts(result.style()), result.candidates(), false,
-                ContextMemorySource.Availability.READY);
+                ContextMemorySource.Availability.READY, snapshot.get().truncated(), snapshot.get().corruptRows());
     }
 
     /**
@@ -111,7 +111,8 @@ public class IndexedMemorySource implements ContextMemorySource {
         for (MemorySearchIndex.Hit hit : hits) {
             MemorySearchIndex.Doc doc = hit.doc();
             facts.add(new ContextMemorySource.Fact(doc.memoryId(), doc.version(), doc.kind(), doc.predicate(),
-                    doc.value(), doc.scopeType(), doc.scopeId()));
+                    doc.value(), doc.scopeType(), doc.scopeId(),
+                    doc.validUntilEpochMilli() == Long.MAX_VALUE ? null : doc.validUntilEpochMilli()));
         }
         return facts;
     }

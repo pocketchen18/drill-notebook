@@ -10,8 +10,10 @@ import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
 import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 
@@ -26,10 +28,30 @@ import org.springframework.stereotype.Service;
 public class ChatContextService {
     /** 单次记忆选择的总时限（§9.1-7）：超时按"本轮不使用记忆"降级，不拖住聊天。 */
     static final int MEMORY_DEADLINE_MILLIS = 100;
+    public static final int MEMORY_TOOL_LIMIT = 5;
 
     /** 计划身份与版本快照：发送前复核就比这几个数。 */
     public record Snapshot(long historyRevision, long contextGeneration, Long summaryRevision, Long vaultEpoch,
                            Long vaultRevision, long policyRevision) {
+    }
+
+    public enum MemoryLookupStatus {
+        OK, NO_MATCH, UNAVAILABLE, STALE, LIMIT_REACHED, INVALID_ARGUMENT
+    }
+
+    public record MemoryLookup(MemoryLookupStatus status, ContextMemorySource.Availability availability,
+                               List<ContextMemorySource.Fact> facts, boolean incomplete) {
+        public MemoryLookup {
+            facts = facts == null ? List.of() : List.copyOf(facts);
+        }
+
+        static MemoryLookup stale() {
+            return new MemoryLookup(MemoryLookupStatus.STALE, null, List.of(), false);
+        }
+
+        static MemoryLookup unavailable(ContextMemorySource.Availability availability, boolean incomplete) {
+            return new MemoryLookup(MemoryLookupStatus.UNAVAILABLE, availability, List.of(), incomplete);
+        }
     }
 
     private final ConversationProjection projection;
@@ -114,6 +136,64 @@ public class ChatContextService {
         } catch (SQLException error) {
             return false;
         }
+    }
+
+    /**
+     * 模型只读工具入口：策略、授权、当前作用域与库版本都必须在服务边界内重新取，
+     * 不能相信调用方传来的计划副本或参数。
+     */
+    public MemoryLookup readMemoriesForTool(ChatContextPlan plan, boolean memoryUseRequested, String query) {
+        if (plan == null || !matches(plan)) return MemoryLookup.stale();
+        if (!memoryUseRequested) {
+            return MemoryLookup.unavailable(ContextMemorySource.Availability.NOT_REQUESTED, false);
+        }
+        if (query == null || query.isBlank()) {
+            return new MemoryLookup(MemoryLookupStatus.INVALID_ARGUMENT, null, List.of(), false);
+        }
+        try {
+            MemoryPolicyService.Eligibility eligibility = policy.useEligibility();
+            if (!eligibility.allowed()) {
+                return MemoryLookup.unavailable(ContextMemorySource.Availability.DENIED, false);
+            }
+            ChatSessionMetadataRepository.State state = sessions.read(plan.sessionId()).orElse(null);
+            if (state == null || state.contextGeneration() != plan.contextGeneration()) return MemoryLookup.stale();
+            Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
+            if (envelope.isEmpty()) {
+                return MemoryLookup.unavailable(ContextMemorySource.Availability.LOCKED, false);
+            }
+            MemoryRepository.VaultEnvelope current = envelope.get();
+            if (!Objects.equals(plan.vaultEpoch(), current.epoch())
+                    || !Objects.equals(plan.vaultRevision(), current.revision())) {
+                return MemoryLookup.stale();
+            }
+            ContextMemorySource.Selection selection = memories.select(current.vaultId(), state.memoryScopeType(),
+                    state.memoryNotebookId() == null ? 0L : state.memoryNotebookId(), query,
+                    System.currentTimeMillis(), MEMORY_DEADLINE_MILLIS);
+            if (!matches(plan)) return MemoryLookup.stale();
+            boolean incomplete = selection.truncated() || selection.corruptRows() > 0;
+            if (selection.availability() != ContextMemorySource.Availability.READY) {
+                return MemoryLookup.unavailable(selection.availability(), incomplete);
+            }
+            List<ContextMemorySource.Fact> facts = new ArrayList<>(selection.topical());
+            facts.addAll(selection.style());
+            if (facts.size() > MEMORY_TOOL_LIMIT) {
+                facts = new ArrayList<>(facts.subList(0, MEMORY_TOOL_LIMIT));
+            }
+            if (facts.isEmpty()) {
+                return new MemoryLookup(MemoryLookupStatus.NO_MATCH, ContextMemorySource.Availability.READY,
+                        facts, incomplete);
+            }
+            MemoryLookupStatus status = facts.size() >= MEMORY_TOOL_LIMIT
+                    && selection.candidatesSeen() > facts.size()
+                    ? MemoryLookupStatus.LIMIT_REACHED : MemoryLookupStatus.OK;
+            return new MemoryLookup(status, ContextMemorySource.Availability.READY, facts, incomplete);
+        } catch (SQLException error) {
+            return MemoryLookup.unavailable(ContextMemorySource.Availability.LOCKED, false);
+        }
+    }
+
+    public MemoryLookup readMemoriesForTool(ChatContextPlan plan, String query, boolean memoryUseRequested) {
+        return readMemoriesForTool(plan, memoryUseRequested, query);
     }
 
     /** 当前版本快照：检查器与发送前复核共用一个口径。 */
