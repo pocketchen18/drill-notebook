@@ -26,6 +26,12 @@ public record ChatContextPlan(String planId, long sessionId, long contextGenerat
         citations = citations == null ? List.of() : List.copyOf(citations);
     }
 
+    /** 只更新库版本快照：同一轮写入推进 revision 后，后续工具与发送前复核必须看到新版本。 */
+    public ChatContextPlan withVaultSnapshot(Long epoch, Long revision) {
+        return new ChatContextPlan(planId, sessionId, contextGeneration, historyRevision, summaryRevision, epoch,
+                revision, policyRevision, messages, notices, citations, audit);
+    }
+
     /** 只改发送状态，不动内容与账本：发送前 not_sent，发出后 sent，读流出错按 unknown。 */
     public ChatContextPlan withDispatchState(String dispatchState) {
         return new ChatContextPlan(planId, sessionId, contextGeneration, historyRevision, summaryRevision,

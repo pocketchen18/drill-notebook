@@ -309,6 +309,7 @@ export function MemoryManager(): JSX.Element {
         confirmLoading={deleteMutation.isPending}
         onOk={() => deleteMutation.mutate()}
         onCancel={closeAndRestore}
+        unmountOnExit
       >
         <div className="form-stack">
           <Typography.Text>

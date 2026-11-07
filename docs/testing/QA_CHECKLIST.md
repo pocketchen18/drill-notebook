@@ -178,6 +178,8 @@
 | normalizer 升级迁移 | `backend/.../NoteIndexingServiceTest.java`（2 用例） | 启动审计重建 hash 不符的页（视频页从 0 分块变为可检索）、二次运行幂等；hash 一致的页与笔记正文不被改写 |
 | 视频 / 附件块入索引 | `backend/.../NoteNormalizerTest.java`（3 用例） | `videoBlock` 取标题 + URL、`fileBlock` 取文件名、空 attrs 不产生分块 |
 | provider 可用性可见 | `backend/.../EmbeddingJobExecutorTest.java` + `frontend/src/components/EmbeddingSettingsCard.test.tsx` | status 返回 `providerReady`；`REBUILDING && providerReady=false` 时设置页显示「本地向量组件不可用」而非「索引构建中」 |
+| 记忆工具删除后显式重记 | `backend/.../MemoryCreateToolTest.java`（14 用例） | 删除后明确说「请记住」会解除 `FAMILY` 抑制并让新行/已有同值行重新可见；未明确要求时返回 `SUPPRESSED` 且不插行 |
+| 记忆管理连续删除 | `frontend/src/components/ai-memory/MemoryManager.test.tsx`（13 用例） | 删除确认框关闭即卸载；连续删除第二条时确认框显示正确正文并仍能发出 `DELETE` |
 | 前端回归 | `npm test --prefix frontend`（最新基线见模块十二） | AI 流式解析、设置面板、记忆曲线、会话↔日历联动、界面状态记忆、题库/知识点/背诵组件交互回归、Markdown 题干纯文本化（`markdownText`）、`app.css` 令牌约束（Embedding 条目跟主题变量） |
 | 全量门禁 | `npm run test:backend` + 前端测试 / 构建 | 提交前三道门禁，见 TESTING_GUIDELINES.md 第二节；后端数量以实际运行结果为准 |
 

@@ -416,6 +416,19 @@ public class MemoryPolicyService {
         return consent.allowed() ? quotaGate() : consent;
     }
 
+    /**
+     * 对话内 AI 写入：记忆启用 + MEMORY_USE 授权 + 解锁 + 作用域 + ACTIVE 上限。
+     * 不走维护授权：写入由当前已授权的对话触发，不发生新的维护外发。
+     */
+    public Eligibility aiWriteEligibility(String scopeType, long scopeId) throws SQLException {
+        Eligibility use = useEligibility();
+        if (!use.allowed()) {
+            return use;
+        }
+        Eligibility scope = scopeEligibility(scopeType, scopeId);
+        return scope.allowed() ? quotaGate() : scope;
+    }
+
     /** 会话摘要：{@code compressSession} 独立判断，长期记忆关闭也能压（§2.1）。 */
     public Eligibility summaryEligibility() throws SQLException {
         MemorySettingsRepository.Settings row = current();

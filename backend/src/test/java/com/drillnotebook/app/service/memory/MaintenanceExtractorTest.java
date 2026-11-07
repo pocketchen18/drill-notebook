@@ -126,4 +126,53 @@ class MaintenanceExtractorTest {
         assertEquals("之后每次回答结束之后带一个完毕", candidate.value());
         assertEquals(text, candidate.quote());
     }
+
+    @Test
+    void addMemoryCommandPrefixIsStrippedFromTheDeterministicFallback() throws Exception {
+        var result = extractWithEmptyModel("请加入记忆:我是男的");
+
+        assertTrue(result.formatOk());
+        assertEquals(1, result.candidates().size());
+        var candidate = result.candidates().get(0);
+        assertEquals("我是男的", candidate.value(), "命令前缀不能写进事实值");
+        assertEquals("BACKGROUND", candidate.kind());
+        assertEquals("请加入记忆:我是男的", candidate.quote());
+    }
+
+    @Test
+    void fullWidthColonAndPolitePrefixAreAlsoStripped() throws Exception {
+        var result = extractWithEmptyModel("请加入记忆：我是男的");
+
+        assertTrue(result.formatOk());
+        assertEquals(1, result.candidates().size());
+        assertEquals("我是男的", result.candidates().get(0).value());
+    }
+
+    @Test
+    void pureMemoryCommandWithoutAFactIsNotSaved() throws Exception {
+        var result = extractWithEmptyModel("请加入记忆");
+
+        assertTrue(result.formatOk());
+        assertTrue(result.candidates().isEmpty(), "只有命令没有事实时不能落一条只有命令的记忆");
+    }
+
+    private static MaintenancePorts.ExtractionResult extractWithEmptyModel(String text) throws Exception {
+        MaintenanceUpstream upstream = mock(MaintenanceUpstream.class);
+        when(upstream.call(anyString(), anyString())).thenReturn(new AiUpstreamClient.Result(
+                "{\"schemaVersion\":2,\"candidates\":[]}", null, "stop", true, false, false,
+                AiUpstreamClient.Usage.unknown()));
+        MemoryRepository repository = mock(MemoryRepository.class);
+        when(repository.findPage(anyString(), anyString(), anyString(), anyLong(), isNull(), isNull(), anyInt()))
+                .thenReturn(List.of());
+        MaintenanceExtractor extractor = new MaintenanceExtractor(upstream, repository,
+                mock(MemoryCryptoService.class), new TokenEstimator(MAPPER), MAPPER);
+        MemoryCryptoService.MemoryKey key = new MemoryCryptoService.MemoryKey(new byte[32], new byte[32], "vault",
+                "fingerprint");
+        Batch batch = new Batch(Kind.EXTRACT, 1L, 1L, 1L, 1L, "GLOBAL", 0L, "Asia/Shanghai", 1L, 1L,
+                PreviousSummary.NONE,
+                List.of(new SourceTurn(1L, 1L, 101L, 102L, text, null, 12, 0L,
+                        List.of(new SourceBlock("b1", text)), "2026-10-31T15:50:00Z")),
+                0, 12, "rev", 0L, List.of());
+        return extractor.extract(batch, key, null);
+    }
 }

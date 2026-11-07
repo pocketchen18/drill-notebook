@@ -1,15 +1,15 @@
 # v0.7.1 AI 记忆工具：UI/UX
 
-状态：当前切片已实现并提交（3819da9）；本文先记录现状与验收表现，供人工确认后再调整。后续 3 个工具沿用同一套交互约定。
+当前已落地能力与开关状态见 [features.md](../../features.md)；本文只记录 UI/UX 设计与待确认项，后续工具沿用同一套交互约定。
 
 需求基线：[requirements.md](requirements.md)。
 
 ## 1. 范围
 
-- 聊天模型可调用的记忆工具：本切片只开放 `search_memories`。
+- 聊天模型可调用的记忆工具与当前状态见 [features.md](../../features.md)。
 - 设置页提供聊天模型的「工具调用」开关；导入兜底模型不显示该开关。
 - 工具调用对用户表现为正常对话：不展示原始 JSON、函数名或参数，只展示最终回答。
-- 记忆操作状态展示、`list_memories` / `create_memory` / `update_memory` 的界面属于后续切片。
+- 记忆操作状态展示（P6）、`create_memory` / `update_memory` 的界面属于后续切片。
 
 ## 2. 入口与布局
 

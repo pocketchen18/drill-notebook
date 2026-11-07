@@ -213,7 +213,7 @@ export function AiModelSlotCard({ purpose, title, description }: {
               onChange={setTools}
             />
             <Typography.Text type="secondary" id="ai-slot-tools-help">
-              自定义端点需显式开启；开启后模型可调用 search_memories 检索已保存的记忆。
+              自定义端点需显式开启；开启后模型可检索、新增或更新已保存的记忆。
             </Typography.Text>
           </div>
         ) : null}

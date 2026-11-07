@@ -75,8 +75,8 @@ public class MemoryRepository {
                           String observedAt, String recordedAt, String lastConfirmedAt) {
     }
 
-    /** 新增结果。FAMILY_CONFLICT / PENDING_QUOTA_FULL 都不留任何行。 */
-    public enum AddOutcome { ADDED, FAMILY_CONFLICT, PENDING_QUOTA_FULL }
+    /** 新增结果。FAMILY_CONFLICT / PENDING_QUOTA_FULL / DUPLICATE 都不留任何行。 */
+    public enum AddOutcome { ADDED, DUPLICATE, FAMILY_CONFLICT, PENDING_QUOTA_FULL }
 
     /** 替换结果。VERSION_CONFLICT 时 {@code current} 是最新的 ACTIVE 版本元数据（供 409 响应）。 */
     public enum ReplaceOutcome { REPLACED, VERSION_CONFLICT, NOT_FOUND }
@@ -88,6 +88,14 @@ public class MemoryRepository {
         public static AddResult of(AddOutcome outcome) {
             return new AddResult(outcome, null, null, 0, 0);
         }
+    }
+
+    /**
+     * 带证据的新增结果。归一值重复时 {@code duplicateMemoryId/duplicateVersion} 指向已有当前版本，
+     * 不新增任何行，也不推进 vault revision。
+     */
+    public record AddWithEvidenceResult(AddOutcome outcome, String memoryId, int version, String duplicateMemoryId,
+                                        int duplicateVersion, long vaultRevision) {
     }
 
     public record ReplaceResult(ReplaceOutcome outcome, String memoryId, String rowId, int version,
@@ -355,6 +363,33 @@ public class MemoryRepository {
     }
 
     /**
+     * 新增事实并挂上来源证据，三者（去重判断、事实、证据）在同一事务内完成。
+     * 归一值相同就返回 DUPLICATE 并指向已有版本；重复判断与插入之间不给并发写入留窗口。
+     */
+    public AddWithEvidenceResult addWithEvidence(NewMemory draft, EvidenceDraft evidence) throws SQLException {
+        scopeContract(draft);
+        return immediate.execute(connection -> {
+            requireVault(connection, draft.vaultId());
+            Optional<FactRow> duplicate = findCurrentByValueHmac(connection, draft.vaultId(), draft.valueHmac());
+            if (duplicate.isPresent()) {
+                return new AddWithEvidenceResult(AddOutcome.DUPLICATE, null, 0, duplicate.get().memoryId(),
+                        duplicate.get().version(), 0);
+            }
+            if (draft.status().equals(STATUS_PENDING) && pendingCount(connection, draft.vaultId()) >= PENDING_QUOTA) {
+                return new AddWithEvidenceResult(AddOutcome.PENDING_QUOTA_FULL, null, 0, null, 0, 0);
+            }
+            if (draft.status().equals(STATUS_ACTIVE) && hasActiveInFamily(connection, draft)) {
+                return new AddWithEvidenceResult(AddOutcome.FAMILY_CONFLICT, null, 0, null, 0, 0);
+            }
+            String memoryId = UUID.randomUUID().toString();
+            insertFact(connection, draft, memoryId, draft.rowId(), 1);
+            attachEvidenceIn(connection, evidence, draft.rowId());
+            return new AddWithEvidenceResult(AddOutcome.ADDED, memoryId, 1, null, 0,
+                    updateVault(connection, draft.vaultId(), false).revision());
+        });
+    }
+
+    /**
      * 替换：同一事务里旧 ACTIVE 版 CAS 成 SUPERSEDED、新 ACTIVE 版 version+1。
      * CAS 未命中（并发改过）就返回 VERSION_CONFLICT，旧版与证据都不动。
      */
@@ -586,6 +621,25 @@ public class MemoryRepository {
             statement.setString(1, vaultId);
             statement.setString(2, valueHmac);
             return first(statement.executeQuery());
+        }
+    }
+
+    /**
+     * 某个作用域内按归一值查当前版本。update_memory 用文本定位时必须同时按 scope 收口，
+     * 不能拿跨作用域的第一条冒充本册目标。
+     */
+    public List<FactRow> findCurrentByValueHmacInScope(String vaultId, String scopeType, long scopeId,
+                                                       String valueHmac) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT " + FACT_COLUMNS
+                     + " FROM ai_memory_item WHERE vault_id = ? AND scope_type = ? AND scope_id = ?"
+                     + " AND value_hmac = ? AND status <> '" + STATUS_SUPERSEDED
+                     + "' ORDER BY version DESC")) {
+            statement.setString(1, vaultId);
+            statement.setString(2, scopeType);
+            statement.setLong(3, scopeId);
+            statement.setString(4, valueHmac);
+            return collect(statement.executeQuery());
         }
     }
 

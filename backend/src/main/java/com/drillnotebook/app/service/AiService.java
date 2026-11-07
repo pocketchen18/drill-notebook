@@ -20,6 +20,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -39,6 +40,7 @@ public class AiService {
     /** 工具循环硬上限：最多 2 个工具阶段、3 次执行、3 次普通模型请求。 */
     private static final int TOOL_MAX_STAGES = 2;
     private static final int TOOL_MAX_EXECUTIONS = 3;
+    private static final int TOOL_MAX_MEMORY_WRITES = 3;
     private static final int TOOL_MAX_REQUESTS = 3;
     private static final int TOOL_MAX_OUTPUT_TOKENS = 4096;
     private static final int TOOL_MAX_MEMORIES_PER_CALL = 5;
@@ -46,8 +48,24 @@ public class AiService {
     private static final int TOOL_MAX_ARGUMENT_BYTES = 4 * 1024;
     private static final int TOOL_MAX_RESULT_BYTES = 16 * 1024;
     private static final String MEMORY_TOOL_INSTRUCTION =
-            "需要用户已授权保存的个人记忆（背景、偏好、跨会话目标）时可调用 search_memories；"
-                    + "只依据返回的事实回答，未命中就如实说明，不要编造记忆。";
+            "需要用户已授权保存的个人记忆（背景、偏好、跨会话目标）时可调用 search_memories 检索事实，"
+                    + "或调用 list_memories 查看记忆标题；"
+                    + "当用户说「记住」「加入记忆」「帮我记一下」或明确要求保存长期信息时，"
+                    + "必须调用 create_memory 保存，不要声称自己没有写入工具，也不要让用户手动添加；"
+                    + "text 尽量保留用户原话，不要自行改写成第三人称或近义句；"
+                    + "即使历史回答里说过没有写入工具，也以当前工具定义为准；"
+                    + "当用户纠正或补充已有记忆时调用 update_memory，先用 search_memories 找到原正文，"
+                    + "把返回的 text 原样作为 currentText；如果 search_memories 没命中，先调用 list_memories"
+                    + "看标题，按标题里的主题词（例如「男性」）再检索一次，不要因为原话和存储措辞不同就断定没有记忆；"
+                    + "纠正时更新与用户原说法对应的那条旧事实（例如先说「我是男的」后改口「我是女的」，"
+                    + "应更新「男性」那条），不要把新值写到另一条相似记忆上；"
+                    + "无法确定目标时先向用户确认，不要新增一条相反事实；"
+                    + "只有 create_memory 返回 CREATED/DUPLICATE、update_memory 返回 UPDATED/NO_CHANGE 时"
+                    + "才能说已保存或已更新；DUPLICATE 表示已经保存过；其他状态必须如实说明未写入，不得声称已记住；"
+                    + "create_memory 返回 SUPPRESSED 表示这一主题之前被用户删除且本轮没有明确要求重新记住，"
+                    + "要如实告诉用户；只有用户再说「请记住」这类明确要求后，才能重新调用；"
+                    + "但不要把一次性任务、临时状态或闲聊写成长期记忆；"
+                    + "只依据返回的内容回答，未命中就如实说明，不要编造记忆。";
     /** RAG 注入上限：最多 10 个片段、12,000 chars 近似 token 预算。 */
     private static final int RAG_MAX_CITATIONS = 10;
     private static final int RAG_CONTEXT_CHAR_BUDGET = 12_000;
@@ -79,14 +97,39 @@ public class AiService {
         AiUpstreamClient.ToolDefinition definition();
 
         /**
-         * @return §9.3 约定的有界结果（facts 最多 5 条）；调用方仍会再次收紧。
+         * @return §9.3 约定的有界结果；调用方仍会按 {@link #resultKey()} 与 {@link #maxItemsPerCall()} 再次收紧。
          */
         Map<String, Object> execute(ChatContextPlan plan, String rawArguments, boolean memoryUseRequested,
                                     String userText);
+
+        /**
+         * 带轮次身份的入口：写入类工具需要当前 turn / user message 才能挂证据；
+         * 只读工具继续走上面的四参重载。
+         */
+        default Map<String, Object> execute(ChatContextPlan plan, String rawArguments, boolean memoryUseRequested,
+                                            String userText, long turnId, long userMessageId) {
+            return execute(plan, rawArguments, memoryUseRequested, userText);
+        }
+
+        /** 结果里承载条目的字段名：search 用 facts，list 用 items。 */
+        default String resultKey() {
+            return "facts";
+        }
+
+        /** 单次调用最多返回多少条；调用方还会按整轮预算收紧。 */
+        default int maxItemsPerCall() {
+            return TOOL_MAX_MEMORIES_PER_CALL;
+        }
+
+        /** 写工具成功后会推进 vault revision，调用方据此刷新本轮计划快照。 */
+        default boolean mutatesMemory() {
+            return false;
+        }
     }
 
     /** 记忆工具由外部装配；未注册时保持纯文本路径。 */
-    private volatile MemoryTool memoryTool;
+    private volatile List<MemoryTool> memoryTools = List.of();
+    private volatile Map<String, MemoryTool> memoryToolsByName = Map.of();
 
     private AiUpstreamClient upstream() {
         AiUpstreamClient client = upstreamClient;
@@ -138,8 +181,26 @@ public class AiService {
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setMemoryTool(MemoryTool memoryTool) {
-        this.memoryTool = memoryTool;
+    public void setMemoryTools(List<MemoryTool> tools) {
+        List<MemoryTool> usable = new ArrayList<>();
+        if (tools != null) {
+            for (MemoryTool tool : tools) {
+                AiUpstreamClient.ToolDefinition definition = tool == null ? null : tool.definition();
+                if (definition != null && definition.name() != null && !definition.name().isBlank()) {
+                    usable.add(tool);
+                }
+            }
+        }
+        usable.sort(Comparator.comparing((MemoryTool tool) -> tool.definition().name()));
+        Map<String, MemoryTool> byName = new LinkedHashMap<>();
+        for (MemoryTool tool : usable) {
+            String name = tool.definition().name();
+            if (byName.putIfAbsent(name, tool) != null) {
+                throw new IllegalStateException("重复的记忆工具名: " + name);
+            }
+        }
+        this.memoryTools = List.copyOf(usable);
+        this.memoryToolsByName = Map.copyOf(byName);
     }
 
     public Map<String, Object> redactedConfig() {
@@ -566,10 +627,39 @@ public class AiService {
                 outcome.stateDurable(), plan, usage, lease.requestId(), request.sessionId(), view);
     }
 
-    /** 一次派发所需的一切：v2 用统一计划，v1 保持客户端自带 messages 的旧语义（§7.1）。 */
-    private record Dispatch(ChatContextPlan plan, RetrievalOutcome legacy, List<Map<String, Object>> messages) {
+    /**
+     * 一次派发所需的一切：v2 用统一计划，v1 保持客户端自带 messages 的旧语义（§7.1）。
+     * 工具写入会推进 vault revision，所以计划引用必须能在同一轮内被替换成新快照。
+     */
+    private static final class Dispatch {
+        private ChatContextPlan plan;
+        private final RetrievalOutcome legacy;
+        private final List<Map<String, Object>> messages;
+
+        Dispatch(ChatContextPlan plan, RetrievalOutcome legacy, List<Map<String, Object>> messages) {
+            this.plan = plan;
+            this.legacy = legacy;
+            this.messages = messages;
+        }
+
+        ChatContextPlan plan() {
+            return plan;
+        }
+
+        RetrievalOutcome legacy() {
+            return legacy;
+        }
+
+        List<Map<String, Object>> messages() {
+            return messages;
+        }
+
         String planId() {
             return plan == null ? null : plan.planId();
+        }
+
+        void refreshPlan(ChatContextPlan next) {
+            if (next != null) plan = next;
         }
 
         ChatContextPlan markSent() {
@@ -907,7 +997,7 @@ public class AiService {
     }
 
     private record ToolCallContext(ChatContextPlan plan, boolean memoryUseRequested, String userText,
-                                   String expectedName, int remainingMemories) {
+                                   int remainingMemories, long turnId, long userMessageId) {
     }
 
     private record ToolPayload(String json, int memories) {
@@ -921,20 +1011,17 @@ public class AiService {
      * 轮次的 begin/finalize 仍由调用方各做一次，这里只负责请求级结算。
      */
     private AiUpstreamClient.Result runTurn(TurnCall call) {
-        List<AiUpstreamClient.ToolDefinition> tools = List.of();
-        if (call.memoryToolsAllowed() && memoryTool != null) {
-            AiUpstreamClient.ToolDefinition definition = memoryTool.definition();
-            if (definition != null && definition.name() != null && !definition.name().isBlank()) {
-                tools = List.of(definition);
-            }
-        }
+        List<AiUpstreamClient.ToolDefinition> tools = call.memoryToolsAllowed()
+                ? memoryTools.stream().map(MemoryTool::definition).toList()
+                : List.of();
         boolean toolMode = !tools.isEmpty();
-        String expectedTool = toolMode ? tools.get(0).name() : "";
+        Map<String, MemoryTool> toolsByName = toolMode ? memoryToolsByName : Map.of();
         List<Map<String, Object>> messages = new ArrayList<>(call.messages());
         if (toolMode) messages = withMemoryInstruction(messages);
         DeltaBuffer buffer = toolMode ? new DeltaBuffer() : null;
         int stages = 0;
         int executions = 0;
+        int writes = 0;
         int requests = 0;
         int memories = 0;
         int remainingOutput = TOOL_MAX_OUTPUT_TOKENS;
@@ -983,14 +1070,23 @@ public class AiService {
             stages++;
             messages.add(assistantToolMessage(result));
             for (AiUpstreamClient.ToolCall toolCall : result.toolCalls()) {
+                MemoryTool selected = toolsByName.get(toolCall.name());
                 ToolPayload payload;
                 if (executions >= TOOL_MAX_EXECUTIONS) {
-                    payload = limitReachedPayload();
+                    payload = limitReachedPayload(selected == null ? "facts" : selected.resultKey());
+                } else if (selected != null && selected.mutatesMemory() && writes >= TOOL_MAX_MEMORY_WRITES) {
+                    payload = limitReachedPayload(selected.resultKey());
                 } else {
                     executions++;
-                    payload = executeMemoryCall(toolCall, new ToolCallContext(call.dispatch().plan(),
-                            call.memoryUseRequested(), call.userText(), expectedTool,
-                            TOOL_MAX_MEMORIES_TOTAL - memories));
+                    payload = executeMemoryCall(toolCall, toolsByName, new ToolCallContext(
+                            call.dispatch().plan(), call.memoryUseRequested(), call.userText(),
+                            TOOL_MAX_MEMORIES_TOTAL - memories, call.lease().turnId(),
+                            call.lease().userMessageId()));
+                    if (selected != null && selected.mutatesMemory()) {
+                        writes++;
+                        // 写入已推进 vault revision：不刷新本轮计划，下一次工具调用与下一次发送复核都会误判 STALE
+                        call.dispatch().refreshPlan(contexts.refreshAfterMemoryWrite(call.dispatch().plan()));
+                    }
                 }
                 memories += payload.memories();
                 messages.add(toolResultMessage(toolCall.id(), payload.json()));
@@ -1001,7 +1097,7 @@ public class AiService {
 
     private boolean memoryToolsActive(AiConfigRepository.ConfigRow config, TurnRequest request,
                                       boolean memoryUseRequested) {
-        return request.protocolVersion() == 2 && memoryUseRequested && memoryTool != null
+        return request.protocolVersion() == 2 && memoryUseRequested && !memoryTools.isEmpty()
                 && memoryToolsEnabled(config);
     }
 
@@ -1056,60 +1152,81 @@ public class AiService {
         return message;
     }
 
-    private ToolPayload executeMemoryCall(AiUpstreamClient.ToolCall call, ToolCallContext context) {
-        if (!context.expectedName().equals(call.name())) return invalidArgumentPayload();
+    private ToolPayload executeMemoryCall(AiUpstreamClient.ToolCall call, Map<String, MemoryTool> toolsByName,
+                                          ToolCallContext context) {
+        MemoryTool tool = toolsByName.get(call.name());
+        if (tool == null) return invalidArgumentPayload("facts");
+        String key = tool.resultKey();
         String arguments = call.arguments();
         if (arguments == null
                 || arguments.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > TOOL_MAX_ARGUMENT_BYTES) {
-            return invalidArgumentPayload();
+            return invalidArgumentPayload(key);
         }
-        if (context.remainingMemories() <= 0) return limitReachedPayload();
+        if (context.remainingMemories() <= 0) return limitReachedPayload(key);
         Map<String, Object> raw;
         try {
-            raw = memoryTool.execute(context.plan(), arguments, context.memoryUseRequested(), context.userText());
+            raw = tool.execute(context.plan(), arguments, context.memoryUseRequested(), context.userText(),
+                    context.turnId(), context.userMessageId());
         } catch (RuntimeException error) {
-            return unavailablePayload();
+            return unavailablePayload(key);
         }
-        return boundMemoryPayload(raw, context.remainingMemories());
+        return boundMemoryPayload(raw, context.remainingMemories(), key, tool.maxItemsPerCall());
     }
 
-    /** 工具结果再次收紧：单次最多 5 条、整轮 15 条、序列化后最多 16KiB；超限只回状态，不转发原文。 */
-    private ToolPayload boundMemoryPayload(Map<String, Object> raw, int remainingMemories) {
-        if (raw == null) return unavailablePayload();
-        if (remainingMemories <= 0) return limitReachedPayload();
-        Object value = raw.get("facts");
-        List<?> facts = value instanceof List<?> list ? list : List.of();
-        int cap = Math.min(TOOL_MAX_MEMORIES_PER_CALL, remainingMemories);
+    /** 工具结果再次收紧：按工具的 resultKey 截断、整轮 15 条、序列化后最多 16KiB；超限只回状态。 */
+    private ToolPayload boundMemoryPayload(Map<String, Object> raw, int remainingMemories, String key,
+                                           int perCallCap) {
+        if (raw == null) return unavailablePayload(key);
+        if (remainingMemories <= 0) return limitReachedPayload(key);
+        Object value = raw.get(key);
+        boolean hasRows = raw.containsKey(key);
+        List<?> rows = value instanceof List<?> list ? list : List.of();
+        int cap = Math.min(Math.max(1, perCallCap), remainingMemories);
         List<Object> bounded = new ArrayList<>();
-        for (Object fact : facts) {
+        for (Object row : rows) {
             if (bounded.size() >= cap) break;
-            if (fact instanceof Map<?, ?>) bounded.add(fact);
+            if (row instanceof Map<?, ?>) bounded.add(row);
         }
         Map<String, Object> body = new LinkedHashMap<>(raw);
-        body.put("facts", bounded);
-        if (bounded.size() < facts.size()) body.put("incomplete", true);
+        if (hasRows) body.put(key, bounded);
+        if (hasRows && bounded.size() < rows.size()) {
+            body.put("incomplete", true);
+            body.remove("nextCursor");
+        }
         String json;
         try {
             json = mapper.writeValueAsString(body);
         } catch (Exception error) {
-            return unavailablePayload();
+            return unavailablePayload(key);
         }
         if (json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > TOOL_MAX_RESULT_BYTES) {
-            return limitReachedPayload();
+            return limitReachedPayload(key);
         }
         return new ToolPayload(json, bounded.size());
     }
 
-    private static ToolPayload unavailablePayload() {
-        return new ToolPayload("{\"status\":\"UNAVAILABLE\",\"facts\":[],\"incomplete\":true}", 0);
+    private ToolPayload unavailablePayload(String key) {
+        return errorPayload("UNAVAILABLE", key);
     }
 
-    private static ToolPayload invalidArgumentPayload() {
-        return new ToolPayload("{\"status\":\"INVALID_ARGUMENT\",\"facts\":[],\"incomplete\":true}", 0);
+    private ToolPayload invalidArgumentPayload(String key) {
+        return errorPayload("INVALID_ARGUMENT", key);
     }
 
-    private static ToolPayload limitReachedPayload() {
-        return new ToolPayload("{\"status\":\"LIMIT_REACHED\",\"facts\":[],\"incomplete\":true}", 0);
+    private ToolPayload limitReachedPayload(String key) {
+        return errorPayload("LIMIT_REACHED", key);
+    }
+
+    private ToolPayload errorPayload(String status, String key) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", status);
+        body.put(key, List.of());
+        body.put("incomplete", true);
+        try {
+            return new ToolPayload(mapper.writeValueAsString(body), 0);
+        } catch (Exception error) {
+            return new ToolPayload("{\"status\":\"" + status + "\",\"facts\":[],\"incomplete\":true}", 0);
+        }
     }
 
     private static AiUpstreamClient.Result replay(TurnCall call, DeltaBuffer buffer, AiUpstreamClient.Result result) {

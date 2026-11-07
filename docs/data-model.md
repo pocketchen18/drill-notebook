@@ -48,7 +48,7 @@
 
 | 表 | 职责 | 关键约束 |
 |---|---|---|
-| `ai_config` | 模型配置 | `purpose` 主键；密钥密文；`params` JSON 存协议、流式、缓存、工具等开关 |
+| `ai_config` | 模型配置 | `purpose` 主键；密钥密文；`params` JSON 存 `apiFormat`、`streaming`、`tools`、`cacheBreakpoints` 等开关 |
 | `ai_chat_session` | 会话 | 标题、归档、模型、标签 |
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
@@ -69,6 +69,12 @@
 | `ai_memory_suppression` | 抑制项 | `FAMILY` / `PREDICATE` / `EVIDENCE` 复合主键 |
 | `ai_memory_operation` | 幂等操作 | `operation_id` 主键；`IN_PROGRESS` / `COMPLETED` |
 
+v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memories` 读取 `MemoryIndexService` 的内存快照（由 `ai_memory_item` 的 ACTIVE 版本构建），工具结果不落库。`list_memories` 的 `updatedAt` 取自 `ai_memory_item.last_confirmed_at`。
+
+`create_memory` 复用 `ai_memory_item` / `ai_memory_evidence` / `ai_memory_item_evidence`：事实与证据在同一事务写入，证据的 `session_id` / `turn_id` / `message_id` 指向当前轮，`source_block_id = user-message`；归一值重复时不插行。受 v9 的 `origin CHECK (AUTO, MANUAL)` 约束，工具写入记为 `AUTO`，载荷内 `createdBy = AI_TOOL` 保留真实来源；管理页来源列仍显示自动。事实同时记为 `manual_protected = 1`，删除来源会话时只断证据、不删除这条长期记忆。写入会推进 `ai_memory_vault.revision`，并同步重建内存检索快照。若同一 `FAMILY` 键已有删除留下的抑制，只有用户当轮明确要求记住时 `create_memory` 才解除该 `FAMILY` 抑制（`PREDICATE` / `EVIDENCE` 保留），否则返回 `SUPPRESSED` 且不插行。解除抑制本身不推进 revision；若只命中已有同值行（`DUPLICATE`），仍会重建内存检索快照，让该行重新可见。
+
+`update_memory` 不新增表：按 `currentText` 定位时用 `value_hmac` 在当前可见作用域内查当前版本，按 `memoryId + expectedVersion` 定位时走版本 CAS。成功更新复用 `ai_memory_item` 的版本链，旧版本转 `SUPERSEDED`、新版本 `ACTIVE`，`ai_memory_item_evidence` 链接复制到新版本；内容变更后 `origin` 转 `MANUAL` 且 `manual_protected = 1`。归一值未变化时不产生新版本；vault revision 只在真正写入时推进。
+
 ### 4.3 用量与容量
 
 | 表 | 职责 | 关键约束 |
@@ -76,6 +82,8 @@
 | `ai_usage_attempt` | 单次上游调用用量 | 预留 / 发送 / 结算 / 未知 / 释放状态；缓存读写分列 |
 | `ai_usage_daily` | 按日聚合 | `(budget_date, budget_timezone, target_fingerprint, purpose)` 主键 |
 | `ai_chat_storage` | 逻辑容量账本 | 单行；历史与附件上限、已用与预留字节 |
+
+工具循环的每次上游请求仍按 `ai_usage_attempt` 单独结算；工具结果本身不计费，也不写入会话历史。
 
 ## 5. 版本与迁移
 

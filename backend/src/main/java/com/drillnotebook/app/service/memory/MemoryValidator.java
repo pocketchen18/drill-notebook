@@ -421,11 +421,8 @@ public final class MemoryValidator {
      * 语言认不出不拒绝——那是"无法确定"，交给 REVIEW，而不是替模型猜一种语言。
      */
     private static String normalize(String predicate, String rawValue, String language) {
-        if (rawValue == null) {
-            return null;
-        }
-        String value = rawValue.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
-        if (value.isEmpty()) {
+        String value = normalizeValueText(rawValue);
+        if (value == null) {
             return null;
         }
         if ("answer.language".equals(predicate)) {
@@ -468,6 +465,18 @@ public final class MemoryValidator {
             return predicate;
         }
         return MULTI_VALUE_PREDICATES.contains(predicate) ? predicate + ":" + normalizedValue : predicate;
+    }
+
+    /**
+     * 通用值归一：折叠空白并小写，用于跨来源的精确去重；空值返回 null。
+     * 与提取链的 {@code normalize} 共用同一口径，避免"同一句话两套归一"。
+     */
+    public static String normalizeValueText(String rawValue) {
+        if (rawValue == null) {
+            return null;
+        }
+        String value = rawValue.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+        return value.isEmpty() ? null : value;
     }
 
     /** §5 的小型语言映射表；认不出返回 null，由调用方标 REVIEW。 */

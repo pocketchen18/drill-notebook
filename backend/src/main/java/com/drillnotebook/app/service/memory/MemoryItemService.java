@@ -280,6 +280,14 @@ public class MemoryItemService {
     // ---- 改 ----
 
     public MemoryApiResult edit(String memoryId, EditInput edit) {
+        return edit(memoryId, edit, MemoryValidator.MAX_VALUE_CODE_POINTS);
+    }
+
+    /**
+     * 对话工具写入的用户原话可以比自动提取的候选更长（§P4/P5 的 1–1000 口径）；
+     * 上限由调用方显式给出，人工录入与提取链仍走默认的 160。
+     */
+    public MemoryApiResult edit(String memoryId, EditInput edit, int maxValueCodePoints) {
         if (edit.expectedVersion() == null) {
             return MemoryApiResult.error(400, "MEMORY_VERSION_REQUIRED", "编辑必须带上读到的 expectedVersion");
         }
@@ -295,7 +303,8 @@ public class MemoryItemService {
             return locked();
         }
         try {
-            return statusChange ? changeStatus(key, memoryId, edit) : changeContent(key, memoryId, edit);
+            return statusChange ? changeStatus(key, memoryId, edit)
+                    : changeContent(key, memoryId, edit, maxValueCodePoints);
         } catch (SQLException error) {
             return storageError(error);
         } catch (MemoryCryptoException error) {
@@ -331,7 +340,7 @@ public class MemoryItemService {
         };
     }
 
-    private MemoryApiResult changeContent(MemoryKey key, String memoryId, EditInput edit)
+    private MemoryApiResult changeContent(MemoryKey key, String memoryId, EditInput edit, int maxValueCodePoints)
             throws SQLException, MemoryCryptoException {
         Optional<FactRow> current = memory.findVersion(key.vaultId(), memoryId, edit.expectedVersion());
         if (current.isEmpty()) {
@@ -354,7 +363,7 @@ public class MemoryItemService {
         boolean contentChanged = !existingValue.equals(value);
         String validUntil = edit.validUntil() == null ? active.validUntil()
                 : blank(edit.validUntil()) ? null : clean(edit.validUntil());
-        String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil);
+        String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil, maxValueCodePoints);
         if (problem != null) {
             return badRequest(problem);
         }
@@ -587,6 +596,11 @@ public class MemoryItemService {
     // ---- 校验与工具 ----
 
     private String shapeProblem(String kind, String scopeType, String predicate, String value, String validUntil) {
+        return shapeProblem(kind, scopeType, predicate, value, validUntil, MemoryValidator.MAX_VALUE_CODE_POINTS);
+    }
+
+    private String shapeProblem(String kind, String scopeType, String predicate, String value, String validUntil,
+                                int maxValueCodePoints) {
         if (kind == null || !KINDS.contains(kind)) {
             return "MEMORY_KIND_INVALID";
         }
@@ -596,7 +610,7 @@ public class MemoryItemService {
         if (blank(predicate) || codePoints(predicate) > MAX_PREDICATE_CODE_POINTS) {
             return "MEMORY_PREDICATE_INVALID";
         }
-        if (blank(value) || codePoints(value) > MAX_VALUE_CODE_POINTS) {
+        if (blank(value) || codePoints(value) > maxValueCodePoints) {
             return "MEMORY_VALUE_INVALID";
         }
         if (validUntil != null && !validUntil.isBlank()) {

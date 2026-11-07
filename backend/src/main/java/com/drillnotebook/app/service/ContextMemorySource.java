@@ -22,6 +22,34 @@ public interface ContextMemorySource {
     Selection select(String vaultId, String scopeType, long scopeId, String queryText, long nowMillis,
                      int deadlineMillis);
 
+    /**
+     * 按当前会话可见范围列出记忆标题（不返回正文）。
+     *
+     * @param scopeFilter GLOBAL / NOTEBOOK / ALL；调用方已校验 NOTEBOOK 只在笔记本会话合法
+     */
+    Listing list(String vaultId, String scopeType, long scopeId, String scopeFilter, long nowMillis,
+                 int deadlineMillis, int limit);
+
+    /** 一条列表项：标题已按 UI 口径从正文派生，不含记忆 ID、内部谓词或密文。 */
+    record ListedItem(String title, String scopeType, long scopeId, Long updatedAtEpochMilli) {
+    }
+
+    /** 列表结果：{@code hasMore} 表示还有未返回的合格行；{@code truncated} 表示快照本身被截断。 */
+    record Listing(List<ListedItem> items, boolean hasMore, boolean truncated, int corruptRows,
+                   Availability availability) {
+        public static final Listing EMPTY = new Listing(List.of(), false, false, 0, Availability.READY);
+
+        public Listing {
+            items = items == null ? List.of() : List.copyOf(items);
+            availability = availability == null ? Availability.READY : availability;
+            corruptRows = Math.max(0, corruptRows);
+        }
+
+        public static Listing unavailable(Availability availability) {
+            return new Listing(List.of(), false, false, 0, availability);
+        }
+    }
+
     /** 一条候选事实：正文已解密，只到组装器为止，绝不写进审计或元数据。 */
     record Fact(String memoryId, int version, String kind, String predicate, String value, String scopeType,
                 long scopeId, Long validUntilEpochMilli) {
