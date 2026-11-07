@@ -15,9 +15,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -30,8 +35,8 @@ import org.springframework.stereotype.Service;
  *
  * <p>三条硬规矩：</p>
  * <ul>
- *   <li><b>绝不在聊天请求里同步建索引</b>：{@link #ready} 只查已有快照，缺快照时由
- *       {@link #requestBuild} 提交后台任务，本轮按"不使用记忆"降级（§9.1-1）。</li>
+ *   <li><b>读取不触发同步构建</b>：{@link #ready} 只查已有快照，缺快照时由
+ *       {@link #requestBuild} 提交后台任务；读侧可在已有预算内等待，超时才降级。</li>
  *   <li><b>版本一致</b>：快照绑定 {@code (vaultId, epoch, revision)}，任何写路径推进 revision 后旧快照
  *       立刻不可用；读路径永远只看到整份换入的不可变快照，不会读到半构建状态。</li>
  *   <li><b>锁定即清</b>：登记为 {@link MemoryVaultService#onLock} 钩子，钥匙没了缓存也就没了（S11）。</li>
@@ -106,6 +111,29 @@ public class MemoryIndexService {
         return Optional.empty();
     }
 
+    /** 等待同一份后台任务，不重复构建；超时不取消任务，后续读取仍可复用其结果。 */
+    public Optional<Snapshot> awaitReady(String vaultId, long epoch, long revision, long deadlineNanos) {
+        Optional<Snapshot> ready = ready(vaultId, epoch, revision);
+        if (ready.isPresent()) return ready;
+        Future<?> task;
+        synchronized (buildLock) {
+            task = identity(vaultId, epoch, revision).equals(queuedIdentity) ? inFlight.get() : null;
+        }
+        long remaining = deadlineNanos - System.nanoTime();
+        if (task != null && remaining > 0) {
+            try {
+                task.get(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            } catch (CancellationException | ExecutionException | TimeoutException ignored) {
+                // 版本切换、后台失败或预算耗尽时仍由读侧返回不可用，不拖住聊天。
+            }
+        }
+        Snapshot current = snapshot;
+        return current != null && current.matches(vaultId, epoch, revision) && !locked()
+                ? Optional.of(current) : Optional.empty();
+    }
+
     /** 钥匙不在了：此时"没有快照"的原因是被锁定，而不是还在建（客户端文案要分得清）。 */
     public boolean locked() {
         return vault.currentKey().isEmpty();
@@ -114,7 +142,7 @@ public class MemoryIndexService {
     /** 提交一次构建：同一版本已经在排队/在飞就什么都不做；版本变了先取消旧任务再排队。 */
     public void requestBuild(String vaultId, long epoch, long revision) {
         Optional<MemoryKey> key = vault.currentKey();
-        if (key.isEmpty()) {
+        if (key.isEmpty() || !vaultId.equals(key.get().vaultId())) {
             return;
         }
         String identity = identity(vaultId, epoch, revision);
@@ -148,13 +176,15 @@ public class MemoryIndexService {
 
     /** 锁定钩子：丢弃快照并取消在飞任务。密钥没了还留着解密正文，就是明文泄漏。 */
     public void clear() {
-        generation.incrementAndGet();
-        Future<?> previous = inFlight.getAndSet(null);
-        if (previous != null) {
-            previous.cancel(false);
+        synchronized (buildLock) {
+            generation.incrementAndGet();
+            Future<?> previous = inFlight.getAndSet(null);
+            if (previous != null) {
+                previous.cancel(false);
+            }
+            snapshot = null;
+            queuedIdentity = "";
         }
-        snapshot = null;
-        queuedIdentity = "";
     }
 
     /** 某作用域内被抑制的 family 键（§9.1 第 5 条的"移除…suppression"）。 */
@@ -167,15 +197,33 @@ public class MemoryIndexService {
     /** 同步构建并换入快照：给测试和"这一轮就要用上"的场景用，与后台任务同一份实现。 */
     public Snapshot buildNow(String vaultId, long epoch, long revision) throws SQLException {
         MemoryKey key = vault.currentKey().orElse(null);
-        if (key == null) {
+        if (key == null || !vaultId.equals(key.vaultId())) {
             throw new SQLException("记忆库未解锁，无法构建检索快照");
         }
-        Snapshot built = build(key, vaultId, epoch, revision, generation.get());
-        if (built == null) {
-            throw new SQLException("记忆索引快照构建被取消");
+        long myGeneration;
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        synchronized (buildLock) {
+            myGeneration = generation.incrementAndGet();
+            Future<?> previous = inFlight.getAndSet(completion);
+            if (previous != null) previous.cancel(false);
+            // 同版本读者复用本次构建，不能另起后台任务把写入后的同步构建打断。
+            queuedIdentity = identity(vaultId, epoch, revision);
         }
-        snapshot = built;
-        return built;
+        try {
+            Snapshot built = build(key, vaultId, epoch, revision, myGeneration);
+            if (!install(built, key, myGeneration)) {
+                throw new SQLException("记忆索引快照构建被取消");
+            }
+            return built;
+        } finally {
+            synchronized (buildLock) {
+                if (myGeneration == generation.get()) {
+                    queuedIdentity = "";
+                    inFlight.set(null);
+                }
+            }
+            completion.complete(null);
+        }
     }
 
     @PreDestroy
@@ -185,28 +233,34 @@ public class MemoryIndexService {
     }
 
     private void runBuild(long myGeneration, MemoryKey key, String vaultId, long epoch, long revision) {
-        boolean installed = false;
         try {
             if (myGeneration != generation.get() || key.erased()) {
                 return;
             }
             Snapshot built = build(key, vaultId, epoch, revision, myGeneration);
-            if (built == null || myGeneration != generation.get() || key.erased()) {
-                return;
-            }
-            // 整份换入：读侧要么看到旧快照，要么看到新快照，永远不会看到构建中的索引
-            snapshot = built;
-            installed = true;
+            install(built, key, myGeneration);
         } catch (SQLException | RuntimeException error) {
             log.warn("记忆索引快照构建失败，本轮按无记忆降级: {}", error.toString());
         } finally {
-            if (!installed) {
-                synchronized (buildLock) {
-                    if (myGeneration == generation.get()) {
-                        queuedIdentity = "";
-                    }
+            synchronized (buildLock) {
+                if (myGeneration == generation.get()) {
+                    queuedIdentity = "";
+                    inFlight.set(null);
                 }
             }
+        }
+    }
+
+    /** 只有仍对应当前库版本的整份快照才能换入，锁定/较新的构建不能被旧任务覆盖。 */
+    private boolean install(Snapshot built, MemoryKey key, long myGeneration) throws SQLException {
+        if (built == null || key.erased()) return false;
+        var current = memory.readVault(built.vaultId());
+        if (current.isEmpty() || !built.matches(current.get().vaultId(), current.get().epoch(),
+                current.get().revision())) return false;
+        synchronized (buildLock) {
+            if (myGeneration != generation.get() || key.erased()) return false;
+            snapshot = built;
+            return true;
         }
     }
 

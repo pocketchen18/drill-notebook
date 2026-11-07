@@ -2,6 +2,7 @@ package com.drillnotebook.app.repository;
 
 import com.drillnotebook.app.service.ChatTurnRejectException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +62,28 @@ public class AiConnectionsStore {
                 json(state), expected);
         if (updated != 1) throw conflict();
         return new State(expected + 1, state.providers(), state.chatModelId(), state.importModelId());
+    }
+
+    /** 应用主模型与同步已开启的记忆授权一起提交；授权写入失败时配置也回滚。 */
+    public State saveWithMemoryConsent(State state, long expected, String useFingerprint, String maintenanceFingerprint) {
+        return new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource())).execute(status -> {
+            State saved = save(state, expected);
+            String now = Instant.now().toString();
+            // 专用维护模型保留自己的授权；未启用记忆时不创建设置、不改开关或授权。
+            jdbc.update("""
+                    UPDATE ai_memory_settings SET
+                      use_consent_fingerprint = ?,
+                      maintenance_consent_fingerprint = CASE
+                        WHEN COALESCE(json_extract(policy_json, '$.maintenanceModelMode'), 'chat') = 'dedicated'
+                        THEN maintenance_consent_fingerprint ELSE ? END,
+                      revision = revision + 1, consented_at = ?, updated_at = ?
+                    WHERE id = 1 AND enabled = 1 AND (
+                      use_consent_fingerprint IS NOT ? OR (
+                        COALESCE(json_extract(policy_json, '$.maintenanceModelMode'), 'chat') <> 'dedicated'
+                        AND maintenance_consent_fingerprint IS NOT ?))
+                    """, useFingerprint, maintenanceFingerprint, now, now, useFingerprint, maintenanceFingerprint);
+            return saved;
+        });
     }
 
     public AiConfigRepository.ConfigRow resolve(State state, String purpose) {

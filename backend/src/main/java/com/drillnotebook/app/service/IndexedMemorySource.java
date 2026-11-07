@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>一次 {@code select} 做的四件事，按 §9.1 第 5 条的顺序：</p>
  * <ol>
- *   <li>取与当前库版本一致的快照；没有就提交后台重建并按 {@code BUILDING} 交白卷；</li>
+ *   <li>取与当前库版本一致的快照；没有就提交后台重建，在本次预算内仍未就绪才返回 {@code BUILDING}；</li>
  *   <li>把 {@code FAMILY} 抑制键交给索引，让被遗忘的同族事实<b>在打分前</b>就出局（否则它会白占 3 个名额）；</li>
  *   <li>索引内完成作用域/有效期过滤、BM25 打分、相关性下限、分层排序、家族去重与 3+2 上限；</li>
  *   <li>剩余时间不够就整轮降级为"本轮不使用记忆"（§9.1-7）。</li>
@@ -44,7 +44,7 @@ public class IndexedMemorySource implements ContextMemorySource {
     public Selection select(String vaultId, String scopeType, long scopeId, String queryText, long nowMillis,
                            int deadlineMillis) {
         long deadlineNanos = System.nanoTime() + Math.max(1, deadlineMillis) * 1_000_000L;
-        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId);
+        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId, deadlineNanos);
         if (!access.ok()) {
             return Selection.unavailable(access.failure());
         }
@@ -71,7 +71,7 @@ public class IndexedMemorySource implements ContextMemorySource {
     public Listing list(String vaultId, String scopeType, long scopeId, String scopeFilter, long nowMillis,
                         int deadlineMillis, int limit) {
         long deadlineNanos = System.nanoTime() + Math.max(1, deadlineMillis) * 1_000_000L;
-        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId);
+        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId, deadlineNanos);
         if (!access.ok()) {
             return Listing.unavailable(access.failure());
         }
@@ -94,7 +94,7 @@ public class IndexedMemorySource implements ContextMemorySource {
     }
 
     /** 两条读路径共用的库版本/快照/抑制校验；失败原因按 Availability 返回。 */
-    private SnapshotAccess openSnapshot(String vaultId, String scopeType, long scopeId) {
+    private SnapshotAccess openSnapshot(String vaultId, String scopeType, long scopeId, long deadlineNanos) {
         if (vaultId == null) {
             return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
         }
@@ -109,8 +109,9 @@ public class IndexedMemorySource implements ContextMemorySource {
         if (envelope.isEmpty() || !vaultId.equals(envelope.get().vaultId())) {
             return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
         }
-        Optional<MemoryIndexService.Snapshot> snapshot = indexes.ready(vaultId, envelope.get().epoch(),
-                envelope.get().revision());
+        // 留出过滤与检索时间；小库后台构建若在预算内完成，本轮直接使用。
+        Optional<MemoryIndexService.Snapshot> snapshot = indexes.awaitReady(vaultId, envelope.get().epoch(),
+                envelope.get().revision(), deadlineNanos - 5_000_000L);
         if (snapshot.isEmpty()) {
             // 没钥匙就是"锁定"，有钥匙才是"快照还在建"：两条文案与后续动作完全不同
             return new SnapshotAccess(null, null, indexes.locked() ? ContextMemorySource.Availability.LOCKED

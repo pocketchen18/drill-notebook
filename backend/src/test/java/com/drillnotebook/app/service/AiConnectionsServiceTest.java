@@ -6,6 +6,7 @@ import com.drillnotebook.app.memory.Schema9Fixture;
 import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.AiConnectionsStore;
+import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -137,6 +138,119 @@ class AiConnectionsServiceTest {
         service.delete(one, false, body());
         assertNull(state().model(one));
     }
+
+    private void memorySettings(boolean enabled, String mode) {
+        jdbc.update("INSERT INTO ai_memory_settings(id, enabled, policy_json, use_consent_fingerprint,"
+                        + " maintenance_consent_fingerprint, updated_at) VALUES(1, ?, ?, 'old-use', 'old-maintenance', 'before')",
+                enabled ? 1 : 0, "{\"maintenanceModelMode\":\"" + mode + "\"}");
+    }
+
+    private Map<String, Object> memorySettings() {
+        return jdbc.queryForMap("SELECT * FROM ai_memory_settings WHERE id = 1");
+    }
+
+    private void assertCurrentMemoryConsent() {
+        var target = configs.findChat();
+        var saved = memorySettings();
+        assertEquals(MemoryPolicyService.consentFingerprint(MemoryPolicyService.PURPOSE_USE,
+                EmbeddingSpaceContracts.normalizeEndpoint(target.endpoint()), AiService.apiFormatOf(target), target.model()),
+                saved.get("use_consent_fingerprint"));
+        assertEquals(MemoryPolicyService.consentFingerprint(MemoryPolicyService.PURPOSE_MAINTENANCE,
+                EmbeddingSpaceContracts.normalizeEndpoint(target.endpoint()), AiService.apiFormatOf(target), target.model()),
+                saved.get("maintenance_consent_fingerprint"));
+    }
+
+    @Test void applyingChatPersistsBothConsentsAndReapplyingRepairsOldStaleState() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true), two = model(p, "two", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(true, "chat");
+        service.bind(body("purpose", "chat", "modelId", two));
+        assertCurrentMemoryConsent();
+        var saved = memorySettings();
+        assertEquals(2, ((Number) saved.get("revision")).intValue());
+        assertEquals(1, ((Number) saved.get("enabled")).intValue());
+        assertEquals(0, ((Number) saved.get("auto_extract")).intValue());
+        assertEquals(0, ((Number) saved.get("compress_session")).intValue());
+        // 重新建立服务实例后仍然有效，读取配置和重复应用不反复推进记忆版本。
+        service = new AiConnectionsService(new AiConfigRepository(jdbc), new ApiKeyEncryptor(), mapper);
+        service.view();
+        service.bind(body("purpose", "chat", "modelId", two));
+        assertEquals(saved, memorySettings());
+        jdbc.update("UPDATE ai_memory_settings SET use_consent_fingerprint = 'stale'");
+        service.bind(body("purpose", "chat", "modelId", two));
+        assertCurrentMemoryConsent();
+    }
+
+    @Test void changingAppliedProviderEndpointAndProtocolRefreshesConsents() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(true, "chat");
+        service.saveProvider(p, body("name", "Gateway", "endpoint", "https://new.invalid/v1",
+                "apiFormat", "anthropic", "authMode", "none"));
+        assertCurrentMemoryConsent();
+    }
+
+    @Test void disabledMemoryAndUnrelatedConnectionChangesDoNotGrantConsent() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true), two = model(p, "two", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(false, "chat");
+        var disabled = memorySettings();
+        service.bind(body("purpose", "chat", "modelId", two));
+        assertEquals(disabled, memorySettings());
+        jdbc.update("UPDATE ai_memory_settings SET enabled = 1");
+        var enabled = memorySettings();
+        service.bind(body("purpose", "import", "modelId", one));
+        service.saveModels(null, one, body("modelId", "one", "name", "New name"));
+        provider("Other", "https://other.invalid/v1");
+        assertEquals(enabled, memorySettings());
+    }
+
+    @Test void dedicatedMaintenanceConsentSurvivesChatSwitch() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true), two = model(p, "two", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(true, "dedicated");
+        service.bind(body("purpose", "chat", "modelId", two));
+        assertNotEquals("old-use", memorySettings().get("use_consent_fingerprint"));
+        assertEquals("old-maintenance", memorySettings().get("maintenance_consent_fingerprint"));
+    }
+
+    @Test void failedConsentWriteRollsBackModelSwitchAndConnectionEdits() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true), two = model(p, "two", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(true, "chat");
+        var before = state();
+        var memoryBefore = memorySettings();
+        jdbc.execute("CREATE TRIGGER fail_consent BEFORE UPDATE ON ai_memory_settings"
+                + " BEGIN SELECT RAISE(ABORT, 'test consent write failure'); END");
+        assertThrows(org.springframework.dao.DataAccessException.class,
+                () -> service.bind(body("purpose", "chat", "modelId", two)));
+        assertEquals(before, state());
+        assertEquals(memoryBefore, memorySettings());
+        assertThrows(org.springframework.dao.DataAccessException.class,
+                () -> service.saveProvider(p, body("name", "Gateway", "endpoint", "https://new.invalid/v1",
+                        "apiFormat", "chat_completions", "authMode", "none")));
+        assertEquals(before, state());
+        assertEquals(memoryBefore, memorySettings());
+    }
+
+    @Test void staleApplyDoesNotUpdateMemoryConsent() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String one = model(p, "one", true), two = model(p, "two", true);
+        service.bind(body("purpose", "chat", "modelId", one));
+        memorySettings(true, "chat");
+        var stale = body("purpose", "chat", "modelId", two);
+        service.saveModels(null, two, body("modelId", "two", "name", "Changed"));
+        var before = memorySettings();
+        assertEquals("CONFIG_CHANGED", assertThrows(ChatTurnRejectException.class, () -> service.bind(stale)).code());
+        assertEquals(before, memorySettings());
+        assertEquals(one, state().chatModelId());
+    }
+
     @Test void keyChangeIsExplicitEncryptedAndNoAuthClearsIt() throws Exception {
         service.saveProvider(null, body("name", "Private", "endpoint", "https://gateway.example/v1", "apiFormat", "chat_completions", "authMode", "api_key", "apiKey", "test-sensitive-key"));
         var first = state().providers().get(0);
