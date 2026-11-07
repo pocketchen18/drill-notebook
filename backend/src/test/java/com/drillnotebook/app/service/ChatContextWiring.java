@@ -5,13 +5,16 @@ import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryOperationRepository;
+import com.drillnotebook.app.repository.MemoryProposalRepository;
 import com.drillnotebook.app.repository.MemorySettingsRepository;
 import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.repository.NotebookRepository;
 import com.drillnotebook.app.repository.RetrievalIndexRepository;
 import com.drillnotebook.app.repository.SessionContextRepository;
+import com.drillnotebook.app.service.memory.MemoryAiWriter;
 import com.drillnotebook.app.service.memory.MemoryCryptoService;
 import com.drillnotebook.app.service.memory.MemoryIndexService;
+import com.drillnotebook.app.service.memory.MemoryItemService;
 import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,7 +37,9 @@ public final class ChatContextWiring {
                         MemoryIndexService indexes, MemoryCryptoService crypto, MemoryVaultService vault,
                         MemoryPolicyService policy, ChatHistoryRepository historyRepo,
                         SessionContextRepository checkpoints, ChatAttachmentReader attachmentReader,
-                        MemorySearchTool memorySearchTool) {
+                        MemorySearchTool memorySearchTool, MemoryListTool memoryListTool,
+                        MemoryCreateTool memoryCreateTool, MemoryUpdateTool memoryUpdateTool,
+                        MemoryItemService items, MemorySuppressionRepository suppressions) {
     }
 
     public static Stack wire(DataSource dataSource, JdbcTemplate jdbc, ChatLegacyWiring.Wiring wiring) {
@@ -58,9 +63,17 @@ public final class ChatContextWiring {
         MemorySuppressionRepository suppressions = new MemorySuppressionRepository(dataSource, wiring.immediate());
         MemoryIndexService indexes = new MemoryIndexService(wiring.memory(), vault, crypto, suppressions, mapper);
         IndexedMemorySource memories = new IndexedMemorySource(indexes, wiring.memory());
+        MemoryAiWriter aiWriter = new MemoryAiWriter(wiring.memory(), crypto, suppressions, mapper);
+        MemoryItemService items = new MemoryItemService(crypto, wiring.memory(), vault, policy, operations,
+                new MemoryProposalRepository(dataSource, wiring.immediate()), suppressions,
+                new MemoryJobRepository(dataSource, wiring.immediate()), wiring.metadata());
         ChatContextService contexts = new ChatContextService(projection, assembler, budgeter, memories,
-                wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo);
+                wiring.metadata(), checkpoints, wiring.memory(), policy, historyRepo, vault, crypto, aiWriter, items,
+                indexes);
         MemorySearchTool memorySearchTool = new MemorySearchTool(contexts);
+        MemoryListTool memoryListTool = new MemoryListTool(contexts);
+        MemoryCreateTool memoryCreateTool = new MemoryCreateTool(contexts);
+        MemoryUpdateTool memoryUpdateTool = new MemoryUpdateTool(contexts);
         ChatHistoryService history = new ChatHistoryService(historyRepo, wiring.metadata(), wiring.cipher(), vault);
         ChatStorageService storage = new ChatStorageService(wiring.ledger(), historyRepo, wiring.metadata(),
                 wiring.turns(), wiring.memory(), operations, mapper);
@@ -68,6 +81,7 @@ public final class ChatContextWiring {
                 wiring.cipher(), attachmentReader, wiring.memory(), crypto, vault, checkpoints,
                 new RetrievalIndexRepository(jdbc), mapper);
         return new Stack(contexts, history, storage, inspector, estimator, projection, assembler, budgeter, memories,
-                indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader, memorySearchTool);
+                indexes, crypto, vault, policy, historyRepo, checkpoints, attachmentReader, memorySearchTool,
+                memoryListTool, memoryCreateTool, memoryUpdateTool, items, suppressions);
     }
 }

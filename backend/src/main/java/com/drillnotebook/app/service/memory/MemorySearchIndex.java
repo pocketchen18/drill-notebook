@@ -109,6 +109,8 @@ public final class MemorySearchIndex {
     /** term → (文档下标 → 词频)；文档下标而不是 memoryId，省掉检索期的字符串哈希查找。 */
     private final Map<String, Map<Integer, Integer>> postings;
     private final List<Doc> docs;
+    /** 列表工具用的稳定顺序：最近确认时间倒序，memoryId 倒序破平局。 */
+    private final List<Doc> listedDocs;
     private final int[] documentLengths;
     private final List<Set<String>> keyTokens;
     private final List<String> normalizedValues;
@@ -119,10 +121,11 @@ public final class MemorySearchIndex {
     private final Map<String, List<Doc>> preferenceDocsByScope;
     private final double averageLength;
 
-    private MemorySearchIndex(List<Doc> docs, Map<String, Map<Integer, Integer>> postings, int[] documentLengths,
-                              List<Set<String>> keyTokens, List<String> normalizedValues,
+    private MemorySearchIndex(List<Doc> docs, List<Doc> listedDocs, Map<String, Map<Integer, Integer>> postings,
+                              int[] documentLengths, List<Set<String>> keyTokens, List<String> normalizedValues,
                               Map<String, List<Doc>> preferenceDocsByScope, double averageLength) {
         this.docs = docs;
+        this.listedDocs = listedDocs;
         this.postings = postings;
         this.documentLengths = documentLengths;
         this.keyTokens = List.copyOf(keyTokens);
@@ -136,6 +139,9 @@ public final class MemorySearchIndex {
         List<Doc> docs = new ArrayList<>(facts);
         // 固定顺序：同一批事实无论入库/查询顺序如何，快照结构与破平局结果都一致
         docs.sort(Comparator.comparing(Doc::scopeKey).thenComparing(Doc::memoryId).thenComparingInt(Doc::version));
+        List<Doc> listed = new ArrayList<>(docs);
+        listed.sort(Comparator.comparingLong(Doc::confirmedAtEpochMilli).reversed()
+                .thenComparing(Comparator.comparing((Doc doc) -> doc.memoryId()).reversed()));
         Map<String, Map<Integer, Integer>> postings = new HashMap<>();
         int[] documentLengths = new int[docs.size()];
         List<Set<String>> keyTokens = new ArrayList<>();
@@ -162,8 +168,8 @@ public final class MemorySearchIndex {
             }
         }
         double average = docs.isEmpty() ? 1 : totalLength / (double) docs.size();
-        return new MemorySearchIndex(List.copyOf(docs), postings, documentLengths, keyTokens, normalizedValues,
-                freezePreferences(preferenceDocsByScope), average);
+        return new MemorySearchIndex(List.copyOf(docs), List.copyOf(listed), postings, documentLengths, keyTokens,
+                normalizedValues, freezePreferences(preferenceDocsByScope), average);
     }
 
     private static Map<String, List<Doc>> freezePreferences(Map<String, List<Doc>> source) {
@@ -174,6 +180,46 @@ public final class MemorySearchIndex {
 
     public int size() {
         return docs.size();
+    }
+
+    /** 列表结果：{@code hasMore} 表示还有未返回的合格行；{@code timedOut} 时调用方按不可用降级。 */
+    public record Listing(List<Doc> docs, boolean hasMore, boolean timedOut) {
+    }
+
+    /**
+     * 只读列表：按最近确认时间倒序返回会话可见、未过期、未被抑制的文档。
+     * 不参与打分，也不做笔记本偏好覆盖——那是检索注入的排序规则，不是可见性规则。
+     */
+    public Listing list(String sessionScopeType, long sessionScopeId, String scopeFilter, long nowMillis,
+                        int limit, long deadlineMillis, Predicate<Doc> eligible) {
+        long deadlineNanos = System.nanoTime() + Math.max(1, deadlineMillis) * 1_000_000L;
+        boolean all = scopeFilter == null || "ALL".equals(scopeFilter);
+        boolean wantGlobal = all || "GLOBAL".equals(scopeFilter);
+        boolean wantNotebook = ("NOTEBOOK".equals(sessionScopeType) && sessionScopeId > 0)
+                && (all || "NOTEBOOK".equals(scopeFilter));
+        int cap = Math.max(1, limit);
+        List<Doc> items = new ArrayList<>();
+        for (int index = 0; index < listedDocs.size(); index++) {
+            if ((index & 63) == 0 && System.nanoTime() > deadlineNanos) {
+                return new Listing(List.of(), false, true);
+            }
+            Doc doc = listedDocs.get(index);
+            if (!visibleForList(doc, wantGlobal, wantNotebook, sessionScopeId)) continue;
+            if (doc.validUntilEpochMilli() <= nowMillis) continue;
+            if (eligible != null && !eligible.test(doc)) continue;
+            if (items.size() >= cap) {
+                return new Listing(List.copyOf(items), true, false);
+            }
+            items.add(doc);
+        }
+        return new Listing(List.copyOf(items), false, false);
+    }
+
+    private static boolean visibleForList(Doc doc, boolean wantGlobal, boolean wantNotebook, long sessionScopeId) {
+        if ("GLOBAL".equals(doc.scopeType())) {
+            return wantGlobal;
+        }
+        return wantNotebook && "NOTEBOOK".equals(doc.scopeType()) && doc.scopeId() == sessionScopeId;
     }
 
     /**

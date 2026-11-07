@@ -2,6 +2,7 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
@@ -77,7 +78,8 @@ class MemoryToolChatPathTest {
                 new ObjectMapper(), null, wiring.turnService(), wiring.cipher(), stack.contexts());
         ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key", "tools", true));
-        ai.setMemoryTool(stack.memorySearchTool());
+        ai.setMemoryTools(List.of(stack.memorySearchTool(), stack.memoryListTool(),
+                stack.memoryCreateTool(), stack.memoryUpdateTool()));
         sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1 WHERE id = ?", sessionId);
         unlockVault();
@@ -127,10 +129,136 @@ class MemoryToolChatPathTest {
         assertFalse(dbContains("\"tool_call_id\""), "工具消息不能落进持久化转录");
     }
 
+    @Test
+    void listMemoryToolPathReturnsOnlyTitles() throws Exception {
+        ToolFixtureServer listServer = new ToolFixtureServer("list_memories", "{}");
+        try {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            Map<String, Object> response = ai.chat(body("我记了哪些事"));
+            assertEquals("COMPLETED", response.get("status"));
+            List<String> bodies = listServer.bodies();
+            assertEquals(2, bodies.size(), "工具调用后必须再发一次模型请求");
+            assertTrue(bodies.get(0).contains(MemorySearchTool.NAME), "首请求必须带 search 工具定义");
+            assertTrue(bodies.get(0).contains(MemoryListTool.NAME), "首请求必须带 list 工具定义");
+            String listContent = toolMessageContent(bodies.get(1));
+            assertTrue(listContent.contains(FACT), "列表结果只包含标题");
+            assertFalse(listContent.contains("predicate"), "列表结果不能带内部谓词");
+
+            List<String> deltas = new ArrayList<>();
+            AiService.ChatResult streamed = ai.chatStream(body("我记了哪些事"), (type, text) -> {
+                deltas.add(type + ":" + text);
+                return true;
+            });
+            assertEquals("COMPLETED", streamed.status());
+            assertEquals(4, listServer.bodies().size(), "SSE 同样要完成工具续写");
+            assertTrue(listServer.bodies().get(3).contains(FACT));
+            assertFalse(deltas.toString().contains(MemoryListTool.NAME), "工具调用不能作为正文发给前端");
+            assertFalse(deltas.toString().contains("\"items\""), "工具结果不能作为正文发给前端");
+            assertFalse(dbContains(MemoryListTool.NAME), "工具名不能落进持久化转录");
+            assertFalse(dbContains("\"tool_call_id\""), "工具消息不能落进持久化转录");
+        } finally {
+            listServer.close();
+        }
+    }
+
+    @Test
+    void createMemoryToolPersistsEvidenceAndSurvivesTheRevisionRefresh() throws Exception {
+        ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
+                "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}");
+        try {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            Map<String, Object> response = ai.chat(body("记住：我每周三晚上复习"));
+            assertEquals("COMPLETED", response.get("status"), String.valueOf(response));
+            List<String> bodies = createServer.bodies();
+            assertEquals(2, bodies.size(), "写入后仍要完成续写，不能因 vault revision 变化被误判 CONTEXT_CHANGED");
+            String toolContent = toolMessageContent(bodies.get(1));
+            assertTrue(toolContent.contains("CREATED"), "工具结果只返回定位状态");
+            assertFalse(toolContent.contains("我每周三晚上复习"),
+                    "写入结果不回显正文，模型只能依据用户原话继续回答");
+
+            Map<String, Object> row = jdbc.queryForMap("SELECT memory_id, origin, scope_type FROM ai_memory_item"
+                    + " WHERE status = 'ACTIVE' AND scope_type = 'GLOBAL' AND kind = 'PREFERENCE'");
+            assertEquals("AUTO", row.get("origin"));
+            List<Map<String, Object>> evidence = jdbc.queryForList(
+                    "SELECT e.turn_id, e.message_id, e.source_block_id FROM ai_memory_evidence e"
+                            + " JOIN ai_memory_item_evidence ie ON ie.evidence_id = e.id"
+                            + " JOIN ai_memory_item i ON i.row_id = ie.item_row_id WHERE i.memory_id = ?",
+                    String.valueOf(row.get("memory_id")));
+            assertEquals(1, evidence.size());
+            assertEquals("user-message", evidence.get(0).get("source_block_id"));
+            assertNotNull(evidence.get(0).get("turn_id"));
+            assertNotNull(evidence.get(0).get("message_id"));
+            assertFalse(dbContains(MemoryCreateTool.NAME), "工具名不能落进持久化转录");
+            assertFalse(dbContains("tool_call_id"), "工具消息不能落进持久化转录");
+        } finally {
+            createServer.close();
+        }
+    }
+
+    @Test
+    void updateMemoryToolPathLocatesByTextAndRefreshesTheVaultSnapshot() throws Exception {
+        ToolFixtureServer updateServer = new ToolFixtureServer("update_memory",
+                "{\"currentText\":\"" + FACT + "\",\"text\":\"考试改到周五\"}");
+        try {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", updateServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            Map<String, Object> response = ai.chat(body("考试安排改到周五"));
+            assertEquals("COMPLETED", response.get("status"), String.valueOf(response));
+            List<String> bodies = updateServer.bodies();
+            assertEquals(2, bodies.size(), "更新后仍要完成续写，不能因 vault revision 变化被误判 CONTEXT_CHANGED");
+            String toolContent = toolMessageContent(bodies.get(1));
+            assertTrue(toolContent.contains("UPDATED"), "工具结果只返回定位状态");
+            assertTrue(toolContent.contains("\"version\":2"), toolContent);
+            assertFalse(toolContent.contains("考试改到周五"), "更新结果不回显正文");
+
+            Map<String, Object> oldRow = jdbc.queryForMap("SELECT status FROM ai_memory_item"
+                    + " WHERE value_hmac IS NOT NULL AND status = 'SUPERSEDED'");
+            assertEquals("SUPERSEDED", oldRow.get("status"));
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item WHERE status = 'ACTIVE'"
+                    + " AND value_hmac IS NOT NULL AND kind = 'GOAL'", Integer.class));
+            assertFalse(dbContains(MemoryUpdateTool.NAME), "工具名不能落进持久化转录");
+            assertFalse(dbContains("\"tool_call_id\""), "工具消息不能落进持久化转录");
+        } finally {
+            updateServer.close();
+        }
+    }
+
+    @Test
+    void unknownToolNameIsRejectedWithoutBreakingTheTurn() throws Exception {
+        ToolFixtureServer unknownServer = new ToolFixtureServer("unknown_memory_tool", "{}");
+        try {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", unknownServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true));
+            Map<String, Object> response = ai.chat(body("我记了哪些事"));
+            assertEquals("COMPLETED", response.get("status"));
+            assertEquals(2, unknownServer.bodies().size());
+            String toolContent = toolMessageContent(unknownServer.bodies().get(1));
+            assertTrue(toolContent.contains("INVALID_ARGUMENT"));
+            assertTrue(toolContent.contains("\"facts\":[]"), "未知工具按默认字段回空");
+        } finally {
+            unknownServer.close();
+        }
+    }
+
     private Map<String, Object> body(String userText) {
         return Map.of("protocolVersion", 2, "requestId", UuidV7.generate(System.currentTimeMillis()),
                 "sessionId", sessionId, "memoryOptions", Map.of("use", true),
                 "input", Map.of("userText", userText));
+    }
+
+    private static String toolMessageContent(String requestBody) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        for (var message : mapper.readTree(requestBody).path("messages")) {
+            if ("tool".equals(message.path("role").asText())) {
+                return message.path("content").asText("");
+            }
+        }
+        return "";
     }
 
     private static void assertTokenBudgets(List<String> requests) throws Exception {
@@ -191,18 +319,9 @@ class MemoryToolChatPathTest {
      * 分别回 JSON 或 SSE，不落盘、不外呼。
      */
     private static final class ToolFixtureServer implements Closeable {
-        private static final String TOOL_CALL = "{\"choices\":[{\"message\":{\"role\":\"assistant\","
-                + "\"content\":\"\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{"
-                + "\"name\":\"search_memories\",\"arguments\":\"{\\\"query\\\":\\\"复习计划\\\"}\"}}]},"
-                + "\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}";
         private static final String FINAL_JSON = "{\"choices\":[{\"message\":{\"role\":\"assistant\","
                 + "\"content\":\"" + FINAL + "\"},\"finish_reason\":\"stop\"}],"
                 + "\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}}";
-        private static final String TOOL_SSE = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
-                + "\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search_memories\","
-                + "\"arguments\":\"{\\\"query\\\":\\\"复习计划\\\"}\"}}]}}]}\n\n"
-                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"
-                + "data: [DONE]\n\n";
         private static final String FINAL_SSE = "data: {\"choices\":[{\"delta\":{\"content\":\"根据记忆，\"}}]}\n\n"
                 + "data: {\"choices\":[{\"delta\":{\"content\":\"先看内存管理。\"}}]}\n\n"
                 + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
@@ -212,12 +331,32 @@ class MemoryToolChatPathTest {
         private final java.util.concurrent.ExecutorService executor =
                 java.util.concurrent.Executors.newFixedThreadPool(2);
         private final List<String> bodies = Collections.synchronizedList(new ArrayList<>());
+        private final String toolCall;
+        private final String toolSse;
 
         ToolFixtureServer() throws IOException {
+            this("search_memories", "{\"query\":\"复习计划\"}");
+        }
+
+        ToolFixtureServer(String toolName, String toolArguments) throws IOException {
+            toolCall = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{"
+                    + "\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":" + jsonString(toolName)
+                    + ",\"arguments\":" + jsonString(toolArguments) + "}}]},"
+                    + "\"finish_reason\":\"tool_calls\"}],"
+                    + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}";
+            toolSse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
+                    + "\"type\":\"function\",\"function\":{\"name\":" + jsonString(toolName)
+                    + ",\"arguments\":" + jsonString(toolArguments) + "}}]}}]}\n\n"
+                    + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"
+                    + "data: [DONE]\n\n";
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", this::handle);
             server.setExecutor(executor);
             server.start();
+        }
+
+        private static String jsonString(String raw) {
+            return "\"" + raw.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
         }
 
         String baseUrl() {
@@ -237,14 +376,14 @@ class MemoryToolChatPathTest {
             boolean continuation = body.contains("\"role\":\"tool\"");
             boolean stream = body.contains("\"stream\":true");
             if (stream) {
-                byte[] payload = (continuation ? FINAL_SSE : TOOL_SSE).getBytes(StandardCharsets.UTF_8);
+                byte[] payload = (continuation ? FINAL_SSE : toolSse).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
                 exchange.sendResponseHeaders(200, payload.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(payload);
                 }
             } else {
-                byte[] payload = (continuation ? FINAL_JSON : TOOL_CALL).getBytes(StandardCharsets.UTF_8);
+                byte[] payload = (continuation ? FINAL_JSON : toolCall).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, payload.length);
                 try (OutputStream out = exchange.getResponseBody()) {

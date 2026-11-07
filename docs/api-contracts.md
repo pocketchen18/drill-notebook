@@ -160,6 +160,35 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
 若流在没有 `done` / `error` 的情况下 EOF，客户端必须用 `requestId` 查询轮次状态，不能把占位内容当作完成。
 
+#### 3.2.1 对话内记忆工具
+
+仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册工具时，聊天请求才携带工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。
+
+- `PUT /ai/config` 的 `params.tools` 是显式覆盖值；未提供时保留原值。`GET /ai/config` 的 `chat.tools` 返回当前有效值。
+- 默认开启：`api.openai.com`、`api.deepseek.com`，以及 `api.anthropic.com` + Claude Messages。自定义或未验证端点默认关闭，须由用户显式开启。
+- 导入兜底模型不启用工具。
+
+| 工具 | 参数 | 输出 |
+|---|---|---|
+| `search_memories` | `query`：1–200 字符 | `{status, availability?, facts:[{text,kind,scope,expiry}], incomplete}`；单次 ≤5 条 |
+| `list_memories` | `limit?`：1–20，默认 10；`scope?`：`GLOBAL` / `NOTEBOOK` / `ALL`，默认 `ALL` | `{status, availability?, items:[{title,scope,updatedAt}], incomplete}`；单次声明上限 20 条 |
+| `create_memory` | `text`：1–1000 字符；`kind`：`PREFERENCE` / `GOAL` / `BACKGROUND` / `TASK`；`scope?`：`GLOBAL` / `NOTEBOOK`；`expiry?`：ISO-8601 UTC | `{status, memoryId?, version?, availability?, reason?}` |
+| `update_memory` | `text`：1–1000 字符；定位二选一：`currentText`（检索结果中的现有正文）或 `memoryId` + `expectedVersion`；`expiry?`：ISO-8601 UTC，省略保留原值 | `{status, memoryId?, version?, availability?, reason?}` |
+
+- `search_memories` 只返回回答所需事实，不返回记忆 ID、内部谓词、来源密文或原始分数。
+- `list_memories` 只返回标题、作用域与更新时间；标题由正文压缩空白后取前 20 个码点派生，空值兜底「未命名记忆」；`updatedAt` 取 `last_confirmed_at`，无值时为 `null`。不返回正文、记忆 ID、内部谓词或来源密文。
+- 作用域：GLOBAL 会话只列/写 GLOBAL；NOTEBOOK 会话列「本册 + GLOBAL」，写入默认本册，也可显式指定 GLOBAL。GLOBAL 会话请求 `scope=NOTEBOOK` 返回 `INVALID_ARGUMENT`。`update_memory` 不允许跨作用域移动：只能更新当前会话可见的 NOTEBOOK 本册或 GLOBAL 记忆，其他笔记本的记忆返回 `NOT_FOUND`。
+- `list_memories` 当前不提供 cursor；结果超出 `limit` 或索引快照不完整时用 `incomplete=true` / `LIMIT_REACHED` 表示还有未返回内容。
+- `create_memory` 按归一值（折叠空白、小写）全库精确去重；`DUPLICATE` 返回已有 `memoryId/version`，不新增版本。凭据与敏感内容返回 `REJECTED`，`reason` 为 `CREDENTIAL` / `SENSITIVE`。成功时返回 `CREATED` 与定位信息，不回显正文。
+- `create_memory` 写入来源在 `ai_memory_item.origin` 记为 `AUTO`（v9 约束只有 `AUTO/MANUAL`），载荷记录 `createdBy=AI_TOOL`；事实按 `manualProtected=true` 落库，删除来源会话时只断证据、不删除这条长期记忆。证据指向当前会话 / 轮次 / 用户消息。
+- 家族抑制与显式重记：`create_memory` 发现新事实的 `FAMILY` 键命中删除留下的抑制时，只有当前用户消息本身含明确记忆请求（「记住」「加入记忆」等）才解除该 `FAMILY` 抑制并继续写入；否则返回 `SUPPRESSED`，不落库、不声称成功。`PREDICATE` / `EVIDENCE` 抑制保留给自动提取，不随显式重记解除。解除抑制后会同步重建索引，已有同值行也重新可见；若本次只命中已有同值行（`DUPLICATE`）而没有新建版本，不推进 vault revision，但仍会重建快照。
+- `update_memory` 优先用 `currentText`（`search_memories` 返回的正文原样）在当前可见作用域内按归一值定位；歧义（同一作用域存在多条同值当前记忆）返回 `AMBIGUOUS`。也可用 `create_memory` 返回的 `memoryId + expectedVersion` 精确定位，版本不符返回 `STALE`。
+- `update_memory` 归一值未变化返回 `NO_CHANGE`，不新增版本、不推进 revision；成功时旧版本转 `SUPERSEDED`、新版本 `ACTIVE`，证据继承到新版本，`origin` 转为 `MANUAL` 且 `manualProtected=true`。凭据与敏感内容返回 `REJECTED`，`reason` 为 `CREDENTIAL` / `SENSITIVE`。
+- 写入会推进 vault revision；服务端在本轮内刷新计划快照并同步重建索引，使同轮后续检索能看到新版本。
+- 读工具 `status`：`OK` / `NO_MATCH` / `UNAVAILABLE` / `STALE` / `LIMIT_REACHED` / `INVALID_ARGUMENT`；写工具另有 `CREATED` / `UPDATED` / `DUPLICATE` / `NO_CHANGE` / `NOT_FOUND` / `AMBIGUOUS` / `SUPPRESSED` / `REJECTED`。`availability`：`READY` / `BUILDING` / `LOCKED` / `TIMEOUT` / `NOT_REQUESTED` / `DENIED`。
+- 预算：工具阶段 ≤2、执行 ≤3、上游请求 ≤3；单轮记忆条目合计 ≤15；单轮记忆写入（`create_memory` + `update_memory`）≤3；单次参数 ≤4096 UTF-8 字节；单次结果 ≤16 KiB。
+- 工具调用与结果只存在于本轮内存，不写入会话消息、历史、SSE 或日志；SSE 只回放最终 `text` / `reasoning` / `done`。
+
 ### 3.3 轮次状态与上下文
 
 | 方法 | 路径 | 用途 |

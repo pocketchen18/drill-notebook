@@ -38,14 +38,6 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
     static final int MAX_KNOWN_FACTS = 8;
     /** 展示给模型的事实值上限：超长只截断展示，落库用的仍是校验过的原值。 */
     private static final int MAX_SHOWN_VALUE_CODE_POINTS = 160;
-    /**
-     * 用户明确要求记住时，不再把“写不写”交给模型碰运气：命中这些词就兜底落一条。
-     * 顺序从长到短，避免“请记住”先被“记住”拆掉后留下一个孤零零的“请”。
-     */
-    private static final List<String> MEMORY_INTENT_MARKERS = List.of(
-            "请记住", "帮我记住", "让你记住", "加入记忆", "记到记忆", "存到记忆",
-            "记住", "记一下", "记下来", "别忘了", "不要忘记");
-
     private static final Logger log = LoggerFactory.getLogger(MaintenanceExtractor.class);
 
     private final MaintenanceUpstream upstream;
@@ -183,7 +175,7 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
             if (text == null) {
                 continue;
             }
-            for (String marker : MEMORY_INTENT_MARKERS) {
+            for (String marker : MemoryIntent.MARKERS) {
                 if (text.contains(marker)) {
                     return block;
                 }
@@ -194,11 +186,13 @@ public class MaintenanceExtractor implements MaintenancePorts.Extractor {
 
     private static String memoryValue(String text) {
         String value = text;
-        for (String marker : MEMORY_INTENT_MARKERS) {
+        for (String marker : MemoryIntent.MARKERS) {
             value = value.replace(marker, "");
         }
         value = value.replaceAll("^[\\s，。！？、：；,.!?:;]+|[\\s，。！？、：；,.!?:;]+$", "");
-        return value.isBlank() ? text.strip() : value.strip();
+        // 去掉“加入记忆”后可能只剩“请:”：只清这种礼貌前缀，不碰“请叫我…”这类正常正文
+        value = value.replaceAll("^请\\s*[，。！？、：；,.!?:;]\\s*", "");
+        return value.strip();
     }
 
     private static String intentKind(String text) {

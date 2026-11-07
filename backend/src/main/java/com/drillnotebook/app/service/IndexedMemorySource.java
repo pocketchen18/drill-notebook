@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.service.memory.MemoryIndexService;
 import com.drillnotebook.app.service.memory.MemorySearchIndex;
+import com.drillnotebook.app.service.memory.MemoryTitles;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,41 +43,17 @@ public class IndexedMemorySource implements ContextMemorySource {
     @Override
     public Selection select(String vaultId, String scopeType, long scopeId, String queryText, long nowMillis,
                            int deadlineMillis) {
-        if (vaultId == null) {
-            return Selection.unavailable(ContextMemorySource.Availability.LOCKED);
-        }
         long deadlineNanos = System.nanoTime() + Math.max(1, deadlineMillis) * 1_000_000L;
-        Optional<MemoryRepository.VaultEnvelope> envelope;
-        try {
-            envelope = memory.readEnvelope();
-        } catch (SQLException error) {
-            // 记忆读失败只让本轮不带记忆，不能把用户的聊天打掉（§9.1-7）
-            log.warn("记忆库版本读取失败，本轮降级为无记忆: {}", error.toString());
-            return Selection.unavailable(ContextMemorySource.Availability.LOCKED);
-        }
-        if (envelope.isEmpty() || !vaultId.equals(envelope.get().vaultId())) {
-            return Selection.unavailable(ContextMemorySource.Availability.LOCKED);
-        }
-        Optional<MemoryIndexService.Snapshot> snapshot = indexes.ready(vaultId, envelope.get().epoch(),
-                envelope.get().revision());
-        if (snapshot.isEmpty()) {
-            // 没钥匙就是"锁定"，有钥匙才是"快照还在建"：两条文案与后续动作完全不同
-            return Selection.unavailable(indexes.locked() ? ContextMemorySource.Availability.LOCKED
-                    : ContextMemorySource.Availability.BUILDING);
-        }
-        Predicate<MemorySearchIndex.Doc> eligible;
-        try {
-            eligible = suppressedFilter(vaultId, scopeType, scopeId);
-        } catch (SQLException error) {
-            log.warn("记忆抑制键读取失败，本轮降级为无记忆: {}", error.toString());
-            return Selection.unavailable(ContextMemorySource.Availability.LOCKED);
+        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId);
+        if (!access.ok()) {
+            return Selection.unavailable(access.failure());
         }
         long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
         if (remainingMillis <= 0) {
             return Selection.unavailable(ContextMemorySource.Availability.TIMEOUT);
         }
-        MemorySearchIndex.Result result = snapshot.get().index().search(queryText, scopeType, scopeId, nowMillis,
-                MemorySearchIndex.TOPICAL_LIMIT, remainingMillis, eligible);
+        MemorySearchIndex.Result result = access.snapshot().index().search(queryText, scopeType, scopeId,
+                nowMillis, MemorySearchIndex.TOPICAL_LIMIT, remainingMillis, access.eligible());
         if (result.timedOut()) {
             return Selection.unavailable(ContextMemorySource.Availability.TIMEOUT);
         }
@@ -86,7 +63,75 @@ public class IndexedMemorySource implements ContextMemorySource {
                     result.scanned());
         }
         return new Selection(facts(result.topical()), facts(result.style()), result.candidates(), false,
-                ContextMemorySource.Availability.READY, snapshot.get().truncated(), snapshot.get().corruptRows());
+                ContextMemorySource.Availability.READY, access.snapshot().truncated(),
+                access.snapshot().corruptRows());
+    }
+
+    @Override
+    public Listing list(String vaultId, String scopeType, long scopeId, String scopeFilter, long nowMillis,
+                        int deadlineMillis, int limit) {
+        long deadlineNanos = System.nanoTime() + Math.max(1, deadlineMillis) * 1_000_000L;
+        SnapshotAccess access = openSnapshot(vaultId, scopeType, scopeId);
+        if (!access.ok()) {
+            return Listing.unavailable(access.failure());
+        }
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        if (remainingMillis <= 0) {
+            return Listing.unavailable(ContextMemorySource.Availability.TIMEOUT);
+        }
+        MemorySearchIndex.Listing result = access.snapshot().index().list(scopeType, scopeId, scopeFilter,
+                nowMillis, limit, remainingMillis, access.eligible());
+        if (result.timedOut()) {
+            return Listing.unavailable(ContextMemorySource.Availability.TIMEOUT);
+        }
+        List<ListedItem> items = new ArrayList<>();
+        for (MemorySearchIndex.Doc doc : result.docs()) {
+            items.add(new ListedItem(MemoryTitles.displayTitle(doc.value()), doc.scopeType(), doc.scopeId(),
+                    doc.confirmedAtEpochMilli() > 0 ? doc.confirmedAtEpochMilli() : null));
+        }
+        return new Listing(items, result.hasMore(), access.snapshot().truncated(), access.snapshot().corruptRows(),
+                ContextMemorySource.Availability.READY);
+    }
+
+    /** 两条读路径共用的库版本/快照/抑制校验；失败原因按 Availability 返回。 */
+    private SnapshotAccess openSnapshot(String vaultId, String scopeType, long scopeId) {
+        if (vaultId == null) {
+            return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
+        }
+        Optional<MemoryRepository.VaultEnvelope> envelope;
+        try {
+            envelope = memory.readEnvelope();
+        } catch (SQLException error) {
+            // 记忆读失败只让本轮不带记忆，不能把用户的聊天打掉（§9.1-7）
+            log.warn("记忆库版本读取失败，本轮降级为无记忆: {}", error.toString());
+            return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
+        }
+        if (envelope.isEmpty() || !vaultId.equals(envelope.get().vaultId())) {
+            return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
+        }
+        Optional<MemoryIndexService.Snapshot> snapshot = indexes.ready(vaultId, envelope.get().epoch(),
+                envelope.get().revision());
+        if (snapshot.isEmpty()) {
+            // 没钥匙就是"锁定"，有钥匙才是"快照还在建"：两条文案与后续动作完全不同
+            return new SnapshotAccess(null, null, indexes.locked() ? ContextMemorySource.Availability.LOCKED
+                    : ContextMemorySource.Availability.BUILDING);
+        }
+        Predicate<MemorySearchIndex.Doc> eligible;
+        try {
+            eligible = suppressedFilter(vaultId, scopeType, scopeId);
+        } catch (SQLException error) {
+            log.warn("记忆抑制键读取失败，本轮降级为无记忆: {}", error.toString());
+            return new SnapshotAccess(null, null, ContextMemorySource.Availability.LOCKED);
+        }
+        return new SnapshotAccess(snapshot.get(), eligible, null);
+    }
+
+    private record SnapshotAccess(MemoryIndexService.Snapshot snapshot,
+                                  Predicate<MemorySearchIndex.Doc> eligible,
+                                  ContextMemorySource.Availability failure) {
+        boolean ok() {
+            return failure == null;
+        }
     }
 
     /**

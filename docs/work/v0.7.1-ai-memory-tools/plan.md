@@ -1,51 +1,10 @@
 # v0.7.1 AI 记忆工具：执行计划
 
-状态：`search_memories` 与工具框架已完成并提交（3819da9）。本计划覆盖剩余 3 个工具与配套能力，按顺序推进；每步完成并验证后再进入下一步。
+当前进度与已完成事项见 [features.md](../../features.md)。本计划只覆盖剩余 2 个工具（`create_memory` / `update_memory`）与配套能力（状态展示、语义检索与用量统计），按顺序推进；每步完成并验证后再进入下一步。
 
 需求基线：[requirements.md](requirements.md)。
 
-## 1. 当前进度
-
-| 步骤 | 内容 | 状态 |
-|---|---|---|
-| P0 | 工具协议与通用循环（OpenAI / Anthropic，普通 + SSE） | 完成 |
-| P1 | `search_memories` 只读检索工具 | 完成 |
-| P2 | 设置页「工具调用」开关与有效值回显 | 完成 |
-| P3 | `list_memories` 标题列表工具 | 待开始 |
-| P4 | `create_memory` 新增记忆工具 | 待开始 |
-| P5 | `update_memory` 更新记忆工具 | 待开始 |
-| P6 | 记忆操作状态展示 | 待开始 |
-| P7 | 语义检索与用量统计 | 待开始 |
-
-## 2. P3：`list_memories`
-
-### 目标
-
-模型按授权范围分批查看记忆标题，用于「我记了哪些事」类问题，不返回正文。
-
-### 文件范围
-
-- 新增 `backend/src/main/java/com/drillnotebook/app/service/MemoryListTool.java`
-- `AiService.MemoryTool` 注册位与工具选择：允许按请求选择不同工具，或先用一个 `MemoryTools` 聚合
-- `ChatContextService`：新增只读标题查询，复用现有 scope / vault / policy 校验
-- `MemoryIndexService` 或 `MemoryRepository`：按 scope + 时间倒序取标题，不返回正文
-- 测试：`MemoryListToolTest.java`、扩展 `MemoryToolChatPathTest.java`
-
-### 约束
-
-- 参数：`limit`（1–20，默认 10）、可选 `scope`（GLOBAL / NOTEBOOK / ALL）；未知字段拒绝。
-- 返回：`{status, items:[{title, scope, updatedAt}], nextCursor?, incomplete}`。
-- 不返回正文、记忆 ID、内部谓词、来源密文。
-- 授权与 `search_memories` 相同；未解锁 / 构建中返回 `UNAVAILABLE`。
-- 结果 ≤ 1200 token；单轮累计 ≤ 15 条。
-
-### 验收
-
-- 「我记了哪些事？」触发列表工具，回答只引用标题。
-- 无记忆返回 `NO_MATCH`，不编造。
-- 关闭工具开关后请求不携带定义。
-
-## 3. P4：`create_memory`
+## 1. P4：`create_memory`
 
 ### 目标
 
@@ -76,7 +35,7 @@
 - 未同意 / 未解锁 → `UNAVAILABLE`，不落库。
 - 写入后当轮搜索能读到新版本（revision 已推进）。
 
-## 4. P5：`update_memory`
+## 2. P5：`update_memory`
 
 ### 目标
 
@@ -104,7 +63,7 @@
 - 并发修改 → 后到者 `STALE`，不覆盖。
 - 更新后当轮搜索读到新版本。
 
-## 5. P6：记忆操作状态展示
+## 3. P6：记忆操作状态展示
 
 ### 目标
 
@@ -127,7 +86,7 @@
 - 工具命中 → 显示数量与标题；无命中 → 显示未找到；不可用 → 显示原因。
 - 关闭工具开关 → 不显示状态行。
 
-## 6. P7：语义检索与用量统计
+## 4. P7：语义检索与用量统计
 
 ### 语义检索
 
@@ -142,7 +101,7 @@
 - 展示输入、输出、缓存读 / 写、节省估算；不把缓存子集重复计数。
 - 设置页或用量页新增查询接口与只读视图。
 
-## 7. 验证命令
+## 5. 验证命令
 
 ```powershell
 # 后端定向
@@ -159,7 +118,7 @@ npm run build
 
 每个工具至少覆盖：正常、参数非法、未授权、范围不符、索引不可用、重复 / 版本冲突、达到上限。
 
-## 8. 风险与回滚
+## 6. 风险与回滚
 
 - **写入放大**：AI 自主写入必须有策略开关与单轮上限；默认关闭，避免污染记忆库。
 - **版本并发**：更新必须 CAS；失败返回 `STALE`，不自动重试覆盖。
@@ -167,9 +126,9 @@ npm run build
 - **索引不一致**：写入 / 更新后推进 revision；本轮后续工具调用重新读取快照，不使用旧索引。
 - **回滚**：每个工具独立开关与独立测试；关闭工具开关即回到 v0.7.0 的纯预注入路径。
 
-## 9. 完成标准
+## 7. 完成标准
 
-- 4 个工具全部实现并通过定向 + 全量测试。
+- 剩余 `create_memory` / `update_memory` 与 P6 / P7 完成；4 个工具整体通过定向 + 全量测试。
 - 设置页开关、状态展示、管理页来源与版本行为符合 UI/UX 文档。
 - 状态文档 `docs/features.md`、`docs/data-model.md`、`docs/api-contracts.md` 已同步。
 - 本目录归档到 `docs/archive/v0.7.1/`，不留在活跃上下文。

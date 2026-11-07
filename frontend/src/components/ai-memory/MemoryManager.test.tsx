@@ -95,6 +95,11 @@ function modal(): HTMLElement {
   return node as HTMLElement;
 }
 
+/** 顶层弹窗：确认框后打开时必须排在详情框之后，否则会被详情框盖住。 */
+function topModal(): HTMLElement {
+  return modal();
+}
+
 function searchBodies(): Array<{ cursor?: string }> {
   return apiPost.mock.calls
     .filter((call) => call[0] === '/api/ai/memory/search')
@@ -187,6 +192,52 @@ describe('MemoryManager', () => {
       expectedVersion: 1,
       operationId: expect.any(String)
     }));
+  });
+
+  it('连续删除两条记忆时第二条仍然能发出删除请求', async () => {
+    let current = [
+      item({ memoryId: 'm-1', value: '第一条记忆' }),
+      item({ memoryId: 'm-2', value: '第二条记忆' })
+    ];
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/ai/memory/settings') return Promise.resolve(settings());
+      if (url === '/api/notebooks') return Promise.resolve([]);
+      if (url === '/api/ai/memory/items/m-1') return Promise.resolve(current[0] ?? item({ memoryId: 'm-1' }));
+      if (url === '/api/ai/memory/items/m-2') return Promise.resolve(current[1] ?? item({ memoryId: 'm-2' }));
+      if (url.startsWith('/api/ai/memory/proposals')) return Promise.resolve(proposalPage([]));
+      return Promise.resolve({});
+    });
+    apiPost.mockImplementation((url: string, body?: { status?: string }) => {
+      if (url === '/api/ai/memory/search') {
+        return Promise.resolve({ items: current, limit: 20, status: body?.status ?? 'ACTIVE', hasMore: false, vaultRevision: 2 });
+      }
+      return Promise.resolve({});
+    });
+    apiDelJson.mockImplementation((url: string) => {
+      const id = url.split('/').pop();
+      current = current.filter((row) => row.memoryId !== id);
+      return Promise.resolve(undefined);
+    });
+
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: '查看记忆：第一条记忆' }));
+    fireEvent.click(within(topModal()).getByRole('button', { name: '删除' }));
+    fireEvent.click(within(topModal()).getByRole('button', { name: '删除' }));
+    await waitFor(() => expect(apiDelJson).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText('第一条记忆')).toBeNull());
+    // 确认框必须随关闭一起卸载；否则它会留在详情框下面，下一次删除永远点不到
+    await waitFor(() => expect(document.querySelectorAll('.arco-modal').length).toBe(0));
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看记忆：第二条记忆' }));
+    fireEvent.click(within(topModal()).getByRole('button', { name: '删除' }));
+    expect(topModal().textContent).toContain('第二条记忆');
+    fireEvent.click(within(topModal()).getByRole('button', { name: '删除' }));
+
+    await waitFor(() => expect(apiDelJson).toHaveBeenCalledTimes(2));
+    expect(apiDelJson).toHaveBeenLastCalledWith('/api/ai/memory/items/m-2', {
+      expectedVersion: 1,
+      operationId: expect.any(String)
+    });
   });
 
   it('列表读失败时把后端原因如实显示，而不是留一片空白', async () => {

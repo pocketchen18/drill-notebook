@@ -1,6 +1,6 @@
 # v0.7.1 AI 记忆工具：后端规格
 
-状态：`search_memories` 与通用工具框架已实现并提交（3819da9）；`list_memories`、`create_memory`、`update_memory` 待实现。
+当前已落地的工具契约与状态见 [api-contracts.md](../../api-contracts.md) 与 [features.md](../../features.md)；本文只保留后端设计规格，不重复维护状态表。
 
 需求基线：[requirements.md](requirements.md)。
 
@@ -187,10 +187,3 @@ protocolVersion == 2
 - `frontend/src/components/AiModelSlotCard.tsx`
 - `frontend/src/lib/types.ts`
 - `frontend/src/components/AiModelSlotCard.test.tsx`
-
-## 9. 当前验证
-
-- 前端：`npm test` 718 通过 / 4 跳过；`npm run build` 通过。
-- 后端：`AiServiceConfigToolsTest`、`MemoryToolChatPathTest`、`MemorySearchToolTest`、`AiUpstreamClientTest` 通过。
-- 设置页开关已在本地浏览器验证：默认状态、切换、浅色 / 深色、390 宽布局可用。
-- 未做：完整后端全量测试、正式发行打包、真实第三方自定义端点的工具兼容性矩阵。
