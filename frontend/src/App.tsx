@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Layout } from '@arco-design/web-react';
 import { BookOpenText, Calendar, ChevronsLeft, ChevronsRight, FileText, Layers3, Moon, Settings, Sparkles, Sun, Target, XCircle } from 'lucide-react';
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { createHashRouter, RouterProvider, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { resolveSystemTheme, useUiStore } from './stores/uiStore';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
 import { describeAccelerator } from './lib/shortcuts';
@@ -258,11 +258,8 @@ function Shell(): JSX.Element {
 }
 
 export function App(): JSX.Element {
-  return (
-    <HashRouter>
-      <Shell />
-    </HashRouter>
-  );
+  const [router] = useState(() => createHashRouter([{ path: '*', element: <Shell /> }]));
+  return <RouterProvider router={router} />;
 }
 
 export function AppRoutes(): JSX.Element {

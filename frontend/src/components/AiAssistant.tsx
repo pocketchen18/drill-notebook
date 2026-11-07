@@ -88,7 +88,7 @@ export function AiAssistant(): JSX.Element {
       const raw = await get<AiConfig>('/api/ai/config');
       // 兼容新旧 API：优先 chat 槽
       const chat = raw.chat ?? raw;
-      return { ...raw, hasKey: chat.hasKey, provider: chat.provider, endpoint: chat.endpoint, model: chat.model, chat };
+      return { ...raw, hasKey: chat.hasKey, authMode: chat.authMode, provider: chat.provider, endpoint: chat.endpoint, model: chat.model, chat };
     }
   });
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks'), enabled: aiOpen });
@@ -590,7 +590,7 @@ export function AiAssistant(): JSX.Element {
     // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
     if (streaming) return;
     if (!message.trim() && !attachments.length) return;
-    if (!configQuery.data?.hasKey) {
+    if (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')) {
       Message.warning('请先在设置中配置 API Key');
       return;
     }
@@ -752,7 +752,7 @@ export function AiAssistant(): JSX.Element {
           <div className="ai-drawer-title">
             <Sparkles size={16} />
             <span>AI 学习助手</span>
-            <Tag size="small" color={configQuery.data?.hasKey ? 'green' : 'orange'}>{configQuery.data?.hasKey ? '已配置' : '未配置'}</Tag>
+            <Tag size="small" color={configQuery.data?.hasKey || configQuery.data?.authMode === 'none' ? 'green' : 'orange'}>{configQuery.data?.hasKey || configQuery.data?.authMode === 'none' ? '已配置' : '未配置'}</Tag>
           </div>
         }
         visible={aiOpen}
@@ -897,7 +897,7 @@ export function AiAssistant(): JSX.Element {
 
           <div className="ai-quick-prompts">
             {quickPrompts.map((item) => (
-              <button key={item.label} type="button" className="ai-chip" disabled={!configQuery.data?.hasKey} onClick={() => {
+              <button key={item.label} type="button" className="ai-chip" disabled={!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')} onClick={() => {
                 setMessage(item.text);
               }}>{item.label}</button>
             ))}
@@ -1071,7 +1071,7 @@ export function AiAssistant(): JSX.Element {
             <Button
               type="primary"
               icon={streaming ? <Square size={14} /> : <Send size={16} />}
-              disabled={!streaming && (!configQuery.data?.hasKey || sessionId === undefined)}
+              disabled={!streaming && (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || sessionId === undefined)}
               onClick={() => {
                 if (streaming) {
                   stopGeneration();
@@ -1083,7 +1083,7 @@ export function AiAssistant(): JSX.Element {
               title={streaming ? '中断生成' : '发送'}
             />
           </div>
-          {!configQuery.data?.hasKey ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中填写 Base URL 与 API Key 后即可使用。</Typography.Text> : null}
+          {!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
         </div>
         <Modal

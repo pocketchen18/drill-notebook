@@ -220,6 +220,7 @@ public class AiService {
         result.put("endpoint", chat.get("endpoint"));
         result.put("model", chat.get("model"));
         result.put("hasKey", chat.get("hasKey"));
+        result.put("authMode", chat.get("authMode"));
         return result;
     }
 
@@ -229,6 +230,7 @@ public class AiService {
         result.put("endpoint", row == null || row.endpoint() == null ? "" : row.endpoint());
         result.put("model", row == null || row.model() == null ? "" : row.model());
         result.put("hasKey", row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank());
+        result.put("authMode", AiModelLimits.noKey(row) ? "none" : "api_key");
         // API 格式与流式开关（params JSON）；存量配置无 params 时回退默认值
         String apiFormat = AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
         boolean streaming = true;
@@ -413,7 +415,16 @@ public class AiService {
     }
 
     public Map<String, Object> chat(Map<String, Object> body) {
-        AiConfigRepository.ConfigRow config = requireChatConfig();
+        AiConfigRepository.ConfigRow config;
+        AiConnectionUsage usage;
+        synchronized (AiConnectionUsage.LOCK) {
+            config = requireChatConfig();
+            usage = AiConnectionUsage.acquire(config);
+        }
+        try (usage) { return chatWithConfig(body, config); }
+    }
+
+    private Map<String, Object> chatWithConfig(Map<String, Object> body, AiConfigRepository.ConfigRow config) {
         TurnRequest request = turnRequest(body);
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
@@ -536,6 +547,18 @@ public class AiService {
      */
     public ChatResult chatStream(Map<String, Object> body, AiUpstreamClient.StreamListener listener,
                                  java.util.function.Consumer<Map<String, Object>> metadataSender) {
+        AiConfigRepository.ConfigRow config;
+        AiConnectionUsage usage;
+        synchronized (AiConnectionUsage.LOCK) {
+            config = requireChatConfig();
+            usage = AiConnectionUsage.acquire(config);
+        }
+        try (usage) { return chatStreamWithConfig(body, listener, metadataSender, config); }
+    }
+
+    private ChatResult chatStreamWithConfig(Map<String, Object> body, AiUpstreamClient.StreamListener listener,
+                                            java.util.function.Consumer<Map<String, Object>> metadataSender,
+                                            AiConfigRepository.ConfigRow config) {
         TurnRequest request = turnRequest(body);
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
@@ -550,10 +573,9 @@ public class AiService {
         boolean finalized = false;
         ChatTurnService.FinalResult lastFinal = null;
         try {
-            UpstreamConfig upstream = decryptedChatUpstream(request.masterPassword());
+            UpstreamConfig upstream = decryptedChatUpstream(config, request.masterPassword());
             if (upstream == null) {
                 // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
-                AiConfigRepository.ConfigRow config = requireChatConfig();
                 Dispatch dispatch = prepare(body, request, lease, config, false);
                 attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
                 emitMetadata(metadataSender, dispatch, lease);
@@ -577,18 +599,17 @@ public class AiService {
                 return streamResult(request, lease, done, dispatch.markSent(), AiUpstreamClient.Usage.unknown(),
                         dispatch.legacy());
             }
-            AiConfigRepository.ConfigRow config = requireChatConfig();
             boolean memoryUseRequested = memoryUseRequested(body);
             boolean memoryToolsActive = memoryToolsActive(config, request, memoryUseRequested);
             Dispatch dispatch = prepare(body, request, lease, config, memoryToolsActive);
             emitMetadata(metadataSender, dispatch, lease);
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
-                    DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
+                    AiModelLimits.output(config, DEFAULT_CALL.maxTokens()), DEFAULT_CALL.disableThinking(), false,
                     cacheBreakpointsEnabled(config, upstream.baseUrl(), upstream.apiFormat(), upstream.model()),
-                    () -> persistCacheUnsupported(config));
+                    () -> persistCacheUnsupported(config)).withReasoning(AiReasoningSettings.from(config));
             AiUpstreamClient.Result result = runTurn(new TurnCall(config, lease, dispatch, dispatch.messages(),
-                    target, true, listener, memoryUseRequested, memoryToolsActive, request.userText()));
+                    target, upstream.streaming(), listener, memoryUseRequested, memoryToolsActive, request.userText()));
             // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
             ChatContextPlan sent = dispatch.markSent();
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
@@ -690,7 +711,8 @@ public class AiService {
         try {
             ChatContextPlan plan = contexts.plan(lease, request.userText(), call.hits(),
                     mapValue(body.get("pageContext")), memoryOptions,
-                    contextWindowOf(config), windowConfigured(config));
+                    contextWindowOf(config), windowConfigured(config),
+                    AiModelLimits.ceiling(config, "maxInputTokens", Integer.MAX_VALUE), AiModelLimits.output(config, DEFAULT_CALL.maxTokens()));
             return call.notice() == null ? plan : plan.withExtraNotices(List.of("RETRIEVAL_UNAVAILABLE"));
         } catch (ChatTurnRejectException error) {
             chatTurns.abandon(lease, "context_rejected");
@@ -967,7 +989,7 @@ public class AiService {
         try {
             Map<String, Object> params = new LinkedHashMap<>(paramsOf(config));
             params.put("cacheBreakpoints", false);
-            configs.updateParams(config.purpose(), mapper.writeValueAsString(params));
+            configs.updateParamsIfCurrent(config, mapper.writeValueAsString(params));
         } catch (Exception error) {
             log.warn("记录缓存能力降级失败", error);
         }
@@ -984,9 +1006,9 @@ public class AiService {
         if (config.endpoint().equalsIgnoreCase("mock://local")) return null;
         String apiKey = decryptApiKey(config, masterPassword);
         return new AiUpstreamClient.Upstream(config.endpoint(), apiKey, config.model(), apiFormatOf(config),
-                DEFAULT_CALL.maxTokens(), DEFAULT_CALL.disableThinking(), false,
+                AiModelLimits.output(config, DEFAULT_CALL.maxTokens()), DEFAULT_CALL.disableThinking(), false,
                 cacheBreakpointsEnabled(config, config.endpoint(), apiFormatOf(config), config.model()),
-                () -> persistCacheUnsupported(config));
+                () -> persistCacheUnsupported(config)).withReasoning(AiReasoningSettings.from(config));
     }
 
     /** 一次派发所需的上下文。 */
@@ -1028,12 +1050,12 @@ public class AiService {
         AiUpstreamClient.Result last = null;
         while (true) {
             requirePlanStillCurrent(call.dispatch(), call.lease());
-            int budget = Math.min(Math.min(call.target().maxTokens(), TOOL_MAX_OUTPUT_TOKENS / TOOL_MAX_REQUESTS),
-                    remainingOutput);
+            int budget = toolMode ? Math.min(Math.min(call.target().maxTokens(), TOOL_MAX_OUTPUT_TOKENS / TOOL_MAX_REQUESTS),
+                    remainingOutput) : call.target().maxTokens();
             if (budget <= 0) return last;
-            if (call.target().anthropic() && budget < 1024) return last;
             remainingOutput -= budget;
             AiUpstreamClient.Upstream target = withMaxTokens(call.target(), budget);
+            AiModelLimits.validate(call.config(), messages, tools, budget);
             String attempt = chatTurns.startUsage(call.lease(),
                     UsageRepository.targetFingerprint(target.baseUrl(), target.apiFormat(), target.model()),
                     call.dispatch().planId());
@@ -1115,7 +1137,7 @@ public class AiService {
     private static AiUpstreamClient.Upstream withMaxTokens(AiUpstreamClient.Upstream target, int maxTokens) {
         return new AiUpstreamClient.Upstream(target.baseUrl(), target.apiKey(), target.model(), target.apiFormat(),
                 maxTokens, target.disableThinking(), target.jsonMode(), target.cacheBreakpoints(),
-                target.onCacheFallback());
+                target.onCacheFallback(), target.reasoning());
     }
 
     private static List<Map<String, Object>> withMemoryInstruction(List<Map<String, Object>> messages) {
@@ -1129,6 +1151,8 @@ public class AiService {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("role", "assistant");
         message.put("content", result.text() == null ? "" : result.text());
+        if (!result.thinkingBlocks().isEmpty()) message.put("anthropic_thinking", result.thinkingBlocks());
+        else if (result.reasoning() != null && !result.reasoning().isBlank()) message.put("reasoning_content", result.reasoning());
         List<Map<String, Object>> calls = new ArrayList<>();
         for (AiUpstreamClient.ToolCall call : result.toolCalls()) {
             Map<String, Object> function = new LinkedHashMap<>();
@@ -1877,22 +1901,13 @@ public class AiService {
 
     private AiConfigRepository.ConfigRow requireImportConfig() {
         AiConfigRepository.ConfigRow importConfig = configs.find(AiConfigRepository.PURPOSE_IMPORT);
-        if (importConfig != null && importConfig.encryptedKey() != null && !importConfig.encryptedKey().isBlank()
-                && importConfig.endpoint() != null && !importConfig.endpoint().isBlank()) {
-            return importConfig;
-        }
-        // 如果导入兜底模型未单独配置，自动回退使用主模型配置
-        AiConfigRepository.ConfigRow chatConfig = configs.find(AiConfigRepository.PURPOSE_CHAT);
-        if (chatConfig != null && chatConfig.encryptedKey() != null && !chatConfig.encryptedKey().isBlank()
-                && chatConfig.endpoint() != null && !chatConfig.endpoint().isBlank()) {
-            return chatConfig;
-        }
+        if (importConfig == null) return requireChatConfig();
         return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Base URL");
     }
 
     private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {
         AiConfigRepository.ConfigRow config = configs.find(purpose);
-        if (config == null || config.encryptedKey() == null || config.encryptedKey().isBlank()) throw new IllegalArgumentException(missingKeyMsg);
+        if (config == null || (!AiModelLimits.noKey(config) && (config.encryptedKey() == null || config.encryptedKey().isBlank()))) throw new IllegalArgumentException(missingKeyMsg);
         if (config.endpoint() == null || config.endpoint().isBlank()) throw new IllegalArgumentException(missingEndpointMsg);
         return config;
     }
@@ -1903,17 +1918,14 @@ public class AiService {
 
     private String call(AiConfigRepository.ConfigRow config, List<Map<String, Object>> messages, String masterPassword, CallOptions options) {
         CallOptions opts = options == null ? DEFAULT_CALL : options;
-        try {
-            Map<String, Object> metadata = mapper.readValue(config.keyMeta(), new TypeReference<>() {});
-            String mode = String.valueOf(metadata.getOrDefault("mode", "fingerprint"));
-            String material = mode.equals("password") ? masterPassword : encryptor.fingerprintMaterial();
-            if (material.isBlank()) throw new IllegalArgumentException("该 AI 配置需要主密码");
-            String apiKey = encryptor.decrypt(config.encryptedKey(), String.valueOf(metadata.get("salt")), String.valueOf(metadata.get("iv")), material);
+        try (AiConnectionUsage usage = AiConnectionUsage.acquire(config)) {
+            String apiKey = decryptApiKey(config, masterPassword);
             try {
+                AiModelLimits.validate(config, messages, List.of(), AiModelLimits.output(config, opts.maxTokens()));
                 if (config.endpoint().equalsIgnoreCase("mock://local")) return mockReply(messages);
                 AiUpstreamClient.Upstream upstream = new AiUpstreamClient.Upstream(
                         config.endpoint(), apiKey, config.model(), apiFormatOf(config),
-                        opts.maxTokens(), opts.disableThinking());
+                        AiModelLimits.output(config, opts.maxTokens()), opts.disableThinking());
                 long start = System.currentTimeMillis();
                 log.info("AI 请求：model={} format={} target={} timeout={}s max_tokens={} disableThinking={}",
                         config.model(), upstream.apiFormat(), config.endpoint(), opts.timeoutSeconds(), opts.maxTokens(), opts.disableThinking());
@@ -1937,6 +1949,8 @@ public class AiService {
                 }
                 return reply;
             } finally { apiKey = null; }
+        } catch (ChatTurnRejectException error) {
+            throw error;
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (Exception error) {
@@ -1945,22 +1959,26 @@ public class AiService {
         }
     }
 
-    /** 读 params.apiFormat；缺省/损坏时回退 chat_completions。 */
+    /** 优先读显式协议；旧配置没有协议字段时兼容原供应商名称。 */
     public static String apiFormatOf(AiConfigRepository.ConfigRow config) {
-        if (config.params() == null || config.params().isBlank()) return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        String provider = config.provider() == null ? "" : config.provider().toLowerCase(java.util.Locale.ROOT);
+        String fallback = provider.contains("anthropic") || provider.contains("claude")
+                ? AiUpstreamClient.FORMAT_ANTHROPIC : AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+        if (config.params() == null || config.params().isBlank()) return fallback;
         try {
             Map<String, Object> parsed = new ObjectMapper().readValue(config.params(), new TypeReference<Map<String, Object>>() {});
             Object value = parsed.get("apiFormat");
             return value == null || String.valueOf(value).isBlank()
-                    ? AiUpstreamClient.FORMAT_CHAT_COMPLETIONS
+                    ? fallback
                     : normalizeApiFormat(String.valueOf(value));
         } catch (Exception error) {
-            return AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
+            return fallback;
         }
     }
 
     /** 解密 API Key（模型列表/测活共用）。 */
     private String decryptApiKey(AiConfigRepository.ConfigRow config, String masterPassword) {
+        if (AiModelLimits.noKey(config)) return "";
         try {
             Map<String, Object> metadata = mapper.readValue(config.keyMeta(), new TypeReference<>() {});
             String mode = String.valueOf(metadata.getOrDefault("mode", "fingerprint"));
@@ -1976,8 +1994,7 @@ public class AiService {
     }
 
     /** 解密主模型配置为一次性上游入参；mock://local 返回 null（由调用方短路）。 */
-    private UpstreamConfig decryptedChatUpstream(String masterPassword) {
-        AiConfigRepository.ConfigRow config = requireChatConfig();
+    private UpstreamConfig decryptedChatUpstream(AiConfigRepository.ConfigRow config, String masterPassword) {
         if (config.endpoint().equalsIgnoreCase("mock://local")) return null;
         String apiKey = decryptApiKey(config, masterPassword);
         return new UpstreamConfig(apiFormatOf(config), config.endpoint(), apiKey, config.model(), config.params());
@@ -1993,7 +2010,7 @@ public class AiService {
         request.put("model", config.model());
         request.put("messages", messages);
         request.put("stream", false);
-        request.put("max_tokens", opts.maxTokens());
+        request.put("max_tokens", AiModelLimits.output(config, opts.maxTokens()));
         if (opts.disableThinking() && supportsThinkingToggle(config)) {
             request.put("enable_thinking", false);
             // 部分兼容网关读取 chat_template_kwargs

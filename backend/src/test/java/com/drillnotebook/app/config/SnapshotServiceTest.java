@@ -53,7 +53,7 @@ class SnapshotServiceTest {
         JdbcTemplate copyJdbc = new JdbcTemplate(copy);
         assertEquals("快照前的笔记本",
                 copyJdbc.queryForObject("SELECT title FROM notebook WHERE id = 1", String.class));
-        assertEquals(9, copyJdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), copyJdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         try (Connection connection = copy.getConnection(); Statement statement = connection.createStatement();
              ResultSet result = statement.executeQuery("PRAGMA integrity_check")) {
             assertTrue(result.next());
