@@ -45,7 +45,7 @@ class Schema9MigrationTest {
         new DatabaseInitializer(dataSource, paths()).initialize();
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
 
-        assertEquals(9, version(jdbc));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), version(jdbc));
         for (String table : new String[]{"ai_chat_turn", "ai_chat_attachment", "ai_memory_vault",
                 "ai_memory_settings", "ai_memory_item", "ai_memory_evidence", "ai_memory_item_evidence",
                 "ai_memory_proposal", "ai_session_context", "ai_memory_job", "ai_memory_suppression",
@@ -90,7 +90,7 @@ class Schema9MigrationTest {
         new DatabaseInitializer(dataSource, paths()).initialize();
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
 
-        assertEquals(9, version(jdbc));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), version(jdbc));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notebook", Integer.class));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM note_page", Integer.class));
         assertEquals(pageOne, jdbc.queryForObject("SELECT content FROM note_page WHERE id = 1", String.class));
@@ -158,7 +158,7 @@ class Schema9MigrationTest {
         initializer.initialize();
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
 
-        assertEquals(9, version(jdbc));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), version(jdbc));
         assertEquals(1, Schema9Fixture.objectCount(jdbc, "table", "ai_chat_turn"));
         assertEquals(1, Schema9Fixture.objectCount(jdbc, "index", "idx_ai_turn_running_session"));
         assertEquals(1, Schema9Fixture.objectCount(jdbc, "index", "idx_memory_one_active_family"));
@@ -201,13 +201,13 @@ class Schema9MigrationTest {
     void refusesDatabaseFromNewerProgramBeforeAnyDdl() throws Exception {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("CREATE TABLE schema_version(version INTEGER NOT NULL)");
-        jdbc.update("INSERT INTO schema_version(version) VALUES (10)");
+        jdbc.update("INSERT INTO schema_version(version) VALUES (?)", DatabaseInitializer.currentSchemaVersion() + 1);
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 () -> new DatabaseInitializer(dataSource, paths()).initialize());
         assertTrue(error.getMessage().contains("高于本程序支持"), error.getMessage());
 
-        assertEquals(10, version(jdbc));
+        assertEquals(DatabaseInitializer.currentSchemaVersion() + 1, version(jdbc));
         // 拒绝发生在建表之前：连 v8 就有的表都没被创建
         assertEquals(0, Schema9Fixture.objectCount(jdbc, "table", "question"));
         assertEquals(0, Schema9Fixture.objectCount(jdbc, "table", "ai_chat_turn"));
@@ -234,7 +234,7 @@ class Schema9MigrationTest {
         Path dir = appRoot.resolve("backups");
         if (!Files.isDirectory(dir)) return null;
         try (var files = Files.list(dir)) {
-            return files.filter(path -> path.getFileName().toString().startsWith("pre-schema9-")).findFirst().orElse(null);
+            return files.filter(path -> path.getFileName().toString().startsWith("pre-schema" + DatabaseInitializer.currentSchemaVersion() + "-")).findFirst().orElse(null);
         }
     }
 
@@ -246,7 +246,7 @@ class Schema9MigrationTest {
         Path dir = appRoot.resolve("backups");
         if (!Files.isDirectory(dir)) return 0;
         try (var files = Files.list(dir)) {
-            return files.filter(path -> path.getFileName().toString().startsWith("pre-schema9-")).count();
+            return files.filter(path -> path.getFileName().toString().startsWith("pre-schema" + DatabaseInitializer.currentSchemaVersion() + "-")).count();
         }
     }
 

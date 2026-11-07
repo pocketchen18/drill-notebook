@@ -87,6 +87,13 @@ public class ChatContextService {
     public ChatContextPlan plan(ChatTurnService.Lease lease, String userText, List<RetrievalHit> hits,
                                 Map<String, Object> pageContext, Map<String, Object> memoryOptions,
                                 int contextWindow, boolean windowKnown) throws SQLException {
+        return plan(lease, userText, hits, pageContext, memoryOptions, contextWindow, windowKnown,
+                Integer.MAX_VALUE, ContextBudgeter.OUTPUT_RESERVE_TOKENS);
+    }
+
+    public ChatContextPlan plan(ChatTurnService.Lease lease, String userText, List<RetrievalHit> hits,
+                                Map<String, Object> pageContext, Map<String, Object> memoryOptions,
+                                int contextWindow, boolean windowKnown, int maxInputTokens, int outputReserve) throws SQLException {
         ChatSessionMetadataRepository.State state = sessions.read(lease.sessionId())
                 .orElseThrow(() -> new ChatTurnRejectException(404, "SESSION_NOT_FOUND", "会话不存在", Map.of()));
         validatePageContext(pageContext, state);
@@ -116,7 +123,7 @@ public class ChatContextService {
                 projected.observedSummaryRevision(),
                 envelope.map(MemoryRepository.VaultEnvelope::epoch).orElse(null),
                 envelope.map(MemoryRepository.VaultEnvelope::revision).orElse(null),
-                policyRevision, contextWindow, windowKnown);
+                policyRevision, contextWindow, windowKnown, maxInputTokens, outputReserve);
         return budgeter.fit(draft, projected, target, audit);
     }
 

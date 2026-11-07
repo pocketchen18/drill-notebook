@@ -61,7 +61,13 @@ public class AiUpstreamClient {
             boolean disableThinking,
             boolean jsonMode,
             boolean cacheBreakpoints,
-            Runnable onCacheFallback) {
+            Runnable onCacheFallback,
+            AiReasoningSettings reasoning) {
+
+        public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
+                        boolean disableThinking, boolean jsonMode, boolean cacheBreakpoints, Runnable onCacheFallback) {
+            this(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, cacheBreakpoints, onCacheFallback, AiReasoningSettings.AUTO);
+        }
 
         public Upstream(String baseUrl, String apiKey, String model, String apiFormat, int maxTokens,
                         boolean disableThinking, boolean jsonMode, boolean cacheBreakpoints) {
@@ -80,7 +86,11 @@ public class AiUpstreamClient {
 
         public Upstream withCacheBreakpoints(boolean enabled) {
             return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, enabled,
-                    onCacheFallback);
+                    onCacheFallback, reasoning);
+        }
+
+        public Upstream withReasoning(AiReasoningSettings value) {
+            return new Upstream(baseUrl, apiKey, model, apiFormat, maxTokens, disableThinking, jsonMode, cacheBreakpoints, onCacheFallback, value);
         }
 
         public boolean anthropic() {
@@ -95,10 +105,17 @@ public class AiUpstreamClient {
      * downstreamGone=前端连接已断（等同于用户主动停止），usage=厂商用量或 unknown。
      */
     public record Result(String text, String reasoning, String finishReason, boolean terminalObserved,
-                         boolean captureLimited, boolean downstreamGone, Usage usage, List<ToolCall> toolCalls) {
+                         boolean captureLimited, boolean downstreamGone, Usage usage, List<ToolCall> toolCalls,
+                         List<Map<String, Object>> thinkingBlocks) {
 
         public Result {
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+            thinkingBlocks = thinkingBlocks == null ? List.of() : thinkingBlocks.stream().map(AiUpstreamClient::freeze).toList();
+        }
+
+        public Result(String text, String reasoning, String finishReason, boolean terminalObserved,
+                      boolean captureLimited, boolean downstreamGone, Usage usage, List<ToolCall> toolCalls) {
+            this(text, reasoning, finishReason, terminalObserved, captureLimited, downstreamGone, usage, toolCalls, List.of());
         }
 
         /** 兼容旧形态：本次响应没有工具调用。 */
@@ -242,10 +259,10 @@ public class AiUpstreamClient {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(writeJson(request)));
         if (anthropic) {
-            builder.header("x-api-key", upstream.apiKey());
+            if (upstream.apiKey() != null && !upstream.apiKey().isBlank()) builder.header("x-api-key", upstream.apiKey());
             builder.header("anthropic-version", ANTHROPIC_VERSION);
         } else {
-            builder.header("Authorization", "Bearer " + upstream.apiKey());
+            if (upstream.apiKey() != null && !upstream.apiKey().isBlank()) builder.header("Authorization", "Bearer " + upstream.apiKey());
         }
         HttpRequest httpRequest = builder.build();
         Deadline deadline = new Deadline(Math.max(timeoutSeconds, 1) + 1L);
@@ -375,10 +392,10 @@ public class AiUpstreamClient {
                 .timeout(Duration.ofSeconds(20))
                 .GET();
         if (anthropic) {
-            builder.header("x-api-key", upstream.apiKey());
+            if (upstream.apiKey() != null && !upstream.apiKey().isBlank()) builder.header("x-api-key", upstream.apiKey());
             builder.header("anthropic-version", ANTHROPIC_VERSION);
         } else {
-            builder.header("Authorization", "Bearer " + upstream.apiKey());
+            if (upstream.apiKey() != null && !upstream.apiKey().isBlank()) builder.header("Authorization", "Bearer " + upstream.apiKey());
         }
         HttpResponse<String> response;
         try {
@@ -452,7 +469,9 @@ public class AiUpstreamClient {
                 .streamUsage()) {
             request.put("stream_options", Map.of("include_usage", true));
         }
-        request.put("max_tokens", upstream.maxTokens());
+        // OpenAI 推理模型使用包含思考 token 的 completion 上限；其他兼容服务保持原字段。
+        boolean openAiReasoner = upstream.model().matches("(?:openai/)?(?:gpt-[5-9].*|o[1-9](?:-.*)?)");
+        request.put(openAiReasoner ? "max_completion_tokens" : "max_tokens", upstream.maxTokens());
         if (upstream.disableThinking()) {
             request.put("enable_thinking", false);
             // 部分兼容网关读取 chat_template_kwargs
@@ -465,6 +484,7 @@ public class AiUpstreamClient {
         if (!tools.isEmpty()) {
             request.put("tools", chatTools(tools));
         }
+        upstream.reasoning().apply(request, false, upstream.maxTokens(), upstream.disableThinking());
         return request;
     }
 
@@ -489,11 +509,12 @@ public class AiUpstreamClient {
             }
         }
         request.put("messages", payload.messages());
-        request.put("max_tokens", Math.max(upstream.maxTokens(), 1024));
+        request.put("max_tokens", Math.max(upstream.maxTokens(), 1));
         request.put("stream", stream);
         if (!tools.isEmpty()) {
             request.put("tools", anthropicTools(tools));
         }
+        upstream.reasoning().apply(request, true, upstream.maxTokens(), upstream.disableThinking());
         return request;
     }
 
@@ -606,6 +627,9 @@ public class AiUpstreamClient {
             }
             if ("assistant".equals(role) && message.get("tool_calls") instanceof List<?> calls && !calls.isEmpty()) {
                 List<Map<String, Object>> blocks = new ArrayList<>();
+                if (message.get("anthropic_thinking") instanceof List<?> thinking) {
+                    for (Object raw : thinking) if (raw instanceof Map<?, ?> block) blocks.add(freeze(block));
+                }
                 String text = openAiText(content);
                 if (!text.isBlank()) blocks.add(Map.of("type", "text", "text", text));
                 for (Object raw : calls) {
@@ -742,7 +766,10 @@ public class AiUpstreamClient {
         StringBuilder text = new StringBuilder();
         StringBuilder reasoning = new StringBuilder();
         List<ToolCall> toolCalls = new ArrayList<>();
+        AnthropicThinkingBlocks thinking = new AnthropicThinkingBlocks();
+        int index = 0;
         for (JsonNode block : root.path("content")) {
+            thinking.open(index++, block);
             String type = block.path("type").asText("");
             if ("text".equals(type)) {
                 text.append(block.path("text").asText(""));
@@ -759,7 +786,7 @@ public class AiUpstreamClient {
         String stopReason = root.path("stop_reason").asText("");
         return new Result(text.toString(), reasoning.toString(), stopReason,
                 !stopReason.isEmpty() || !toolCalls.isEmpty(),
-                false, false, usageOfAnthropic(root), List.copyOf(toolCalls));
+                thinking.limited(), false, usageOfAnthropic(root), thinking.limited() ? List.of() : List.copyOf(toolCalls), thinking.finish());
     }
 
     private ToolCall validatedToolCall(String id, String name, String arguments) {
@@ -887,13 +914,14 @@ public class AiUpstreamClient {
                                   ActiveTurnRegistry.Handle handle, Deadline deadline) throws IOException {
         Capture capture = new Capture();
         ToolCallStream toolStream = new ToolCallStream();
+        AnthropicThinkingBlocks thinking = new AnthropicThinkingBlocks();
         String[] finish = {""};
         Usage[] usage = {Usage.unknown()};
         boolean[] terminal = {false};
         boolean[] downstreamGone = {false};
         boolean[] readInterrupted = {false};
         try {
-            consumeAnthropicEvents(body, listener, handle, deadline, capture, toolStream, finish, usage, terminal,
+            consumeAnthropicEvents(body, listener, handle, deadline, capture, toolStream, thinking, finish, usage, terminal,
                     downstreamGone);
         } catch (IOException interrupted) {
             // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
@@ -902,14 +930,14 @@ public class AiUpstreamClient {
         }
         boolean complete = (terminal[0] || !finish[0].isEmpty()) && !downstreamGone[0] && !readInterrupted[0];
         return new Result(capture.text(), capture.reasoning(), finish[0],
-                terminal[0] || !finish[0].isEmpty(), capture.limited(),
+                terminal[0] || !finish[0].isEmpty(), capture.limited() || thinking.limited(),
                 downstreamGone[0] || readInterrupted[0], usage[0],
-                complete ? toolStream.finish() : List.of());
+                complete && !thinking.limited() ? toolStream.finish() : List.of(), complete ? thinking.finish() : List.of());
     }
 
     private void consumeAnthropicEvents(InputStream body, StreamListener listener,
                                         ActiveTurnRegistry.Handle handle, Deadline deadline, Capture capture,
-                                        ToolCallStream toolStream, String[] finish, Usage[] usage,
+                                        ToolCallStream toolStream, AnthropicThinkingBlocks thinking, String[] finish, Usage[] usage,
                                         boolean[] terminal, boolean[] downstreamGone) throws IOException {
         readSse(body, (eventName, data) -> {
             if (stopped(handle, deadline)) return false;
@@ -925,12 +953,14 @@ public class AiUpstreamClient {
             if (parsed.hasAny()) usage[0] = usage[0].merge(parsed);
             if ("content_block_start".equals(type)) {
                 JsonNode block = node.path("content_block");
+                thinking.open(node.path("index").asInt(0), block);
                 if ("tool_use".equals(block.path("type").asText(""))) {
                     toolStream.open(node.path("index").asInt(0), block.path("id").asText(""),
                             block.path("name").asText(""));
                 }
             } else if ("content_block_delta".equals(type)) {
                 JsonNode delta = node.path("delta");
+                thinking.delta(node.path("index").asInt(0), delta);
                 String deltaType = delta.path("type").asText("");
                 if ("thinking_delta".equals(deltaType)) {
                     String kept = capture.keepReasoning(delta.path("thinking").asText(""));
@@ -957,7 +987,7 @@ public class AiUpstreamClient {
             } else if ("error".equals(type)) {
                 throw new IllegalArgumentException("AI 服务返回错误：" + node.path("error").path("message").asText("未知"));
             }
-            return !capture.limited();
+            return !capture.limited() && !thinking.limited();
         });
     }
 

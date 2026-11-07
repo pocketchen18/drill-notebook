@@ -1,8 +1,8 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
 import { Edit3, Plus, RotateCcw, Sparkles, Star, Trash2 } from 'lucide-react';
-import { AiModelSlotCard } from '../components/AiModelSlotCard';
+import { AiConnectionsPanel, type SettingsLeaveGuard } from '../components/ai-connections/AiConnectionsPanel';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { MemoryManager } from '../components/ai-memory/MemoryManager';
 import { MemorySettingsCard } from '../components/ai-memory/MemorySettingsCard';
@@ -95,6 +95,8 @@ export function SettingsPage(): JSX.Element {
   const shortcutConfig = useUiStore((state) => state.shortcutConfig);
   const setShortcutConfig = useUiStore((state) => state.setShortcutConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>(readTabFromUrl);
+  const aiLeaveGuard = useRef<SettingsLeaveGuard | null>(null);
+  const registerAiGuard = useCallback((guard: SettingsLeaveGuard | null) => { aiLeaveGuard.current = guard; }, []);
 
   // 快捷键：同一时刻只允许一个动作处于录制态
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
@@ -181,6 +183,14 @@ export function SettingsPage(): JSX.Element {
   };
 
   const switchTab = (key: SettingsTab): void => {
+    if (activeTab === 'ai' && key !== 'ai' && aiLeaveGuard.current) {
+      aiLeaveGuard.current(() => commitTab(key));
+      return;
+    }
+    commitTab(key);
+  };
+
+  const commitTab = (key: SettingsTab): void => {
     setActiveTab(key);
     persistViewState('settings', { tab: key });
     const basePath = window.location.hash.split('?')[0] || '#/settings';
@@ -548,21 +558,7 @@ export function SettingsPage(): JSX.Element {
       <div className="settings-tab-panel" role="tabpanel">
       <section className="panel">
         <div className="panel-header"><h2>AI 连接</h2></div>
-        <div className="panel-body form-stack">
-          <AiModelSlotCard
-            purpose="chat"
-            title="主模型（对话 / 总结 / 学习计划）"
-            description="侧栏助手、计划排程、解答题建议评分等走此配置。"
-          />
-          <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
-            <AiModelSlotCard
-              purpose="import"
-              title="导入兜底模型（PDF / Markdown / JSON / 知识点）"
-              description="仅用于导入时的 AI 解析，与主模型分开，可选用更便宜或更长上下文的模型以节省 token。未配置时自动回退主模型。"
-            />
-          </div>
-          <Typography.Text type="secondary">两套密钥均经本地 Java 后端 Argon2id + AES-256-GCM 加密存储。</Typography.Text>
-        </div>
+        <AiConnectionsPanel registerGuard={registerAiGuard} />
       </section>
       </div>
     )}

@@ -2,6 +2,9 @@ package com.drillnotebook.app.service.memory;
 
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.service.AiUpstreamClient;
+import com.drillnotebook.app.service.AiModelLimits;
+import com.drillnotebook.app.service.AiConnectionUsage;
+import com.drillnotebook.app.service.AiService;
 import com.drillnotebook.app.service.ApiKeyEncryptor;
 import com.drillnotebook.app.service.EmbeddingSpaceContracts;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -51,22 +54,33 @@ class MaintenanceUpstream {
 
     /** 一次带固定系统提示词的维护调用；返回原文与实际用量，结构判定归调用方。 */
     AiUpstreamClient.Result call(String systemPrompt, String input) throws MaintenancePorts.AttemptFailure {
-        AiConfigRepository.ConfigRow row = targetRow();
+        AiConfigRepository.ConfigRow row;
+        AiConnectionUsage usage;
+        synchronized (AiConnectionUsage.LOCK) {
+            row = targetRow();
+            usage = AiConnectionUsage.acquire(row);
+        }
+        try (usage) { return callSnapshot(systemPrompt, input, row); }
+    }
+
+    private AiUpstreamClient.Result callSnapshot(String systemPrompt, String input, AiConfigRepository.ConfigRow row) throws MaintenancePorts.AttemptFailure {
         List<Map<String, Object>> messages = List.of(
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", input));
         String endpoint = EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint());
-        String apiFormat = mapFormat(row.provider());
+        String apiFormat = AiService.apiFormatOf(row);
+        int output = AiModelLimits.output(row, MaintenanceRules.OUTPUT_TOKEN_BUDGET);
         AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(endpoint, headlessKey(row), row.model(),
-                apiFormat, MaintenanceRules.OUTPUT_TOKEN_BUDGET, true, true);
+                apiFormat, output, true, true);
         int timeoutSeconds = (int) Math.max(1, MaintenanceRules.CALL_TIMEOUT_MILLIS / 1_000L);
         try {
+            AiModelLimits.validate(row, messages, List.of(), output);
             return client.call(target, messages, false, null, timeoutSeconds);
         } catch (Exception error) {
             if (!target.anthropic() && responseFormatRejected(error)) {
                 // 兼容网关可能不认 response_format：只对这一种明确拒绝再发一次纯提示词请求
                 AiUpstreamClient.Upstream plain = new AiUpstreamClient.Upstream(endpoint, target.apiKey(),
-                        target.model(), apiFormat, MaintenanceRules.OUTPUT_TOKEN_BUDGET, true, false);
+                        target.model(), apiFormat, output, true, false);
                 try {
                     return client.call(plain, messages, false, null, timeoutSeconds);
                 } catch (Exception retryError) {
@@ -95,11 +109,11 @@ class MaintenanceUpstream {
             throw new MaintenancePorts.AttemptFailure("TARGET_MISSING", "维护模型未配置", false);
         }
         AiConfigRepository.ConfigRow row = configs.find(target.slot());
-        if (row == null || row.encryptedKey() == null || row.encryptedKey().isBlank()) {
+        if (row == null || (!AiModelLimits.noKey(row) && (row.encryptedKey() == null || row.encryptedKey().isBlank()))) {
             throw new MaintenancePorts.AttemptFailure("TARGET_KEY_MISSING", "维护模型缺少 API Key", false);
         }
         String endpoint = EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint());
-        String apiFormat = mapFormat(row.provider());
+        String apiFormat = AiService.apiFormatOf(row);
         if (!target.fingerprint().equals(policy.consentFingerprint(MemoryPolicyService.PURPOSE_MAINTENANCE, endpoint,
                 apiFormat, row.model()))) {
             throw new MaintenancePorts.AttemptFailure("TARGET_CHANGED", "维护目标在本次运行中被更换", false);
@@ -112,6 +126,7 @@ class MaintenanceUpstream {
      * password 模式由 worker 的门禁提前挡成等待态，走到这里说明配置中途被换过。
      */
     private String headlessKey(AiConfigRepository.ConfigRow row) throws MaintenancePorts.AttemptFailure {
+        if (AiModelLimits.noKey(row)) return "";
         try {
             Map<String, Object> meta = mapper.readValue(row.keyMeta(), new TypeReference<>() {
             });
@@ -128,9 +143,4 @@ class MaintenanceUpstream {
         }
     }
 
-    private static String mapFormat(String provider) {
-        String lowered = provider == null ? "" : provider.toLowerCase(Locale.ROOT);
-        return lowered.contains("anthropic") || lowered.contains("claude") ? AiUpstreamClient.FORMAT_ANTHROPIC
-                : AiUpstreamClient.FORMAT_CHAT_COMPLETIONS;
-    }
 }

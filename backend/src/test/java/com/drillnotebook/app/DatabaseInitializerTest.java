@@ -20,7 +20,7 @@ class DatabaseInitializerTest {
         dataSource.setUrl("jdbc:sqlite:" + root.resolve("data/study.db"));
         new DatabaseInitializer(dataSource).initialize();
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-        assertEquals(9, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_point'", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_chat_session'", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'study_plan_group'", Integer.class));
@@ -69,7 +69,7 @@ class DatabaseInitializerTest {
         DatabaseInitializer initializer = new DatabaseInitializer(dataSource, Schema9Fixture.resolver(root));
         initializer.initialize();
         initializer.initialize();
-        assertEquals(9, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals("A", jdbc.queryForObject("SELECT user_answer FROM answer_record WHERE id = 1", String.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM pragma_table_info('answer_record') WHERE name = 'grading_status'", Integer.class));
     }
@@ -85,7 +85,7 @@ class DatabaseInitializerTest {
         jdbc.execute("CREATE TABLE ai_chat_message(id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT)");
         jdbc.update("INSERT INTO ai_chat_message(role, content) VALUES ('user', '旧消息')");
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(root)).initialize();
-        assertEquals(9, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_session", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_message WHERE session_id IS NOT NULL AND content = '旧消息'", Integer.class));
     }
@@ -114,7 +114,7 @@ class DatabaseInitializerTest {
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(root)).initialize();
 
         // Version bumped
-        assertEquals(9, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         // Original data preserved
         assertEquals("测试页", jdbc.queryForObject("SELECT title FROM note_page WHERE id = 1", String.class));
         assertEquals("Hello", jdbc.queryForObject("SELECT content FROM note_page WHERE id = 1", String.class).replaceAll(".*\"text\":\"(.*?)\".*", "$1"));
@@ -128,7 +128,7 @@ class DatabaseInitializerTest {
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM embedding_job", Integer.class));
         // Idempotent re-init
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(root)).initialize();
-        assertEquals(9, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM note_page", Integer.class));
     }
 

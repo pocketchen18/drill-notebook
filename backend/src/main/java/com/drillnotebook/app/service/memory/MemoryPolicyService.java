@@ -333,7 +333,8 @@ public class MemoryPolicyService {
         String slot = slotOf(purpose);
         AiConfigRepository.ConfigRow row = AiConfigRepository.PURPOSE_MEMORY.equals(slot)
                 ? configs.findMemory() : configs.findChat();
-        boolean keyPresent = row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank();
+        boolean keyPresent = com.drillnotebook.app.service.AiModelLimits.noKey(row)
+                || (row != null && row.encryptedKey() != null && !row.encryptedKey().isBlank());
         if (row == null || row.endpoint() == null || row.endpoint().isBlank()
                 || row.model() == null || row.model().isBlank()) {
             return new Target(purpose, slot, row == null ? null : row.provider(), null, null, null, false,
@@ -353,6 +354,7 @@ public class MemoryPolicyService {
     public boolean maintenanceKeyUsable() {
         AiConfigRepository.ConfigRow row = MODE_DEDICATED.equals(maintenanceMode())
                 ? configs.findMemory() : configs.findChat();
+        if (com.drillnotebook.app.service.AiModelLimits.noKey(row)) return true;
         if (row == null || row.encryptedKey() == null || row.encryptedKey().isBlank()
                 || row.keyMeta() == null || row.keyMeta().isBlank()) {
             return false;
