@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -55,6 +55,42 @@ const send = async (text: string): Promise<void> => {
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
 };
 
+/** jsdom 不做布局；模拟可滚动视口，并逐帧驱动持续生成时的自动跟随。 */
+const mockChatViewport = () => {
+  const element = document.querySelector<HTMLDivElement>('.ai-drawer-chat')!;
+  let height = 1600;
+  let top = 0;
+  Object.defineProperties(element, {
+    clientHeight: { configurable: true, value: 400 },
+    scrollHeight: { configurable: true, get: () => height },
+    scrollTop: {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => { top = Math.max(0, Math.min(value, height - 400)); }
+    }
+  });
+  let frameId = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    frames.set(++frameId, callback);
+    return frameId;
+  });
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => { frames.delete(id); });
+  return {
+    element,
+    grow: (pixels: number) => { height += pixels; },
+    scrollTo: (position: number) => {
+      element.scrollTop = position;
+      fireEvent.scroll(element);
+    },
+    nextFrame: () => {
+      const pending = Array.from(frames.values());
+      frames.clear();
+      act(() => { pending.forEach((callback) => callback(performance.now())); });
+    }
+  };
+};
+
 describe('AiAssistant 流式会话状态', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -75,6 +111,61 @@ describe('AiAssistant 流式会话状态', () => {
       streamCallbacks = callbacks;
       return Promise.resolve(() => undefined);
     });
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([32, 1000])('生成期间向上滚动 %i 像素后保持阅读位置，回到底部才恢复跟随', async (distance) => {
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    const viewport = mockChatViewport();
+    const { element } = viewport;
+
+    await send('请给出长回答');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    viewport.nextFrame();
+    expect(element.scrollTop).toBe(1200);
+
+    viewport.scrollTo(1200 - distance);
+    viewport.nextFrame();
+    expect(element.scrollTop).toBe(1200 - distance);
+    // 没有位移的重复 scroll 事件不能重新开启跟随。
+    fireEvent.scroll(element);
+    viewport.grow(200);
+    act(() => {
+      streamCallbacks!.onReasoning('继续思考');
+      streamCallbacks!.onText('继续生成正文');
+    });
+    expect(element.scrollTop).toBe(1200 - distance);
+    viewport.nextFrame();
+    viewport.nextFrame();
+    expect(element.scrollTop).toBe(1200 - distance);
+
+    viewport.scrollTo(1400);
+    viewport.grow(100);
+    viewport.nextFrame();
+    expect(element.scrollTop).toBe(1500);
+    viewport.grow(100);
+    act(() => { streamCallbacks!.onText('，还有后续内容'); });
+    expect(element.scrollTop).toBe(1600);
+  });
+
+  it('在阅读旧消息时开始生成，回到底部仍能恢复逐帧跟随', async () => {
+    renderAssistant();
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    const viewport = mockChatViewport();
+    viewport.scrollTo(1200);
+    viewport.scrollTo(500);
+
+    await send('继续回答');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    viewport.nextFrame();
+    expect(viewport.element.scrollTop).toBe(500);
+
+    viewport.scrollTo(1200);
+    viewport.grow(200);
+    viewport.nextFrame();
+    expect(viewport.element.scrollTop).toBe(1400);
   });
 
   it('关闭再打开侧边栏触发的 refetch 不得把流式中的本地尾巴顶到最前', async () => {
