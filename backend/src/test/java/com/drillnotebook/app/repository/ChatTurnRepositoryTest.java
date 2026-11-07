@@ -261,10 +261,10 @@ class ChatTurnRepositoryTest {
         assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_attachment"));
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_evidence WHERE id = 'ev-1'"), "原话不得以快照名义留存");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence"));
-        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"),
-                "原话是该自动事实唯一来源时，同一事务把它作为孤儿移除（P1c 接线）");
-        assertEquals(2, jdbc.queryForObject("SELECT revision FROM ai_memory_vault WHERE id = 'vault-1'",
-                Integer.class).intValue(), "证据/事实变更推进 vault revision，读路径据此失效缓存");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"),
+                "清理原话后仍然保留已保存的长期记忆");
+        assertEquals(1, jdbc.queryForObject("SELECT revision FROM ai_memory_vault WHERE id = 'vault-1'",
+                Integer.class).intValue(), "清理来源不改记忆正文，继续复用现有索引");
 
         ChatStorageLedger.Snapshot after = ledger.read();
         assertEquals(0, after.historyBytes(), "清理后本轮存量归零");

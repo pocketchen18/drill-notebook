@@ -113,7 +113,7 @@ public class MemoryRepository {
     public record EvidenceResult(String evidenceId, boolean reused) {
     }
 
-    /** 删来源后的重算统计（§2.3「先识别受影响，再删证据，最后重算孤儿自动事实，同一事务完成」）。 */
+    /** 删来源后的清理统计：已保存记忆保留，只移除失去依据的待确认项与原话。 */
     public record PurgeResult(int evidenceDeleted, int autoFactsRemoved, int protectedFactsKept,
                               int proposalsDeleted, int proposalsStaled, long vaultRevision) {
         public boolean changed() {
@@ -814,7 +814,7 @@ public class MemoryRepository {
     /**
      * 同一事务内的重算入口：删除来源行的调用方（{@code ChatTurnRepository.clearContent}、
      * {@code AiChatSessionRepository.delete}、P9 的历史清理）必须用它，而不是外面再开一个事务——
-     * §2.3 要求"识别受影响 → 删证据 → 重算孤儿自动事实"与来源删除在同一事务里完成，
+     * 原话证据与来源删除在同一事务里完成，已保存的长期记忆独立保留；
      * 拆成两笔就会出现"原话已清但会话还在"的半截状态。
      */
     public PurgeResult purgeEvidence(Connection connection, Long sessionId, List<Long> turnIds, List<Long> messageIds)
@@ -844,14 +844,12 @@ public class MemoryRepository {
                 continue;
             }
             boolean orphan = !hasRemainingEvidence(connection, itemRowId, evidenceIds);
-            boolean autoLiveFact = "AUTO".equals(fact.get().origin()) && !fact.get().manualProtected()
-                    && (STATUS_ACTIVE.equals(fact.get().status()) || STATUS_PENDING.equals(fact.get().status()));
-            if (orphan && autoLiveFact) {
+            if (orphan && removableWithSource(fact.get())) {
                 execute(connection, "DELETE FROM ai_memory_item WHERE row_id = ?", itemRowId);
                 removedMemoryIds.add(fact.get().memoryId());
                 removed++;
             } else if (orphan) {
-                kept++;   // 人工保护/历史版本：内容留着，只是来源被去掉
+                kept++;   // 已保存的记忆（包括自动记忆）与历史版本都只断来源
             }
         }
         int proposalsDeleted = execute(connection, "DELETE FROM ai_memory_proposal WHERE evidence_id IN ("
@@ -864,8 +862,13 @@ public class MemoryRepository {
                     + " WHERE status = 'PENDING' AND target_memory_id IN ("
                     + placeholders(removedMemoryIds.size()) + ")", removedMemoryIds.toArray());
         }
-        long revision = updateVault(connection, vaultId, false).revision();
+        // 原话/待确认项不属于检索快照；保留的正文没变，不必作废索引或其它会话的计划。
+        long revision = vaultStateIn(connection, vaultId).orElseThrow().revision();
         return new PurgeResult(evidenceIds.size(), removed, kept, proposalsDeleted, proposalsStaled, revision);
+    }
+
+    private static boolean removableWithSource(FactRow fact) {
+        return "AUTO".equals(fact.origin()) && !fact.manualProtected() && STATUS_PENDING.equals(fact.status());
     }
 
     /**
@@ -875,8 +878,8 @@ public class MemoryRepository {
      *
      * @param evidence 会被删掉的原话证据行数
      * @param proposals 挂在这些证据上的待处理建议数（会一起删）
-     * @param autoFacts 失去唯一来源且无人工保护的自动事实（会被删）
-     * @param protectedFacts 失去来源但被人工保护/历史版本的事实（<b>留着</b>，只断来源）
+     * @param autoFacts 失去唯一来源且无人工保护的待确认项（会被删）
+     * @param protectedFacts 失去来源的已保存记忆与历史版本（保留内容；字段名保持兼容）
      */
     public record MemoryImpact(int evidence, int proposals, int autoFacts, int protectedFacts) {
     }
@@ -918,9 +921,7 @@ public class MemoryRepository {
             if (hasRemainingEvidence(connection, itemRowId, evidenceIds)) {
                 continue;
             }
-            boolean autoLiveFact = "AUTO".equals(fact.get().origin()) && !fact.get().manualProtected()
-                    && (STATUS_ACTIVE.equals(fact.get().status()) || STATUS_PENDING.equals(fact.get().status()));
-            if (autoLiveFact) {
+            if (removableWithSource(fact.get())) {
                 autoFacts++;
             } else {
                 protectedFacts++;

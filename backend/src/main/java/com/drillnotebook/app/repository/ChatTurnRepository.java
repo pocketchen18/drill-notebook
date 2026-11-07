@@ -282,7 +282,7 @@ public class ChatTurnRepository {
      * 用户明确清理该轮原文：一次事务删消息、附件与该轮证据，清空两组密文元数据并立墓碑，
      * 同事务把账本扣准。墓碑行本身保留（重复 request ID 据此返回 RESULT_EXPIRED）。
      *
-     * <p>证据清理走 {@link MemoryRepository#purgeEvidence}，因此同一事务里还会重算孤儿自动事实、
+     * <p>证据清理走 {@link MemoryRepository#purgeEvidence}，已保存记忆只断来源；同一事务还会清理待确认项、
      * 删掉引用被删原话的建议（§2.3「不能只依赖 SET NULL 把 quote 留下」）。</p>
      */
     public void clearContent(String requestId, String deletedAt) throws SQLException {

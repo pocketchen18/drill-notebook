@@ -225,7 +225,7 @@ export function MemoryDetail(props: MemoryDetailProps): JSX.Element {
       <div className="form-stack">
         <Typography.Text bold>来源（{sources.length}）</Typography.Text>
         {sources.length === 0 && (
-          <Meta label={row.origin === 'MANUAL' ? '人工添加的记忆没有聊天原话。' : '还没有可显示来源，或来源已被清理。'} />
+          <Meta label={row.origin === 'MANUAL' ? '人工添加的记忆没有聊天原话。' : '来源已被删除'} />
         )}
         <ul className="ai-memory-sources" role="list">
           {sources.map((source) => (

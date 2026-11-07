@@ -5,6 +5,7 @@ import com.drillnotebook.app.repository.AiConnectionsStore;
 import com.drillnotebook.app.repository.AiConnectionsStore.Model;
 import com.drillnotebook.app.repository.AiConnectionsStore.Provider;
 import com.drillnotebook.app.repository.AiConnectionsStore.State;
+import com.drillnotebook.app.service.memory.MemoryPolicyService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -233,7 +234,7 @@ public class AiConnectionsService {
             if (id != null) ready(owner(state, id), state.model(id));
             return new State(state.revision(), state.providers(), "chat".equals(purpose) ? id : state.chatModelId(),
                     "import".equals(purpose) ? id : state.importModelId());
-        });
+        }, "chat".equals(body.get("purpose")));
     }
 
     public Map<String, Object> delete(String id, boolean isProvider, Map<String, Object> body) {
@@ -332,10 +333,35 @@ public class AiConnectionsService {
     }
 
     private Map<String, Object> mutate(Map<String, Object> body, UnaryOperator<State> update) {
+        return mutate(body, update, false);
+    }
+
+    private Map<String, Object> mutate(Map<String, Object> body, UnaryOperator<State> update, boolean applyChat) {
         synchronized (AiConnectionUsage.LOCK) {
             State state = state();
             if (!(body.get("revision") instanceof Number revision) || revision.longValue() != state.revision()) throw AiConnectionsStore.conflict();
-            return view(store.save(update.apply(state), state.revision()));
+            State next = update.apply(state);
+            var target = store.resolve(next, "chat");
+            String fingerprint = memoryFingerprint(target, MemoryPolicyService.PURPOSE_USE);
+            // 显式应用可修复旧版本留下的过期授权；修改当前连接的地址/协议也要同步。
+            if (fingerprint != null && (applyChat || !fingerprint.equals(
+                    memoryFingerprint(store.resolve(state, "chat"), MemoryPolicyService.PURPOSE_USE)))) {
+                return view(store.saveWithMemoryConsent(next, state.revision(), fingerprint,
+                        memoryFingerprint(target, MemoryPolicyService.PURPOSE_MAINTENANCE)));
+            }
+            return view(store.save(next, state.revision()));
+        }
+    }
+
+    private static String memoryFingerprint(AiConfigRepository.ConfigRow config, String purpose) {
+        if (config == null || blank(config.endpoint()) || blank(config.model())
+                || (!AiModelLimits.noKey(config) && blank(config.encryptedKey()))) return null;
+        try {
+            return MemoryPolicyService.consentFingerprint(purpose, EmbeddingSpaceContracts.normalizeEndpoint(config.endpoint()),
+                    AiService.apiFormatOf(config), config.model());
+        } catch (IllegalArgumentException error) {
+            // 本地演示和未完成的旧配置没有实际外发目标。
+            return null;
         }
     }
 

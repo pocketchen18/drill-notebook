@@ -148,7 +148,7 @@ describe('ChatHistoryCleanup', () => {
     expect(screen.getByText('1 条不完整的旧记录不纳入本次清理')).toBeTruthy();
     expect(screen.getByText('还有 4 轮更早的没纳入，清理完这批可以再来一次')).toBeTruthy();
     expect(screen.getByText(
-      '3 条原话证据一起删除；2 条建议随原话一起删除；1 条自动记忆失去唯一来源会消失；1 条受保护记忆只断来源、内容保留'
+      '3 条原话证据一起删除；2 条建议随原话一起删除；1 条待确认记忆随原话一起删除；1 条已保存记忆只断来源、内容保留'
     )).toBeTruthy();
     expect(screen.getByText(/预览有效至/)).toBeTruthy();
   });

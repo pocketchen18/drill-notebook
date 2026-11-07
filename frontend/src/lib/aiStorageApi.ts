@@ -42,7 +42,7 @@ export interface ChatCleanupPreview {
   messageIds: number[];
   turnRequestIds: string[];
   incompleteLegacyMessageIds: number[];
-  /** 受影响记忆：会被删的原话证据、挂在证据上的建议（不分状态）、失去唯一来源的自动事实、只断来源的人工保护事实。 */
+  /** 受影响记忆：被删原话及建议、失去来源的待确认项，以及只断来源的已保存记忆。 */
   affectedEvidence: number;
   affectedProposals: number;
   autoFactsRemoved: number;

@@ -33,7 +33,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * 事实版本链与证据（contracts §2.3、§2.3.1 尾段、§7 的 deleteMemory/applyExtraction 片段）：
- * 替换同事务、版本 CAS、family 唯一约束、证据去重，以及删来源后的孤儿自动事实重算。
+ * 替换同事务、版本 CAS、family 唯一约束、证据去重，以及删来源后保留已保存记忆。
  */
 class MemoryRepositoryTest {
     private static final String VAULT = "vault-1";
@@ -345,13 +345,14 @@ class MemoryRepositoryTest {
     }
 
     @Test
-    void deletedSourcesDropOrphanAutoFactsButKeepProtectedContent() throws Exception {
+    void deletedSourcesKeepSavedMemoriesAndTheirIndexRevision() throws Exception {
         long turnOne = insertTurn();
         long turnTwo = insertTurn();
 
         String autoWithTwoSources = attachFact("f-a", "v-a", turnOne, turnTwo);
         String autoOnlySource = attachFact("f-b", "v-b", turnOne);
         String protectedOnlySource = attachFactProtected("f-c", "v-c", turnOne);
+        FactRow autoBefore = memory.findCurrent(VAULT, autoOnlySource).orElseThrow();
         long revisionBeforePurge = vault().revision();
 
         insertProposal("prop-by-evidence", evidenceIdOf(turnOne, "f-a"), autoOnlySource);
@@ -361,22 +362,23 @@ class MemoryRepositoryTest {
 
         // turnOne 上挂着 f-a / f-b / f-c 三条原话，全部按同一来源范围一起清掉
         assertEquals(3, result.evidenceDeleted());
-        assertEquals(1, result.autoFactsRemoved(), "没有任何来源的自动事实被移除");
-        assertEquals(1, result.protectedFactsKept(), "人工保护记忆留着，只去掉被删来源");
+        assertEquals(0, result.autoFactsRemoved(), "删除来源不能连带删除已保存的自动记忆");
+        assertEquals(2, result.protectedFactsKept(), "自动和人工记忆都保留内容，只去掉被删来源");
         assertEquals(1, result.proposalsDeleted(), "引用被删证据的建议直接删，不靠 SET NULL 留原话");
-        assertEquals(1, result.proposalsStaled(), "目标被移除的建议变 STALE");
+        assertEquals(0, result.proposalsStaled(), "记忆目标仍然存在");
         assertTrue(result.changed());
-        assertEquals(revisionBeforePurge + 1, result.vaultRevision());
-        assertEquals(revisionBeforePurge + 1, vault().revision(), "证据/事实/建议任一变更都要推进内容版本");
+        assertEquals(revisionBeforePurge, result.vaultRevision());
+        assertEquals(revisionBeforePurge, vault().revision(), "只清原话不改变索引内容，不触发重建");
 
         assertTrue(memory.findCurrent(VAULT, autoWithTwoSources).isPresent(), "还有另一条来源的自动事实不受影响");
-        assertTrue(memory.findCurrent(VAULT, autoOnlySource).isEmpty());
+        assertEquals(autoBefore, memory.findCurrent(VAULT, autoOnlySource).orElseThrow(),
+                "保留原内容、版本、自动来源与时间，不改成人工记录");
         FactRow kept = memory.findCurrent(VAULT, protectedOnlySource).orElseThrow();
         assertEquals("MANUAL", kept.origin());
         assertEquals(List.of(), memory.evidenceIdsForItem(kept.rowId()));
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence WHERE item_row_id = '" + kept.rowId() + "'"),
                 "关联行随证据级联清掉");
-        assertEquals("STALE", jdbc.queryForObject(
+        assertEquals("PENDING", jdbc.queryForObject(
                 "SELECT status FROM ai_memory_proposal WHERE id = 'prop-by-target'", String.class));
     }
 

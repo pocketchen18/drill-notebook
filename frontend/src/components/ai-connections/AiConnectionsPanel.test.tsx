@@ -12,8 +12,8 @@ const fixture = (): Connections => ({ revision: 1, chatModelId: 'a', importModel
     models: [{ id: 'a', modelId: 'chat-a', name: '通用对话', group: '常用', streaming: true, tools: false }, { id: 'b', modelId: 'chat-b', name: '深度分析', group: '', streaming: false, tools: true }] },
   { id: 'q', name: '备用网关', endpoint: 'https://backup.invalid/v1', apiFormat: 'chat_completions', authMode: 'none', hasKey: false, needsPassword: false, models: [] }
 ] });
-function mount(registerGuard?: (guard: SettingsLeaveGuard | null) => void) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+function mount(registerGuard?: (guard: SettingsLeaveGuard | null) => void,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })) {
   return render(<QueryClientProvider client={client}><AiConnectionsPanel registerGuard={registerGuard} /></QueryClientProvider>);
 }
 describe('AI connection workflow', () => {
@@ -77,14 +77,18 @@ describe('AI connection workflow', () => {
   });
   it('apply waits for server success and a failed switch keeps current binding', async () => {
     request.mockRejectedValue(new Error('保存失败'));
-    mount();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    client.setQueryData(['ai-memory-settings'], { enabled: true, revision: 1 });
+    mount(undefined, client);
     fireEvent.click(await screen.findByRole('button', { name: '应用' }));
     await screen.findByText('保存失败');
     expect(screen.getByText('学习网关 / 通用对话')).toBeInTheDocument();
+    expect(client.getQueryState(['ai-memory-settings'])?.isInvalidated).toBe(false);
     expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ purpose: 'chat', modelId: 'b' });
     request.mockResolvedValue({ ...fixture(), revision: 2, chatModelId: 'b' });
     fireEvent.click(screen.getByRole('button', { name: '应用' }));
     await screen.findByText('学习网关 / 深度分析');
+    expect(client.getQueryState(['ai-memory-settings'])?.isInvalidated).toBe(true);
   });
   it('dirty supplier switch supports keep editing, failed save and discard', async () => {
     request.mockRejectedValue(new Error('配置已变更'));

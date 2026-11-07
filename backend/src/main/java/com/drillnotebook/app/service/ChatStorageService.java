@@ -159,7 +159,7 @@ public class ChatStorageService {
         result.put("turnRequestIds", scope.turnRequestIds());
         // 复核 N4：界面要让用户"看见孤立行"，就得知道是哪几条，而不是只知道有几条。
         result.put("incompleteLegacyMessageIds", scope.incompleteLegacyIds());
-        // 契约 §3：受影响记忆计数。预览先说清"会连带删掉几条记忆"，确认才不是盲签。
+        // 预览分别说明被清理的来源/待确认项，以及只断来源的已保存记忆。
         result.put("affectedEvidence", scope.impact().evidence());
         result.put("affectedProposals", scope.impact().proposals());
         result.put("autoFactsRemoved", scope.impact().autoFacts());
