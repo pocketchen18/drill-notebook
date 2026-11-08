@@ -73,7 +73,7 @@ class MemoryClearServiceTest {
                 new MemorySuppressionRepository(dataSource, immediate), operations, vault, policy,
                 new MemoryJobRepository(dataSource, immediate), immediate, mapper);
         clears = new MemoryClearService(memory, policy, metadata, operations, mapper);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

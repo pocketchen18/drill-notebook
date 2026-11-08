@@ -41,7 +41,7 @@ class ChatStorageLedgerTest {
         jdbc = new JdbcTemplate(dataSource);
         immediate = new ImmediateTransaction(dataSource);
         ledger = new ChatStorageLedger(dataSource, immediate);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

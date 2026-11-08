@@ -257,10 +257,14 @@ public class AiChatSessionRepository {
         }
     }
 
-    public long ensureDefaultSession() {
+    public Long firstSessionId() {
         List<Long> ids = jdbc.query("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", (result, row) -> result.getLong(1));
-        if (!ids.isEmpty()) return ids.get(0);
-        return create("默认会话", null);
+        return ids.isEmpty() ? null : ids.get(0);
+    }
+
+    public long ensureDefaultSession() {
+        Long existing = firstSessionId();
+        return existing == null ? create("默认会话", null) : existing;
     }
 
     public record MessageRow(long id, Long sessionId, String role, String content, String contentCipher, String contentMeta,

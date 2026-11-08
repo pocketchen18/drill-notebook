@@ -33,8 +33,8 @@ class ChatStorageSizerTest {
         dataSource = Schema9Fixture.dataSource(appRoot);
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(appRoot)).initialize();
         jdbc = new JdbcTemplate(dataSource);
-        // 启动迁移已经建好默认会话，这里复用它，不再另造 id=1
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        // 显式准备会话；产品启动不再生成占位会话。
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

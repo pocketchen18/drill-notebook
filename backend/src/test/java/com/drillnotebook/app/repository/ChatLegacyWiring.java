@@ -51,6 +51,11 @@ public final class ChatLegacyWiring {
         return wire(dataSource, jdbc).sessions();
     }
 
+    /** 测试需要聊天记录时显式准备会话；产品初始化不再自动创建默认会话。 */
+    public static long ensureSession(JdbcTemplate jdbc) {
+        return sessions(jdbc.getDataSource(), jdbc).ensureDefaultSession();
+    }
+
     public static ChatTurnService turnService(DataSource dataSource, JdbcTemplate jdbc) {
         return wire(dataSource, jdbc).turnService();
     }

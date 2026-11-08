@@ -337,7 +337,6 @@ public class AiService {
     }
 
     public List<Map<String, Object>> listSessions(boolean includeArchived) {
-        sessions.ensureDefaultSession();
         return sessions.list(includeArchived);
     }
 
@@ -363,8 +362,6 @@ public class AiService {
 
     public void deleteSession(long id) {
         requireSession(id);
-        List<Map<String, Object>> all = sessions.list(true);
-        if (all.size() <= 1) throw new IllegalArgumentException("至少保留一个会话");
         chatTurns.runningRequestId(id).ifPresent(requestId -> {
             throw new ChatTurnRejectException(409, "SESSION_BUSY", "会话有正在生成的回答，请先停止",
                     Map.of("runningTurn", requestId));
@@ -1959,8 +1956,8 @@ public class AiService {
 
     /** Prefer sessionMessages; kept for compatibility with older clients. */
     public List<Map<String, Object>> messages() {
-        long sessionId = sessions.ensureDefaultSession();
-        return sessionMessages(sessionId, "");
+        Long sessionId = sessions.firstSessionId();
+        return sessionId == null ? List.of() : sessionMessages(sessionId, "");
     }
 
     private long resolveSessionId(Map<String, Object> body) {

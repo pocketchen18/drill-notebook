@@ -246,8 +246,8 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET / POST | `/ai/sessions` | 会话列表 / 新建 |
-| PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（运行中删除返回 409） |
+| GET / POST | `/ai/sessions` | 会话列表（允许为空） / 显式创建；前端仅首次发送时调用 POST |
+| PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（允许删除最后一条；运行中删除返回 409） |
 | POST | `/ai/sessions/{id}/title` | 异步生成 / 重新生成标题（202） |
 | GET | `/ai/sessions/{id}/messages` | 消息列表（解密） |
 | GET | `/ai/messages` | 全局消息查询 |
@@ -257,6 +257,8 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 | GET | `/ai/sessions/{id}/export` | 导出会话 |
 
 轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
+
+会话列表和旧版全局消息查询均为只读；无会话时返回 `[]`，不补建默认记录。前端新会话页没有会话 ID，首次有效发送时调用创建接口，再用返回的 ID 发送该条消息；进入页面、编辑草稿、删除当前会话均不调用创建接口。已有空白记录不自动删除或复用；旧客户端未提供会话 ID 的实际聊天请求仍可按兼容规则创建默认会话。
 
 会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议，当前 MVP 只支持复制，跨会话读取工具尚未接入。
 

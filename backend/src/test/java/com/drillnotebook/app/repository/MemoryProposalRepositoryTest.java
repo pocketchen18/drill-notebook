@@ -52,7 +52,7 @@ class MemoryProposalRepositoryTest {
         ImmediateTransaction immediate = new ImmediateTransaction(dataSource);
         facts = new MemoryRepository(dataSource, immediate);
         proposals = new MemoryProposalRepository(dataSource, immediate);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         jdbc.update("INSERT INTO ai_memory_vault(id, wrapped_dek, wrap_meta, mode, created_at)"
                 + " VALUES (?, 'dek', '{}', 'fingerprint', ?)", VAULT, NOW);
     }

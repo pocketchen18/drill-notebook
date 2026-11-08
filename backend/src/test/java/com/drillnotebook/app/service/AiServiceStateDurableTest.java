@@ -88,7 +88,7 @@ class AiServiceStateDurableTest {
                 new ObjectMapper(), null, turnService, wiring.cipher(), stack.contexts());
         ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key"));
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

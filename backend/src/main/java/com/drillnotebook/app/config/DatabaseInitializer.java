@@ -249,6 +249,11 @@ public class DatabaseInitializer {
     }
 
     private static void migrateAiChatSessions(Connection connection) throws SQLException {
+        // 只有旧消息确实缺少归属时才迁移；空数据库和删除后的空列表不补建会话。
+        try (Statement statement = connection.createStatement();
+             ResultSet orphan = statement.executeQuery("SELECT 1 FROM ai_chat_message WHERE session_id IS NULL LIMIT 1")) {
+            if (!orphan.next()) return;
+        }
         long defaultSessionId;
         try (Statement statement = connection.createStatement();
              ResultSet existing = statement.executeQuery("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1")) {

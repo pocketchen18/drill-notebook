@@ -56,7 +56,7 @@ class AiChatSessionLegacyLedgerTest {
         memory = new MemoryRepository(dataSource, immediate);
         turns = new ChatTurnRepository(dataSource, immediate, ledger, metadata, memory);
         sessions = new AiChatSessionRepository(jdbc, immediate, ledger, metadata, memory);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

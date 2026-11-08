@@ -126,7 +126,7 @@ export function useChatHistoryPages(sessionId: number | undefined, enabled = tru
     historyRevision: pages[0]?.historyRevision ?? 0,
     hasOlder,
     residentCapped,
-    isLoading: isPending,
+    isLoading: enabled && sessionId !== undefined && isPending,
     isError,
     isLoadingOlder: isFetchingNextPage,
     error,

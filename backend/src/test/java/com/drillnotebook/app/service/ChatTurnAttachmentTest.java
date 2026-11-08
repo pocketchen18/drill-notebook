@@ -56,7 +56,7 @@ class ChatTurnAttachmentTest {
         turns = wiring.turns();
         ledger = wiring.ledger();
         mapper = new ObjectMapper();
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1, title = '我的复习' WHERE id = ?", sessionId);
     }
 

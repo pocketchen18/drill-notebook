@@ -47,6 +47,8 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 
 会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；真实完成状态来自会话列表，前端仅在存在 generating 时轮询。自动标题不进入聊天正文或工具活动；跨会话查阅工具尚未实现。
 
+新会话页作为无 ID 的前端草稿存在，点击新建或删除当前会话只切换到该页。首次发送才显式创建会话，随后发送同一份输入；同步防重复与渲染后发送保证快速流式事件不会丢失。列表允许为空，初始化和只读查询不补建默认会话；迁移仅为已有未归属的旧消息建立会话。
+
 ### 2.3 界面状态记忆（v0.5.2）
 
 `lib/viewState.ts` 用**单个** localStorage key `ui.viewState.v1` 保存「上次页面 + 各页视图状态」：

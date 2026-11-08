@@ -55,7 +55,7 @@ class ChatTurnServiceLifecycleTest {
         wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         ledger = wiring.ledger();
         service = wiring.turnService();
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1 WHERE id = ?", sessionId);
     }
 

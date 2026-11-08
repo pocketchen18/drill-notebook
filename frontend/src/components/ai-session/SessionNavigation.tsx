@@ -108,6 +108,7 @@ export function SessionNavigation(props: Props): JSX.Element {
     setEdit({ id: session.id, original: session.title, draft: session.title });
   };
   const showMenu = async (session: AiChatSession, origin: HTMLElement, x: number, y: number): Promise<void> => {
+    if (props.creating) return;
     if (!(await saveRename())) return;
     setSub(null); setMenu({ id: session.id, origin, x, y });
   };
@@ -234,7 +235,7 @@ export function SessionNavigation(props: Props): JSX.Element {
 
   return <>
     <div className="session-nav" ref={bar}>
-      <button className="session-nav-trigger" ref={trigger} aria-label="切换会话" aria-haspopup="dialog" aria-expanded={open}
+      <button className="session-nav-trigger" ref={trigger} disabled={props.creating} aria-label="切换会话" aria-haspopup="dialog" aria-expanded={open}
         title={current?.title} onClick={() => { if (open) void closeList(); else setOpen(true); }}
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); }
@@ -242,13 +243,13 @@ export function SessionNavigation(props: Props): JSX.Element {
           if (current && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) { e.preventDefault(); rowMenu(current, e.currentTarget); }
         }}
         onDoubleClick={() => { if (current) void beginRename(current); }}>
-        <span>{current?.title ?? (props.loading ? '正在加载会话…' : '选择会话')}</span>
+        <span>{current?.title ?? (props.loading ? '正在加载会话…' : '新会话')}</span>
         {current?.titleStatus === 'generating' && <LoaderCircle className="session-nav-spin" size={13} aria-label="正在生成标题" />}
         <ChevronDown size={14} />
       </button>
       <button className="session-nav-icon" aria-label="新建会话" title="新建会话" disabled={props.creating}
         onClick={async () => { if (await saveRename()) { setOpen(false); closeMenu(); props.onCreate(); } }}><Plus size={16} /></button>
-      <button className="session-nav-icon" aria-label="会话更多操作" title="会话更多操作" disabled={!current}
+      <button className="session-nav-icon" aria-label="会话更多操作" title="会话更多操作" disabled={!current || props.creating}
         onClick={(e) => { if (current) rowMenu(current, e.currentTarget); }}><MoreHorizontal size={17} /></button>
     </div>
     {open && visible && createPortal(<div ref={list} className="session-nav-list" role="dialog" aria-label="会话列表"
@@ -272,7 +273,7 @@ export function SessionNavigation(props: Props): JSX.Element {
               {edit.error && <small role="alert">{edit.error}</small>}
               {saving && <small>正在保存…</small>}
             </div> : <>
-              <button data-session={session.id} className="session-nav-select" title={session.title} aria-current={session.id === currentId ? 'true' : undefined}
+              <button data-session={session.id} className="session-nav-select" title={session.title} disabled={props.creating} aria-current={session.id === currentId ? 'true' : undefined}
                 onClick={async () => { if (await saveRename()) { closeMenu(); setOpen(false); if (session.id !== currentId) props.onSelect(session.id); } }}
                 onKeyDown={(e) => {
                   if (e.key === 'F2') { e.preventDefault(); void beginRename(session); }
@@ -307,7 +308,7 @@ export function SessionNavigation(props: Props): JSX.Element {
           <button role="menuitem" data-child="export" aria-haspopup="menu" aria-expanded={sub === 'export'} onMouseEnter={() => { if (!stacked) setSub('export'); }} onClick={() => openChild('export')}><Download size={14} />导出 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <div role="separator" />
           <button role="menuitem" className="session-nav-danger" onMouseEnter={() => setSub(null)}
-            disabled={sessions.length <= 1 || target.id === props.busyId} title={sessions.length <= 1 ? '至少保留一个会话' : target.id === props.busyId ? '请先停止正在生成的回复' : undefined}
+            disabled={target.id === props.busyId} title={target.id === props.busyId ? '请先停止正在生成的回复' : undefined}
             onClick={() => { closeMenu(); setConfirm({ kind: 'delete', session: target }); setConfirmError(''); }}><Trash2 size={14} />删除会话</button>
         </>}
       </div>
