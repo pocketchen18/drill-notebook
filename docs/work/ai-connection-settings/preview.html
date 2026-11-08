@@ -72,6 +72,9 @@
     #dn-ai-review .dn-section:first-child { padding-top: 0; }
     #dn-ai-review .dn-form-grid { display: grid; gap: 14px; margin-top: 16px; }
     #dn-ai-review .dn-field { display: grid; gap: 6px; font-size: 13px; }
+    #dn-ai-review .dn-model-presets { display: grid; gap: 4px; margin-top: -10px; padding: 6px; border: 1px solid var(--dn-line); border-radius: 7px; background: var(--dn-panel); }
+    #dn-ai-review .dn-model-presets button { justify-content: start; border-color: transparent; }
+    #dn-ai-review .dn-model-presets [aria-selected=true] { background: var(--dn-selected); }
     #dn-ai-review .dn-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     #dn-ai-review .dn-toggle-row { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 15px 0; }
     #dn-ai-review .dn-toggle-row + .dn-toggle-row { border-top: 1px solid var(--dn-line); }
@@ -219,10 +222,33 @@
       }
       function renderEditor() {
         const p = current(), m = editing;
-        main.innerHTML = `<div class="dn-heading">${button(icon('arrow-left') + '返回模型列表','back','','dn-link')}<span class="dn-muted dn-wrap">${esc(p.name)} / ${m.isNew ? '添加模型' : esc(m.name || m.id)}</span></div><form id="dn-model-form"><section class="dn-section"><h2>${m.isNew ? '添加模型' : '模型设置'}</h2><div class="dn-form-grid"><label class="dn-field">所属供应商<input readonly value="${esc(p.name)}"></label><label class="dn-field">模型 ID<input id="dn-edit-id" name="id" value="${esc(m.id)}" ${m.isNew ? 'required' : 'readonly'} placeholder="供应商提供的准确模型 ID"></label><div class="dn-field-pair"><label class="dn-field">模型名称<input id="dn-edit-name" name="name" maxlength="80" value="${esc(m.name)}" placeholder="留空使用模型 ID"></label><label class="dn-field">分组名称<input name="group" maxlength="40" value="${esc(m.group)}" placeholder="未分组"></label></div></div></section><section class="dn-section"><h3>输出与工具</h3><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>流式输出</strong><span class="dn-muted">开启后逐步显示回答。</span></span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="streaming" aria-label="流式输出" ${m.streaming ? 'checked' : ''}></label><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>允许工具调用</strong><span class="dn-muted">允许模型使用应用已提供并获授权的工具。</span>${same(imported,p.id,m.id) ? '<span class="dn-muted">仅对主模型对话生效，导入解析不调用记忆工具。</span>' : ''}</span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="tools" aria-label="允许工具调用" ${m.tools ? 'checked' : ''}></label></section><details class="dn-advanced"><summary class="cursor-interaction">上下文与输出上限（可选）</summary><div class="dn-form-grid">${[['context','上下文窗口'],['input','最大输入 Token'],['output','最大输出 Token']].map(([key,label]) => `<label class="dn-field">${label}<input type="number" min="1" step="1" name="${key}" value="${esc(m[key])}" placeholder="未指定 · 沿用应用现有策略"></label>`).join('')}<p class="dn-muted">自定义上限不会突破应用的任务限制。</p></div></details><div id="dn-form-error" class="dn-error" role="alert" hidden></div>${same(applied,p.id,m.id) || same(imported,p.id,m.id) ? '<p class="dn-muted" style="margin-top:18px">保存后从下一次请求生效，当前任务继续使用原配置。</p>' : ''}<div class="dn-actions">${button('取消','back')}<button type="button" data-action="save-form" class="dn-primary cursor-interaction">${m.isNew ? '保存模型' : '保存模型设置'}</button></div></form>`;
+        main.innerHTML = `<div class="dn-heading">${button(icon('arrow-left') + '返回模型列表','back','','dn-link')}<span class="dn-muted dn-wrap">${esc(p.name)} / ${m.isNew ? '添加模型' : esc(m.name || m.id)}</span></div><form id="dn-model-form"><section class="dn-section"><h2>${m.isNew ? '添加模型' : '模型设置'}</h2><div class="dn-form-grid"><label class="dn-field">所属供应商<input readonly value="${esc(p.name)}"></label><label class="dn-field">模型 ID<input id="dn-edit-id" name="id" value="${esc(m.id)}" required list="dn-model-presets" placeholder="供应商提供的准确模型 ID"></label><div class="dn-field-pair"><label class="dn-field">模型名称<input id="dn-edit-name" name="name" maxlength="80" value="${esc(m.name)}" placeholder="留空使用模型 ID"></label><label class="dn-field">分组名称<input name="group" maxlength="40" value="${esc(m.group)}" placeholder="未分组"></label></div></div></section><section class="dn-section"><h3>输出与工具</h3><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>流式输出</strong><span class="dn-muted">开启后逐步显示回答。</span></span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="streaming" aria-label="流式输出" ${m.streaming ? 'checked' : ''}></label><label class="dn-toggle-row"><span class="dn-toggle-copy"><strong>允许工具调用</strong><span class="dn-muted">允许模型使用应用已提供并获授权的工具。</span>${same(imported,p.id,m.id) ? '<span class="dn-muted">仅对主模型对话生效，导入解析不调用记忆工具。</span>' : ''}</span><input type="checkbox" role="switch" class="dn-switch cursor-interaction" name="tools" aria-label="允许工具调用" ${m.tools ? 'checked' : ''}></label></section><details class="dn-advanced"><summary class="cursor-interaction">上下文与输出上限（可选）</summary><div class="dn-form-grid">${[['context','上下文窗口'],['input','最大输入 Token'],['output','最大输出 Token']].map(([key,label]) => `<label class="dn-field">${label}<input type="number" min="1" step="1" name="${key}" value="${esc(m[key])}" placeholder="未指定 · 沿用应用现有策略"></label>`).join('')}<p class="dn-muted">自定义上限不会突破应用的任务限制。</p></div></details><div id="dn-form-error" class="dn-error" role="alert" hidden></div>${same(applied,p.id,m.id) || same(imported,p.id,m.id) ? '<p class="dn-muted" style="margin-top:18px">保存后从下一次请求生效，当前任务继续使用原配置。</p>' : ''}<div class="dn-actions">${button('取消','back')}<button type="button" data-action="save-form" class="dn-primary cursor-interaction">${m.isNew ? '保存模型' : '保存模型设置'}</button></div></form>`;
+        const modelIdInput = main.querySelector('#dn-edit-id');
+        modelIdInput.removeAttribute('list');
+        modelIdInput.setAttribute('role', 'combobox'); modelIdInput.setAttribute('aria-controls', 'dn-model-presets'); modelIdInput.setAttribute('aria-expanded', 'false');
+        modelIdInput.parentElement.insertAdjacentHTML('afterend', '<div id="dn-model-presets" class="dn-model-presets" role="listbox" aria-label="预设模型" hidden></div>');
         main.querySelectorAll('.dn-section')[1].insertAdjacentHTML('beforebegin', reasoningMarkup());
         main.querySelector('#dn-level-search').value = effortSearch;
         refreshEffort();
+      }
+      function showModelPresets() {
+        const input = main.querySelector('#dn-edit-id'), list = main.querySelector('#dn-model-presets');
+        if (!input || !list) return;
+        const search = input.value.trim().toLowerCase();
+        const options = Object.entries(presets).filter(([id, preset]) => `${id} ${preset.name}`.toLowerCase().includes(search));
+        list.innerHTML = options.map(([id, preset], index) => button(`${esc(id)} · ${esc(preset.name)}`, 'select-preset', `role="option" aria-selected="${index === 0}" data-id="${esc(id)}"`)).join('');
+        list.hidden = !options.length; input.setAttribute('aria-expanded', String(!list.hidden));
+      }
+      function closeModelPresets() {
+        const list = main.querySelector('#dn-model-presets');
+        if (list) list.hidden = true;
+        main.querySelector('#dn-edit-id')?.setAttribute('aria-expanded', 'false');
+      }
+      function selectModelPreset(id) {
+        const preset = presets[id];
+        if (!editing || !preset) return;
+        Object.assign(editing, { id, preset: id, name: preset.name, context: preset.context, input: '', output: preset.output, levels: [...preset.levels], defaultEffort: '', control: 'effort', thinkingBudget: '' });
+        render(); main.querySelector('#dn-edit-id').focus(); closeModelPresets(); persist();
       }
       function levelLabel(levels) {
         if (!levels.length) return '未设置';
@@ -278,15 +304,20 @@
       }
       function saveEditor() {
         const p = current(), m = { ...editing, id: editing.id.trim(), name: editing.name.trim(), group: editing.group.trim() };
+        const originalId = JSON.parse(original).id;
         let error = '';
         if (!m.id) error = '请输入模型 ID。';
-        else if (m.isNew && p.models.some(item => item.id === m.id)) error = '该供应商已添加相同模型 ID。';
+        else if (p.models.some(item => item.id === m.id && (m.isNew || item.id !== originalId))) error = '该供应商已添加相同模型 ID。';
         for (const field of ['context','input','output']) if (m[field] !== '' && (!Number.isSafeInteger(Number(m[field])) || Number(m[field]) <= 0)) error = 'Token 上限需要填写正整数，或留空。';
         if (m.context && ((m.input && Number(m.input) > Number(m.context)) || (m.output && Number(m.output) > Number(m.context)))) error = '输入或输出上限不能大于上下文窗口。';
         if (m.control === 'budget' && m.thinkingBudget && (!Number.isSafeInteger(Number(m.thinkingBudget)) || Number(m.thinkingBudget) <= 0)) error = '思考预算需要填写正整数，或留空。';
         if (error) { const el = main.querySelector('#dn-form-error'); el.hidden = false; el.textContent = error; return false; }
         const isNew = m.isNew; delete m.isNew;
-        if (isNew) p.models.push(m); else p.models[p.models.findIndex(item => item.id === m.id)] = m;
+        if (isNew) p.models.push(m); else {
+          p.models[p.models.findIndex(item => item.id === originalId)] = m;
+          if (same(applied, p.id, originalId)) applied = [p.id, m.id];
+          if (same(imported, p.id, originalId)) imported = [p.id, m.id];
+        }
         editing = null; original = ''; say('已保存模型设置（草图演示），应用用途保持不变。'); return true;
       }
       function guard(action) {
@@ -338,6 +369,10 @@
           if (editing.control !== 'effort' && editing.defaultEffort) { editing.defaultEffort = ''; notice = '控制方式已改变，默认等级恢复为服务默认。'; }
           closeEffort(); refreshEffort(notice); persist(); return;
         }
+        if (editing && target.id === 'dn-edit-id') {
+          editing.id = target.value;
+          showModelPresets(); persist(); return;
+        }
         if (editing && target.closest('#dn-model-form') && target.name) editing[target.name] = target.type === 'checkbox' ? target.checked : target.value;
         if (editing) refreshEffort();
       });
@@ -345,6 +380,24 @@
         event.preventDefault();
         if (event.target.getAttribute('id') === 'dn-model-form' && saveEditor()) { render(); persist(); }
         else if (event.target.getAttribute('id') === 'dn-connection-form' && saveConnection()) { render(); persist(); }
+      });
+      root.addEventListener('focusin', event => { if (event.target.id === 'dn-edit-id') showModelPresets(); });
+      root.addEventListener('focusout', event => {
+        if (event.target.id === 'dn-edit-id' && !event.relatedTarget?.closest?.('#dn-model-presets')) closeModelPresets();
+      });
+      root.addEventListener('keydown', event => {
+        if (event.target.id !== 'dn-edit-id' || event.isComposing) return;
+        const list = main.querySelector('#dn-model-presets');
+        if (!list || list.hidden) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); closeModelPresets(); }
+        const options = [...list.querySelectorAll('[role=option]')];
+        if (event.key === 'Enter') { event.preventDefault(); selectModelPreset(options.find(option => option.getAttribute('aria-selected') === 'true')?.dataset.id); }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const current = options.findIndex(option => option.getAttribute('aria-selected') === 'true');
+          const next = (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+          options.forEach((option, index) => option.setAttribute('aria-selected', String(index === next)));
+        }
       });
       root.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); const popup = main.querySelector('#dn-level-popup'); if (popup && !popup.hidden) { closeEffort(true); return; } if (pending) { pending = null; main.querySelector('.dn-confirm')?.remove(); } else if (editing || connection) guard(() => { editing = null; connection = null; render(); }); else { activeMenu = ''; render(); } } });
       document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#dn-ai-review .dn-level-picker')) closeEffort(); });
@@ -360,6 +413,7 @@
         }
         const el = event.target.closest('button[data-action]'); if (!el || el.disabled) return;
         const action = el.dataset.action, id = el.dataset.id;
+        if (action === 'select-preset') { selectModelPreset(id); return; }
         if (action === 'effort-open') {
           const popup = main.querySelector('#dn-level-popup');
           if (!popup.hidden) closeEffort(true);

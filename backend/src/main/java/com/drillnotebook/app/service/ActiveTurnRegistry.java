@@ -1,5 +1,7 @@
 package com.drillnotebook.app.service;
 
+import com.drillnotebook.app.model.ToolActivity;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,6 +23,7 @@ public class ActiveTurnRegistry {
         private final long sessionId;
         private final AtomicBoolean cancelRequested = new AtomicBoolean();
         private volatile Runnable abortHook;
+        private volatile List<ToolActivity> toolActivities = List.of();
 
         Handle(String requestId, long sessionId) {
             this.requestId = requestId;
@@ -37,6 +40,14 @@ public class ActiveTurnRegistry {
 
         public boolean cancelRequested() {
             return cancelRequested.get();
+        }
+
+        public List<ToolActivity> toolActivities() {
+            return toolActivities;
+        }
+
+        public void toolActivities(List<ToolActivity> activities) {
+            toolActivities = List.copyOf(activities);
         }
 
         /** 用户主动停止：置标志并中断尚未结束的读取；重复点击只有第一次算数。 */

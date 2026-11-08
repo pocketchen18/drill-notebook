@@ -1,134 +1,67 @@
-# v0.7.1 AI 记忆工具：执行计划
+# AI 工具活动与全局调用预算：执行计划
 
-当前进度与已完成事项见 [features.md](../../features.md)。本计划只覆盖剩余 2 个工具（`create_memory` / `update_memory`）与配套能力（状态展示、语义检索与用量统计），按顺序推进；每步完成并验证后再进入下一步。
+当前切片：全局 AI 对话设置与长工具链预算。用户已批准默认 50 阶段、100 次执行、整轮 30 分钟、单次 15 分钟，要求可修改、恢复默认且不跟随模型。
 
-需求基线：[requirements.md](requirements.md)。
+状态：2026-11-08 工具活动展示与全局预算已实现并通过定向回归。当前开发应用的后端尚未重新打包、重启。
 
-## 1. P4：`create_memory`
+## 当前执行清单
 
-### 目标
+- [x] 全局设置持久化、校验与独立设置入口（保存/取消/恢复默认）。
+- [x] 统一阶段、执行、实际输出 Token、最终回答预留、总时长与请求期限。
+- [x] 移除记忆总条数/写入次数旧限制，扩展解析与活动容量；重复无进展检测。
+- [x] 达限原因、历史恢复与用户主动继续；取消/断连及时收尾。
+- [x] 长链与边界回归、设置交互测试、构建与隔离浏览器验收、便携检查。
+- [x] 原地记录验证结果；暂不修改全局状态文档和 MEMORY.md，不提交或重启用户应用。
 
-把对话中具有长期价值、且用户希望保留的信息新增为记忆；不重复写入归一值完全相同的记忆。
+## 1. 后端事件与持久化
 
-### 文件范围
+- [x] 新增 model/ToolActivity.java 白名单记录。
+- [x] ActiveTurnRegistry、ChatTurnService、ChatTurnRepository：保存有界活动检查点、复用助手占位、正确结算元数据容量。
+- [x] AiService / AiController：在真实工具执行边界发送活动快照，保留取消与失败的实际结果，统一返回与状态查询。
+- [x] ChatHistoryRepository / ChatHistoryService：历史返回加密记录的安全摘要，不重新执行工具。
+- [x] 后端定向测试：流程、隐私、取消、持久化与容量。
 
-- 新增 `backend/src/main/java/com/drillnotebook/app/service/MemoryCreateTool.java`
-- `MemoryItemService` 或新的写入服务：复用自动提取的归一化、去重、scope 与证据写入
-- `MemoryPolicyService`：写入资格、手动写入指纹与同意检查
-- `ChatContextService`：写入后推进 vault revision / 会话 generation，避免本轮后续读取旧快照
-- 测试：`MemoryCreateToolTest.java`、`MemoryToolChatPathTest.java` 增加写路径
+## 2. 前端展示
 
-### 约束
+- [x] aiStream、useAiChatTurn：解析活动事件；工具状态不依赖正文流式开关；按身份确认中断状态。
+- [x] types、useChatHistoryPages：对齐活动数据。
+- [x] 新增 ToolActivityGroup 与文案辅助模块：组/行折叠、耗时、结果与异常。
+- [x] AiAssistant、app.css：接入当前回复与历史，保留稳定 key、阅读位置和自由滚动。
+- [x] 组件与 hook 回归：状态、折叠、中断、重开与无工具路径。
 
-- 参数：`text`（1–1000 字符）、`kind`、可选 `scope`、可选 `expiry`；未知字段拒绝。
-- 写入前必须通过手动写入资格与用户同意；AI 自主写入需要显式策略开关。
-- 归一值完全相同 → 返回 `DUPLICATE`，不新增版本。
-- 写入来源标记为 `AI`，证据指向当前会话 / 轮次 / 消息。
-- 写入成功后返回 `{status:"CREATED", memoryId, version}`；不返回正文回显。
-- 单轮最多新增 3 条；超过返回 `LIMIT_REACHED`。
-- 不写日志明文、不写上下文审计明文。
+## 3. 验证与收尾
 
-### 验收
+- [x] 前后端相关测试与前端/后端编译通过。
+- [x] 隔离浏览器检查实际组件的运行/完成/中断未知、历史与窄屏，不调用用户模型。
+- [x] 便携性：确认只复用现有加密数据库落点；完成静态检查与仅元数据的运行检查。
+- [x] git diff --check；仅保留当前切片改动，不提交 Git。
+- [x] 更新本文件为真实验证结果。
+- [ ] 全局状态文档同步与施工材料归档：按用户并行协作要求暂缓，解除约束后统一收口。
 
-- 用户说「记住：我每周三晚上复习」→ 新增一条 GLOBAL 记忆，管理页可见。
-- 重复说同一内容 → 返回 `DUPLICATE`，管理页不出现两条相同记忆。
-- 未同意 / 未解锁 → `UNAVAILABLE`，不落库。
-- 写入后当轮搜索能读到新版本（revision 已推进）。
+## 4. 文件范围
 
-## 2. P5：`update_memory`
+后端范围：全局预算模型/仓库/接口与 schema 11、聊天预算循环与上游请求、轮次/历史/活动容量及对应测试。前端范围：独立「AI 对话」设置入口与「运行限制」表单、聊天事件/历史与达限提示、「继续」入口、工具活动容量与样式及对应测试。施工文档在本目录原位更新。
 
-### 目标
+不改：供应商/模型设置、记忆写入业务规则、索引重建规则、全局状态文档、其它成员正在推进的功能。
 
-用户纠正或补充时更新对应记忆，旧版本归档，新版本继承来源证据，避免新旧内容并存。
+## 5. 验证记录（2026-11-08）
 
-### 文件范围
+| 检查 | 结果 |
+|---|---|
+| 前端定向回归 | AiRuntimeSettingsPanel / ToolActivityGroup / AiAssistant.stream / aiStream / aiTurnText / SettingsPage.general：6 个文件、63 项通过 |
+| 前端生产构建 | `npm run build --prefix frontend` 通过；保留现有 bundle 大小提示 |
+| 后端编译与定向回归 | 24 个测试类、225 项通过；覆盖预算、配置持久化/冲突、长工具链、流式、迁移、历史与容量。发现的保存失败提示回归已修复，最后相关 8 类、40 项复验通过 |
+| 长链与边界 | 普通/流式完成 50 阶段、100 次执行并保存/读回全部记录；半批执行达限保留调用与结果配对；按实际 usage 扣减、最终回答预留、重复无进展、切模型不改全局设置、本轮配置快照固定 |
+| 浏览器验收 | 真实设置/工具活动组件 + 隔离虚构 API；保存重载、取消、恢复默认草稿、无效输入、409 保留草稿与重新载入、100 条活动可滚动通过；1280×900 浅色与 580×850 深色无横向溢出、无 pageerror、0 次外部模型调用 |
+| 断连与失败 | 等待响应头可取消；断流保留已收正文；首帧失败停止外发；流式中断不掩盖本地保存失败，保留 stateDurable=false |
+| 静态便携检查 | `cache/portable-registry-audit.ps1` 扫描 588 个源码文件，未发现注册表 / 持久化环境变量 API |
+| 运行落盘检查 | 隔离后端测试前后仅比较约定应用落点的大小与修改时间；候选目录前后均 0 文件、0 新增，不读取 C 盘文件内容；不是用户应用全进程落盘审计 |
+| 差异格式 | `git diff --check` 通过 |
 
-- 新增 `backend/src/main/java/com/drillnotebook/app/service/MemoryUpdateTool.java`
-- 复用 `MemoryItemService` 的版本写入、证据继承、手动来源标记与 CAS
-- `ChatContextService`：更新后推进 revision / generation
-- 测试：`MemoryUpdateToolTest.java`、`MemoryToolChatPathTest.java` 增加更新路径
+此前工具活动界面已验收自由滚动、手动折叠、结束自动收起的阅读位置以及 320 px 布局。本轮保留相关行为，不把此前全量测试数字作为本轮最新结果。浏览器使用隔离配置且禁用 localStorage / sessionStorage 访问，不读取用户模型密钥或真实聊天数据。
 
-### 约束
+原 `scripts/portable-audit.ps1` 会读取外部文件内容以计算哈希，本轮使用工作区临时脚本执行仅元数据版本；没有扩大 C 盘内容读取权限。
 
-- 参数：`memoryId`、`expectedVersion`、`text`、可选 `expiry`；未知字段拒绝。
-- 必须带 `expectedVersion` 做乐观锁；版本不匹配返回 `STALE`，不覆盖他人修改。
-- 更新后旧版本转 `SUPERSEDED`，新版本 `ACTIVE`；继承证据；来源转人工。
-- 归一值与原值相同 → `NO_CHANGE`，不新增版本。
-- 单轮最多更新 3 条。
-- 不允许跨 scope 移动；需要移动时先删除再新建。
+本轮本地验收脚本与截图位于已忽略的 `temp/runtime-budget-qa/`，不入库；自己启动的浏览器与服务已关闭。开源实现参考见 Spec §6，全局设置草图见 UI/UX。
 
-### 验收
-
-- 「把每周三改成每周四」→ 同一 memoryId 新版本，旧版本归档，管理页只显示一条。
-- 并发修改 → 后到者 `STALE`，不覆盖。
-- 更新后当轮搜索读到新版本。
-
-## 3. P6：记忆操作状态展示
-
-### 目标
-
-让用户知道本轮是否使用了记忆、用了哪些、是否被截断，而不是只看到一句回答。
-
-### 交互
-
-- 在回答下方显示一行状态：`已参考 3 条记忆` / `记忆索引构建中，本轮未使用` / `未找到相关记忆`。
-- 可展开查看被引用记忆的标题与范围；不显示内部 ID、谓词、来源密文。
-- 工具调用失败不弹错误，只在状态行说明原因。
-
-### 文件范围
-
-- 后端：`ChatContextPlan` / 轮次结果增加 `memoryToolStatus` 摘要（已加密审计 + 明文字段仅标题 / scope / 数量）
-- 前端：`AiAssistant.tsx` / `useAiChatTurn.ts` 渲染状态行与展开区
-- 测试：组件测试 + `MemoryToolChatPathTest` 断言状态字段
-
-### 验收
-
-- 工具命中 → 显示数量与标题；无命中 → 显示未找到；不可用 → 显示原因。
-- 关闭工具开关 → 不显示状态行。
-
-## 4. P7：语义检索与用量统计
-
-### 语义检索
-
-- 复用现有 embedding 空间与 `retrieval_embedding`，为 `ai_memory_item` 的 ACTIVE 版本建立向量索引。
-- 检索时先按 scope / 过期 / 抑制过滤，再做向量召回，最后按阈值与预算截断。
-- 索引未就绪时回退现有索引检索，不阻塞回答。
-- 需要新增记忆向量表或复用检索分块表；优先复用现有 `embedding_job` 队列与模型选择。
-
-### 用量统计
-
-- 按模型 / 日期 / 用途聚合 `ai_usage_attempt` 与 `ai_usage_daily`。
-- 展示输入、输出、缓存读 / 写、节省估算；不把缓存子集重复计数。
-- 设置页或用量页新增查询接口与只读视图。
-
-## 5. 验证命令
-
-```powershell
-# 后端定向
-.\mvnw.cmd -q '-Dtest=MemoryListToolTest,MemoryCreateToolTest,MemoryUpdateToolTest,MemoryToolChatPathTest,MemorySearchToolTest' test
-
-# 后端全量
-.\mvnw.cmd -B -f backend/pom.xml test
-
-# 前端
-cd frontend
-npm test
-npm run build
-```
-
-每个工具至少覆盖：正常、参数非法、未授权、范围不符、索引不可用、重复 / 版本冲突、达到上限。
-
-## 6. 风险与回滚
-
-- **写入放大**：AI 自主写入必须有策略开关与单轮上限；默认关闭，避免污染记忆库。
-- **版本并发**：更新必须 CAS；失败返回 `STALE`，不自动重试覆盖。
-- **作用域泄漏**：所有读写先校验 GLOBAL / NOTEBOOK；notebook 记忆不得出现在其他笔记本会话。
-- **索引不一致**：写入 / 更新后推进 revision；本轮后续工具调用重新读取快照，不使用旧索引。
-- **回滚**：每个工具独立开关与独立测试；关闭工具开关即回到 v0.7.0 的纯预注入路径。
-
-## 7. 完成标准
-
-- 剩余 `create_memory` / `update_memory` 与 P6 / P7 完成；4 个工具整体通过定向 + 全量测试。
-- 设置页开关、状态展示、管理页来源与版本行为符合 UI/UX 文档。
-- 状态文档 `docs/features.md`、`docs/data-model.md`、`docs/api-contracts.md` 已同步。
-- 本目录归档到 `docs/archive/v0.7.1/`，不留在活跃上下文。
+运行限制：本轮没有替换当前后端 JAR 或重启用户应用；正常开发启动脚本会检测旧 JAR 并重建。设置从下一轮生效，模型自身容量仍可能提前触发收尾；用量未知时按请求分配额度保守扣减。「继续」沿用同会话已有回答开启新轮次，不恢复原上游连接或持久化原始工具结果。全局状态文档与归档须等并行协作约束解除后完成。

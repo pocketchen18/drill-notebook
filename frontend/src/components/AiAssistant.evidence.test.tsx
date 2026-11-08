@@ -6,8 +6,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
+import type { StreamCallbacks, StreamDonePayload } from '../lib/aiStream';
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
+
+vi.mock('../lib/aiStream', () => ({
+  streamChat: async (_path: string, body: unknown, callbacks: StreamCallbacks) => {
+    void apiPost('/api/ai/chat', body).then((view: StreamDonePayload) => callbacks.onDone({ ...view, reasoning: view.reasoning ?? '' }));
+    return () => undefined;
+  }
+}));
 
 vi.mock('../lib/api', () => ({
   get: (...args: unknown[]) => apiGet(...args),

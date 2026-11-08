@@ -1,189 +1,84 @@
-# v0.7.1 AI 记忆工具：后端规格
+# AI 对话工具活动：实现规格
 
-当前已落地的工具契约与状态见 [api-contracts.md](../../api-contracts.md) 与 [features.md](../../features.md)；本文只保留后端设计规格，不重复维护状态表。
+设计以同目录 ui-ux.md 为准。工具活动展示已落地；当前按用户批准扩展为全局调用预算与设置，四种工具的业务权限不变。
 
-需求基线：[requirements.md](requirements.md)。
+## 全局调用预算（当前施工）
 
-## 1. 目标与边界
+- 独立 `ai_runtime_settings(id=1, revision, document)` 保存全局设置，落在现有 APP_ROOT 数据库；GET/PUT `/api/ai/runtime-settings`，PUT 带 revision 做并发覆盖检查。GET 返回 values/defaults，不创建模型配置。数据库 schema 升为 11。
+- 字段与默认值：maxToolStages=50、maxToolExecutions=100、turnTimeoutMinutes=30、requestTimeoutMinutes=15、maxOutputTokens=128000、requestOutputTokens=16384、finalOutputTokens=8192、repeatedToolLimit=3（0 关闭）。范围分别为 1–500、1–1000、1–240、1–120、1024–2000000、256–131072、256–65536、0–20；请求时长不得超过整轮，最终预留须小于总输出。
+- 每轮冻结设置；工具阶段最多指定次数，最终无工具回答另留一次请求。Token 按上游实际 output usage 累计（包含厂商计入的思考量），未知 usage 仅在本轮预算中保守扣除该次分配额度，不伪装实际计费。最终回答保留独立输出额度。
+- 整轮使用单调时钟；请求期限取单次上限与整轮剩余时间较小值，持续输出也遵守显式期限。取消关闭请求（包括等待响应头），SSE 采用任务生命周期并发送心跳，不再固定五分钟强行结束。
+- 相同工具名、规范化参数与相同返回结果连续达到阈值才判无进展；计数在有新结果时重置，写工具的已确认结果保留。达到预算/无进展时停止后续工具，给模型具体原因并要求最终总结。
+- 取消整轮 15 条记忆及独立 3 次写入额度，写操作与读取共同遵守执行预算。单工具结果最多 64 KiB，条数按各工具本身定义；结果过大有独立状态码，不冒充次数耗尽。
+- 单响应最多解析 128 个工具调用，超量返回明确捕获截断而不是悄悄漏调用；活动最多保留 1200 项，覆盖最大 1000 次执行与末批未执行项。结果元数据容量扩至 512 KiB，单轮回复预留扩至 3 MiB，以容纳正文、思考与元数据加密后的开销，仍计入原存储账本。
+- 长链增量使用模型输入/上下文窗口预算；接近上限时停止工具并预留总结空间，不删除当前问题或未配对的工具消息。预算停止原因通过 finishReason 传递、持久化并在历史中恢复。
+- 前端「继续」开启同会话新一轮，明确提示延续未完成任务并核对已完成变更；不自动复用旧 requestId 或重放工具。
 
-- 让聊天模型在对话中按需检索当前会话可见的长期记忆，而不是把所有记忆预先注入上下文。
-- 工具只返回回答所需的最小事实；授权、范围、版本与索引状态由现有记忆服务统一判断。
-- 不改变 v0.7.0 的管理页检索、自动提取、对话预注入与用量记账链路。
-- 工具调用是聊天模型的专属能力；导入兜底模型不启用。
+## 1. 安全展示对象
 
-## 2. 配置与能力判定
+新增有界 ToolActivity，字段为：
 
-### 2.1 存储
-
-`ai_config.params` 增加可选布尔字段 `tools`：
-
-- 存在显式值：优先使用，`true` / `false` 都可覆盖官方端点默认值。
-- 不存在：由 `ProviderCapabilities.of(endpoint, apiFormat, model, null).tools()` 推断。
-- 已验证官方端点：`api.openai.com`、`api.deepseek.com`、`api.anthropic.com` + Claude Messages，默认 `true`。
-- 自定义 / 未验证端点：默认 `false`。
-- `PUT /api/ai/config` 未提供 `tools` 时保留既有值，不因保存其他字段被重置。
-
-### 2.2 回显
-
-`GET /api/ai/config` 的 `chat` 增加 `tools`，返回**当前有效值**（显式值或默认推断），供前端开关回显。
-
-### 2.3 启用条件
-
-一次聊天请求只有在以下条件全部满足时才携带工具定义：
-
-```text
-protocolVersion == 2
-&& memoryOptions.use == true
-&& MemoryTool 已注册
-&& 当前模型有效 tools == true
-```
-
-任一项不满足：按原有无工具路径处理，不报错、不提示模型。
-
-## 3. 工具协议
-
-### 3.1 工具定义
-
-```json
-{
-  "name": "search_memories",
-  "description": "只读检索当前会话可见的长期记忆。",
-  "parameters": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": ["query"],
-    "properties": {
-      "query": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 200,
-        "description": "要检索的长期记忆关键词或问题，最多 200 个字符。"
-      }
-    }
-  }
-}
-```
-
-### 3.2 参数校验
-
-- 原始参数 ≤ 4096 UTF-8 字节。
-- 必须是 JSON 对象，只接受一个字段 `query`；重复字段、尾随 token、未知字段均拒绝。
-- `query` 必须为非空字符串，≤ 200 个 Unicode code point。
-- 校验失败返回 `INVALID_ARGUMENT`，不执行检索。
-
-### 3.3 输出
-
-```json
-{
-  "status": "OK | NO_MATCH | UNAVAILABLE | STALE | LIMIT_REACHED | INVALID_ARGUMENT",
-  "availability": "READY | BUILDING | LOCKED | TIMEOUT",
-  "facts": [
-    {
-      "text": "记忆正文",
-      "kind": "FACT | PREFERENCE | ...",
-      "scope": "GLOBAL:0 | NOTEBOOK:1",
-      "expiry": "2026-11-06T00:00:00Z | null"
-    }
-  ],
-  "incomplete": false
-}
-```
-
-- `availability` 只在需要说明不可用原因时出现。
-- `facts` 最多 5 条 / 次，累计最多 15 条 / 轮；结果 JSON ≤ 16 KiB。
-- `incomplete = true` 表示索引损坏、截断或结果被预算截断，模型不应把结果当成完整事实。
-- 不返回记忆 ID、来源会话 / 消息、内部谓词、族键、HMAC、密文或原始引用。
-
-## 4. 授权、范围与版本
-
-执行前由 `ChatContextService.readMemoriesForTool(plan, memoryUseRequested, query)` 统一把关：
-
-1. 记忆功能启用，`PURPOSE_USE` 同意有效。
-2. 当前会话作用域合法：GLOBAL 或当前 NOTEBOOK。
-3. 记忆库已解锁，vault epoch / revision 与计划快照一致。
-4. 策略 revision 与计划一致；不一致返回 `STALE`。
-5. 索引 `READY` 才检索；`BUILDING` / `LOCKED` / `TIMEOUT` 返回 `UNAVAILABLE` 与对应 availability。
-6. 只检索 ACTIVE、未过期、范围合法的记忆；notebook 局部覆盖优先于全局兜底。
-7. 返回事实仍按现有过滤规则排除被抑制项与过期项。
-
-工具执行不重新读取会话历史，不重复发送图片附件，不改变本轮已冻结的上下文计划。
-
-## 5. 对话循环
-
-### 5.1 限制
-
-| 限制 | 值 |
+| 字段 | 语义 |
 |---|---|
-| 工具阶段 | ≤ 2 |
-| 工具执行次数 | ≤ 3 |
-| 上游请求次数 | ≤ 3（另含一次既有重试预算，总上限 4） |
-| 单次工具结果 token | ≤ 1200 |
-| 单轮工具结果 token | ≤ 4096 |
-| 工具定义 token | ≤ 1024 |
-| 单次参数 | ≤ 4096 UTF-8 字节 |
-| 结果 JSON | ≤ 16 KiB |
+| sequence | 本轮由服务端分配的顺序号，作为行身份；不用上游 call ID |
+| toolName | 四种已注册工具名的白名单；未知名称统一 unknown_tool |
+| state | RUNNING / FINISHED / UNKNOWN |
+| outcome | 实际执行结果枚举；未知结果统一 UNKNOWN |
+| startedAt | 服务端真正开始处理调用的 ISO 时间 |
+| elapsedMs | 单次执行耗时；未得到终态时为空 |
+| count | 真实返回或写入数量，最大 1000 |
+| availability | 已知可用性枚举，可空 |
+| incomplete | 结果是否截断 / 不完整 |
 
-工具按返回顺序串行执行，不并行。
+不得包含参数、查询文本、记忆内容、ID、版本、外部错误文本或密钥。四种工具均使用相同结构；返回数量只描述本次结果，不代表记忆库总量或模型实际引用数。记录上限与全局预算实现保持一致。
 
-### 5.2 流程
+## 2. 生命周期与传输
 
-1. 建立本轮 `ChatContextPlan`，冻结历史、摘要、记忆与作用域快照。
-2. 首次请求携带工具定义；OpenAI Chat Completions 使用 `tools` / `tool_calls`，Anthropic Messages 使用 `tools` / `tool_use` / `tool_result`。
-3. 工具模式下缓冲文本与 reasoning 增量，不立即回放给前端。
-4. 收到工具调用后：校验参数 → 执行 → 把 assistant tool call 与 tool result 追加到本轮消息 → 再次请求。
-5. 模型不再调用工具时，回放缓冲的最终回答增量，正常结束。
-6. 达到阶段 / 次数上限时，下一次请求不再携带工具定义，要求模型基于已有结果作答。
-7. 整轮只 `begin` / `finalize` 一次；每次上游请求单独结算 usage；失败不把「只有工具调用、没有回答」记为成功。
+1. 真实处理调用前记录 RUNNING，执行返回后原位记录 FINISHED。取消后不启动后续工具。
+2. 工具异常若不能确认是否发生写入，展示 UNKNOWN，不虚报未写入。
+3. POST /api/ai/chat/stream 增加 tool_activity 事件。内容包含 requestId、sessionId、toolActivities 全量有界快照与 phase（tools / answer）。旧客户端忽略新事件。
+4. 工具状态独立于模型正文的 streaming 配置：前端统一使用事件通道；服务端仍按该模型配置决定上游正文是否流式输出。
+5. done 与普通 POST /chat 统一结果增加 toolActivities。GET /turns/{requestId} 和历史消息也返回同一白名单结构。
+6. 客户端按 requestId 与 sequence 合并，已完成行不被迟到的 RUNNING 覆盖；不会因工具事件触发自动重发。
+7. 连接异常或停止后，使用本轮身份只读确认；没有最终确认的活动停止动画并标 UNKNOWN。已完成写入保留，任何恢复读取都不重放工具。
 
-### 5.3 流式与取消
+## 3. 持久化与容量
 
-- 普通与 SSE 两条路径共用同一循环。
-- 工具调用帧不进入前端 SSE；只回放最终回答的 `text` / `reasoning` / `done`。
-- 客户端取消时终止整个循环，关闭上游连接，保留已产生的部分文本。
-- 下游断开时不再发起新的工具阶段。
+工具活动复用 ai_chat_turn.result_meta_cipher / result_meta_crypto 加密保存，不另建活动表或磁盘落点；全局预算使用本文前述独立设置表。
 
-## 6. 隐私与记账
+- 每次开始 / 完成调用做一次有界检查点，使进程重启后可保留此前已确认结果。
+- 首次工具活动产生一个空的助手消息占位，确保没有最终正文的失败 / 中断轮次也能展示工具记录；最终回复更新同一个助手消息。
+- 检查点的元数据字节从当前轮次预留中转为已使用容量；最终结算扣除旧检查点字节，避免重复计算。
+- 终态审计与活动合并保存，失败或孤儿收尾保留已有检查点。状态/历史读取没有活跃句柄时将残留 RUNNING 投影为 UNKNOWN。
+- 删除或清理会话仍走既有账本与密文清理逻辑；不保留额外文件。
+- 读取记录时仍受现有解密约束。旧消息无该字段时返回空列表，不补造记录。
+- 如果检查点保存失败，不能默默执行新的写工具；保留已确认动作并通过既有错误路径结束，避免不可追踪的重复副作用。
 
-- 工具参数与结果只存在于本轮内存，不写入会话消息、历史、SSE、日志或上下文审计明文。
-- 日志只记录长度、状态、耗时等元数据。
-- 上下文审计只保存加密的元数据摘要，≤ 16 KiB。
-- usage 按每次上游请求记录；OpenAI cached token 是输入的子集，Anthropic cache read / write 独立分桶，不跨请求求和。
-- 工具执行本身不计费；只有上游模型请求计费。
+## 4. 前端组件
 
-## 7. 失败语义
+新增 ToolActivityGroup 与独立的文案/状态合并辅助模块，挂在助手回答上方。
 
-| 情况 | 行为 |
-|---|---|
-| 参数非法 | 返回 `INVALID_ARGUMENT`，模型可修正后重试（受次数限制） |
-| 记忆未启用 / 未同意 | 不携带工具；或按现有策略返回 `UNAVAILABLE` |
-| 索引构建中 / 锁定 / 超时 | `UNAVAILABLE` + availability，不阻塞回答 |
-| 范围或版本过期 | `STALE`，不返回旧事实 |
-| 无匹配 | `NO_MATCH`，`facts` 为空 |
-| 达到次数 / 预算 | `LIMIT_REACHED`，停止继续调用 |
-| 上游不支持工具 | 请求失败按现有错误路径返回；不回退成伪造的工具结果 |
-| 工具执行异常 | 返回 `UNAVAILABLE`，本轮仍尽量给出回答 |
+- 初次执行展开；正常结束可自动收起；异常保留可见摘要。
+- 手动展开/收起后不再自动改变用户选择；调用行详情显示时间、耗时、范围与技术名。
+- 不同状态用图标和文字共同表达；不将空结果、重复/无变更判为失败，也不将失败判为无记忆。
+- 正文生成状态与工具加载状态分开。
+- 读取历史保留活动与真实轮次终态；活动自身不参与模型上下文构建。
+- 展开时暂停自动粘底并保留触发点位置；沿用用户主动上滚后不自动滚回底部的行为。
 
-## 8. 涉及文件
+## 5. 验证边界
 
-后端：
+后端覆盖：真实执行顺序、事件与落盘一致、无敏感内容、无正文中断、失败写入未知、取消不执行下一工具、非流式正文与历史、容量结算/重建一致。
 
-- `backend/src/main/java/com/drillnotebook/app/service/MemorySearchTool.java`
-- `backend/src/main/java/com/drillnotebook/app/service/AiService.java`
-- `backend/src/main/java/com/drillnotebook/app/service/AiUpstreamClient.java`
-- `backend/src/main/java/com/drillnotebook/app/service/ChatContextService.java`
-- `backend/src/main/java/com/drillnotebook/app/service/ProviderCapabilities.java`
-- `backend/src/main/java/com/drillnotebook/app/service/ContextMemorySource.java`
-- `backend/src/main/java/com/drillnotebook/app/service/IndexedMemorySource.java`
+前端覆盖：事件解析与身份、状态合并、成功/空/异常文案、折叠选择、停止与历史恢复、无工具不显示、自由滚动。真实浏览器验收使用虚构配置与隔离数据，不调用用户配置的模型。
 
-测试：
+本次不修改全局状态文档，以避免与并行工作冲突；完成后在 Plan 中记录同步待办。
 
-- `MemorySearchToolTest.java`
-- `MemoryToolChatPathTest.java`
-- `AiServiceConfigToolsTest.java`
-- `AiUpstreamClientTest.java`
+## 6. 开源实现参考
 
-前端：
+本轮保留已确认的界面设计，参考以下源码的实现方式，不引入这些项目的依赖，也不复制其完整组件：
 
-- `frontend/src/components/AiModelSlotCard.tsx`
-- `frontend/src/lib/types.ts`
-- `frontend/src/components/AiModelSlotCard.test.tsx`
+- OpenChamber：`packages/ui/src/components/chat/components/LiveActivityCollapse.tsx` 与 `message/parts/ToolPart.scrolling.test.tsx`。参考折叠内容与事件数据分离、用户上滚后停止跟随、结束时保留组件身份。源码仓库：https://github.com/openchamber/openchamber 。
+- pi-webui：`public/app.js` 中的 `tool_execution_start` / `tool_execution_end` 分发和工具占位。工具状态与消息更新各自处理，收到实际结果前不填造结果。源码仓库：https://github.com/khimaros/pi-webui 。
+- deepseek-harness：`packages/client/ui-chat/src/client/conversation-nodes/tool.ts` 与 `process-activity.ts`。参考按调用身份将开始和结果合并到同一记录、结束后收口未完成调用、汇总动作与具体工具记录分开。本项目仅暴露本轮 sequence，不暴露上游 call ID 或参数。源码仓库：https://github.com/deepseek-ai/deepseek-harness 。
+
+采用上述状态处理思路；记忆写入结果仍以本项目服务端确认值为准。尤其不能将断连直接推断成写入失败。

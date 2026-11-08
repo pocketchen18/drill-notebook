@@ -13,6 +13,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -40,7 +41,7 @@ public class AiUpstreamClient {
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final Set<String> CACHE_UNSUPPORTED = ConcurrentHashMap.newKeySet();
-    private static final int MAX_TOOL_CALLS = 3;
+    private static final int MAX_TOOL_CALLS = 128;
     private static final int MAX_TOOL_ARGUMENT_BYTES = 4 * 1024;
 
     private final HttpClient http;
@@ -216,6 +217,7 @@ public class AiUpstreamClient {
                                 boolean stream, StreamListener listener, int timeoutSeconds,
                                 ActiveTurnRegistry.Handle handle) {
         List<ToolDefinition> safeTools = sanitizeTools(tools);
+        long requestStarted = System.nanoTime();
         Upstream effective = cacheUnsupported(upstream) ? upstream.withCacheBreakpoints(false) : upstream;
         try {
             return callOnce(effective, messages, safeTools, stream, listener, timeoutSeconds, handle);
@@ -223,8 +225,10 @@ public class AiUpstreamClient {
             if (effective.cacheBreakpoints() && isCacheUnsupported(error.getMessage())) {
                 rememberCacheUnsupported(upstream);
                 upstream.onCacheFallback().run();
+                int remaining = timeoutSeconds - (int) ((System.nanoTime() - requestStarted) / 1_000_000_000L);
+                if (remaining <= 0) return new Result("", "", "deadline", false, false, false, Usage.unknown());
                 return callOnce(upstream.withCacheBreakpoints(false), messages, safeTools, stream, listener,
-                        timeoutSeconds, handle);
+                        remaining, handle);
             }
             throw error;
         }
@@ -265,34 +269,43 @@ public class AiUpstreamClient {
             if (upstream.apiKey() != null && !upstream.apiKey().isBlank()) builder.header("Authorization", "Bearer " + upstream.apiKey());
         }
         HttpRequest httpRequest = builder.build();
-        Deadline deadline = new Deadline(Math.max(timeoutSeconds, 1) + 1L);
+        Deadline deadline = new Deadline(Math.max(timeoutSeconds, 1));
         if (handle != null) handle.bindAbortHook(deadline::expire);
         if (stopped(handle, deadline)) {
             // 排队期间用户已经点了停止：连一个字节都不必发出去（§7.3 服务端 token 与前端 abort 同效）
             deadline.cancel();
+            if (handle != null) handle.bindAbortHook(null);
             return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
         }
         HttpResponse<InputStream> response;
         try {
-            response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (java.net.http.HttpTimeoutException error) {
+            var pending = http.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+            deadline.attach(pending);
+            response = pending.get();
+        } catch (java.util.concurrent.CancellationException | java.util.concurrent.ExecutionException error) {
             deadline.cancel();
-            throw new IllegalArgumentException("AI 请求超时（" + timeoutSeconds + " 秒），请换更快模型或加大超时");
-        } catch (IOException error) {
-            deadline.cancel();
-            throw new IllegalArgumentException("AI 服务连接失败：" + error.getMessage());
+            if (handle != null) handle.bindAbortHook(null);
+            if (stopped(handle, deadline) || error.getCause() instanceof HttpTimeoutException) {
+                return new Result("", "", handle != null && handle.cancelRequested() ? "aborted" : "deadline",
+                        false, false, handle != null && handle.cancelRequested(), Usage.unknown());
+            }
+            throw new IllegalArgumentException("AI 服务连接失败：" + (error.getCause() == null ? error.getMessage() : error.getCause().getMessage()));
         } catch (InterruptedException error) {
+            deadline.expire();
             deadline.cancel();
+            if (handle != null) handle.bindAbortHook(null);
             Thread.currentThread().interrupt();
-            throw new IllegalArgumentException("AI 请求被中断");
+            return new Result("", "", "aborted", false, false, true, Usage.unknown());
         }
         InputStream body = response.body();
         deadline.attach(body);
-        // 尚未取得响应体时取消只能靠 HttpRequest.timeout；刚取得时若已取消/到期，立即关闭，一字节都不读
+        // 等待响应头时由 Future 响应取消；刚取得响应体时若已取消/到期，立即关闭，一字节都不读。
         if (stopped(handle, deadline)) {
             deadline.cancel();
             close(body);
-            return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+            if (handle != null) handle.bindAbortHook(null);
+            return new Result("", "", reason(handle, deadline), false, false,
+                    handle != null && handle.cancelRequested(), Usage.unknown());
         }
         try {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -307,7 +320,7 @@ public class AiUpstreamClient {
             if (stopped(handle, deadline)) {
                 // 已经收到的部分照常交回，但绝不能算成正常完成（§7.2.2 竞争只留一个终态）
                 return new Result(result.text(), result.reasoning(), reason(handle, deadline), false,
-                        result.captureLimited(), true, result.usage(), List.of());
+                        result.captureLimited(), handle != null && handle.cancelRequested(), result.usage(), List.of());
             }
             return result;
         } catch (IllegalArgumentException error) {
@@ -318,7 +331,8 @@ public class AiUpstreamClient {
         } catch (IOException error) {
             // 到期或取消会表现为读失败：这是"无终止帧"，不是上游正常完成
             if (stopped(handle, deadline)) {
-                return new Result("", "", reason(handle, deadline), false, false, true, Usage.unknown());
+                return new Result("", "", reason(handle, deadline), false, false,
+                        handle != null && handle.cancelRequested(), Usage.unknown());
             }
             throw new IllegalArgumentException("AI 响应读取失败：" + error.getMessage());
         } finally {
@@ -359,6 +373,7 @@ public class AiUpstreamClient {
 
         private final AtomicBoolean expired = new AtomicBoolean();
         private final AtomicReference<InputStream> attached = new AtomicReference<>();
+        private final AtomicReference<java.util.concurrent.CompletableFuture<?>> pending = new AtomicReference<>();
         private final ScheduledFuture<?> future;
 
         Deadline(long seconds) {
@@ -370,8 +385,15 @@ public class AiUpstreamClient {
             if (expired.get()) close(body);
         }
 
+        void attach(java.util.concurrent.CompletableFuture<?> request) {
+            pending.set(request);
+            if (expired.get()) request.cancel(true);
+        }
+
         void expire() {
             expired.set(true);
+            var request = pending.get();
+            if (request != null) request.cancel(true);
             close(attached.get());
         }
 
@@ -739,9 +761,10 @@ public class AiUpstreamClient {
         String text = extractText(message);
         String reasoning = message.path("reasoning_content").asText("");
         List<ToolCall> toolCalls = parseChatToolCalls(message.path("tool_calls"));
+        boolean oversized = message.path("tool_calls").size() > MAX_TOOL_CALLS;
         return new Result(text, reasoning, finishReason,
                 !finishReason.isEmpty() || !text.isEmpty() || !toolCalls.isEmpty(),
-                false, false, usageOfChatCompletion(root), toolCalls);
+                oversized, false, usageOfChatCompletion(root), oversized ? List.of() : toolCalls);
     }
 
     private List<ToolCall> parseChatToolCalls(JsonNode calls) {
@@ -768,9 +791,11 @@ public class AiUpstreamClient {
         List<ToolCall> toolCalls = new ArrayList<>();
         AnthropicThinkingBlocks thinking = new AnthropicThinkingBlocks();
         int index = 0;
+        int toolCount = 0;
         for (JsonNode block : root.path("content")) {
             thinking.open(index++, block);
             String type = block.path("type").asText("");
+            if ("tool_use".equals(type)) toolCount++;
             if ("text".equals(type)) {
                 text.append(block.path("text").asText(""));
             } else if ("thinking".equals(type)) {
@@ -786,7 +811,8 @@ public class AiUpstreamClient {
         String stopReason = root.path("stop_reason").asText("");
         return new Result(text.toString(), reasoning.toString(), stopReason,
                 !stopReason.isEmpty() || !toolCalls.isEmpty(),
-                thinking.limited(), false, usageOfAnthropic(root), thinking.limited() ? List.of() : List.copyOf(toolCalls), thinking.finish());
+                thinking.limited() || toolCount > MAX_TOOL_CALLS, false, usageOfAnthropic(root),
+                thinking.limited() || toolCount > MAX_TOOL_CALLS ? List.of() : List.copyOf(toolCalls), thinking.finish());
     }
 
     private ToolCall validatedToolCall(String id, String name, String arguments) {
@@ -896,17 +922,17 @@ public class AiUpstreamClient {
                     finish[0] = finishReason;
                     terminal[0] = true;
                 }
-                return !capture.limited();
+                return !capture.limited() && !toolStream.limited;
             });
         } catch (IOException interrupted) {
             // 到期/取消会关掉响应体，让读流直接失败：已经收到的半句仍要交回，不能当成什么都没发生
-            if (!stopped(handle, deadline)) throw interrupted;
             readInterrupted[0] = true;
         }
         List<ToolCall> toolCalls = terminal[0] && !downstreamGone[0] && !readInterrupted[0]
                 ? toolStream.finish() : List.of();
-        return new Result(capture.text(), capture.reasoning(), finish[0], terminal[0], capture.limited(),
-                downstreamGone[0] || readInterrupted[0], usage[0], toolCalls);
+        return new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
+                terminal[0] && !readInterrupted[0], capture.limited() || toolStream.limited,
+                downstreamGone[0], usage[0], toolCalls);
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
@@ -925,13 +951,12 @@ public class AiUpstreamClient {
                     downstreamGone);
         } catch (IOException interrupted) {
             // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
-            if (!stopped(handle, deadline)) throw interrupted;
             readInterrupted[0] = true;
         }
         boolean complete = (terminal[0] || !finish[0].isEmpty()) && !downstreamGone[0] && !readInterrupted[0];
-        return new Result(capture.text(), capture.reasoning(), finish[0],
-                terminal[0] || !finish[0].isEmpty(), capture.limited() || thinking.limited(),
-                downstreamGone[0] || readInterrupted[0], usage[0],
+        return new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
+                (terminal[0] || !finish[0].isEmpty()) && !readInterrupted[0], capture.limited() || thinking.limited() || toolStream.limited,
+                downstreamGone[0], usage[0],
                 complete && !thinking.limited() ? toolStream.finish() : List.of(), complete ? thinking.finish() : List.of());
     }
 
@@ -987,7 +1012,7 @@ public class AiUpstreamClient {
             } else if ("error".equals(type)) {
                 throw new IllegalArgumentException("AI 服务返回错误：" + node.path("error").path("message").asText("未知"));
             }
-            return !capture.limited() && !thinking.limited();
+            return !capture.limited() && !thinking.limited() && !toolStream.limited;
         });
     }
 
@@ -1050,11 +1075,12 @@ public class AiUpstreamClient {
     /** 流式工具调用缓冲：按 index 拼接分片参数，只有终止帧到达后才产出完整调用。 */
     private final class ToolCallStream {
         private final Map<Integer, ToolCallDraft> drafts = new LinkedHashMap<>();
+        private boolean limited;
 
         void open(int index, String id, String name) {
             ToolCallDraft draft = drafts.get(index);
             if (draft == null) {
-                if (drafts.size() >= MAX_TOOL_CALLS) return;
+                if (drafts.size() >= MAX_TOOL_CALLS) { limited = true; return; }
                 draft = new ToolCallDraft();
                 drafts.put(index, draft);
             }
@@ -1066,7 +1092,7 @@ public class AiUpstreamClient {
             if (fragment == null || fragment.isEmpty()) return;
             ToolCallDraft draft = drafts.get(index);
             if (draft == null) {
-                if (drafts.size() >= MAX_TOOL_CALLS) return;
+                if (drafts.size() >= MAX_TOOL_CALLS) { limited = true; return; }
                 draft = new ToolCallDraft();
                 drafts.put(index, draft);
             }
@@ -1079,6 +1105,7 @@ public class AiUpstreamClient {
         }
 
         List<ToolCall> finish() {
+            if (limited) return List.of();
             List<ToolCall> out = new ArrayList<>();
             for (ToolCallDraft draft : drafts.values()) {
                 if (out.size() >= MAX_TOOL_CALLS) break;

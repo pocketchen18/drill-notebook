@@ -5,6 +5,8 @@ import { streamChat } from '../lib/aiStream';
 import type { ChatResultView, StreamErrorInfo } from '../lib/aiStream';
 import { generateUuidV7 } from '../lib/uuidV7';
 import type { RetrievalOptions } from '../lib/types';
+import { readToolActivities } from '../lib/toolActivity';
+import type { ToolActivity, ToolPhase } from '../lib/toolActivity';
 
 /**
  * 聊天轮次的唯一出口（执行方案 §12、contracts §4.1/§4.2/§4.5）。
@@ -39,6 +41,7 @@ export interface TurnInput {
 
 /** GET /turns/{requestId} 的可见事实（§4.5）：界面只能拿这些字段描述这一轮。 */
 export interface TurnStatusView {
+  toolActivities?: ToolActivity[];
   requestId?: string;
   sessionId?: number;
   status?: string;
@@ -50,6 +53,8 @@ export interface TurnStatusView {
 }
 
 export type TurnEvent =
+  | { type: 'activity'; requestId: string; activities: ToolActivity[]; phase: ToolPhase }
+  | { type: 'reconciled'; requestId: string; status: TurnStatusView }
   | { type: 'begun'; requestId: string }
   | { type: 'text'; requestId: string; delta: string }
   | { type: 'reasoning'; requestId: string; delta: string }
@@ -68,6 +73,7 @@ interface ActiveTurn {
   begun: boolean;
   /** 收到过任何 text/reasoning：已产出内容，绝不能自动重发。 */
   produced: boolean;
+  toolObserved: boolean;
   /**
    * 是否已经用过那唯一一次"确认没开始 → 交给非流式补完"的回退。
    * `SESSION_BUSY` 与 `TURN_NOT_FOUND` 会稳定同时成立（会话被另一轮的活跃句柄占住时，
@@ -122,7 +128,7 @@ export interface UseAiChatTurnOptions {
   onEvent: (event: TurnEvent) => void;
 }
 
-export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTurnOptions): {
+export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
   send: (input: TurnInput) => void;
   stop: () => void;
   busy: boolean;
@@ -131,6 +137,7 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
   const activeRef = useRef<ActiveTurn | null>(null);
   const sessionRef = useRef(sessionId);
   const emitRef = useRef(onEvent);
+  const mountedRef = useRef(true);
   const [busy, setBusy] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
 
@@ -140,6 +147,10 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
   useEffect(() => {
     emitRef.current = onEvent;
   }, [onEvent]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; activeRef.current?.abort?.(); };
+  }, []);
 
   const isCurrent = (turn: ActiveTurn): boolean => activeRef.current === turn;
 
@@ -203,10 +214,11 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
             : message
         });
         finish(turn);
+        if (status.status === 'RUNNING' && status.active) void reconcile(turn);
         return;
       } catch (error) {
         if (error instanceof ApiError && error.code === 'TURN_NOT_FOUND') {
-          if (turn.fallbackTried) {
+          if (turn.fallbackTried || turn.begun || turn.produced) {
             // 回退额度用完了还是"查无此轮 + 会话忙"：那就是别人占着这个会话，如实报，绝不再试第二次
             emit(turn, { type: 'failure', requestId: turn.requestId, message: message || '该会话已有一轮正在进行，请稍后再试', view: {} });
             finish(turn);
@@ -238,6 +250,13 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
         turn.begun = true;
         emit(turn, { type: 'begun', requestId: turn.requestId });
       },
+      onToolActivity: (event) => {
+        if (event.requestId !== turn.requestId) return;
+        turn.begun = true;
+        turn.produced = true;
+        turn.toolObserved = true;
+        emit(turn, { type: 'activity', requestId: turn.requestId, activities: event.toolActivities, phase: event.phase });
+      },
       onDone: (payload) => {
         emit(turn, {
           type: 'result',
@@ -259,10 +278,12 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
               requestId: failure.requestId,
               sessionId: failure.sessionId,
               stateDurable: failure.stateDurable,
-              persistenceStatus: failure.persistenceStatus
+              persistenceStatus: failure.persistenceStatus,
+              toolActivities: failure.toolActivities
             }
           });
           finish(turn);
+          if (turn.toolObserved) void reconcile(turn);
           return;
         }
         void lookupStatus(turn, failure.message);
@@ -286,22 +307,38 @@ export function useAiChatTurn({ sessionId, streamEnabled, onEvent }: UseAiChatTu
       body: buildTurnBody(id, input),
       begun: false,
       produced: false,
+      toolObserved: false,
       fallbackTried: false,
       abort: null
     };
     activeRef.current = turn;
     setBusy(true);
     setRequestId(id);
-    if (streamEnabled) void runStream(turn);
-    else void runPlain(turn);
+    // 正文是否分段由模型配置决定；状态事件始终使用 SSE，关闭正文流式仍能看到真实工具进度。
+    void runStream(turn);
   };
+
+  /** 中断后只读同一轮：确认在途写入的结果，不重新发送，也不干扰用户后来开始的新一轮。 */
+  async function reconcile(turn: ActiveTurn): Promise<void> {
+    for (const delay of [0, ...STATUS_BACKOFF_MS]) {
+      if (delay) await wait(delay);
+      if (!mountedRef.current || sessionRef.current !== turn.sessionId) return;
+      try {
+        const status = await get<TurnStatusView>(`/api/ai/turns/${turn.requestId}`);
+        if (!mountedRef.current || sessionRef.current !== turn.sessionId) return;
+        emitRef.current({ type: 'reconciled', requestId: turn.requestId,
+          status: { ...status, toolActivities: readToolActivities(status.toolActivities) } });
+        if (status.status !== 'RUNNING' || status.active === false) return;
+      } catch { /* 仍未知：保留界面的未确认状态，绝不重放工具。 */ }
+    }
+  }
 
   const stop = (): void => {
     const turn = activeRef.current;
     if (!turn) return;
     turn.abort?.();
     // 只断前端连接时，后端要等下一次写失败或总期限才察觉；带着本轮身份主动取消，会话立刻可用。
-    void post(`/api/ai/turns/${turn.requestId}/cancel`, {}).catch(() => undefined);
+    void post(`/api/ai/turns/${turn.requestId}/cancel`, {}).catch(() => undefined).then(() => reconcile(turn));
     activeRef.current = null;
     setBusy(false);
     setRequestId(null);

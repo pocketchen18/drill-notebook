@@ -1,4 +1,6 @@
 import { ApiError } from './api';
+import { readToolActivities } from './toolActivity';
+import type { ToolActivity, ToolPhase } from './toolActivity';
 
 /** SSE 流式聊天客户端：解析后端 /api/ai/chat/stream 的 text|reasoning|done|error 事件。 */
 
@@ -42,6 +44,8 @@ export interface UsageSnapshot {
 }
 
 export interface ChatResultView {
+  finishReason?: string;
+  toolActivities?: ToolActivity[];
   protocolVersion?: number;
   requestId?: string;
   sessionId?: number;
@@ -71,6 +75,7 @@ export interface StreamMetadata extends ChatResultView {
 }
 
 export interface StreamErrorInfo {
+  toolActivities?: ToolActivity[];
   message: string;
   requestId?: string;
   sessionId?: number;
@@ -82,6 +87,7 @@ export interface StreamErrorInfo {
 }
 
 export interface StreamCallbacks {
+  onToolActivity?: (event: { requestId: string; toolActivities: ToolActivity[]; phase: ToolPhase }) => void;
   onText: (delta: string) => void;
   onReasoning: (delta: string) => void;
   /** 发送前的元数据（requestId + 计划态）：拿到后前端才能在"停止"时调用取消接口。 */
@@ -97,7 +103,7 @@ export interface StreamCallbacks {
 
 const RESULT_VIEW_KEYS: Array<keyof ChatResultView> = [
   'protocolVersion', 'requestId', 'sessionId', 'status', 'stateDurable', 'persistenceStatus', 'replayed',
-  'citations', 'memoryContext', 'contextUsage', 'contextAudit', 'usage', 'planId', 'dispatchState'
+  'citations', 'memoryContext', 'contextUsage', 'contextAudit', 'usage', 'planId', 'dispatchState', 'finishReason'
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -111,6 +117,7 @@ function resultView(payload: Record<string, unknown> | null): ChatResultView {
     for (const key of RESULT_VIEW_KEYS) {
       if (payload[key] !== undefined) view[key] = payload[key];
     }
+    if (Array.isArray(payload.toolActivities)) view.toolActivities = readToolActivities(payload.toolActivities);
   }
   return view as ChatResultView;
 }
@@ -178,7 +185,7 @@ export async function streamChat(path: string, body: unknown, callbacks: StreamC
       }
       const payload = asRecord(parsed);
       const text = textField(payload, 'text');
-      if (eventName === 'text' || eventName === 'reasoning') produced = true;
+      if (eventName === 'text' || eventName === 'reasoning' || eventName === 'tool_activity') produced = true;
       else if (eventName === 'done' || eventName === 'error') settled = true;
       if (eventName === 'text') callbacks.onText(text);
       else if (eventName === 'reasoning') callbacks.onReasoning(text);
@@ -188,6 +195,13 @@ export async function streamChat(path: string, body: unknown, callbacks: StreamC
         if (requestId) {
           lastRequestId = requestId;
           callbacks.onMetadata?.({ ...resultView(payload), requestId });
+        }
+      } else if (eventName === 'tool_activity') {
+        const requestId = textField(payload, 'requestId');
+        if (requestId) {
+          lastRequestId = requestId;
+          callbacks.onToolActivity?.({ requestId, toolActivities: readToolActivities(payload?.toolActivities),
+            phase: payload?.phase === 'answer' ? 'answer' : 'tools' });
         }
       } else if (eventName === 'done') {
         callbacks.onDone({ ...resultView(payload), reply: textField(payload, 'reply'),
@@ -202,7 +216,8 @@ export async function streamChat(path: string, body: unknown, callbacks: StreamC
           code: code || undefined,
           partial: payload?.partial === true,
           persistenceStatus: view.persistenceStatus,
-          stateDurable: view.stateDurable
+          stateDurable: view.stateDurable,
+          toolActivities: view.toolActivities
         });
       }
     };

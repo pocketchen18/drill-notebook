@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ElementRef } from 'react';
 import { Button, Input, Select, Switch } from '@arco-design/web-react';
 import { ArrowLeft, Copy } from 'lucide-react';
-import { defaultTools, modelName, type ConnectionModel, type ConnectionProvider, type EditorHandle, type SaveConnection } from './types';
+import { modelName, type ConnectionModel, type ConnectionProvider, type EditorHandle, type ModelPreset, type SaveConnection } from './types';
 import { matchPreset, presetFields, reasoningDraft, supportedEfforts, useModelPresets, type ModelDraft } from './modelPresets';
 import { ReasoningSettings } from './ReasoningSettings';
 import { VerificationDetails } from './ModelVerification';
+import { ModelIdInput } from './ModelIdInput';
 
 interface EditorProps {
   provider?: ConnectionProvider;
@@ -71,28 +72,23 @@ export function ProviderEditor({ provider, onState, save, leave, done, busy, imp
 interface ModelProps extends EditorProps { provider: ConnectionProvider; model?: ConnectionModel; test?: () => void }
 export function ModelEditor({ provider, model, onState, save, leave, done, busy, impact, test }: ModelProps) {
   const [initial] = useState<ModelDraft>(() => ({ modelId: model?.modelId ?? '', name: model?.name ?? '', group: model?.group ?? '', streaming: model?.streaming ?? true,
-    tools: model?.tools ?? defaultTools(provider, ''), contextWindow: String(model?.contextWindow ?? ''), maxInputTokens: String(model?.maxInputTokens ?? ''), maxOutputTokens: String(model?.maxOutputTokens ?? ''), ...reasoningDraft(model) }));
+    tools: model?.tools ?? false, contextWindow: String(model?.contextWindow ?? ''), maxInputTokens: String(model?.maxInputTokens ?? ''), maxOutputTokens: String(model?.maxOutputTokens ?? ''), ...reasoningDraft(model) }));
   const [draft, setDraft] = useState(initial);
+  const [selectedPreset, setSelectedPreset] = useState<ModelPreset>();
   const presets = useModelPresets(provider);
-  const preset = matchPreset(presets.data, draft.modelId) ?? model?.preset ?? undefined;
-  const touched = useRef(new Set<keyof ModelDraft>());
-  const [toolsTouched, setToolsTouched] = useState(false);
+  const idChanged = !!model && draft.modelId.trim() !== model.modelId;
+  const preset = selectedPreset ?? model?.preset ?? (model ? matchPreset(presets.data, model.modelId) : undefined);
   const [error, setError] = useState('');
   const heading = useRef<HTMLHeadingElement>(null);
   const dirty = JSON.stringify(initial) !== JSON.stringify(draft);
   useEffect(() => { heading.current?.focus(); }, []);
-  const patch = (value: Partial<ModelDraft>) => { for (const field of Object.keys(value)) touched.current.add(field as keyof ModelDraft); setDraft(current => ({ ...current, ...value })); setError(''); };
-  useEffect(() => {
-    if (model || presets.isPending) return;
-    setDraft(current => {
-      const next = { ...current };
-      for (const [field, value] of Object.entries(presetFields(preset))) {
-        if (!touched.current.has(field as keyof ModelDraft)) Object.assign(next, { [field]: value });
-      }
-      if (!next.reasoningEfforts.includes(next.defaultReasoningEffort)) next.defaultReasoningEffort = '';
-      return next;
-    });
-  }, [preset, model, presets.isPending]);
+  const patch = (value: Partial<ModelDraft>) => { setDraft(current => ({ ...current, ...value })); setError(''); };
+  const selectPreset = (modelId: string, selected: ModelPreset) => {
+    const fields = { ...presetFields(selected), maxInputTokens: '', defaultReasoningEffort: '' };
+    // 仅明确选择时填入预设；编辑 ID 与读取候选资料都不修改其他设置。
+    setSelectedPreset(selected);
+    patch({ modelId, ...fields });
+  };
   const restorePreset = () => {
     if (!preset) return;
     const values = presetFields(preset);
@@ -102,6 +98,7 @@ export function ModelEditor({ provider, model, onState, save, leave, done, busy,
   const customized = preset && (draft.contextWindow !== String(preset.contextWindow ?? '') || draft.maxOutputTokens !== String(preset.maxOutputTokens ?? '') || draft.reasoningControl !== preset.reasoningControl || JSON.stringify(draft.reasoningEfforts) !== JSON.stringify(preset.reasoningEfforts));
   const submit = async () => {
     if (!draft.modelId.trim()) { setError('请填写模型 ID'); return false; }
+    if (provider.models.some(value => value.id !== model?.id && value.modelId === draft.modelId.trim())) { setError('此供应商已添加相同模型 ID'); return false; }
     const limits: Record<string, number | null> = {};
     for (const field of ['contextWindow', 'maxInputTokens', 'maxOutputTokens'] as const) {
       const raw = draft[field].trim();
@@ -116,12 +113,9 @@ export function ModelEditor({ provider, model, onState, save, leave, done, busy,
     const budget = draft.reasoningControl === 'budget' ? draft.thinkingBudgetTokens.trim() : '';
     if (budget && (!/^\d+$/.test(budget) || Number(budget) < 1024 || Number(budget) >= 2147483647 || (limits.maxOutputTokens && Number(budget) >= limits.maxOutputTokens))) { setError('思考预算须为至少 1024 的整数，且小于最大输出 Token'); return false; }
     const payload: Record<string, unknown> = {
-      ...draft, modelId: draft.modelId.trim(), name: draft.name.trim(), group: draft.group.trim(), ...limits, thinkingBudgetTokens: budget ? Number(budget) : null
+      ...draft, modelId: draft.modelId.trim(), name: draft.name.trim(), group: draft.group.trim(), ...limits, thinkingBudgetTokens: budget ? Number(budget) : null,
+      ...(selectedPreset ? { presetId: selectedPreset.id } : {})
     };
-    // 新模型由服务端补齐尚未加载的预设；显式编辑过的字段始终优先。
-    if (!model && (presets.isPending || presets.isError)) {
-      for (const field of Object.keys(presetFields())) if (!touched.current.has(field as keyof ModelDraft)) delete payload[field];
-    }
     const ok = await save(model ? `/models/${model.id}` : `/providers/${provider.id}/models`, model ? 'PUT' : 'POST', payload);
     if (ok) done();
     return ok;
@@ -134,14 +128,15 @@ export function ModelEditor({ provider, model, onState, save, leave, done, busy,
     <p className="connection-hint">{provider.name}{impact ? ` · ${impact}` : ''}</p>
     <p className="connection-hint" role="status">{preset ? `参考预设：${preset.name}${customized ? ' · 已自定义' : ''}` : presets.isPending ? '正在读取预设资料…' : '未匹配预设，可手动配置'}{presets.isError && '（预设资料加载失败）'}</p>
     <h3>基本信息</h3>
-    <div className="connection-field"><label htmlFor="model-id">模型 ID</label><div className="connection-actions"><Input id="model-id" maxLength={240} readOnly={!!model} value={draft.modelId} onChange={modelId => patch({ modelId, ...(!model && !toolsTouched ? { tools: defaultTools(provider, modelId) } : {}) })} placeholder="填写供应商提供的模型 ID" disabled={busy} />{model && <Button aria-label="复制模型 ID" icon={<Copy size={15} />} onClick={() => void navigator.clipboard.writeText(model.modelId).catch(() => setError('复制失败，请手动选中复制'))} />}</div></div>
+    <div className="connection-field"><label htmlFor="model-id">模型 ID</label><div className="connection-actions"><ModelIdInput id="model-id" value={draft.modelId} presets={presets.data} loading={presets.isPending} onChange={modelId => patch({ modelId })} onSelect={selectPreset} disabled={busy} />{model && <Button aria-label="复制模型 ID" icon={<Copy size={15} />} onClick={() => void navigator.clipboard.writeText(draft.modelId).catch(() => setError('复制失败，请手动选中复制'))} />}</div></div>
+    {idChanged && <p className="connection-hint">模型 ID 已更改，原用途绑定会保留；旧验证结果将清除，保存后可重新测试连接。</p>}
     <div className="connection-field"><label htmlFor="model-name">模型名称</label><Input id="model-name" value={draft.name} maxLength={80} onChange={name => patch({ name })} placeholder="留空使用模型 ID" disabled={busy} /></div>
     <div className="connection-field"><label htmlFor="model-group">分组名称</label><Input id="model-group" list="connection-groups" value={draft.group} maxLength={40} onChange={group => patch({ group })} placeholder="未分组" disabled={busy} /><datalist id="connection-groups">{[...new Set(provider.models.map(value => value.group).filter(Boolean))].map(value => <option key={value} value={value} />)}</datalist></div>
     <ReasoningSettings draft={draft} patch={patch} format={provider.apiFormat} busy={busy} preset={preset} restore={restorePreset} />
-    {model?.verification && <details className="connection-limits"><summary>最近验证结果</summary><VerificationDetails value={model.verification} /><p className="connection-hint">结果来自添加时的检测，不保证后续服务一直可用。</p></details>}
+    {model?.verification && !idChanged && <details className="connection-limits"><summary>最近验证结果</summary><VerificationDetails value={model.verification} /><p className="connection-hint">结果来自添加时的检测，不保证后续服务一直可用。</p></details>}
     <h3>输出与工具</h3>
     <div className="connection-setting"><div><strong id="stream-label">流式输出</strong><p id="stream-help">开启后逐步显示回答。</p></div><Switch aria-labelledby="stream-label" aria-describedby="stream-help" checked={draft.streaming} onChange={streaming => patch({ streaming })} disabled={busy} /></div>
-    <div className="connection-setting"><div><strong id="tools-label">允许工具调用</strong><p id="tools-help">{model ? '允许模型使用应用已提供并获授权的工具。' : '添加时根据验证结果自动设置，添加后可调整。'}</p>{impact?.includes('导入') && <p>仅对主模型对话生效，导入解析不调用记忆工具。</p>}</div><Switch aria-labelledby="tools-label" aria-describedby="tools-help" checked={model ? draft.tools : false} onChange={tools => { setToolsTouched(true); patch({ tools }); }} disabled={busy || !model} /></div>
+    <div className="connection-setting"><div><strong id="tools-label">允许工具调用</strong><p id="tools-help">{model ? '允许模型使用应用已提供并获授权的工具。' : '添加时根据验证结果自动设置，添加后可调整。'}</p>{impact?.includes('导入') && <p>仅对主模型对话生效，导入解析不调用记忆工具。</p>}</div><Switch aria-labelledby="tools-label" aria-describedby="tools-help" checked={model ? draft.tools : false} onChange={tools => patch({ tools })} disabled={busy || !model} /></div>
     <details className="connection-limits"><summary>上下文与输出上限（可选）</summary><p className="connection-hint">自定义上限不会突破应用的任务限制。留空沿用应用策略；容量按保守估算检查。</p>
       {([['contextWindow', '上下文窗口'], ['maxInputTokens', '最大输入 Token'], ['maxOutputTokens', '最大输出 Token']] as const).map(([field, label]) => <div className="connection-field" key={field}><label htmlFor={`model-${field}`}>{label}</label><Input id={`model-${field}`} inputMode="numeric" value={draft[field]} onChange={value => patch({ [field]: value })} placeholder="未指定" disabled={busy} /></div>)}
     </details>

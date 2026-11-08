@@ -160,10 +160,78 @@ class AiModelVerificationTest {
         var task = executor.submit(() -> verify(p, "conflict"));
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            service.saveModels(p, null, body("modelId", "parallel-edit")); release.countDown();
+            service.saveProvider(p, body("name", "Changed", "endpoint", "http://127.0.0.1:1/v1", "apiFormat", "chat_completions", "authMode", "none")); release.countDown();
             assertInstanceOf(ChatTurnRejectException.class, assertThrows(ExecutionException.class, () -> task.get(5, TimeUnit.SECONDS)).getCause());
-            assertEquals(List.of("parallel-edit"), models(p).stream().map(AiConnectionsStore.Model::modelId).toList());
+            assertTrue(models(p).isEmpty());
         } finally { release.countDown(); }
+    }
+    @Test void concurrentVerificationMergesEveryResultAndQueuedRequestsUseConnectionVersion() throws Exception {
+        String p = provider("chat_completions");
+        String version = mapper.valueToTree(service.view()).path("providers").get(0).path("connectionVersion").asText();
+        var snapshot = body("connectionVersion", version);
+        var entered = new CountDownLatch(3); var release = new CountDownLatch(1);
+        beforeReply = ignored -> { entered.countDown(); try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } };
+        List<Future<Map<String, Object>>> tasks = new ArrayList<>();
+        for (String id : List.of("alpha", "beta", "gamma")) {
+            var request = new LinkedHashMap<>(snapshot); request.put("requestId", id); request.put("model", Map.of("modelId", id));
+            tasks.add(executor.submit(() -> service.verifyAndAdd(p, request)));
+        }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "all three text probes must overlap");
+            service.saveModels(p, null, body("modelId", "manual"));
+            String manual = models(p).get(0).id(); service.bind(body("purpose", "chat", "modelId", manual));
+            service.saveProvider(p, body("name", "Renamed", "endpoint", configs.connections().read().provider(p).endpoint(), "apiFormat", "chat_completions", "authMode", "none"));
+            release.countDown();
+            for (var task : tasks) assertEquals(true, task.get(10, TimeUnit.SECONDS).get("added"));
+            assertEquals(4, models(p).size());
+            assertEquals(manual, configs.connections().read().chatModelId());
+            assertEquals("Renamed", configs.connections().read().provider(p).name());
+            // 排队请求即使持有旧全局 revision，只要实际连接没变也无需重复探测。
+            snapshot.put("requestId", "queued"); snapshot.put("model", Map.of("modelId", "delta"));
+            assertEquals(true, service.verifyAndAdd(p, snapshot).get("added"));
+            assertEquals(Set.of("manual", "alpha", "beta", "gamma", "delta"), new HashSet<>(models(p).stream().map(AiConnectionsStore.Model::modelId).toList()));
+            assertEquals(12, requests.size());
+            assertFalse(AiConnectionUsage.providerActive(p));
+        } finally { release.countDown(); }
+    }
+    @Test void staleConnectionVersionRejectsBeforeAnyProbe() {
+        String p = provider("chat_completions");
+        String version = mapper.valueToTree(service.view()).path("providers").get(0).path("connectionVersion").asText();
+        var request = body("connectionVersion", version, "requestId", "stale", "model", Map.of("modelId", "alpha"));
+        service.saveProvider(p, body("name", "Probe", "endpoint", "http://127.0.0.1:1/v1", "apiFormat", "chat_completions", "authMode", "none"));
+        assertThrows(ChatTurnRejectException.class, () -> service.verifyAndAdd(p, request));
+        assertTrue(requests.isEmpty()); assertTrue(models(p).isEmpty());
+    }
+    @Test void modelAddedDuringProbeKeepsItsManualSettings() throws Exception {
+        String p = provider("chat_completions"); var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+        beforeReply = ignored -> { entered.countDown(); try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } };
+        var task = executor.submit(() -> verify(p, "manual-race"));
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            service.saveModels(p, null, body("modelId", "gpt-5.2", "name", "Manual", "tools", false));
+            var original = models(p).get(0); release.countDown();
+            assertEquals(true, task.get(10, TimeUnit.SECONDS).get("existing"));
+            assertEquals(List.of(original), models(p));
+        } finally { release.countDown(); }
+    }
+    @Test void changingVerifiedModelIdClearsOnlyProbeResultsAndPreservesSettingsAndBindings() {
+        String p = provider("chat_completions"); verify(p, "original");
+        var original = models(p).get(0);
+        service.bind(body("purpose", "chat", "modelId", original.id()));
+        service.bind(body("purpose", "import", "modelId", original.id()));
+        var state = configs.connections().read(); var owner = state.provider(p);
+        var params = new LinkedHashMap<>(original.params()); params.put("cacheBreakpoints", false);
+        var cached = new AiConnectionsStore.Model(original.id(), original.modelId(), original.name(), "常用", params);
+        configs.connections().save(new AiConnectionsStore.State(state.revision(), List.of(new AiConnectionsStore.Provider(owner.id(), owner.name(), owner.apiFormat(), owner.endpoint(), owner.authMode(), owner.encryptedKey(), owner.keyMeta(), List.of(cached))), original.id(), original.id()), state.revision());
+        service.saveModels(null, original.id(), body("modelId", "custom-new"));
+        var saved = models(p).get(0);
+        assertEquals(original.id(), saved.id()); assertEquals("custom-new", configs.findChat().model());
+        assertEquals("custom-new", configs.findImport().model()); assertEquals("常用", saved.group());
+        for (String key : List.of("verification", "visionVerified", "cacheBreakpoints")) {
+            assertFalse(saved.params().containsKey(key), key); params.remove(key);
+        }
+        assertEquals(params, saved.params());
+        assertEquals(original.name(), saved.name());
     }
     static String digits(String base64) throws java.io.IOException {
         try (var input = new MemoryCacheImageInputStream(new ByteArrayInputStream(Base64.getDecoder().decode(base64)))) {

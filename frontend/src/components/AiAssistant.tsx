@@ -14,7 +14,7 @@ import { safeFileName } from '../lib/export';
 import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
 import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
-import { historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
+import { canContinueTurn, executionStopNotice, historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
 import type { TurnNotice } from '../lib/aiTurnText';
 import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
 import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
@@ -26,6 +26,9 @@ import type { PendingAttachment } from '../lib/aiAttachmentLimits';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { useUiStore } from '../stores/uiStore';
+import { ToolActivityGroup } from './ai-memory/ToolActivityGroup';
+import { mergeToolActivities, settleToolActivities } from '../lib/toolActivity';
+import type { ToolActivity } from '../lib/toolActivity';
 
 const { TextArea } = Input;
 
@@ -157,18 +160,22 @@ export function AiAssistant(): JSX.Element {
     const covered = new Set<string>();
     const server: ChatMessage[] = history.messages.map((row) => {
       if (row.requestId) covered.add(`${row.role}:${row.requestId}`);
-      const mirror = row.requestId ? snapshots.get(row.requestId) : undefined;
+      const mirror = row.role === 'assistant' && row.requestId ? snapshots.get(row.requestId) : undefined;
       return {
         id: row.id,
         role: row.role,
-        content: row.content,
-        reasoning: row.reasoning,
+        content: mirror?.streaming || !row.content ? mirror?.content ?? row.content : row.content,
+        reasoning: mirror?.streaming ? mirror.reasoning : row.reasoning ?? mirror?.reasoning,
+        streaming: mirror?.streaming,
+        toolActivities: mirror?.streaming ? mirror.toolActivities
+          : settleToolActivities(mergeToolActivities(mirror?.toolActivities, row.toolActivities)),
+        toolPhase: mirror?.toolPhase,
         createdAt: row.createdAt,
         requestId: row.requestId ?? undefined,
         citations: mirror?.citations,
-        notice: historyNotice(row) ?? mirror?.notice,
+        notice: mirror?.streaming ? mirror.notice : historyNotice(row) ?? mirror?.notice,
         turn: mirror?.turn,
-        _key: `h${row.id}`
+        _key: mirror?._key ?? `h${row.id}`
       };
     });
     // 本地只留还没被服务端历史覆盖的那几条（正在跑的一轮、以及刚定稿还没重取回来的一轮）
@@ -487,7 +494,7 @@ export function AiAssistant(): JSX.Element {
   };
 
   /** 失败/状态未知时的收口：有内容就定稿保留，零生成的空占位撤掉，绝不留下转圈的气泡。 */
-  const settleOrDropAssistant = (notice?: TurnNotice): void => {
+  const settleOrDropAssistant = (notice?: TurnNotice, activities?: ToolActivity[]): void => {
     const key = turnTargetRef.current?.assistantKey;
     if (!key) return;
     setMessages((current) => {
@@ -496,12 +503,13 @@ export function AiAssistant(): JSX.Element {
       if (!last || last._key !== key || last.role !== 'assistant') return next;
       const text = typeof last.content === 'string' ? last.content : '';
       const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
-      if (!text.trim() && !reasoning.trim()) {
+      const toolActivities = settleToolActivities(mergeToolActivities(last.toolActivities, activities));
+      if (!text.trim() && !reasoning.trim() && !toolActivities.length) {
         next.pop();
         turnTargetRef.current = null;
         return next;
       }
-      next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false, notice };
+      next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false, notice, toolActivities };
       return next;
     });
   };
@@ -519,9 +527,20 @@ export function AiAssistant(): JSX.Element {
 
   /** 轮次事件的界面落点：done、查到的终态、失败都只写回本轮那一个气泡（§4.2 统一结果）。 */
   function onTurnEvent(event: TurnEvent): void {
+    if (event.type === 'reconciled') {
+      // 取消后的确认按原 requestId 回填，不能套用指向新一轮的 turnTargetRef。
+      setMessages((current) => current.map((item) => item.role === 'assistant' && item.requestId === event.requestId
+        ? { ...item, toolActivities: settleToolActivities(mergeToolActivities(item.toolActivities, event.status.toolActivities)) }
+        : item));
+      if (event.status.status && event.status.status !== 'RUNNING') invalidateSessionLists(true);
+      return;
+    }
     stampTurnIdentity(event.requestId);
     switch (event.type) {
       case 'begun':
+        return;
+      case 'activity':
+        patchAssistant((prev) => ({ toolActivities: mergeToolActivities(prev.toolActivities, event.activities), toolPhase: event.phase }));
         return;
       case 'text':
         patchAssistant((prev) => ({ content: `${String(prev.content)}${event.delta}` }));
@@ -541,6 +560,7 @@ export function AiAssistant(): JSX.Element {
           // 本轮身份与统一结果快照：徽标和检查器只认 requestId，历史行现在也带它（§4.5）
           requestId: event.requestId,
           turn: { ...event.view, requestId: event.requestId },
+          toolActivities: settleToolActivities(mergeToolActivities(prev?.toolActivities, event.view.toolActivities)),
           streaming: false
         }));
         invalidateSessionLists(true);
@@ -549,14 +569,14 @@ export function AiAssistant(): JSX.Element {
       case 'failure':
         // 这一轮真的开始过或已产出内容：保留已生成的部分，把服务端错误如实提示给用户（§7.3、§7.2 第 6 条）。
         Message.error(event.message || '生成中断，请重试');
-        settleOrDropAssistant(outcomeNotice(event.view));
+        settleOrDropAssistant(outcomeNotice(event.view), event.view.toolActivities);
         invalidateSessionLists(false);
         return;
       case 'status': {
         const settled = event.status.status !== undefined && event.status.status !== 'RUNNING';
         // 已经 COMPLETED 就别再说"不完整"：这时交给 refetch 拿服务端那份正文
-        const notice = event.status.status === 'COMPLETED' ? undefined : statusNotice(event.status);
-        settleOrDropAssistant(notice ? { code: notice.code, message: event.message ?? notice.message } : undefined);
+        const notice = event.status.status === 'COMPLETED' ? executionStopNotice(event.status.finishReason) : statusNotice(event.status);
+        settleOrDropAssistant(notice ? { code: notice.code, message: event.message ?? notice.message } : undefined, event.status.toolActivities);
         invalidateSessionLists(settled);
         return;
       }
@@ -583,9 +603,11 @@ export function AiAssistant(): JSX.Element {
       if (!key || !last || last._key !== key || !(last.role === 'assistant' && last.streaming)) return next;
       const text = typeof last.content === 'string' ? last.content : '';
       const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
-      if (text.trim() || reasoning.trim()) {
+      if (text.trim() || reasoning.trim() || last.toolActivities?.length) {
         // 思考链也算已生成内容：正文或思考链任一非空都定稿保留，绝不静默丢弃。
-        next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false };
+        next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false,
+          toolActivities: settleToolActivities(last.toolActivities),
+          notice: last.toolActivities?.length ? { code: 'ABORTED', message: '回答已中断，已确认的工具结果已保留。' } : last.notice };
       } else {
         // 真正零生成（刚开始连接）：回滚占位与 user 消息，方便立即重发。
         next.pop();
@@ -597,10 +619,10 @@ export function AiAssistant(): JSX.Element {
     });
   };
 
-  const send = (): void => {
+  const submitMessage = (continuation?: string): void => {
     // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
     if (streaming) return;
-    if (!message.trim() && !attachments.length) return;
+    if (!continuation && !message.trim() && !attachments.length) return;
     if (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')) {
       Message.warning('请先在设置中配置 API Key');
       return;
@@ -609,8 +631,8 @@ export function AiAssistant(): JSX.Element {
       Message.warning('请先选择或新建会话');
       return;
     }
-    const text = message.trim() || '请分析附件内容';
-    const displayText = [message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)]
+    const text = continuation ?? (message.trim() || '请分析附件内容');
+    const displayText = [continuation ?? message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)]
       .filter(Boolean).join('\n\n') || '请分析附件内容';
     const images = attachments.filter((item) => item.kind === 'image');
     const content: string | ChatContentPart[] = images.length
@@ -618,15 +640,10 @@ export function AiAssistant(): JSX.Element {
       : text;
     const userKey = nextMessageKey();
     const userMessage: ChatMessage = { role: 'user', content, displayContent: displayText, _key: userKey };
-    if (streamEnabled) {
-      const assistantKey = nextMessageKey();
-      turnTargetRef.current = { userKey, assistantKey };
-      setMessages((current) => [...current, userMessage,
-        { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
-    } else {
-      turnTargetRef.current = { userKey, assistantKey: null };
-      setMessages((current) => [...current, userMessage]);
-    }
+    const assistantKey = nextMessageKey();
+    turnTargetRef.current = { userKey, assistantKey };
+    setMessages((current) => [...current, userMessage,
+      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
     setMessage('');
     setAttachments([]);
     // clientId 服务端限 64 码点且只用于本轮关联，不能拿文件名当身份
@@ -648,6 +665,7 @@ export function AiAssistant(): JSX.Element {
     };
     turn.send(input);
   };
+  const send = (): void => submitMessage();
 
   const insertMutation = useMutation({
     mutationFn: async (markdown: string) => {
@@ -951,11 +969,18 @@ export function AiAssistant(): JSX.Element {
                       <div className="chat-reasoning-body">{item.reasoning}</div>
                     </details>
                   ) : null}
+                  {isAssistant && item.toolActivities?.length ? <ToolActivityGroup
+                    activities={item.toolActivities} active={item.streaming} phase={item.toolPhase}
+                    onDisclosure={() => { stickyBottomRef.current = false; }} /> : null}
                   <MarkdownContent value={text} />
-                  {item.streaming ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
+                  {item.streaming && !item.toolActivities?.length ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
                   {item.notice ? (
                     <div className="ai-retrieval-notice">
                       {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
+                      {isAssistant && item === visibleMessages.at(-1) && canContinueTurn(item.notice) && <Button size="mini" type="text"
+                        disabled={streaming || !!message.trim() || attachments.length > 0}
+                        title={message.trim() || attachments.length ? '请先处理输入框中的草稿' : '沿用已有结果，以新一轮预算继续'}
+                        onClick={() => submitMessage('请继续完成上一轮尚未完成的任务，依据已有结果继续；已经确认成功的操作不要重复执行，写入结果不确定时先核对。')}>继续</Button>}
                     </div>
                   ) : null}
                   {isAssistant ? (
@@ -989,7 +1014,7 @@ export function AiAssistant(): JSX.Element {
                         />
                       ) : null}
                       <div className="chat-message-actions">
-                        <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button>
+                        {text ? <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button> : null}
                         {turnId ? (
                           <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnId, snapshot: turnSnapshot ?? undefined })}>
                             本轮上下文

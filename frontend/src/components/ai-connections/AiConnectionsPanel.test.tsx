@@ -61,10 +61,34 @@ describe('AI connection workflow', () => {
     await screen.findByRole('heading', { name: '备用网关' });
     expect(request).toHaveBeenCalledOnce();
   });
+  it('parallel verification keeps the newest snapshot when replies and refetches arrive late', async () => {
+    const state = fixture(); state.providers[0].connectionVersion = 'connection-v1';
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    read.mockImplementation((path: string) => Promise.resolve(path.endsWith('/presets') ? [] : state));
+    const finishes: ((value: unknown) => void)[] = [];
+    request.mockImplementation((path: string) => path.endsWith('/discover') ? Promise.resolve(['first', 'second']) : new Promise(resolve => finishes.push(resolve)));
+    mount(undefined, client);
+    fireEvent.click(await screen.findByRole('button', { name: '获取模型' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /first/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /second/ }));
+    fireEvent.click(screen.getByRole('button', { name: '验证并添加（2）' }));
+    await waitFor(() => expect(finishes).toHaveLength(2));
+    for (const call of request.mock.calls.filter(call => call[0].endsWith('/verify-add'))) expect(JSON.parse(call[1].body).connectionVersion).toBe('connection-v1');
+    const additions = ['first', 'second'].map(id => ({ id, modelId: id, name: '', group: '', streaming: true, tools: false }));
+    const latest = { ...state, revision: 3, providers: [{ ...state.providers[0], models: [...state.providers[0].models, ...additions] }, state.providers[1]] };
+    const earlier = { ...latest, revision: 2, providers: [{ ...latest.providers[0], models: latest.providers[0].models.slice(0, -1) }, state.providers[1]] };
+    await act(async () => { finishes[1]({ added: true, connections: latest }); });
+    await act(async () => { finishes[0]({ added: true, connections: earlier }); });
+    await screen.findByRole('button', { name: '完成' });
+    expect(client.getQueryData(['ai-connections'])).toEqual(latest);
+    fireEvent.click(screen.getByRole('button', { name: '完成' }));
+    await screen.findByRole('button', { name: '设置：second' });
+    expect(client.getQueryData(['ai-connections'])).toEqual(latest);
+  });
   it('browsing and saving model settings does not apply; switches are independent', async () => {
     mount();
     fireEvent.click(await screen.findByRole('button', { name: '设置：深度分析' }));
-    expect(screen.getByLabelText('模型 ID')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('模型 ID')).not.toHaveAttribute('readonly');
     expect(screen.getByRole('switch', { name: '流式输出' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('switch', { name: '允许工具调用' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('switch', { name: '流式输出' }));

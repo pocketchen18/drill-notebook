@@ -42,6 +42,67 @@ class AiUpstreamClientTest {
         return new AiUpstreamClient.Deadline(3600);
     }
 
+    @Test void cancellationInterruptsTheWaitForResponseHeaders() throws Exception {
+        var arrived = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            arrived.countDown();
+            try { release.await(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            exchange.close();
+        });
+        server.start();
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var handle = new ActiveTurnRegistry().acquire("cancel-headers", 1L).orElseThrow();
+            var upstream = new AiUpstreamClient.Upstream("http://127.0.0.1:" + server.getAddress().getPort(), "", "stub", "chat_completions", 128, false);
+            var pending = executor.submit(() -> client.call(upstream, List.of(Map.of("role", "user", "content", "test")), false, null, 900, handle));
+            assertTrue(arrived.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            handle.requestCancel();
+            var result = pending.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals("aborted", result.finishReason());
+            assertTrue(result.downstreamGone());
+        } finally { release.countDown(); server.stop(0); executor.shutdownNow(); }
+    }
+
+    @Test void waitingTimeoutIsNotReportedAsUserCancellation() throws Exception {
+        var release = new java.util.concurrent.CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            try { release.await(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            exchange.close();
+        });
+        server.start();
+        try {
+            var upstream = new AiUpstreamClient.Upstream("http://127.0.0.1:" + server.getAddress().getPort(), "", "stub", "chat_completions", 128, false);
+            var result = client.call(upstream, List.of(Map.of("role", "user", "content", "test")), false, null, 1);
+            assertEquals("deadline", result.finishReason());
+            assertFalse(result.downstreamGone());
+            assertFalse(result.terminalObserved());
+        } finally { release.countDown(); server.stop(0); }
+    }
+
+    @Test void brokenStreamPreservesTextAndDoesNotExecuteIncompleteTools() throws Exception {
+        var prefix = sse("{\"choices\":[{\"delta\":{\"content\":\"已收到的部分\"}}]}");
+        var broken = new InputStream() {
+            public int read() throws IOException {
+                int next = prefix.read();
+                if (next < 0) throw new IOException("fixture disconnect");
+                return next;
+            }
+        };
+        var deadline = idleDeadline();
+        try {
+            var result = client.consumeChatCompletionStream(broken, null, null, deadline);
+            assertEquals("已收到的部分", result.text());
+            assertEquals("stream_error", result.finishReason());
+            assertFalse(result.terminalObserved());
+            assertTrue(result.toolCalls().isEmpty());
+        } finally { deadline.cancel(); }
+    }
+
     @Test
     void urlNormalizationChatCompletions() {
         assertEquals("https://x/v1/chat/completions", AiUpstreamClient.chatCompletionsUrl("https://x/v1"));
@@ -566,16 +627,20 @@ class AiUpstreamClientTest {
     }
 
     @Test
-    void streamedToolCallsAreBoundedToThreeAndFourKibArguments() throws Exception {
+    void streamedToolCallsSupportLargeBatchesAndRejectOverflowAndFourKibArguments() throws Exception {
         List<String> events = new ArrayList<>();
-        for (int index = 0; index < 4; index++) {
+        for (int index = 0; index < 128; index++) {
             events.add("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":" + index
                     + ",\"id\":\"call_" + index + "\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}");
         }
         events.add("[DONE]");
         AiUpstreamClient.Result capped = client.consumeChatCompletionStream(
                 sse(events.toArray(String[]::new)), null, null, idleDeadline());
-        assertEquals(3, capped.toolCalls().size(), "单次响应最多 3 个工具调用");
+        assertEquals(128, capped.toolCalls().size(), "完整接收工具批次，不在第三项悄悄丢弃");
+        events.add(128, "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":128,\"id\":\"overflow\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}");
+        var oversized = client.consumeChatCompletionStream(sse(events.toArray(String[]::new)), null, null, idleDeadline());
+        assertTrue(oversized.captureLimited());
+        assertTrue(oversized.toolCalls().isEmpty(), "超量不能交付不完整批次");
 
         AiUpstreamClient.Result rejected = client.consumeChatCompletionStream(sse(
                 "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","

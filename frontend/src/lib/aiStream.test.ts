@@ -39,6 +39,7 @@ const run = async (frames: string[], hooks: Partial<StreamCallbacks> = {}): Prom
         hooks.onText?.(delta);
       },
       onReasoning: hooks.onReasoning ?? (() => undefined),
+      onToolActivity: hooks.onToolActivity,
       onMetadata: (metadata) => {
         captured.metadata.push(metadata);
         hooks.onMetadata?.(metadata);
@@ -62,6 +63,17 @@ const run = async (frames: string[], hooks: Partial<StreamCallbacks> = {}): Prom
 };
 
 describe('aiStream metadata 事件', () => {
+  it('工具帧算实际进展并只投影安全字段，断流不变成零输出重试', async () => {
+    const onToolActivity = vi.fn();
+    const record = { sequence: 1, toolName: 'create_memory', state: 'FINISHED', outcome: 'CREATED',
+      count: 1, elapsedMs: 120, startedAt: '2026-11-08T01:00:00Z', arguments: 'PRIVATE', result: 'PRIVATE' };
+    const captured = await run([`event:tool_activity\ndata:${JSON.stringify({ requestId: 'r-tool', toolActivities: [record], phase: 'tools' })}\n\n`], { onToolActivity });
+    expect(captured.noDone).toEqual({ requestId: 'r-tool', partial: true });
+    expect(onToolActivity).toHaveBeenCalledTimes(1);
+    expect(onToolActivity.mock.calls[0][0].toolActivities[0]).toMatchObject({ outcome: 'CREATED', count: 1 });
+    expect(JSON.stringify(onToolActivity.mock.calls)).not.toContain('PRIVATE');
+    expect(captured.deltas).toEqual([]);
+  });
   it('把 metadata 的 requestId 交给 onMetadata，且不影响其他事件', async () => {
     const captured = await run([
       'event:metadata\ndata:{"requestId":"r-1","sessionId":10,"status":"prepared"}\n\n',

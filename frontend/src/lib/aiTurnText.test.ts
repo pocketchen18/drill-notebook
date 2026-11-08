@@ -83,6 +83,15 @@ describe('aiTurnText 查状态查出来的终态', () => {
 });
 
 describe('aiTurnText 历史行的终态', () => {
+  it('生成失败或中断只标注助手回复，用户原文删除提示仍保留', () => {
+    for (const turnStatus of ['FAILED', 'ABORTED', 'TRUNCATED', 'RUNNING']) {
+      expect(historyNotice({ role: 'user', turnStatus })).toBeUndefined();
+      expect(historyNotice({ role: 'assistant', turnStatus })).toBeDefined();
+    }
+    expect(historyNotice({ role: 'user', contentDeleted: true, turnStatus: 'FAILED' }))
+      .toMatchObject({ code: 'CONTENT_DELETED' });
+  });
+
   it('清理过原文、失败轮次、正常完成各说各话，不把缺原文当成没问题', () => {
     expect(historyNotice({ contentDeleted: true, turnStatus: 'COMPLETED' })).toMatchObject({
       code: 'CONTENT_DELETED', message: '这一轮的原文已按你的要求清理，只剩时间与状态'

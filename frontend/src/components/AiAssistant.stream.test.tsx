@@ -7,6 +7,7 @@ import { useUiStore } from '../stores/uiStore';
 import { ApiError } from '../lib/api';
 import { isUuidV7 } from '../lib/uuidV7';
 import type { StreamCallbacks } from '../lib/aiStream';
+import type { ToolActivity } from '../lib/toolActivity';
 
 const { apiGet, apiPost, streamChatMock } = vi.hoisted(() => ({
   apiGet: vi.fn(), apiPost: vi.fn(), streamChatMock: vi.fn()
@@ -114,6 +115,84 @@ describe('AiAssistant 流式会话状态', () => {
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
+
+  const activity: ToolActivity = { sequence: 1, toolName: 'create_memory', state: 'FINISHED', outcome: 'CREATED',
+    count: 1, startedAt: '2026-11-08T01:00:00.000Z', elapsedMs: 30, availability: null, incomplete: false };
+
+  it('历史达限说明与继续入口保留，继续开启新轮次且不覆盖草稿', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '检查所有记忆' },
+      { id: 2, role: 'assistant', content: '已完成部分查询', requestId: 'budget-turn', turnStatus: 'COMPLETED', finishReason: 'budget_stages', toolActivities: [activity] }];
+    renderAssistant();
+    const next = await screen.findByRole('button', { name: '继续' });
+    expect(screen.getByText(/已达工具阶段上限/)).toBeVisible();
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '未发送草稿' } });
+    expect(next).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '' } });
+    fireEvent.click(next);
+    await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(1));
+    const body = streamChatMock.mock.calls[0][1];
+    expect(body.sessionId).toBe(10);
+    expect(body.requestId).not.toBe('budget-turn');
+    expect(body.input.userText).toContain('已经确认成功的操作不要重复执行');
+  });
+
+  it('失败历史只在助手气泡提示，用户提问保持原文', async () => {
+    serverMessages = [
+      { id: 1, role: 'user', content: '更新记忆', requestId: 'failed-turn', turnStatus: 'FAILED' },
+      { id: 2, role: 'assistant', content: '', requestId: 'failed-turn', turnStatus: 'FAILED', toolActivities: [activity] }
+    ];
+    renderAssistant();
+    await screen.findByText('更新记忆');
+    expect(document.querySelector('.chat-message.user .ai-retrieval-notice')).toBeNull();
+    expect(screen.getAllByText('这一轮失败，显示的内容可能不完整')).toHaveLength(1);
+    expect(document.querySelector('.chat-message.assistant .ai-retrieval-notice')).not.toBeNull();
+  });
+
+  it('没有正文时中断也保留工具记录与用户消息，停止加载并禁止重发', async () => {
+    renderAssistant();
+    await send('记住我的复习偏好');
+    await waitFor(() => expect(streamCallbacks?.onToolActivity).toBeTruthy());
+    act(() => streamCallbacks!.onToolActivity!({ requestId: turnRequestId(), toolActivities: [activity,
+      { ...activity, sequence: 2, toolName: 'update_memory', state: 'RUNNING', outcome: 'UNKNOWN', elapsedMs: null }], phase: 'tools' }));
+    fireEvent.click(screen.getByRole('button', { name: '中断生成' }));
+    expect(screen.getByText('记住我的复习偏好')).toBeVisible();
+    expect(screen.getByRole('button', { name: /新增记忆 已新增 1 条/ })).toBeVisible();
+    expect(screen.getByText(/回答已中断，已确认的工具结果已保留/)).toBeVisible();
+    expect(document.querySelector('.ai-tool-icon.is-running')).toBeNull();
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
+  });
+
+  it('工具更新不拉回底部，历史占位回流保留当前正文和手动折叠选择', async () => {
+    renderAssistant();
+    await send('检索后继续回答');
+    await waitFor(() => expect(streamCallbacks?.onToolActivity).toBeTruthy());
+    const viewport = mockChatViewport();
+    viewport.scrollTo(1200);
+    viewport.scrollTo(500);
+    act(() => {
+      streamCallbacks!.onText('正在生成的正文');
+      streamCallbacks!.onToolActivity!({ requestId: turnRequestId(), toolActivities: [activity], phase: 'answer' });
+    });
+    const group = screen.getByRole('button', { name: /已新增 1 条.*1 次工具调用/ });
+    fireEvent.click(group);
+    serverMessages = [
+      { id: 101, role: 'user', content: '检索后继续回答', requestId: turnRequestId() },
+      { id: 102, role: 'assistant', content: '', requestId: turnRequestId(), turnStatus: 'RUNNING', toolActivities: [activity] }
+    ];
+    act(() => useUiStore.setState({ aiOpen: false }));
+    act(() => useUiStore.setState({ aiOpen: true }));
+    await waitFor(() => expect(historyCalls()).toBeGreaterThan(1));
+    expect(screen.getByText('正在生成的正文')).toBeVisible();
+    expect(document.querySelector('.chat-message.user .ai-retrieval-notice')).toBeNull();
+    expect(document.querySelector('.chat-message.assistant .ai-retrieval-notice')).toBeNull();
+    expect(screen.getByRole('button', { name: /已新增 1 条.*1 次工具调用/ })).toBe(group);
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    viewport.grow(120);
+    act(() => streamCallbacks!.onToolActivity!({ requestId: turnRequestId(), toolActivities: [activity], phase: 'answer' }));
+    viewport.nextFrame();
+    expect(viewport.element.scrollTop).toBe(500);
+  });
 
   it.each([32, 1000])('生成期间向上滚动 %i 像素后保持阅读位置，回到底部才恢复跟随', async (distance) => {
     renderAssistant();
