@@ -25,6 +25,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class MemoryUpdateToolTest {
@@ -124,7 +126,7 @@ class MemoryUpdateToolTest {
                     "SELECT status, origin, manual_protected FROM ai_memory_item WHERE memory_id = ? AND version = 2",
                     memoryId);
             assertEquals("ACTIVE", current.get("status"));
-            assertEquals("MANUAL", current.get("origin"), "更新后来源必须转人工");
+            assertEquals("MANUAL", current.get("origin"), "原本由人工添加的记忆保留原始类型");
             assertEquals(1, ((Number) current.get("manual_protected")).intValue());
             assertEquals("SUPERSEDED", jdbc.queryForObject(
                     "SELECT status FROM ai_memory_item WHERE memory_id = ? AND version = 1", String.class, memoryId));
@@ -338,8 +340,9 @@ class MemoryUpdateToolTest {
                 Integer.class, memoryId));
     }
 
-    @Test
-    void updateInheritsEvidenceAndExpiryIsPreservedWhenOmitted() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void updateInheritsOriginProtectionEvidenceAndExpiry(boolean manualProtected) throws Exception {
         unlockVault();
         enableUseConsent();
         ChatTurnService.Lease lease = beginTurn("记住：下个月复习");
@@ -351,6 +354,9 @@ class MemoryUpdateToolTest {
             assertEquals("CREATED", created.get("status"), String.valueOf(created));
             String memoryId = String.valueOf(created.get("memoryId"));
 
+            jdbc.update("UPDATE ai_memory_item SET manual_protected = ? WHERE memory_id = ?",
+                    manualProtected ? 1 : 0, memoryId);
+
             ChatContextPlan refreshed = stack.contexts().refreshAfterMemoryWrite(plan);
             Map<String, Object> updated = update(refreshed,
                     "{\"memoryId\":\"" + memoryId + "\",\"expectedVersion\":1,\"text\":\"下个季度复习\"}");
@@ -359,8 +365,9 @@ class MemoryUpdateToolTest {
 
             Map<String, Object> row = jdbc.queryForMap("SELECT row_id, origin, manual_protected, valid_until"
                     + " FROM ai_memory_item WHERE memory_id = ? AND version = 2", memoryId);
-            assertEquals("MANUAL", row.get("origin"));
-            assertEquals(1, ((Number) row.get("manual_protected")).intValue());
+            assertEquals("AUTO", row.get("origin"), "AI 更新不能将自动记忆改成人工添加");
+            assertEquals(manualProtected ? 1 : 0, ((Number) row.get("manual_protected")).intValue(),
+                    "AI 更新保留原有人工保护状态");
             assertEquals("2099-01-01T00:30:00.000Z", row.get("valid_until"), "省略 expiry 必须保留原到期时间");
             List<Map<String, Object>> evidence = jdbc.queryForList(
                     "SELECT e.session_id, e.turn_id, e.message_id, e.source_block_id FROM ai_memory_evidence e"

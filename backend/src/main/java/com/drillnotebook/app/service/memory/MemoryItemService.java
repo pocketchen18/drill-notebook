@@ -288,6 +288,15 @@ public class MemoryItemService {
      * 上限由调用方显式给出，人工录入与提取链仍走默认的 160。
      */
     public MemoryApiResult edit(String memoryId, EditInput edit, int maxValueCodePoints) {
+        return edit(memoryId, edit, maxValueCodePoints, true);
+    }
+
+    /** AI 工具更新保留原始来源与人工保护状态，不能冒充用户在管理页手动编辑。 */
+    public MemoryApiResult editFromAi(String memoryId, EditInput edit, int maxValueCodePoints) {
+        return edit(memoryId, edit, maxValueCodePoints, false);
+    }
+
+    private MemoryApiResult edit(String memoryId, EditInput edit, int maxValueCodePoints, boolean manualEdit) {
         if (edit.expectedVersion() == null) {
             return MemoryApiResult.error(400, "MEMORY_VERSION_REQUIRED", "编辑必须带上读到的 expectedVersion");
         }
@@ -304,7 +313,7 @@ public class MemoryItemService {
         }
         try {
             return statusChange ? changeStatus(key, memoryId, edit)
-                    : changeContent(key, memoryId, edit, maxValueCodePoints);
+                    : changeContent(key, memoryId, edit, maxValueCodePoints, manualEdit);
         } catch (SQLException error) {
             return storageError(error);
         } catch (MemoryCryptoException error) {
@@ -340,7 +349,8 @@ public class MemoryItemService {
         };
     }
 
-    private MemoryApiResult changeContent(MemoryKey key, String memoryId, EditInput edit, int maxValueCodePoints)
+    private MemoryApiResult changeContent(MemoryKey key, String memoryId, EditInput edit, int maxValueCodePoints,
+                                         boolean manualEdit)
             throws SQLException, MemoryCryptoException {
         Optional<FactRow> current = memory.findVersion(key.vaultId(), memoryId, edit.expectedVersion());
         if (current.isEmpty()) {
@@ -360,7 +370,7 @@ public class MemoryItemService {
         String kind = blank(text(existing.get("kind"))) ? "PREFERENCE" : text(existing.get("kind"));
         String existingPredicate = text(existing.get("predicate"));
         String existingValue = text(existing.get("value"));
-        boolean contentChanged = !existingValue.equals(value);
+        boolean manuallyChanged = manualEdit && !existingValue.equals(value);
         String validUntil = edit.validUntil() == null ? active.validUntil()
                 : blank(edit.validUntil()) ? null : clean(edit.validUntil());
         String problem = shapeProblem(kind, active.scopeType(), predicate, value, validUntil, maxValueCodePoints);
@@ -386,7 +396,7 @@ public class MemoryItemService {
                 new MemoryRepository.NewMemory(rowId, key.vaultId(), active.scopeType(), active.scopeId(), kind,
                         crypto.hmac(key, "predicate:" + predicate), familyHmac, crypto.hmac(key, "value:" + value),
                         active.status(), encrypted.cipher(), encrypted.cryptoMeta(),
-                        contentChanged ? "MANUAL" : active.origin(), contentChanged || active.manualProtected(),
+                         manuallyChanged ? "MANUAL" : active.origin(), manuallyChanged || active.manualProtected(),
                         active.pinned(), active.validFrom(), validUntil, active.observedAt(), now, now),
                 active.status());
         if (replaced.outcome() == MemoryRepository.ReplaceOutcome.VERSION_CONFLICT) {
@@ -395,7 +405,7 @@ public class MemoryItemService {
         if (replaced.outcome() == MemoryRepository.ReplaceOutcome.NOT_FOUND) {
             return MemoryApiResult.error(404, "MEMORY_ITEM_NOT_FOUND", "这条记忆已经没有生效版本");
         }
-        // 手动改过当前值，指向旧版本的建议就再也无法采纳：立刻置 STALE，别让它留在待确认列表里（§2.3.1）
+        // 当前值已更新，指向旧版本的建议就再也无法采纳：立刻置 STALE，别让它留在待确认列表里（§2.3.1）
         proposals.markStaleForTarget(key.vaultId(), memoryId);
         log.info("记忆已产生新版本: memoryId={}, version={}", memoryId, replaced.version());
         return MemoryApiResult.of(200,

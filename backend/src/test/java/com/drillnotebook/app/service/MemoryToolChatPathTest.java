@@ -3,6 +3,7 @@ package com.drillnotebook.app.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
@@ -14,6 +15,7 @@ import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.MemoryJobRepository;
 import com.drillnotebook.app.repository.MemoryOperationRepository;
 import com.drillnotebook.app.repository.MemoryProposalRepository;
+import com.drillnotebook.app.repository.MemoryRepository;
 import com.drillnotebook.app.repository.MemorySuppressionRepository;
 import com.drillnotebook.app.service.memory.MemoryApiResult;
 import com.drillnotebook.app.service.memory.MemoryItemService;
@@ -38,6 +40,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
@@ -90,7 +94,8 @@ class MemoryToolChatPathTest {
 
     @AfterEach
     void cleanup() throws Exception {
-        server.close();
+        if (server != null) server.close();
+        if (stack != null) stack.indexes().shutdown();
         TestWorkspace.deleteRecursively(appRoot);
     }
 
@@ -160,6 +165,61 @@ class MemoryToolChatPathTest {
             assertFalse(dbContains("\"tool_call_id\""), "工具消息不能落进持久化转录");
         } finally {
             listServer.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void applyingAnotherModelKeepsMemoriesAvailableWithoutOpeningSettings(boolean changeSupplier) throws Exception {
+        try (var listServer = new ToolFixtureServer("list_memories", "{\"scope\":\"ALL\",\"limit\":20}")) {
+            if (!changeSupplier) {
+                ai.saveConfig(Map.of("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
+                        "apiKey", "stub-key", "tools", true));
+                enableUseConsent();
+            }
+            var envelope = wiring.memory().readEnvelope().orElseThrow();
+            var index = stack.indexes().ready(envelope.vaultId(), envelope.epoch(), envelope.revision()).orElseThrow();
+            // 复现实际操作：自动记忆唯一来源会话被删，然后切模型立即查询。
+            var fact = wiring.memory().findPage(envelope.vaultId(), "ACTIVE", null, null, null, null, 10).get(0);
+            jdbc.update("UPDATE ai_memory_item SET origin = 'AUTO', manual_protected = 0 WHERE row_id = ?", fact.rowId());
+            long sourceSession = wiring.sessions().create("已删除的来源会话", "stub-model");
+            wiring.memory().attachEvidence(new MemoryRepository.EvidenceDraft("source-evidence", envelope.vaultId(),
+                    sourceSession, null, null, "u0", "source-hmac", "fixture-quote", "{}", fact.recordedAt()), fact.rowId());
+            wiring.sessions().delete(sourceSession);
+            assertTrue(wiring.memory().findCurrent(envelope.vaultId(), fact.memoryId()).isPresent());
+            assertEquals(List.of(), wiring.memory().evidenceIdsForItem(fact.rowId()));
+            var configs = new AiConfigRepository(jdbc);
+            var connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), new ObjectMapper());
+            connections.view();
+            var state = configs.connections().read();
+            String providerId = state.owner(state.chatModelId()).id();
+            if (changeSupplier) {
+                connections.saveProvider(null, Map.of("revision", state.revision(), "name", "另一供应商",
+                        "endpoint", listServer.baseUrl(), "apiFormat", "chat_completions", "authMode", "none"));
+                state = configs.connections().read();
+                providerId = state.providers().get(state.providers().size() - 1).id();
+            }
+            connections.saveModels(providerId, null, Map.of("revision", state.revision(), "modelId", "new-model",
+                    "tools", true, "streaming", true));
+            state = configs.connections().read();
+            var models = state.provider(providerId).models();
+            connections.bind(Map.of("revision", state.revision(), "purpose", "chat", "modelId", models.get(models.size() - 1).id()));
+
+            assertTrue(stack.policy().current().enabled());
+            assertTrue(stack.policy().useEligibility().allowed(), "应用成功即能用记忆，不能依赖重新打开设置页");
+            assertEquals(envelope, wiring.memory().readEnvelope().orElseThrow(), "切换聊天模型不改变记忆库版本");
+            assertSame(index, stack.indexes().ready(envelope.vaultId(), envelope.epoch(), envelope.revision()).orElseThrow(),
+                    "切换聊天模型直接复用现有索引");
+
+            assertEquals("COMPLETED", ai.chat(body("看看我现在有哪些记忆")).get("status"));
+            assertEquals("COMPLETED", ai.chatStream(body("再看看我现在有哪些记忆"), (type, text) -> true).status());
+            assertEquals(4, listServer.bodies().size());
+            for (int i : List.of(1, 3)) {
+                var result = new ObjectMapper().readTree(toolMessageContent(listServer.bodies().get(i)));
+                assertEquals("OK", result.path("status").asText());
+                assertEquals("READY", result.path("availability").asText());
+                assertEquals(FACT, result.path("items").get(0).path("title").asText());
+            }
         }
     }
 

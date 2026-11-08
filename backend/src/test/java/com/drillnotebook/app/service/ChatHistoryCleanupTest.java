@@ -30,7 +30,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 执行方案 §7.4）。
  *
  * <p>四条底线：预览只读、什么都不删；执行只清预览钉住的那一份范围（来源变了就 409，绝不扩大）；
- * 释放的字节与账本扣减同源且同事务；删原文必须连证据与孤儿自动事实一起走（§2.3）。</p>
+ * 释放的字节与账本扣减同源且同事务；删原文时清理证据，已保存记忆保留。</p>
  */
 class ChatHistoryCleanupTest {
     private static final Map<String, Object> MOCK_CONFIG = Map.of(
@@ -122,7 +122,7 @@ class ChatHistoryCleanupTest {
     }
 
     @Test
-    void purgesEvidenceAndOrphanFactWithTheContent() throws Exception {
+    void purgesEvidenceButKeepsSavedMemoriesWithTheContent() throws Exception {
         chat("这一问被记住了");
         long turnId = jdbc.queryForObject("SELECT id FROM ai_chat_turn ORDER BY id DESC LIMIT 1", Long.class);
         seedEvidenceOwnedBy(turnId);
@@ -130,8 +130,8 @@ class ChatHistoryCleanupTest {
         execute(preview(newestMessageId(), 200), "op-evidence");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_evidence"), "原话不得以快照名义留存");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence"));
-        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"),
-                "原话是该自动事实唯一来源时，同一事务把它作为孤儿移除");
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"),
+                "清理原话不能连带删除已保存的长期记忆");
     }
 
     @Test
@@ -559,8 +559,8 @@ class ChatHistoryCleanupTest {
 
         Map<String, Object> preview = preview(newestMessageId(), 200);
         assertEquals(3L, number(preview, "affectedEvidence"), "三条原话证据都在这一批里");
-        assertEquals(1L, number(preview, "autoFactsRemoved"), "只有无人工保护的自动事实会跟着消失");
-        assertEquals(1L, number(preview, "protectedFactsKept"));
+        assertEquals(0L, number(preview, "autoFactsRemoved"), "已保存的自动记忆不会随原话消失");
+        assertEquals(2L, number(preview, "protectedFactsKept"));
         assertEquals(0L, number(preview, "affectedProposals"));
 
         Map<String, Object> result = execute(preview, "op-impact");
@@ -568,7 +568,7 @@ class ChatHistoryCleanupTest {
                 "预览报几条证据，实删就必须是几条");
         assertEquals(number(preview, "autoFactsRemoved"), number(result, "autoFactsRemoved"));
         assertEquals(number(preview, "protectedFactsKept"), number(result, "protectedFactsKept"));
-        assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"));
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-1'"));
         assertEquals(1, count("SELECT COUNT(*) FROM ai_memory_item WHERE row_id = 'row-2'"),
                 "人工保护的记忆不许被清理顺手删掉");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence"), "来源链接必须一起断干净");
@@ -645,7 +645,7 @@ class ChatHistoryCleanupTest {
                 Long.class, sessionId);
     }
 
-    /** 该轮拥有的证据与孤儿自动事实：清范围时必须一起走，不能只依赖 SET NULL 把原话留下。 */
+    /** 该轮拥有的证据与已保存记忆：清范围时删证据、保留正文，不能用 SET NULL 留下原话。 */
     private void seedEvidenceOwnedBy(long turnId) throws SQLException {
         seedVault();
         seedEvidence("ev-1", turnId);
@@ -673,7 +673,7 @@ class ChatHistoryCleanupTest {
         }
     }
 
-    /** 一条事实与它的来源集合：{@code manualProtected} 为真时，失去来源只断来源、内容留着。 */
+    /** 一条已保存事实与它的来源集合：无论是否人工保护，失去来源都保留正文。 */
     private void seedFact(String rowId, String memoryId, boolean manualProtected, String... evidenceIds)
             throws SQLException {
         try (Connection connection = dataSource.getConnection()) {

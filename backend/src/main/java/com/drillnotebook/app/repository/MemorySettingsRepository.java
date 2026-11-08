@@ -13,8 +13,8 @@ import org.springframework.stereotype.Repository;
  * 记忆设置单行（contracts §2.1：{@code ai_memory_settings}，id 恒为 1）。
  *
  * <p>写方法一律按 {@code revision} 做 CAS：客户端必须带它读到的版本号，撞上就 409 并把最新行原样带回，
- * 不允许"最后写入的人赢"覆盖别人的开关。授权列只有 {@link #grantConsent} / {@link #revokeConsent}
- * 能改，开关写入永远不会顺带授权（§5.1）。</p>
+ * 不允许"最后写入的人赢"覆盖别人的开关。授权由 {@link #grantConsent} / {@link #revokeConsent}
+ * 或 {@link AiConnectionsStore#saveWithMemoryConsent} 的模型应用事务更新；开关写入不顺带授权。</p>
  */
 @Repository
 public class MemorySettingsRepository {
