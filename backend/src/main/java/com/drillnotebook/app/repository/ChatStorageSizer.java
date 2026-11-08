@@ -17,12 +17,12 @@ import java.sql.SQLException;
  * 计数与写入不同事务，账本就会与实测脱节（P0a 第④组的显式结论）。</p>
  */
 public final class ChatStorageSizer {
-    /** 开始轮次为回复预留的 2 MiB（contracts §2.7）。 */
-    public static final long REPLY_RESERVATION_BYTES = 2_097_152L;
+    /** 回复与最多 1200 项工具活动的密文共用 3 MiB 预留。 */
+    public static final long REPLY_RESERVATION_BYTES = 3_145_728L;
     /** 正文 + reasoning 的原始 UTF-8 捕获上限（两者合计）。 */
     public static final long OUTPUT_CAPTURE_RAW_BYTES = 1_048_576L;
     /** result_meta 序列化明文上限。 */
-    public static final long RESULT_META_PLAIN_MAX_BYTES = 16_384L;
+    public static final long RESULT_META_PLAIN_MAX_BYTES = 524_288L;
     /** 每份 crypto_meta 上限。 */
     public static final long CRYPTO_META_MAX_BYTES = 4_096L;
     /** AES-GCM 认证标签长度。 */

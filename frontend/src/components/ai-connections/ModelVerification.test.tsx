@@ -11,9 +11,9 @@ vi.mock('../../lib/api', () => ({ get: (...args: unknown[]) => read(...args), ap
 const provider: ConnectionProvider = { id: 'p', name: '测试连接', endpoint: 'https://example.invalid/v1', apiFormat: 'chat_completions', authMode: 'none', hasKey: false, needsPassword: false, models: [] };
 const check = (passed: boolean) => ({ status: passed ? 'passed' as const : 'failed' as const, message: passed ? '通过' : '本次请求失败', elapsedMs: 5 });
 const result = (text = true, image = true, tools = true): ModelVerification => ({ text: check(text), image: check(image), tools: check(tools), checkedAt: '2026-11-07T00:00:00Z' });
-function dialog(verify: ReturnType<typeof vi.fn>, password = false) {
+function dialog(verify: ReturnType<typeof vi.fn>, password = false, ids = ['alpha', 'beta']) {
   const close = vi.fn(), refresh = vi.fn(), busy = vi.fn();
-  const view = render(<StrictMode><VerificationDialog provider={{ ...provider, needsPassword: password }} models={[{ modelId: 'alpha' }, { modelId: 'beta' }]} verify={verify} close={close} onBusy={busy} refresh={refresh} /></StrictMode>);
+  const view = render(<StrictMode><VerificationDialog provider={{ ...provider, needsPassword: password }} models={ids.map(modelId => ({ modelId }))} verify={verify} close={close} onBusy={busy} refresh={refresh} /></StrictMode>);
   return { ...view, close, refresh, busy };
 }
 describe('automatic model verification', () => {
@@ -32,31 +32,51 @@ describe('automatic model verification', () => {
     expect(verify.mock.calls.map(call => call[0].modelId)).toEqual(['alpha', 'beta', 'beta']);
   });
   it('cancel waits for server acknowledgment before aborting and ignores late completion', async () => {
-    let finish!: (value: VerificationResponse) => void;
-    let acknowledge!: (value: unknown) => void;
-    request.mockReturnValue(new Promise(resolve => { acknowledge = resolve; }));
-    const verify = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    const { refresh } = dialog(verify);
+    const finishes: ((value: VerificationResponse) => void)[] = [], acknowledgments: ((value: unknown) => void)[] = [];
+    request.mockImplementation(() => new Promise(resolve => { acknowledgments.push(resolve); }));
+    const verify = vi.fn().mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+    const { refresh } = dialog(verify, false, ['alpha', 'beta', 'gamma', 'delta']);
     fireEvent.click(await screen.findByRole('button', { name: '取消剩余验证' }));
+    expect(request).toHaveBeenCalledTimes(3);
     expect(request.mock.calls[0][0]).toMatch(/\/tests\/.+\/cancel$/);
-    expect(verify.mock.calls[0][3].aborted).toBe(false);
-    await act(async () => { acknowledge({ cancelled: true }); });
+    expect(verify.mock.calls.every(call => !call[3].aborted)).toBe(true);
+    await act(async () => { acknowledgments[0]({ cancelled: true }); });
     expect(verify.mock.calls[0][3].aborted).toBe(true);
-    await act(async () => { finish({ added: true, verification: result() }); });
-    await waitFor(() => expect(screen.getAllByText('已取消')).toHaveLength(2));
-    expect(verify).toHaveBeenCalledOnce(); expect(refresh).toHaveBeenCalled();
+    expect(verify.mock.calls[1][3].aborted).toBe(false);
+    await act(async () => { acknowledgments.slice(1).forEach(done => done({ cancelled: true })); });
+    expect(verify.mock.calls.every(call => call[3].aborted)).toBe(true);
+    await act(async () => { finishes.forEach(done => done({ added: true, verification: result() })); });
+    await waitFor(() => expect(screen.getAllByText('已取消')).toHaveLength(4));
+    expect(verify).toHaveBeenCalledTimes(3); expect(refresh).toHaveBeenCalled();
     expect(screen.queryByText('已添加')).not.toBeInTheDocument();
   });
   it('failed cancellation keeps current request visible until it ends', async () => {
-    let finish!: (value: VerificationResponse) => void;
+    const finishes: ((value: VerificationResponse) => void)[] = [];
     request.mockRejectedValue(new Error('offline'));
-    const verify = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const verify = vi.fn().mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
     dialog(verify);
     fireEvent.click(await screen.findByRole('button', { name: '取消剩余验证' }));
     await screen.findByText('取消请求未送达，正在等待当前验证结束。');
     expect(verify.mock.calls[0][3].aborted).toBe(false);
-    await act(async () => { finish({ added: true, verification: result() }); });
-    expect(verify).toHaveBeenCalledOnce();
+    await act(async () => { finishes.forEach(done => done({ added: true, verification: result() })); });
+    expect(verify).toHaveBeenCalledTimes(2);
+    await screen.findByRole('button', { name: '重试未添加项' });
+  });
+  it('keeps three workers busy and preserves row order when responses finish out of order', async () => {
+    const finishes = new Map<string, (value: VerificationResponse) => void>();
+    const verify = vi.fn().mockImplementation((model: { modelId: string }) => new Promise(resolve => finishes.set(model.modelId, resolve)));
+    dialog(verify, false, ['alpha', 'beta', 'gamma', 'delta', 'epsilon']);
+    await waitFor(() => expect(verify).toHaveBeenCalledTimes(3));
+    expect(screen.getAllByText('验证中…')).toHaveLength(3);
+    expect(screen.getAllByText('待验证')).toHaveLength(2);
+    await act(async () => { finishes.get('beta')!({ added: true }); });
+    expect(verify).toHaveBeenCalledTimes(4);
+    expect(verify.mock.calls[3][0].modelId).toBe('delta');
+    await act(async () => { finishes.get('gamma')!({ added: false }); });
+    expect(verify).toHaveBeenCalledTimes(5);
+    await act(async () => { ['alpha', 'delta', 'epsilon'].forEach(id => finishes.get(id)!({ added: true })); });
+    expect(screen.getAllByText('已添加')).toHaveLength(4);
+    expect([...document.querySelectorAll('.connection-check-heading strong')].map(node => node.textContent)).toEqual(['alpha', 'beta', 'gamma', 'delta', 'epsilon']);
   });
   it('password protected connections wait for a password without sending requests', async () => {
     const verify = vi.fn().mockResolvedValue({ added: true, verification: result() });

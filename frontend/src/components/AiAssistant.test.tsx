@@ -5,8 +5,17 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
 import { isUuidV7 } from '../lib/uuidV7';
+import type { StreamCallbacks, StreamDonePayload } from '../lib/aiStream';
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
+
+// 此组验证输入/结果渲染，复用既有响应 fixture；SSE 生命周期由 stream 专项覆盖。
+vi.mock('../lib/aiStream', () => ({
+  streamChat: async (_path: string, body: unknown, callbacks: StreamCallbacks) => {
+    void apiPost('/api/ai/chat', body).then((view: StreamDonePayload) => callbacks.onDone({ ...view, reasoning: view.reasoning ?? '' }));
+    return () => undefined;
+  }
+}));
 
 vi.mock('../lib/api', () => ({
   get: (...args: unknown[]) => apiGet(...args),
@@ -68,7 +77,7 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     vi.clearAllMocks();
     localStorage.clear();
     apiGet.mockImplementation((url: string) => {
-      // streaming:false 让本组用例走确定的非流式通道，只考察请求体与响应渲染
+      // 正文非流式仍使用事件通道，这里仅考察请求体与最终响应渲染。
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);

@@ -8,7 +8,25 @@ import type { ChatResultView } from './aiStream';
 interface TurnStatusLike {
   status?: string;
   active?: boolean;
+  finishReason?: string;
 }
+
+const EXECUTION_STOP_TEXT: Record<string, string> = {
+  budget_stages: '已达工具阶段上限，已依据现有结果收尾。',
+  budget_executions: '已达工具执行次数上限，已依据现有结果收尾。',
+  budget_output: '已达本轮输出 Token 预算，已保留已有结果。',
+  budget_time: '已达本轮时间上限，已保留已确认的工具操作。',
+  budget_context: '模型上下文空间不足，已停止追加工具结果。',
+  budget_repeated: '相同工具调用连续没有新结果，已停止重复执行。',
+  request_timeout: '单次模型请求超时，已保留收到的内容与工具结果。',
+  request_timeout_idle: '单次模型请求等待超时，未收到有效输出，已保留此前工具结果。',
+  stream_error: '模型连接提前中断，已保留收到的内容与已确认的工具操作。',
+  unexpected_tool_calls: '模型在工具已关闭后仍请求调用，本轮已停止。'
+};
+export function executionStopNotice(reason?: string): TurnNotice | undefined {
+  return reason && EXECUTION_STOP_TEXT[reason] ? { code: reason, message: EXECUTION_STOP_TEXT[reason] } : undefined;
+}
+export function canContinueTurn(notice?: { code: string }): boolean { return !!notice && !!EXECUTION_STOP_TEXT[notice.code]; }
 
 const NOTICE_TEXT: Record<string, string> = {
   MEMORY_DISABLED: '自动记忆未开启，本轮没有使用记忆',
@@ -74,6 +92,8 @@ export function outcomeNotice(view: ChatResultView): TurnNotice | undefined {
   if (view.stateDurable === false) {
     return { code: 'PERSISTENCE_FAILED', message: NOTICE_TEXT.PERSISTENCE_FAILED };
   }
+  const stopped = executionStopNotice(view.finishReason);
+  if (stopped) return stopped;
   if (view.status && view.status !== 'COMPLETED') {
     return { code: view.status, message: `这一轮${turnStatusText(view.status)}，显示的内容可能不完整` };
   }
@@ -88,6 +108,8 @@ export function outcomeNotice(view: ChatResultView): TurnNotice | undefined {
 
 /** 查状态查出来的终态也要有话可说。 */
 export function statusNotice(status: TurnStatusLike): TurnNotice {
+  const stopped = executionStopNotice(status.finishReason);
+  if (stopped) return stopped;
   const text = turnStatusText(status.status);
   if (status.status === 'RUNNING') {
     return status.active === false
@@ -226,8 +248,12 @@ const HISTORY_TEXT = {
 };
 
 /** 历史行自带的如实标注：清理过的原文与失败/中断终态各说各的，不许伪装成一次正常回答（§7.4、§4.5）。 */
-export function historyNotice(row: { turnStatus?: string | null; contentDeleted?: boolean }): TurnNotice | undefined {
+export function historyNotice(row: { role?: string; turnStatus?: string | null; contentDeleted?: boolean; finishReason?: string }): TurnNotice | undefined {
   if (row.contentDeleted) return { code: 'CONTENT_DELETED', message: HISTORY_TEXT.CONTENT_DELETED };
+  // 轮次状态描述的是助手生成结果，不能把用户已保存的提问也标成生成失败。
+  if (row.role && row.role !== 'assistant') return undefined;
+  const stopped = executionStopNotice(row.finishReason);
+  if (stopped) return stopped;
   if (row.turnStatus && row.turnStatus !== 'COMPLETED') {
     const notice = statusNotice({ status: row.turnStatus });
     return { code: notice.code, message: notice.message };

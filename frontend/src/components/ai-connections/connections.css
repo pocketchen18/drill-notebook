@@ -77,6 +77,13 @@
 .connection-discovery { max-height: 350px; overflow-y: auto; margin-top: 12px; }
 .connection-discovery > div { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .connection-preset-match { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.connection-model-id-input { flex: 1; min-width: 120px; }
+.connection-model-id-input .arco-autocomplete { width: 100%; }
+.connection-model-presets { max-width: calc(100vw - 32px); }
+.arco-autocomplete-popup .arco-select-popup .connection-model-presets .arco-select-option { height: auto; min-height: 50px; padding: 5px 12px; line-height: 1.4; }
+.connection-model-preset { min-width: 0; padding: 3px 0; white-space: normal; overflow-wrap: anywhere; }
+.connection-model-preset strong { display: block; font-size: 13px; font-weight: 500; }
+.connection-model-preset small { display: block; color: var(--color-text-3); font-size: 12px; margin-top: 3px; }
 .connection-effort-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: min(100%, 340px); min-height: 34px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-bg); padding: 7px 12px; color: var(--text); cursor: pointer; font: inherit; text-align: left; }
 .connection-effort-trigger:disabled { cursor: not-allowed; color: var(--muted); background: var(--subtle-bg); }
 .connection-effort-popup { position: fixed; z-index: 1100; display: flex; flex-direction: column; background: var(--panel-bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); overflow: hidden; }

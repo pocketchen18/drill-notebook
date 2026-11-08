@@ -6,6 +6,7 @@ import { AiConnectionsPanel, type SettingsLeaveGuard } from '../components/ai-co
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { MemoryManager } from '../components/ai-memory/MemoryManager';
 import { MemorySettingsCard } from '../components/ai-memory/MemorySettingsCard';
+import { AiRuntimeSettingsPanel } from '../components/AiRuntimeSettingsPanel';
 import { DataManagementPanel } from '../components/DataManagementPanel';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { useUiStore, type OutlineSide, type ThemeMode } from '../stores/uiStore';
@@ -67,6 +68,7 @@ const DEFAULT_REVIEW_INTERVALS: Record<string, number> = {
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'general', label: '常规' },
   { key: 'ai', label: 'AI 连接' },
+  { key: 'ai-behavior', label: 'AI 对话' },
   { key: 'memory', label: '记忆' },
   { key: 'embedding', label: '嵌入与检索' },
   { key: 'study', label: '学习与复习' },
@@ -183,7 +185,7 @@ export function SettingsPage(): JSX.Element {
   };
 
   const switchTab = (key: SettingsTab): void => {
-    if (activeTab === 'ai' && key !== 'ai' && aiLeaveGuard.current) {
+    if ((activeTab === 'ai' || activeTab === 'ai-behavior') && key !== activeTab && aiLeaveGuard.current) {
       aiLeaveGuard.current(() => commitTab(key));
       return;
     }
@@ -562,6 +564,8 @@ export function SettingsPage(): JSX.Element {
       </section>
       </div>
     )}
+
+    {activeTab === 'ai-behavior' && <div className="settings-tab-stack" role="tabpanel"><AiRuntimeSettingsPanel registerGuard={registerAiGuard} /></div>}
 
       {/* 记忆 Tab：一个总开关 + 记忆库的手动管理，维护细节不堆进界面 */}
       {activeTab === 'memory' && (

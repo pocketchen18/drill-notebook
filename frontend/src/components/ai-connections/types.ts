@@ -29,6 +29,7 @@ export interface ModelPreset {
 }
 export interface ConnectionProvider {
   id: string;
+  connectionVersion?: string;
   name: string;
   apiFormat: 'chat_completions' | 'anthropic';
   endpoint: string;

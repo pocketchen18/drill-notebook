@@ -118,10 +118,10 @@ class ChatStorageSizerTest {
     }
 
     @Test
-    void worstCaseReplyStaysInsideTwoMibReservation() {
+    void worstCaseReplyAndLongToolHistoryStayInsideReservation() {
         long worst = ChatStorageSizer.worstCaseReplyBytes();
-        assertTrue(worst < 1_433_000L, "最坏封装必须低于契约给出的 1,433,000 字节，实际 " + worst);
-        assertTrue(worst < ChatStorageSizer.REPLY_RESERVATION_BYTES, "最坏封装必须低于 2 MiB 预留，否则预留不再成立");
+        assertTrue(worst < 2_110_000L, "正文与 512 KiB 工具元数据的最坏封装应小于此上界，实际 " + worst);
+        assertTrue(worst < ChatStorageSizer.REPLY_RESERVATION_BYTES, "最坏封装必须低于 3 MiB 预留");
     }
 
     @Test

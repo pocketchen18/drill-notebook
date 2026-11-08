@@ -4,12 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.memory.Schema9Fixture;
 import com.drillnotebook.app.memory.TestWorkspace;
 import com.drillnotebook.app.model.UuidV7;
+import com.drillnotebook.app.model.ToolActivity;
+import com.drillnotebook.app.model.AiRuntimeSettings;
+import com.drillnotebook.app.repository.AiRuntimeSettingsRepository;
+import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.ChatLegacyWiring;
 import com.drillnotebook.app.repository.MemoryJobRepository;
@@ -41,6 +46,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -84,6 +90,7 @@ class MemoryToolChatPathTest {
                 "apiKey", "stub-key", "tools", true));
         ai.setMemoryTools(List.of(stack.memorySearchTool(), stack.memoryListTool(),
                 stack.memoryCreateTool(), stack.memoryUpdateTool()));
+        ai.setRuntimeSettings(new AiRuntimeSettingsRepository(jdbc));
         sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1 WHERE id = ?", sessionId);
         unlockVault();
@@ -116,13 +123,17 @@ class MemoryToolChatPathTest {
         assertFalse(dbContains(MemorySearchTool.NAME), "工具名不能落进持久化转录");
     }
 
-    @Test
-    void streamChatExecutesTheToolWithoutLeakingToolContentToSse() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void streamChatExecutesTheToolWithoutLeakingToolContentToSse(boolean streaming) throws Exception {
+        ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
+                "apiKey", "stub-key", "tools", true, "streaming", streaming));
         List<String> deltas = new ArrayList<>();
+        List<Map<String, Object>> events = new ArrayList<>();
         AiService.ChatResult result = ai.chatStream(body("复习计划怎么安排"), (type, text) -> {
             deltas.add(type + ":" + text);
             return true;
-        });
+        }, events::add);
 
         assertEquals("COMPLETED", result.status());
         assertEquals(FINAL, result.text());
@@ -132,6 +143,219 @@ class MemoryToolChatPathTest {
         assertFalse(deltas.toString().contains(MemorySearchTool.NAME), "工具调用不能作为正文发给前端");
         assertFalse(deltas.toString().contains("\"facts\""), "工具结果不能作为正文发给前端");
         assertFalse(dbContains("\"tool_call_id\""), "工具消息不能落进持久化转录");
+        var activityEvents = events.stream().filter(event -> event.containsKey("toolActivities")).toList();
+        assertEquals(3, activityEvents.size(), "实际开始、实际结束、进入回答三个快照");
+        assertEquals("RUNNING", activityRows(activityEvents.get(0)).get(0).state());
+        ToolActivity finished = activityRows(activityEvents.get(1)).get(0);
+        assertEquals("FINISHED", finished.state());
+        assertEquals("OK", finished.outcome());
+        assertEquals(1, finished.count());
+        assertNotNull(finished.startedAt());
+        assertNotNull(finished.elapsedMs());
+        assertEquals("answer", activityEvents.get(2).get("phase"));
+        String visible = new ObjectMapper().writeValueAsString(activityEvents);
+        assertFalse(visible.contains(FACT));
+        assertFalse(visible.contains("arguments"));
+        assertFalse(visible.contains("memoryId"));
+        assertFalse(visible.contains("stub-key"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1, false", "1, true", "3, false", "3, true"})
+    void exhaustedToolBudgetStillProducesAnAnswer(int batchSize, boolean streaming) throws Exception {
+        new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(2, 3, 30, 15, 128000, 16384, 8192, 0));
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(batchSize)) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true, "streaming", streaming));
+            enableUseConsent();
+            List<String> deltas = new ArrayList<>();
+            Map<String, Object> request = body("查清已有记忆后回答我");
+            AiService.ChatResult result = ai.chatStream(request, (type, text) -> {
+                deltas.add(type + ":" + text);
+                return true;
+            });
+
+            assertEquals("COMPLETED", result.status(), "工具达到上限后仍应完成最终回答");
+            assertEquals(FINAL, result.text());
+            if (streaming) assertTrue(deltas.stream().anyMatch(delta -> delta.startsWith("text:")));
+            List<String> requests = repeated.bodies();
+            assertEquals(batchSize == 1 ? 3 : 2, requests.size());
+            var lastRequest = new ObjectMapper().readTree(requests.get(requests.size() - 1));
+            assertFalse(lastRequest.has("tools"), "最后一次请求不能再诱导模型调用没有额度执行的工具");
+            assertTrue(requests.get(requests.size() - 1).contains(FACT), "最终回答仍须依据已经执行的工具结果");
+            assertTokenBudgets(requests);
+            var activities = wiring.turnService().toolActivities(String.valueOf(request.get("requestId")), PASSWORD);
+            assertEquals(batchSize == 1 ? 2 : 3, activities.size());
+            assertTrue(activities.stream().allMatch(row -> "OK".equals(row.outcome())));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ToolActivity> activityRows(Map<String, Object> event) {
+        return (List<ToolActivity>) event.get("toolActivities");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void defaultBudgetHandlesFiftyStagesAndOneHundredExecutionsWithCompleteHistory(boolean streaming) throws Exception {
+        var count = new java.util.concurrent.atomic.AtomicInteger();
+        ai.setMemoryTools(List.of(new AiService.MemoryTool() {
+            public AiUpstreamClient.ToolDefinition definition() { return stack.memorySearchTool().definition(); }
+            public Map<String, Object> execute(com.drillnotebook.app.model.ChatContextPlan plan, String args, boolean use, String text) {
+                return Map.of("status", "OK", "facts", List.of(Map.of("text", "新结果 " + count.incrementAndGet())));
+            }
+        }));
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(2)) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true, "streaming", streaming, "contextWindow", 200000));
+            enableUseConsent();
+            var request = body("完成多个查询后整理结果");
+            var result = ai.chatStream(request, (type, text) -> true);
+            assertEquals("COMPLETED", result.status());
+            assertEquals("budget_stages", result.resultView().get("finishReason"));
+            assertEquals(51, repeated.bodies().size(), "50 个工具阶段之后另留最终回答");
+            assertEquals(100, count.get(), "不能再受 3 次执行或 15 条记忆限制");
+            var persisted = wiring.turnService().toolActivities(String.valueOf(request.get("requestId")), PASSWORD);
+            assertEquals(100, persisted.size());
+            assertEquals(100, persisted.get(99).sequence());
+            var finalBody = new ObjectMapper().readTree(repeated.bodies().get(50));
+            assertFalse(finalBody.has("tools"));
+            assertEquals(8192, finalBody.path("max_tokens").asInt());
+            var history = new ChatHistoryService(new ChatHistoryRepository(dataSource), wiring.metadata(), wiring.cipher(), stack.vault());
+            var messages = (List<?>) history.page(sessionId, null, null, 50).get("messages");
+            var assistant = messages.stream().map(row -> (Map<?, ?>) row).filter(row -> "assistant".equals(row.get("role"))).findFirst().orElseThrow();
+            assertEquals("budget_stages", assistant.get("finishReason"));
+            assertEquals(100, ((List<?>) assistant.get("toolActivities")).size());
+        }
+    }
+
+    @Test void settingsSnapshotStaysStableDuringTurnAndNewTurnUsesUpdatedBudget() throws Exception {
+        var repository = new AiRuntimeSettingsRepository(jdbc);
+        repository.save(0, new AiRuntimeSettings(2, 4, 30, 15, 128000, 16384, 8192, 0));
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            var changed = new java.util.concurrent.atomic.AtomicBoolean();
+            ai.chatStream(body("读取后总结"), (type, text) -> true, event -> {
+                if (event.containsKey("toolActivities") && changed.compareAndSet(false, true)) {
+                    repository.save(1, new AiRuntimeSettings(1, 1, 30, 15, 128000, 16384, 8192, 0));
+                }
+            });
+            assertEquals(3, repeated.bodies().size());
+            ai.chat(body("继续读取"));
+            assertEquals(5, repeated.bodies().size(), "下一轮才读取新全局预算");
+        }
+    }
+
+    @Test void repeatedNoProgressEndsWithAnAnswerAndExplicitReason() throws Exception {
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            var result = ai.chat(body("反复查找"));
+            assertEquals("budget_repeated", result.get("finishReason"));
+            assertEquals(4, repeated.bodies().size());
+            assertEquals(FINAL, result.get("reply"));
+        }
+    }
+
+    @Test void executionLimitStopsTheRemainderOfABatchWithoutLosingCallPairs() throws Exception {
+        new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(50, 7, 30, 15, 128000, 16384, 8192, 0));
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(3)) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            var request = body("查询后回答");
+            var result = ai.chat(request);
+            assertEquals("budget_executions", result.get("finishReason"));
+            assertEquals(4, repeated.bodies().size());
+            var activities = wiring.turnService().toolActivities(String.valueOf(request.get("requestId")), PASSWORD);
+            assertEquals(9, activities.size());
+            assertEquals(7, activities.stream().filter(row -> "OK".equals(row.outcome())).count());
+            assertEquals(2, activities.stream().filter(row -> "LIMIT_REACHED".equals(row.outcome())).count());
+            int calls = 0, results = 0;
+            for (var message : new ObjectMapper().readTree(repeated.bodies().get(3)).path("messages")) {
+                calls += message.path("tool_calls").size();
+                if (message.path("role").asText().equals("tool")) results++;
+            }
+            assertEquals(calls, results, "被预算拦截的调用也必须有对应结果");
+        }
+    }
+
+    @Test void actualOutputBudgetReservesTheFinalAnswer() throws Exception {
+        new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(50, 100, 30, 15, 4096, 1024, 1024, 0));
+        try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
+            repeated.outputTokens = 512;
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            var result = ai.chat(body("查询后总结"));
+            assertEquals("budget_output", result.get("finishReason"));
+            assertEquals(7, repeated.bodies().size(), "6 次实际用量之后才收尾，不按分配的 1024 扣减");
+            var last = new ObjectMapper().readTree(repeated.bodies().get(6));
+            assertFalse(last.has("tools"));
+            assertEquals(1024, last.path("max_tokens").asInt());
+        }
+    }
+
+    @Test
+    void confirmedWriteSurvivesDisconnectBeforeAnyAnswerAndIsRestoredFromHistory() throws Exception {
+        try (ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
+                "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}")) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true, "streaming", false));
+            enableUseConsent();
+            var request = body("记住：我每周三晚上复习");
+            var failure = assertThrows(AiService.StreamFailure.class, () -> ai.chatStream(request,
+                    (type, text) -> true, event -> {
+                        if (event.containsKey("toolActivities")
+                                && activityRows(event).get(0).state().equals("FINISHED")) {
+                            throw new IllegalStateException("fixture-disconnected");
+                        }
+                    }));
+            assertEquals("CREATED", failure.toolActivities().get(0).outcome());
+            assertEquals(1, createServer.bodies().size(), "断连后不能继续下一次模型请求");
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item WHERE status = 'ACTIVE' AND kind = 'PREFERENCE'", Integer.class));
+            var history = new ChatHistoryService(new ChatHistoryRepository(dataSource), wiring.metadata(), wiring.cipher(), stack.vault());
+            var rows = (List<?>) history.page(sessionId, null, null, 50).get("messages");
+            var assistant = rows.stream().map(row -> (Map<?, ?>) row).filter(row -> "assistant".equals(row.get("role"))).findFirst().orElseThrow();
+            assertEquals("", assistant.get("content"));
+            assertEquals("CREATED", ((ToolActivity) ((List<?>) assistant.get("toolActivities")).get(0)).outcome());
+            assertEquals(1, createServer.bodies().size(), "读取历史不重放工具");
+        }
+    }
+
+    @Test
+    void cancellationAfterToolStartDoesNotExecuteThePendingTool() throws Exception {
+        var request = body("复习计划怎么安排");
+        var result = ai.chatStream(request, (type, text) -> true, event -> {
+            if (event.containsKey("toolActivities")) wiring.turnService().cancel(String.valueOf(request.get("requestId")));
+        });
+        assertEquals("ABORTED", result.status());
+        assertEquals(1, server.bodies().size());
+        var rows = wiring.turnService().toolActivities(String.valueOf(request.get("requestId")), PASSWORD);
+        assertEquals("UNKNOWN", rows.get(0).state());
+    }
+
+    @Test
+    void exceptionAfterActualWriteMustNotClaimThatNothingWasSaved() throws Exception {
+        try (ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
+                "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}")) {
+            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+                    "apiKey", "stub-key", "tools", true));
+            enableUseConsent();
+            MemoryCreateTool uncertain = org.mockito.Mockito.spy(stack.memoryCreateTool());
+            org.mockito.Mockito.doAnswer(invocation -> {
+                invocation.callRealMethod();
+                throw new IllegalStateException("fixture-failed-after-write");
+            }).when(uncertain).execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong());
+            ai.setMemoryTools(List.of(stack.memorySearchTool(), stack.memoryListTool(), uncertain, stack.memoryUpdateTool()));
+            var response = ai.chat(body("记住：我每周三晚上复习"));
+            ToolActivity activity = activityRows(response).get(0);
+            assertEquals("UNKNOWN", activity.state());
+            assertEquals("UNKNOWN", activity.outcome());
+            assertEquals(0, activity.count(), "不推断实际写入数量");
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_memory_item WHERE status = 'ACTIVE' AND kind = 'PREFERENCE'", Integer.class));
+        }
     }
 
     @Test
@@ -171,6 +395,8 @@ class MemoryToolChatPathTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void applyingAnotherModelKeepsMemoriesAvailableWithoutOpeningSettings(boolean changeSupplier) throws Exception {
+        var executionSettings = new AiRuntimeSettings(80, 200, 60, 20, 256000, 16384, 8192, 0);
+        new AiRuntimeSettingsRepository(jdbc).save(0, executionSettings);
         try (var listServer = new ToolFixtureServer("list_memories", "{\"scope\":\"ALL\",\"limit\":20}")) {
             if (!changeSupplier) {
                 ai.saveConfig(Map.of("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
@@ -204,6 +430,7 @@ class MemoryToolChatPathTest {
             state = configs.connections().read();
             var models = state.provider(providerId).models();
             connections.bind(Map.of("revision", state.revision(), "purpose", "chat", "modelId", models.get(models.size() - 1).id()));
+            assertEquals(executionSettings, new AiRuntimeSettingsRepository(jdbc).read().values(), "切供应商或模型不得影响全局预算");
 
             assertTrue(stack.policy().current().enabled());
             assertTrue(stack.policy().useEligibility().allowed(), "应用成功即能用记忆，不能依赖重新打开设置页");
@@ -324,8 +551,8 @@ class MemoryToolChatPathTest {
     private static void assertTokenBudgets(List<String> requests) throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         for (String request : requests) {
-            assertTrue(mapper.readTree(request).path("max_tokens").asInt() <= 1365,
-                    "三次请求最坏情况合计不能超过 4095 个输出 token");
+            int limit = mapper.readTree(request).path("max_tokens").asInt();
+            assertTrue(limit > 1365 && limit <= 16384, "不再将 4096 平摊给三次请求");
         }
     }
 
@@ -393,6 +620,8 @@ class MemoryToolChatPathTest {
         private final List<String> bodies = Collections.synchronizedList(new ArrayList<>());
         private final String toolCall;
         private final String toolSse;
+        private int repeatBatchSize;
+        private int outputTokens = 5;
 
         ToolFixtureServer() throws IOException {
             this("search_memories", "{\"query\":\"复习计划\"}");
@@ -427,6 +656,29 @@ class MemoryToolChatPathTest {
             return List.copyOf(bodies);
         }
 
+        /** 有工具定义就继续查；撤下工具后才输出回答，复现真实模型耗尽轮次的路径。 */
+        ToolFixtureServer repeatTools(int batchSize) {
+            repeatBatchSize = batchSize;
+            return this;
+        }
+
+        private String repeatedToolReply(boolean stream) throws IOException {
+            ObjectMapper json = new ObjectMapper();
+            var template = json.readTree(toolCall).path("choices").get(0).path("message").path("tool_calls").get(0);
+            var calls = json.createArrayNode();
+            for (int i = 0; i < repeatBatchSize; i++) {
+                var entry = (com.fasterxml.jackson.databind.node.ObjectNode) template.deepCopy();
+                entry.put("id", "call_" + bodies.size() + "_" + i);
+                if (stream) entry.put("index", i);
+                calls.add(entry);
+            }
+            Map<String, Object> message = Map.of("role", "assistant", "content", "", "tool_calls", calls);
+            String payload = json.writeValueAsString(Map.of("choices", List.of(Map.of(
+                    stream ? "delta" : "message", message, "finish_reason", "tool_calls")),
+                    "usage", Map.of("prompt_tokens", 20, "completion_tokens", outputTokens)));
+            return stream ? "data: " + payload + "\n\ndata: [DONE]\n\n" : payload;
+        }
+
         private void handle(HttpExchange exchange) throws IOException {
             String body;
             try (InputStream in = exchange.getRequestBody()) {
@@ -434,16 +686,17 @@ class MemoryToolChatPathTest {
             }
             bodies.add(body);
             boolean continuation = body.contains("\"role\":\"tool\"");
+            if (repeatBatchSize > 0) continuation = !new ObjectMapper().readTree(body).has("tools");
             boolean stream = body.contains("\"stream\":true");
             if (stream) {
-                byte[] payload = (continuation ? FINAL_SSE : toolSse).getBytes(StandardCharsets.UTF_8);
+                byte[] payload = (continuation ? FINAL_SSE : repeatBatchSize > 0 ? repeatedToolReply(true) : toolSse).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
                 exchange.sendResponseHeaders(200, payload.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(payload);
                 }
             } else {
-                byte[] payload = (continuation ? FINAL_JSON : toolCall).getBytes(StandardCharsets.UTF_8);
+                byte[] payload = (continuation ? FINAL_JSON : repeatBatchSize > 0 ? repeatedToolReply(false) : toolCall).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, payload.length);
                 try (OutputStream out = exchange.getResponseBody()) {

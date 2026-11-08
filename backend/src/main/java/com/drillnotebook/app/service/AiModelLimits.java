@@ -25,6 +25,13 @@ public final class AiModelLimits {
     public static boolean noKey(ConfigRow config) {
         return config != null && ("none".equals(params(config).get("authMode")) || "mock://local".equals(config.endpoint()));
     }
+    /** 工具链每次续写重新估算，给最终回答和收口提示留空间，不裁断用户问题。 */
+    public static int availableOutput(ConfigRow config, Object messages, Object tools, int fallbackWindow) {
+        int input = estimate(messages) + estimate(tools);
+        if (input > ceiling(config, "maxInputTokens", Integer.MAX_VALUE)) return 0;
+        int window = ceiling(config, "contextWindow", fallbackWindow);
+        return Math.max(0, window - input - Math.min(512, window / 10));
+    }
     public static void validate(ConfigRow config, Object messages, Object tools, int output) {
         Map<String, Object> params = params(config);
         if (!params.containsKey("maxInputTokens") && !params.containsKey("contextWindow")) return;

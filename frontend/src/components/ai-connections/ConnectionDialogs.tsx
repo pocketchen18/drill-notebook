@@ -3,6 +3,7 @@ import { Button, Checkbox, Input, Modal, Spin } from '@arco-design/web-react';
 import { apiRequest } from '../../lib/api';
 import { modelName, type ConnectionModel, type ConnectionProvider } from './types';
 import { effortLabel, matchPreset, useModelPresets } from './modelPresets';
+import { ModelIdInput } from './ModelIdInput';
 
 interface Props { provider: ConnectionProvider; close: () => void }
 export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props & { add: (ids: string[], password: string) => void; busy: boolean; saveError?: string }) {
@@ -45,7 +46,7 @@ export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props
         {filtered.map(id => { const exists = provider.models.some(model => model.modelId === id), preset = matchPreset(presets.data, id); return <div key={id}><Checkbox disabled={exists || busy} checked={exists || selected.includes(id)} onChange={checked => setSelected(current => checked ? [...current, id] : current.filter(value => value !== id))}><span>{id}</span><small className="connection-preset-match">{exists ? '已添加' : preset ? `已匹配预设 · ${preset.name}${preset.reasoningEfforts.length ? ` · ${effortLabel(preset.reasoningEfforts)}` : ''}` : '未匹配预设，可手动配置'}</small></Checkbox></div>; })}
         {!filtered.length && <p className="connection-hint">{ids.length ? '没有匹配模型' : '此服务未提供模型列表，可手动添加模型 ID。'}</p>}
       </div></>}
-    <div className="connection-field"><label htmlFor="discover-manual-id">手动模型 ID</label><div className="connection-actions"><Input id="discover-manual-id" value={manual} maxLength={240} onChange={setManual} placeholder="列表未提供时可手动填写" /><Button disabled={!manual.trim() || busy || selected.length >= 20} onClick={() => { const id = manual.trim(); if (provider.models.some(model => model.modelId === id)) { setError('此模型已添加'); return; } setIds(current => [...new Set([...(current ?? []), id])]); setSelected(current => [...new Set([...current, id])]); setSearch(''); setManual(''); }}>加入待选</Button></div></div>
+    <div className="connection-field"><label htmlFor="discover-manual-id">手动模型 ID</label><div className="connection-actions"><ModelIdInput id="discover-manual-id" value={manual} presets={presets.data} loading={presets.isPending} disabled={busy} onChange={setManual} onSelect={setManual} /><Button disabled={!manual.trim() || busy || selected.length >= 20} onClick={() => { const id = manual.trim(); if (provider.models.some(model => model.modelId === id)) { setError('此模型已添加'); return; } setIds(current => [...new Set([...(current ?? []), id])]); setSelected(current => [...new Set([...current, id])]); setSearch(''); setManual(''); }}>加入待选</Button></div>{matchPreset(presets.data, manual) && <p className="connection-hint">已匹配预设 · {matchPreset(presets.data, manual)!.name}，添加时自动填充设置。</p>}</div>
     {selected.length > 20 && <p role="alert" className="connection-error">一次最多验证 20 个模型，请减少选择。</p>}
   </Modal>;
 }

@@ -22,7 +22,7 @@ export function VerificationDialog({ provider, models, password: supplied = '', 
   const [cancelError, setCancelError] = useState('');
   const cancellation = useRef<Promise<boolean>>();
   const rowsRef = useRef(rows); rowsRef.current = rows;
-  const active = useRef<{ controller: AbortController; id: string }>();
+  const active = useRef(new Map<string, AbortController>());
   const stopped = useRef(false);
   const mounted = useRef(true);
   const inFlight = useRef(false);
@@ -33,35 +33,41 @@ export function VerificationDialog({ provider, models, password: supplied = '', 
   const cancel = (): Promise<boolean> => {
     stopped.current = true;
     if (cancellation.current) return cancellation.current;
-    const request = active.current;
-    if (!request) return Promise.resolve(true);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
-    cancellation.current = apiRequest(`/api/ai/connections/tests/${request.id}/cancel`, { method: 'POST', signal: controller.signal }).then(() => {
-      request.controller.abort(); refresh(); return true;
-    }).catch(() => {
-      if (mounted.current) setCancelError('取消请求未送达，正在等待当前验证结束。');
-      return false;
-    }).finally(() => { window.clearTimeout(timeout); cancellation.current = undefined; });
+    const requests = [...active.current];
+    if (!requests.length) return Promise.resolve(true);
+    cancellation.current = Promise.all(requests.map(async ([id, request]) => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 5000);
+      try {
+        await apiRequest(`/api/ai/connections/tests/${id}/cancel`, { method: 'POST', signal: controller.signal });
+        request.abort(); return true;
+      } catch {
+        if (mounted.current) setCancelError('取消请求未送达，正在等待当前验证结束。');
+        return false;
+      } finally { window.clearTimeout(timeout); }
+    })).then(results => results.every(Boolean)).finally(() => { cancellation.current = undefined; });
     return cancellation.current;
   };
   const run = async () => {
     if (inFlight.current || (provider.needsPassword && !password)) return;
     inFlight.current = true; stopped.current = false; setRunning(true); setCancelError(''); onBusy(true);
     const batch = rowsRef.current;
+    const queue = batch.flatMap((row, index) => row.status === 'added' ? [] : [index]);
+    let cursor = 0;
     try {
-      for (let index = 0; index < batch.length; index++) {
-        if (stopped.current) break;
-        if (batch[index].status === 'added') continue;
-        const controller = new AbortController(), id = crypto.randomUUID(); active.current = { controller, id };
-        patch(index, { status: 'running', error: undefined, result: undefined });
-        try {
-          const value = await verify(batch[index].model, password, id, controller.signal);
-          if (!stopped.current) patch(index, { status: value.added ? 'added' : value.cancelled ? 'cancelled' : 'failed', result: value.verification });
-        } catch (error) {
-          if (!stopped.current) patch(index, { status: 'failed', error: error instanceof Error ? error.message : '验证失败，请重试' });
-        } finally { if (active.current?.id === id) active.current = undefined; }
-      }
+      await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (!stopped.current && cursor < queue.length) {
+          const index = queue[cursor++];
+          const controller = new AbortController(), id = crypto.randomUUID(); active.current.set(id, controller);
+          patch(index, { status: 'running', error: undefined, result: undefined });
+          try {
+            const value = await verify(batch[index].model, password, id, controller.signal);
+            if (!stopped.current) patch(index, { status: value.added ? 'added' : value.cancelled ? 'cancelled' : 'failed', result: value.verification });
+          } catch (error) {
+            if (!stopped.current) patch(index, { status: 'failed', error: error instanceof Error ? error.message : '验证失败，请重试' });
+          } finally { active.current.delete(id); }
+        }
+      }));
     } finally {
       if (cancellation.current) await cancellation.current;
       inFlight.current = false;
@@ -79,7 +85,7 @@ export function VerificationDialog({ provider, models, password: supplied = '', 
   return <Modal visible title={`验证模型 · ${provider.name}`} onCancel={leave} maskClosable={false} footer={<div className="connection-actions end">
     {running ? <Button onClick={() => void cancel()}>取消剩余验证</Button> : <>{rows.some(row => row.status !== 'added') && <Button disabled={provider.needsPassword && !password} onClick={() => void run()}>{rows.every(row => row.status === 'queued') ? '开始验证' : '重试未添加项'}</Button>}<Button type="primary" onClick={leave}>完成</Button></>}
   </div>}>
-    <p className="connection-hint">文本通过即可添加；视觉或工具未通过不影响添加。工具通过后自动开启。</p>
+    <p className="connection-hint">同时验证最多 3 个模型。文本通过即可添加；视觉或工具未通过不影响添加。工具通过后自动开启。</p>
     {cancelError && <p role="alert" className="connection-error">{cancelError}</p>}
     {provider.needsPassword && <div className="connection-field"><label htmlFor="verify-password">此连接主密码</label><Input.Password id="verify-password" value={password} onChange={setPassword} disabled={running} /></div>}
     <div className="connection-verifications">{rows.map(row => <section className="connection-verification" key={String(row.model.modelId)}>

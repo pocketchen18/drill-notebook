@@ -78,6 +78,62 @@ class AiConnectionsServiceTest {
         var unknown = service.view();
         assertEquals("effort", mapper.valueToTree(unknown).path("providers").get(0).path("models").get(0).path("reasoningControl").asText());
     }
+    @Test void modelIdEditsPreserveSettingsAndIdentityAndRejectDuplicatesAtomically() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String original = model(p, "old", true), other = model(p, "duplicate", false);
+        service.bind(body("purpose", "chat", "modelId", original));
+        service.bind(body("purpose", "import", "modelId", original));
+        service.saveModels(null, original, body("modelId", "old", "name", "自定义名称", "group", "常用", "contextWindow", 12000, "maxInputTokens", 800, "maxOutputTokens", 2000,
+                "reasoningEfforts", List.of("high"), "defaultReasoningEffort", "high"));
+        var settings = state().model(original).params();
+        service.saveModels(null, original, body("modelId", " gpt-5.2 "));
+        var saved = state().model(original);
+        assertEquals("gpt-5.2", saved.modelId()); assertEquals("自定义名称", saved.name());
+        assertEquals(settings, saved.params());
+        assertEquals("常用", saved.group()); assertEquals(original, state().chatModelId()); assertEquals(original, state().importModelId());
+        assertEquals("gpt-5.2", configs.findChat().model());
+        var before = state();
+        assertThrows(IllegalArgumentException.class, () -> service.saveModels(null, original, body("modelId", "duplicate")));
+        assertEquals(before, state()); assertEquals(other, state().provider(p).models().get(1).id());
+        service.saveModels(null, original, body("modelId", "custom-new", "tools", true, "contextWindow", 20000, "name", "自定义"));
+        assertEquals(true, state().model(original).params().get("tools"));
+        assertEquals(20000, state().model(original).params().get("contextWindow"));
+        assertEquals("high", state().model(original).params().get("defaultReasoningEffort"));
+        assertEquals(800, state().model(original).params().get("maxInputTokens"));
+    }
+    @Test void selectedPresetAndCustomIdPersistIndependentlyWithExplicitDraftValues() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        service.saveModels(p, null, body("modelId", "gateway/gpt-custom", "name", "草稿名称", "presetId", "gpt-5.2",
+                "contextWindow", 500000, "maxInputTokens", null, "maxOutputTokens", 128000,
+                "reasoningControl", "effort", "reasoningEfforts", List.of("low", "high"), "defaultReasoningEffort", "high", "tools", true));
+        var saved = state().provider(p).models().get(0);
+        assertEquals("gpt-5.2", saved.params().get("presetId"));
+        assertEquals(500000, saved.params().get("contextWindow"));
+        service.saveModels(null, saved.id(), body("modelId", "gpt-4.1"));
+        assertEquals(saved.params(), state().model(saved.id()).params());
+        assertEquals(saved.name(), state().model(saved.id()).name());
+        var persisted = new AiConnectionsService(new AiConfigRepository(jdbc), new ApiKeyEncryptor(), mapper);
+        var view = mapper.valueToTree(persisted.view()).path("providers").get(0).path("models").get(0);
+        assertEquals("gpt-4.1", view.path("modelId").asText());
+        assertEquals("gpt-5.2", view.path("preset").path("id").asText());
+        assertEquals(500000, view.path("contextWindow").asInt());
+        assertEquals("high", view.path("defaultReasoningEffort").asText());
+        var before = state();
+        assertThrows(IllegalArgumentException.class, () -> service.saveModels(null, saved.id(), body("modelId", "custom", "presetId", "missing")));
+        assertEquals(before, state());
+    }
+    @Test void emptyDraftFieldsRemainEmptyEvenWhenTheTypedIdMatchesAPreset() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        service.saveModels(p, null, body("modelId", "gpt-5.2", "name", "", "group", "", "tools", false, "streaming", true,
+                "contextWindow", null, "maxInputTokens", null, "maxOutputTokens", null,
+                "reasoningControl", "effort", "reasoningEfforts", List.of(), "defaultReasoningEffort", "", "thinkingBudgetTokens", null));
+        var saved = state().provider(p).models().get(0);
+        assertEquals("", saved.name());
+        for (String field : List.of("contextWindow", "maxInputTokens", "maxOutputTokens", "thinkingBudgetTokens", "defaultReasoningEffort")) assertNull(saved.params().get(field), field);
+        assertEquals(List.of(), saved.params().get("reasoningEfforts"));
+        service.saveModels(null, saved.id(), body("modelId", "gpt-4.1"));
+        assertEquals(saved.params(), state().model(saved.id()).params());
+    }
     @Test void migrationPreservesCiphertextSeparateAccountsAndExplicitPreferences() throws Exception {
         configs.upsert("chat", "custom", "https://api.openai.com/v1", "same", "cipher-a", "meta-a", "{\"tools\":false,\"streaming\":false}");
         configs.upsert("import", "custom", "https://api.openai.com/v1", "same", "cipher-b", "meta-b", "{\"streaming\":true}");

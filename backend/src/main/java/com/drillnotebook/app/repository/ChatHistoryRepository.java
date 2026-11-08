@@ -42,7 +42,7 @@ public class ChatHistoryRepository {
     public record HistoryRow(long messageId, String role, String content, String contentCipher, String contentMeta,
                              String reasoningCipher, String reasoningMeta, String createdAt, Long turnId,
                              String requestId, String turnRole, String turnStatus, boolean contentDeleted,
-                             boolean legacy) {
+                             boolean legacy, String resultMetaCipher, String resultMetaCrypto) {
     }
 
     private static final String TURN_SELECT = "SELECT t.id, t.request_id, t.status, t.context_generation,"
@@ -512,7 +512,7 @@ public class ChatHistoryRepository {
         String sql = "SELECT m.id, m.role, m.content, m.content_cipher, m.content_meta, m.reasoning_cipher,"
                 + " m.reasoning_meta, m.created_at, m.turn_id, m.turn_role,"
                 + " t.request_id AS turn_request_id, t.status AS turn_status,"
-                + " t.content_deleted_at AS turn_deleted"
+                + " t.content_deleted_at AS turn_deleted, t.result_meta_cipher, t.result_meta_crypto"
                 + " FROM ai_chat_message m LEFT JOIN ai_chat_turn t ON t.id = m.turn_id"
                 + " WHERE m.session_id = ? AND m.id " + (backwards ? "< ?" : "> ?")
                 + " ORDER BY m.id " + (backwards ? "DESC" : "ASC") + " LIMIT ?";
@@ -531,7 +531,8 @@ public class ChatHistoryRepository {
                             nullableLong(result, "turn_id"), result.getString("turn_request_id"),
                             result.getString("turn_role"),
                             result.getString("turn_status"), result.getString("turn_deleted") != null,
-                            result.getObject("turn_id") == null));
+                            result.getObject("turn_id") == null, result.getString("result_meta_cipher"),
+                            result.getString("result_meta_crypto")));
                 }
             }
             if (backwards) java.util.Collections.reverse(rows);

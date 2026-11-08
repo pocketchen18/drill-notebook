@@ -143,18 +143,21 @@ public class AiConnectionsService {
         Map<String, Object> draft = mapper.convertValue(body.get("model"), new com.fasterxml.jackson.core.type.TypeReference<>() { });
         Provider provider;
         Model candidate;
-        long revision;
         String key;
         AiConnectionUsage usage;
         ActiveTurnRegistry.Handle handle = new ActiveTurnRegistry.Handle(requestId, 0);
         synchronized (AiConnectionUsage.LOCK) {
             State state = state(); provider = provider(state, providerId);
+            if (body.containsKey("connectionVersion")) {
+                if (!connectionVersion(provider).equals(text(body, "connectionVersion", 64, true))) throw AiConnectionsStore.conflict();
+            } else if (!(body.get("revision") instanceof Number expected) || expected.longValue() != state.revision()) {
+                throw AiConnectionsStore.conflict();
+            }
             String modelId = text(draft, "modelId", 240, true);
             Model existing = provider.models().stream().filter(m -> m.modelId().equals(modelId)).findFirst().orElse(null);
             if (existing != null) return Map.of("added", true, "existing", true, "modelId", existing.id(), "connections", view(state));
-            if (!(body.get("revision") instanceof Number expected) || expected.longValue() != state.revision()) throw AiConnectionsStore.conflict();
             if (provider.models().size() >= 500) invalid("单个供应商最多保存 500 个模型");
-            candidate = model(provider, null, draft); ready(provider, candidate); revision = state.revision();
+            candidate = model(provider, null, draft); ready(provider, candidate);
             if ("mock://local".equals(provider.endpoint())) invalid("本地演示连接不执行联网验证");
             key = provider.id() + "/" + candidate.modelId();
             if (verifyingModels.contains(key) || tests.size() >= 20) invalid("此模型正在验证，或验证任务过多，请稍后重试");
@@ -172,16 +175,20 @@ public class AiConnectionsService {
                 if (handle.cancelRequested()) return Map.of("added", false, "cancelled", true, "verification", verification);
                 if (!verification.text().passed()) return Map.of("added", false, "verification", verification);
                 State latest = state();
-                if (latest.revision() != revision) throw AiConnectionsStore.conflict();
+                Provider current = provider(latest, providerId);
+                if (!connectionVersion(current).equals(connectionVersion(provider))) throw AiConnectionsStore.conflict();
+                Model existing = current.models().stream().filter(m -> m.modelId().equals(candidate.modelId())).findFirst().orElse(null);
+                if (existing != null) return Map.of("added", true, "existing", true, "modelId", existing.id(), "connections", view(latest));
+                if (current.models().size() >= 500) invalid("单个供应商最多保存 500 个模型");
                 Map<String, Object> params = new LinkedHashMap<>(candidate.params());
                 params.put("tools", verification.tools().passed());
                 params.put("visionVerified", verification.image().passed());
                 params.put("verification", mapper.convertValue(verification, Map.class));
                 Model saved = new Model(candidate.id(), candidate.modelId(), candidate.name(), candidate.group(), params);
-                List<Model> models = new ArrayList<>(provider.models()); models.add(saved);
-                var next = replace(latest, provider, new Provider(provider.id(), provider.name(), provider.apiFormat(), provider.endpoint(),
-                        provider.authMode(), provider.encryptedKey(), provider.keyMeta(), models));
-                return Map.of("added", true, "modelId", saved.id(), "verification", verification, "connections", view(store.save(next, revision)));
+                List<Model> models = new ArrayList<>(current.models()); models.add(saved);
+                var next = replace(latest, current, new Provider(current.id(), current.name(), current.apiFormat(), current.endpoint(),
+                        current.authMode(), current.encryptedKey(), current.keyMeta(), models));
+                return Map.of("added", true, "modelId", saved.id(), "verification", verification, "connections", view(store.save(next, latest.revision())));
             }
         } finally {
             synchronized (AiConnectionUsage.LOCK) { tests.remove(requestId, handle); verifyingModels.remove(key); }
@@ -190,14 +197,23 @@ public class AiConnectionsService {
 
     private Model model(Provider provider, Model old, Map<String, Object> body) {
         String id = text(body, "modelId", 240, true);
-        if (old != null && !old.modelId().equals(id)) invalid("已保存的模型 ID 不可修改，请添加新模型");
+        boolean changedId = old != null && !old.modelId().equals(id);
+        // ID 编辑不重置用户设置；仅旧上游身份的探测记录失效。
         Map<String, Object> params = new LinkedHashMap<>(old == null ? Map.of() : old.params());
+        if (changedId) {
+            params.remove("verification"); params.remove("visionVerified"); params.remove("cacheBreakpoints");
+        }
         var preset = AiModelPresets.match(provider, id);
         if (old == null && preset != null) {
             params.put("presetId", preset.id()); params.put("presetVersion", AiModelPresets.version());
             if (preset.contextWindow() != null) params.put("contextWindow", preset.contextWindow());
             if (preset.maxOutputTokens() != null) params.put("maxOutputTokens", preset.maxOutputTokens());
             params.put("reasoningControl", preset.reasoningControl()); params.put("reasoningEfforts", preset.reasoningEfforts());
+        }
+        if (body.containsKey("presetId")) {
+            var reference = AiModelPresets.match(provider, text(body, "presetId", 240, true));
+            if (reference == null) invalid("所选预设不可用，请重新选择");
+            params.put("presetId", reference.id()); params.put("presetVersion", AiModelPresets.version());
         }
         params.put("streaming", bool(body, "streaming", !Boolean.FALSE.equals(params.get("streaming"))));
         params.put("tools", bool(body, "tools", params.get("tools") instanceof Boolean flag ? flag : ProviderCapabilities.of(provider.endpoint(), provider.apiFormat(), id).tools()));
@@ -365,6 +381,16 @@ public class AiConnectionsService {
         }
     }
 
+    private String connectionVersion(Provider provider) {
+        // 密文自带随机盐；摘要仅用作配置一致性标记，不承担授权，不暴露密钥或密文。
+        String snapshot = json(java.util.Arrays.asList(provider.id(), provider.endpoint(), provider.apiFormat(),
+                provider.authMode(), provider.encryptedKey(), provider.keyMeta()));
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(snapshot.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException error) { throw new IllegalStateException(error); }
+    }
+
     private Map<String, Object> view(State state) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("revision", state.revision());
@@ -374,6 +400,7 @@ public class AiConnectionsService {
             Map<String, Object> view = new LinkedHashMap<>();
             view.put("id", p.id()); view.put("name", p.name()); view.put("endpoint", p.endpoint());
             view.put("apiFormat", p.apiFormat()); view.put("authMode", p.authMode());
+            view.put("connectionVersion", connectionVersion(p));
             view.put("hasKey", !blank(p.encryptedKey()));
             view.put("needsPassword", p.keyMeta() != null && p.keyMeta().contains("\"password\""));
             view.put("models", p.models().stream().map(m -> {
@@ -384,7 +411,7 @@ public class AiConnectionsService {
                 item.put("reasoningEfforts", m.params().getOrDefault("reasoningEfforts", List.of()));
                 item.put("defaultReasoningEffort", m.params().get("defaultReasoningEffort"));
                 item.put("thinkingBudgetTokens", m.params().get("thinkingBudgetTokens"));
-                item.put("preset", AiModelPresets.match(p, m.modelId()));
+                item.put("preset", AiModelPresets.match(p, m.params().get("presetId") instanceof String reference ? reference : m.modelId()));
                 item.put("presetVersion", m.params().get("presetVersion"));
                 item.put("visionVerified", m.params().get("visionVerified"));
                 item.put("verification", m.params().get("verification"));
