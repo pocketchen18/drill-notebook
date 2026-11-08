@@ -20,7 +20,7 @@ const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.repl
 const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
-  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.0');
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.1');
   assert.equal(workflow.on.workflow_dispatch.inputs.publish_release.default, false);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.prerelease, true);
   assert.equal(job.defaults.run.shell, 'pwsh');
@@ -44,11 +44,17 @@ test('锁文件安装及前后端测试必须成功后才可打包发布', () =>
   assert.match(steps[pack].run, /--publish never --config\.extraMetadata\.version=/);
   assert.equal(steps[release].if, "github.event_name == 'push' || inputs.publish_release == true");
   assert.equal(steps[release].with.name, 'Drill Notebook ${{ steps.ver.outputs.tag }}');
+  assert.equal(steps[release].with.target_commitish, '${{ github.sha }}');
+  assert.equal(steps[release].with.body_path, '${{ steps.notes.outputs.path }}');
   assert.equal(steps[release].with.fail_on_unmatched_files, true);
   const artifact = steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(artifact.if, undefined);
   assert.equal(artifact.with['if-no-files-found'], 'error');
-  assert.ok(existsSync(join(root, 'docs/plans/v0.7.0-release-notes.md')));
+  const notes = steps.findIndex(step => step.id === 'notes');
+  assert.ok(notes > steps.findIndex(step => step.id === 'ver') && notes < install);
+  assert.equal(steps[notes].if, undefined);
+  assert.equal(steps[notes]['continue-on-error'], undefined);
+  assert.ok(existsSync(join(root, `docs/plans/v${defaultVersion}-release-notes.md`)));
 });
 
 test('云端后端使用预装 Maven，保留测试门禁、Java 17 和 JAR 产物路径', () => {
@@ -108,13 +114,46 @@ function runPackage(dir, args = []) {
 }
 
 const windowsOnly = { skip: process.platform !== 'win32' };
+test('发布说明按完整版本选择，预发行复用同版正文，缺失或空白立即失败', windowsOnly, t => {
+  mkdirSync(cacheRoot, { recursive: true });
+  const dir = mkdtempSync(join(cacheRoot, 'release-notes-test-'));
+  t.after(() => {
+    const pathInCache = relative(cacheRoot, dir);
+    assert.ok(pathInCache && !pathInCache.startsWith(`..${sep}`) && !pathInCache.includes(sep));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  mkdirSync(join(dir, 'docs/plans'), { recursive: true });
+  for (const tag of ['v0.7.0', 'v0.7.1', 'v0.7.10']) {
+    writeFileSync(join(dir, `docs/plans/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
+  }
+  writeFileSync(join(dir, 'docs/plans/v0.7.2-release-notes.md'), ' \n');
+  const script = join(dir, 'select-notes.ps1');
+  const output = join(dir, 'notes-output.txt');
+  writeFileSync(script, steps.find(step => step.id === 'notes').run);
+  for (const tag of ['v0.7.0', 'v0.7.1', 'v0.7.1-rc.1', 'v0.7.10', 'v0.7.2', 'v0.7.3']) {
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
+      cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
+      env: { ...process.env, RELEASE_TAG: tag, GITHUB_OUTPUT: output },
+    });
+    assert.ifError(result.error);
+    if (tag === 'v0.7.2' || tag === 'v0.7.3') {
+      assert.notEqual(result.status, 0, `不应发布缺少正文的版本：${tag}`);
+      assert.equal(existsSync(output), false);
+    } else {
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(readFileSync(output, 'utf8').trim(), `path=docs/plans/${tag.split('-')[0]}-release-notes.md`);
+      rmSync(output);
+    }
+  }
+});
+
 test('云端版本校验拒绝路径、命令及多行输入，正常输出发布版本', windowsOnly, t => {
   const dir = fixture(t);
   const script = join(dir, 'scripts/validate-version.ps1');
   const output = join(dir, 'version-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'ver').run);
-  for (const version of ['v0.6.3', 'v0.7.0-rc.1', '../outside', 'v0.6.3;echo bad', 'v0.6.3\ntag=other', 'v0.6.3\n', '0.6.3']) {
-    const valid = version === 'v0.6.3' || version === 'v0.7.0-rc.1';
+  for (const version of ['v0.7.1', 'v0.7.1-rc.1', '../outside', 'v0.7.1;echo bad', 'v0.7.1\ntag=other', 'v0.7.1\n', '0.7.1']) {
+    const valid = version === 'v0.7.1' || version === 'v0.7.1-rc.1';
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RAW: version, GITHUB_OUTPUT: output },
@@ -145,10 +184,10 @@ test('本地默认版本与 CI 一致，注入应用版本并生成同版本 ZIP
 
 test('自定义版本去除 v 前缀，应用版本与 ZIP 名称一致', windowsOnly, t => {
   const dir = fixture(t);
-  const result = runPackage(dir, ['-Version', 'v0.7.0-rc.1']);
+  const result = runPackage(dir, ['-Version', 'v0.7.1-rc.1']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.7.0-rc.1'));
-  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.7.0-rc.1-win-x64-portable.zip')));
+  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.7.1-rc.1'));
+  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.7.1-rc.1-win-x64-portable.zip')));
 });
 
 test('非法版本在构建和写入产物前被拒绝', windowsOnly, t => {

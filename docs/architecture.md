@@ -78,10 +78,20 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 | 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
-| AI | 配置密文、多会话、消息密文、chat/summarize 代理 |
+| AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-Schema 以 `backend/src/main/resources/schema.sql` 为准。
+当前 schema 11，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+
+### 3.1 AI 连接、轮次与工具（v0.7.1）
+
+- `AiConnectionsService` 管理供应商/模型集合与使用绑定，密钥加密存储；模型内部 ID 稳定，编辑上游模型 ID 不改变绑定。全局预算独立存储；一轮开始时解析配置并冻结快照，后续保存只影响下一轮。
+- 模型发现与验证使用后端代理；最多三个模型并发验证，各模型的文本、图片与工具请求分别记录。文本决定是否加入，工具验证成功才自动开启对应能力。配置版本用于避免旧验证覆盖后续编辑。
+- 对话工具循环按阶段、执行次数、输出额度、单请求/整轮期限和重复无进展共同约束；达限停止新工具并尽量总结。上游请求可取消，SSE 有心跳；正文与活动独立传递，「继续」建立新一轮。
+- 活动按 `requestId` 与轮内 `sequence` 关联，服务端只发白名单摘要，不暴露上游调用 ID；原始参数与工具结果不入 SSE、日志或历史。安全活动元数据随助手消息加密持久化，检查点不推进 `history_revision`，避免使本轮冻结计划失效。
+- 前端连接页使用供应商/模型列表与二级编辑页；`ToolActivityGroup` 展示、折叠活动，保留用户手动选择和滚动位置。失败轮次提示归属助手回复；正文流式更新不强制打断向上阅读。
+- 记忆词法索引以 vault、epoch、revision 判定是否可复用，同版本构建合并、解锁时异步预热；聊天模型不参与索引身份。实际记忆变更或重启后的预热仍可能需要时间，不承诺零延迟。
+- 删除来源会话/历史只清理来源证据，长期记忆及原 origin 保留；删除笔记本仍清理所属 NOTEBOOK scope。接口与安全边界见 [api-contracts.md](api-contracts.md)。
 
 ## 4. 导入 / 导出
 
@@ -94,7 +104,7 @@ Schema 以 `backend/src/main/resources/schema.sql` 为准。
 
 - 开发：未打包时默认在工作区旁建立便携数据根（`APP_ROOT`，不入库）。  
 - 生产：`electron/paths.ts` 将 userData/cache/temp 指到可执行文件旁。  
-- 打包：`docs/jlink.md` + `npm run package:portable`。  
+- 发行包只在 `.github/workflows/release-portable.yml` 构建。标签注入版本，前后端与发布配置测试通过后生成内嵌 JRE、应用目录和 ZIP；按版本选择发布说明，继续使用 Pre-release。操作见 [README §4.3](../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](jlink.md)。本地仅构建与验证，不生成发行包。
 
 ## 6. 测试
 
@@ -115,5 +125,6 @@ Schema 以 `backend/src/main/resources/schema.sql` 为准。
 | v0.6.2 | TipTap 编辑器现代化、斜杠 / 块手柄 / 浮层；草稿回传与按页自动保存加固 |
 | v0.6.3 | 编辑器稳定性：公式转换 / 复制 / 焦点 / 浮窗、统一统计、字面替换、文件落点、新建页面回跳与斜体修复 |
 | v0.7.0 | AI 跨会话记忆、用量/缓存适配、删除与恢复安全；预发行，完整 120 §7 评测仍待补齐 |
+| v0.7.1 | 多供应商/模型与预设、并发验证、四种记忆工具与活动历史、全局运行限制；schema 11；修复滚动、索引复用与来源删除 |
 
 更细提交说明用：`git log --oneline`。

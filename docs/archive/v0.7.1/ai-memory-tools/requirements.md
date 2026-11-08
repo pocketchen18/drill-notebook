@@ -1,7 +1,7 @@
 # v0.7.1 AI 记忆工具：功能需求
 
-> 当前版本（v0.7.1）的完整功能需求。UI/UX 见 [ui-ux.md](ui-ux.md)，后端规格见 [spec.md](spec.md)，执行计划见 [plan.md](plan.md)。
-> v0.7.0 已交付能力见 [features.md](../../features.md) §5；本版本不重做这些能力，只让 AI 在对话中按需调用记忆。
+> 已于 2026-11-08 归档，保留 v0.7.1 的原始需求范围，并非全部交付声明。语义检索、独立用量详情页面与列表分页等未交付项见 [归档说明](../README.md)；当前能力见 [features.md](../../../features.md)。
+> UI/UX 见 [ui-ux.md](ui-ux.md)，后端规格见 [spec.md](spec.md)，执行与历史验证见 [plan.md](plan.md)。
 
 ## 1. 版本目标
 

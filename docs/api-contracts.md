@@ -112,12 +112,49 @@
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET / PUT | `/ai/config` | 读取 / 保存模型配置（密钥密文） |
+| GET / PUT | `/ai/config` | 兼容读取与非集合用途配置；已迁移 chat/import 写入须改用 connections |
 | POST | `/ai/models` | 拉取可用模型列表 |
 | POST | `/ai/models/test` | 测试连接 |
 | POST | `/ai/summarize` | 知识点 / Markdown 总结 |
 
-`PUT /ai/config` 的 `params` 保存协议、流式、缓存、工具开关等；未显式提供的字段沿用既有值。
+当前 AI 连接管理统一使用 `/ai/connections`，响应返回 `{revision, providers, chatModelId, importModelId}`，密钥不回传。修改携带 revision，冲突返回 409；保存与应用绑定独立。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/ai/connections` | 读取脱敏配置集合，首次读取幂等迁移旧配置 |
+| POST | `/ai/connections/providers` | 新建供应商 |
+| PUT / DELETE | `/ai/connections/providers/{id}` | 更新 / 删除供应商 |
+| GET | `/ai/connections/providers/{id}/presets` | 当前连接可用的本地参考预设 |
+| POST | `/ai/connections/providers/{id}/discover` | 获取模型 ID；不直接保存或应用 |
+| POST | `/ai/connections/providers/{id}/models` | 直接新增模型配置 |
+| POST | `/ai/connections/providers/{id}/verify-add` | 验证候选并按文本结果添加 |
+| PUT / DELETE | `/ai/connections/models/{id}` | 更新 / 删除模型；路径 ID 为稳定 UUID |
+| PUT | `/ai/connections/bindings` | `{revision, purpose:chat|import, modelId}`；import 的 null 恢复跟随 |
+| POST | `/ai/connections/models/{id}/test` | 短连接测试，不带聊天历史 |
+| POST | `/ai/connections/tests/{requestId}/cancel` | 取消连接测试或新增验证，支持提前取消 |
+
+- 供应商视图包含 `connectionVersion`；`verify-add` 接收 `revision`、`connectionVersion`、`requestId`、`model`、可选 `masterPassword`。UI 最多 3 个模型并发验证；同连接的结果合入最新集合，不因其他模型刚保存而相互覆盖。连接身份变更时拒绝迟到结果。
+- 文本返回有效正文才添加；图片/工具验证各自返回 status/message/elapsedMs，附 `added`、`modelId`、`connections`。工具验证成功才自动开启工具偏好；已存在同 ID 模型不重复验证或改写。添加不自动应用。
+- 更新上游 `modelId` 保留内部 ID、用途绑定与用户参数，只清理旧验证/探测记录；字段缺省继承，明确空值不重新补填预设。模型 ID 输入只修改 ID，点击/回车选择预设才应用参考参数。
+- 模型可配置 `contextWindow/maxInputTokens/maxOutputTokens`，运行时仍受任务预算约束。每轮冻结模型配置，切换应用从下一轮生效；被用途绑定或运行中请求引用的对象不能删除。
+- `reasoningControl` 默认为 effort；`reasoningEfforts` 可选 `none/minimal/low/medium/high/xhigh/max`，拒绝 ultra，默认档位必须属于集合。Anthropic 不接受 none/minimal；预算方式仅用于 Anthropic。服务默认不发送思考参数；协议映射为 Chat Completions 的 `reasoning_effort`、Anthropic 的 `output_config.effort` 或 `thinking` 预算。
+
+#### 3.1.1 全局对话运行限制
+
+`GET /ai/runtime-settings` 返回 `{revision, values, defaults}`；`PUT` 接收 `{revision, values}`，保存成功返回同形快照。严格校验整数与跨字段关系，冲突返回 `409 AI_SETTINGS_CONFLICT`。独立于供应商/模型，每轮开始读取一次快照；恢复默认由前端回填 defaults 草稿，再显式保存。
+
+| 字段 | 默认值 | 范围 |
+|---|---:|---:|
+| `maxToolStages` | 50 | 1–500 |
+| `maxToolExecutions` | 100 | 1–1000 |
+| `turnTimeoutMinutes` | 30 | 1–240 |
+| `requestTimeoutMinutes` | 15 | 1–120，不能大于整轮时间 |
+| `maxOutputTokens` | 128000 | 1024–2000000 |
+| `requestOutputTokens` | 16384 | 256–131072 |
+| `finalOutputTokens` | 8192 | 256–65536，必须小于整轮输出上限 |
+| `repeatedToolLimit` | 3 | 0–20；0 关闭检查 |
+
+输出预算按各请求实际 output usage 累计，缺少 usage 时仅在执行预算中保守扣除分配额度。工具阶段/执行/输出达限后撤工具，并保留一次最终回答请求；接近总期限提前收口。相同工具名、规范化参数和相同结果连续达到阈值才判无进展；模型上下文容量仍可提前收紧执行。
 
 ### 3.2 对话
 
@@ -152,20 +189,23 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
 | 事件 | 载荷 | 说明 |
 |---|---|---|
-| `text` | `{ requestId, text }` | 回答增量 |
-| `reasoning` | `{ requestId, text }` | 思考增量 |
+| `text` | `{ text }` | 回答增量；身份由本连接 metadata 确认 |
+| `reasoning` | `{ text }` | 思考增量 |
 | `metadata` | 含 `requestId`、`planId` 等 | 本轮计划状态；前端据此登记请求 ID |
-| `done` | `reply`、`reasoning`、`view` | 正常结束；`view` 含 citations / memoryContext / contextUsage / contextAudit / usage / planId / dispatchState |
-| `error` | `{ requestId, code, message, view }` | 失败结束 |
+| `tool_activity` | `{requestId, sessionId, toolActivities, phase}` | 有界活动快照；phase 为 tools / answer |
+| `done` | 普通 chat 响应字段，额外含 reasoning | 顶层含 requestId/sessionId/status/persistenceStatus/stateDurable、finishReason、toolActivities 及上下文/用量字段 |
+| `error` | `{message, partial, requestId?, sessionId?, code?, persistenceStatus?, stateDurable?, toolActivities?}` | 如实保留身份、保存状态与已确认活动 |
 
 若流在没有 `done` / `error` 的情况下 EOF，客户端必须用 `requestId` 查询轮次状态，不能把占位内容当作完成。
+
+SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由任务与全局时间预算管理，断连取消仍在执行的轮次。关闭模型正文流式不关闭活动事件。`finishReason` 包含 `budget_stages/executions/output/time/context/repeated`、`request_timeout`、`request_timeout_idle`、`stream_error` 等；达限后的「继续」使用新 requestId 和可见后续消息，不自动重放原工具。
 
 #### 3.2.1 对话内记忆工具
 
 仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册工具时，聊天请求才携带工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。
 
-- `PUT /ai/config` 的 `params.tools` 是显式覆盖值；未提供时保留原值。`GET /ai/config` 的 `chat.tools` 返回当前有效值。
-- 默认开启：`api.openai.com`、`api.deepseek.com`，以及 `api.anthropic.com` + Claude Messages。自定义或未验证端点默认关闭，须由用户显式开启。
+- 模型配置的 `params.tools` 是显式覆盖值；当前通过 `/ai/connections/models/{id}` 更新。`GET /ai/config` 的 `chat.tools` 仍返回当前有效值。
+- 默认开启：`api.openai.com`、`api.deepseek.com`，以及 `api.anthropic.com` + Claude Messages。未验证的自定义端点默认关闭；新增模型工具验证成功自动开启，显式偏好优先。
 - 导入兜底模型不启用工具。
 
 | 工具 | 参数 | 输出 |
@@ -178,7 +218,7 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 - `search_memories` 只返回回答所需事实，不返回记忆 ID、内部谓词、来源密文或原始分数。
 - `list_memories` 只返回标题、作用域与更新时间；标题由正文压缩空白后取前 20 个码点派生，空值兜底「未命名记忆」；`updatedAt` 取 `last_confirmed_at`，无值时为 `null`。不返回正文、记忆 ID、内部谓词或来源密文。
 - 作用域：GLOBAL 会话只列/写 GLOBAL；NOTEBOOK 会话列「本册 + GLOBAL」，写入默认本册，也可显式指定 GLOBAL。GLOBAL 会话请求 `scope=NOTEBOOK` 返回 `INVALID_ARGUMENT`。`update_memory` 不允许跨作用域移动：只能更新当前会话可见的 NOTEBOOK 本册或 GLOBAL 记忆，其他笔记本的记忆返回 `NOT_FOUND`。
-- `list_memories` 当前不提供 cursor；结果超出 `limit` 或索引快照不完整时用 `incomplete=true` / `LIMIT_REACHED` 表示还有未返回内容。
+- `list_memories` 当前不提供 cursor；结果超出 `limit` 或索引快照不完整时标记 `incomplete=true`。聊天编排将带有效条目的旧 `LIMIT_REACHED` 读结果投影为 `OK + incomplete`，与真正耗尽调用预算区分。
 - `create_memory` 按归一值（折叠空白、小写）全库精确去重；`DUPLICATE` 返回已有 `memoryId/version`，不新增版本。凭据与敏感内容返回 `REJECTED`，`reason` 为 `CREDENTIAL` / `SENSITIVE`。成功时返回 `CREATED` 与定位信息，不回显正文。
 - `create_memory` 写入来源在 `ai_memory_item.origin` 记为 `AUTO`（v9 约束只有 `AUTO/MANUAL`），载荷记录 `createdBy=AI_TOOL`；事实按 `manualProtected=true` 落库，删除来源会话时只断证据、不删除这条长期记忆。证据指向当前会话 / 轮次 / 用户消息。
 - 家族抑制与显式重记：`create_memory` 发现新事实的 `FAMILY` 键命中删除留下的抑制时，只有当前用户消息本身含明确记忆请求（「记住」「加入记忆」等）才解除该 `FAMILY` 抑制并继续写入；否则返回 `SUPPRESSED`，不落库、不声称成功。`PREDICATE` / `EVIDENCE` 抑制保留给自动提取，不随显式重记解除。解除抑制后会同步重建索引，已有同值行也重新可见；若本次只命中已有同值行（`DUPLICATE`）而没有新建版本，不推进 vault revision，但仍会重建快照。
@@ -186,8 +226,12 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 - `update_memory` 归一值未变化返回 `NO_CHANGE`，不新增版本、不推进 revision；成功时旧版本转 `SUPERSEDED`、新版本 `ACTIVE`，证据继承到新版本，`origin` 转为 `MANUAL` 且 `manualProtected=true`。凭据与敏感内容返回 `REJECTED`，`reason` 为 `CREDENTIAL` / `SENSITIVE`。
 - 写入会推进 vault revision；服务端在本轮内刷新计划快照并同步重建索引，使同轮后续检索能看到新版本。
 - 读工具 `status`：`OK` / `NO_MATCH` / `UNAVAILABLE` / `STALE` / `LIMIT_REACHED` / `INVALID_ARGUMENT`；写工具另有 `CREATED` / `UPDATED` / `DUPLICATE` / `NO_CHANGE` / `NOT_FOUND` / `AMBIGUOUS` / `SUPPRESSED` / `REJECTED`。`availability`：`READY` / `BUILDING` / `LOCKED` / `TIMEOUT` / `NOT_REQUESTED` / `DENIED`。
-- 预算：工具阶段 ≤2、执行 ≤3、上游请求 ≤3；单轮记忆条目合计 ≤15；单轮记忆写入（`create_memory` + `update_memory`）≤3；单次参数 ≤4096 UTF-8 字节；单次结果 ≤16 KiB。
-- 工具调用与结果只存在于本轮内存，不写入会话消息、历史、SSE 或日志；SSE 只回放最终 `text` / `reasoning` / `done`。
+- 运行预算见 §3.1.1，读取/写入共享执行次数；取消旧的整轮 15 条记忆与独立 3 次写入限制。单次参数 ≤4096 UTF-8 字节、结果 ≤64 KiB；单响应最多解析 128 个调用，超量明确标记捕获截断。结果大小、上下文、重复与时间限制各有独立状态码。
+- 原始工具调用与结果只存在于本轮内存，不写入会话消息、历史、SSE 或日志；工具模式只回放最终正文/思考。安全活动摘要通过独立事件与最终结果输出并加密持久化。
+
+#### 3.2.2 工具活动摘要
+
+`toolActivities` 最多 1200 项，按服务端 `sequence` 关联，字段为 `toolName/state/outcome/startedAt/elapsedMs/count/availability/incomplete`；toolName 只允许已注册工具或 `unknown_tool`。state 为 RUNNING / FINISHED / UNKNOWN，count 只描述本次返回/写入数。不得包含原始参数、查询文本、记忆正文、ID、版本、密钥或上游错误正文。断连不推断写入失败；没有最终确认的运行项投影为 UNKNOWN。状态与历史读取不会重新执行工具。
 
 ### 3.3 轮次状态与上下文
 
@@ -210,6 +254,8 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 | GET / PUT | `/ai/history/storage` | 历史容量配置 / 状态 |
 | POST | `/ai/history/cleanup/preview` / `cleanup` | 清理预览 / 执行 |
 | GET | `/ai/sessions/{id}/export` | 导出会话 |
+
+轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
 
 ### 3.5 记忆
 

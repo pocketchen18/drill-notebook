@@ -18,7 +18,7 @@
 | [../AGENTS.md](../AGENTS.md) | AI 代理工作约束：文件权限、PowerShell、便携落盘、提交边界 |
 | [../DESIGN.md](../DESIGN.md) | 视觉与交互契约：设计令牌、布局、组件与编辑约定 |
 | [features.md](features.md) | 功能清单：当前 MVP 核心闭环、当前规划摘要、后续候选、Non-Goals；历史版本见 README §1 |
-| [data-model.md](data-model.md) | 当前数据库表与关键约束（schema 9）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
+| [data-model.md](data-model.md) | 当前数据库表与关键约束（schema 11）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [api-contracts.md](api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [architecture.md](architecture.md) | 进程边界、前端分层、后端领域、便携与测试 |
 | [ai-retrieval.md](ai-retrieval.md) | 笔记本混合检索（RAG）：schema v8、API、worker 协议、降级与索引维护 |
@@ -54,7 +54,7 @@
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能验收完成、状态文档同步后，整个目录移入 `docs/archive/<version>/`，不留在活跃上下文。
 
-当前施工文档：[work/v0.7.1-ai-memory-tools/](work/v0.7.1-ai-memory-tools/)。
+当前没有活跃功能施工文档。v0.7.1 已完成切片的材料归档至 [archive/v0.7.1/](archive/v0.7.1/)；v0.8 的侧栏与设置讨论尚未进入施工。
 
 ## 3. 交接记忆
 
@@ -68,9 +68,9 @@
 
 ## 4. 归档
 
-`docs/archive/<version>/` 保存已完成版本的施工文档与验收证据，只读，不作为当前事实来源。归档文档内部的相对链接可能仍指向归档前路径，需要时按文件名在本目录查找。
+`docs/archive/<version>/` 保存已完成版本的施工文档与验收证据，只读，不作为当前事实来源。v0.7.1 的入口、范围与后置项目见 [归档说明](archive/v0.7.1/README.md)；更早归档保留其历史口径。
 
-`docs/plans/v0.7.0-release-notes.md` 是 v0.7.0 发行记录，保留原路径；发布门禁 `scripts/test-release-config.mjs` 会检查该文件存在。
+`docs/plans/v<版本>-release-notes.md` 保存各版发行记录，旧版原文保留。当前为 [v0.7.1 发布说明](plans/v0.7.1-release-notes.md)。工作流按标签的完整基础版本选择正文；例如 `v0.7.1-rc.1` 选择 v0.7.1，缺失或空白即失败。发布配置回归覆盖此选择规则，不能只在本地存在而被 `.gitignore` 忽略。
 
 ## 5. 维护规则
 

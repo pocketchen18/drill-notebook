@@ -150,8 +150,11 @@ describe('AiAssistant 历史分页', () => {
     ]);
     renderAssistant();
     await screen.findByText('失败的一问');
-    // 失败轮次的一对消息都带同一终态：不能只标一边，另一边看起来像正常回答
-    expect(screen.getAllByText('这一轮失败，显示的内容可能不完整')).toHaveLength(2);
+    // 轮次失败归属助手回复，不在用户问题上重复标错；空回复也必须保留终态。
+    expect(screen.getAllByText('这一轮失败，显示的内容可能不完整')).toHaveLength(1);
+    expect(screen.getByText('失败的一问').closest('.chat-message')?.querySelector('.ai-retrieval-notice')).toBeNull();
+    expect(document.querySelector('.chat-message.assistant .ai-retrieval-notice')?.textContent)
+      .toContain('这一轮失败，显示的内容可能不完整');
     expect(screen.getByText('这一轮的原文已按你的要求清理，只剩时间与状态')).toBeTruthy();
     expect(screen.queryByText('当前会话还没有消息')).toBeNull();
   });

@@ -337,6 +337,46 @@ Spacing is based on 4px. The touched workspace uses:
 - **No new debt**: this round adds no accepted debt. The former page-switch
   autosave race is resolved by the per-page draft ownership described above.
 
+### 5.1 AI Connection Settings and Conversations (v0.7.1)
+
+- **Connection workspace**: a provider list opens its model list. The provider
+  overflow menu contains both edit and delete. Connection editing and per-model
+  settings each replace the main workspace with a complete secondary page;
+  returning restores the list and selection. Unsaved forms offer a leave guard.
+- **Save and apply**: saving changes model configuration; applying selects the
+  chat model. Import can follow chat or use its own binding. The current-use
+  summary makes both assignments visible without entering an editor.
+- **Model identity and presets**: the upstream model ID is editable. Typing
+  filters preset suggestions but never resets other fields, including unsaved
+  changes. Only explicit selection by click or Enter applies a preset. Effort
+  is the default reasoning control, with supported levels and a model default;
+  `ultra` is not a model effort level. Conversation-level selection is deferred.
+- **Discovery and validation**: creating a provider opens discovery once.
+  Selected models show queued, running, passed, or failed verification with
+  text, vision, and tool results. Text success determines addition; optional
+  capability failures remain visible. Retry skips added models; cancel retains
+  additions already confirmed. At most three models verify concurrently.
+- **Tool activity**: actual server events appear as a collapsible group inside
+  the assistant response, with compact tool rows and expandable safe details.
+  Times, duration, and outcomes reflect execution; confirmed writes remain
+  successful after cancellation. Parameters, memory content, and raw errors
+  are not displayed. Historical activity never re-executes a tool.
+- **Reading position**: the assistant response uses the available message
+  width. Streaming follows the end only while the reader is at the bottom;
+  scrolling upward pauses following. Automatic collapse preserves the reading
+  anchor, and explicit fold choices survive updates. Failure notices belong
+  to the assistant response, including an empty failed response.
+- **Global limits**: the settings tab is named `AI 对话`, with a `运行限制`
+  group. Save, cancel, and restore-default controls apply to global values;
+  model switching does not reset them. Saved values take effect next turn.
+  Actual defaults and validation ranges are maintained in
+  [the API contract](docs/api-contracts.md), not duplicated here.
+
+The completed designs and sketches are retained in
+[the v0.7.1 archive](docs/archive/v0.7.1/README.md). They do not approve the
+future v0.8 sidebar redesign. The current release's accessibility and provider
+verification limits are recorded in [its release notes](docs/plans/v0.7.1-release-notes.md).
+
 ## 6. Motion & Interaction
 
 | Type | Duration | Easing | Usage |
