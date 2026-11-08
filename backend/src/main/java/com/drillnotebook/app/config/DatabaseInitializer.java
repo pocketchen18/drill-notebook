@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 11;
+    private static final int SCHEMA_VERSION = 12;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -127,6 +127,21 @@ public class DatabaseInitializer {
             ensureColumn(connection, "ai_chat_session", "summary_skipped_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(connection, "ai_chat_session", "last_scan_notice", "TEXT");
             migrateAiChatSessions(connection);
+            ensureColumn(connection, "ai_chat_session", "session_ref", "TEXT");
+            ensureColumn(connection, "ai_chat_session", "title_source", "TEXT NOT NULL DEFAULT 'legacy'");
+            ensureColumn(connection, "ai_chat_session", "title_status", "TEXT NOT NULL DEFAULT 'idle'");
+            ensureColumn(connection, "ai_chat_session", "title_revision", "INTEGER NOT NULL DEFAULT 0");
+            exec(connection, "UPDATE ai_chat_session SET session_ref = lower(hex(randomblob(16))) WHERE session_ref IS NULL");
+            exec(connection, "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_session_ref ON ai_chat_session(session_ref)");
+            if (current == null || current < 12) {
+                exec(connection, """
+                        UPDATE ai_chat_session SET title_source = 'temporary', title_status = 'pending'
+                        WHERE title IN ('新会话', '默认会话')
+                          AND NOT EXISTS (SELECT 1 FROM ai_chat_message m WHERE m.session_id = ai_chat_session.id)
+                        """);
+            }
+            // 进程中断的标题任务不重发，也不永久显示生成中；用户可从菜单重试。
+            exec(connection, "UPDATE ai_chat_session SET title_status = 'failed', title_revision = title_revision + 1 WHERE title_status = 'generating'");
             migrateAiConfigPurposes(connection);
             exec(connection, "CREATE INDEX IF NOT EXISTS idx_ai_chat_session_updated ON ai_chat_session(updated_at DESC, id DESC)");
             exec(connection, "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_session ON ai_chat_message(session_id, id)");

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Drawer, Dropdown, Input, Message, Modal, Select, Space, Tag, Typography } from '@arco-design/web-react';
-import type { RefInputType } from '@arco-design/web-react/es/Input/interface';
-import { Download, FilePlus2, Layers, MoreHorizontal, Paperclip, Plus, Send, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Button, Drawer, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
+import { Download, FilePlus2, Layers, Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
+import { SessionNavigation } from './ai-session/SessionNavigation';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -98,6 +98,7 @@ export function AiAssistant(): JSX.Element {
   const sessionsQuery = useQuery({
     queryKey: ['ai-sessions'],
     queryFn: () => get<AiChatSession[]>('/api/ai/sessions'),
+    refetchInterval: (query) => query.state.data?.some((session) => session.titleStatus === 'generating') ? 1500 : false,
     enabled: aiOpen
   });
 
@@ -116,11 +117,10 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [renameDraft, setRenameDraft] = useState('');
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
   const [inspectorTarget, setInspectorTarget] = useState<{ requestId: string; snapshot?: TurnResult } | null>(null);
-  const renameInputRef = useRef<RefInputType>(null);
+  const selectedSessionRef = useRef(sessionId);
+  selectedSessionRef.current = sessionId;
 
   // 稳定消息 key：消息创建时分配一次，后续 refetch 也保持稳定，避免列表 remount 造成滚动/输入抖动。
   const messageKeyCounter = useRef(0);
@@ -344,78 +344,58 @@ export function AiAssistant(): JSX.Element {
     createSessionMutation.mutate();
   };
 
-  const renameSessionMutation = useMutation({
-    mutationFn: ({ id, title }: { id: number; title: string }) => put<AiChatSession>(`/api/ai/sessions/${id}`, { title }),
-    onSuccess: (session) => {
-      void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-      setSessionId(session.id);
-      setRenaming(false);
-      Message.success('会话已重命名');
-    },
-    onError: (error) => Message.error(error.message)
-  });
-
-  const currentSession = sessionsQuery.data?.find((item) => item.id === sessionId);
-
-  useEffect(() => {
-    if (!renaming) return;
-    const timer = window.setTimeout(() => {
-      const input = renameInputRef.current?.dom;
-      if (!input) return;
-      input.focus();
-      input.select();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [renaming]);
-
-  const beginRename = (): void => {
-    if (sessionId === undefined || renameSessionMutation.isPending) return;
-    setRenameDraft(currentSession?.title ?? '');
-    setRenaming(true);
+  const updateSessionCache = (session: AiChatSession): void => {
+    queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).map((item) =>
+      item.id === session.id && (session.titleRevision ?? 0) >= (item.titleRevision ?? 0) ? session : item));
+    void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
   };
-
-  const cancelRename = (): void => {
-    setRenaming(false);
-    setRenameDraft('');
+  const renameSession = async (id: number, title: string): Promise<void> => {
+    updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { title }));
   };
-
-  const commitRename = (): void => {
-    if (sessionId === undefined || renameSessionMutation.isPending) return;
-    const title = renameDraft.trim();
-    if (!title) {
-      Message.warning('标题不能为空');
-      const input = renameInputRef.current?.dom;
-      input?.focus();
-      input?.select();
-      return;
-    }
-    if (title === (currentSession?.title ?? '')) {
-      cancelRename();
-      return;
-    }
-    renameSessionMutation.mutate({ id: sessionId, title });
+  const generateSessionTitle = async (session: AiChatSession, overwriteManual: boolean): Promise<void> => {
+    updateSessionCache(await post<AiChatSession>(`/api/ai/sessions/${session.id}/title`, {
+      expectedRevision: session.titleRevision, overwriteManual
+    }));
   };
 
   const deleteSessionMutation = useMutation({
-    mutationFn: (id: number) => del(`/api/ai/sessions/${id}`),
-    onSuccess: (_result, deletedId) => {
-      // 先从缓存移除被删会话及其消息，避免会话 effect 在 refetch 完成前把「已删会话」当作
-      // data[0] 重新选中、切回时又把它的内容合并进新会话顶部（删除后短暂串会话的根因）。
-      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
+    mutationFn: async (id: number) => {
+      let home: AiChatSession | undefined;
+      if (selectedSessionRef.current === id) {
+        home = queryClient.getQueryData<AiChatSession[]>(['ai-sessions'])?.find((item) =>
+          item.id !== id && !item.archived && item.messageCount === 0 && item.id !== turn.activeSessionId);
+        // 先准备落点：新建失败时原会话仍然存在；删除失败时保留空白会话供重试复用。
+        if (!home) {
+          home = await post<AiChatSession>('/api/ai/sessions', { title: '新会话' });
+          const created = { ...home, messageCount: home.messageCount ?? 0 };
+          queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) =>
+            [created, ...(old ?? []).filter((item) => item.id !== created.id)]);
+        }
+      }
+      await del(`/api/ai/sessions/${id}`);
+      return home;
+    },
+    onSuccess: (home, deletedId) => {
+      // 一次更新列表与选中项，避免 refetch 将删除后的落点切到其它历史会话。
+      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
+        const remaining = (old ?? []).filter((item) => item.id !== deletedId);
+        return home && !remaining.some((item) => item.id === home.id)
+          ? [{ ...home, messageCount: home.messageCount ?? 0 }, ...remaining] : remaining;
+      });
       queryClient.removeQueries({ queryKey: historyQueryKey(deletedId) });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-      lastExplicitSessionIdRef.current = undefined;
-      setSessionId(undefined);
-      setMessages([]);
-      Message.success('会话已删除');
-    },
-    onError: (error) => Message.error(error.message)
+      if (selectedSessionRef.current === deletedId && home) {
+        lastExplicitSessionIdRef.current = home.id;
+        setSessionId(home.id);
+        setMessages([]);
+        setMessage('');
+        setAttachments([]);
+        setInspectorTarget(null);
+        stickyBottomRef.current = true;
+        olderAnchorRef.current = null;
+      }
+    }
   });
-
-  // 删除确认使用 Arco Modal 而非 window.confirm：
-  // Electron 渲染进程的原生同步对话框关闭后 webContents 键盘焦点可能不恢复（鼠标正常、键盘失效，
-  // 窗口失焦/复焦后才自愈）——这正是「删除会话后输入框无法输入、切软件切回又好了」的偶发根因。
-  const [deleteConfirmSession, setDeleteConfirmSession] = useState<AiChatSession | null>(null);
 
   // 抽屉宽度：可拖拽调整并持久化到 localStorage。
   const AI_DRAWER_WIDTH_KEY = 'drill-notebook-ai-drawer-width';
@@ -729,18 +709,14 @@ export function AiAssistant(): JSX.Element {
     }
   };
 
-  const exportSession = async (format: 'md' | 'html' | 'json'): Promise<void> => {
-    if (sessionId === undefined) {
-      Message.warning('请先选择会话');
-      return;
-    }
+  const exportSession = async (targetId: number, format: 'md' | 'html' | 'json'): Promise<void> => {
     if (!window.api) {
       Message.error('导出功能仅在桌面应用中可用');
       return;
     }
     setExporting(true);
     try {
-      const payload = await get<{ title: string; content: string; format: string }>(`/api/ai/sessions/${sessionId}/export?format=${format}`);
+      const payload = await get<{ title: string; content: string; format: string }>(`/api/ai/sessions/${targetId}/export?format=${format}`);
       const extension = format === 'json' ? 'json' : format;
       const result = await window.api.exportFile.save({
         format: format === 'json' ? 'md' : format,
@@ -803,91 +779,13 @@ export function AiAssistant(): JSX.Element {
           onDoubleClick={onResizeDouble}
         />
         <div className="ai-drawer-body">
-          <div className="ai-session-bar">
-            {renaming ? (
-              <Input
-                ref={renameInputRef}
-                size="small"
-                className="ai-session-title-input"
-                value={renameDraft}
-                disabled={renameSessionMutation.isPending}
-                onChange={setRenameDraft}
-                onBlur={() => commitRename()}
-                onPressEnter={(event) => {
-                  event.preventDefault();
-                  commitRename();
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    cancelRename();
-                  }
-                }}
-                aria-label="重命名会话"
-              />
-            ) : (
-              <button
-                type="button"
-                className="ai-session-title"
-                title="双击重命名"
-                disabled={sessionId === undefined}
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  beginRename();
-                }}
-              >
-                <span className="ai-session-title-text">{currentSession?.title ?? (sessionsQuery.isLoading ? '加载会话…' : '选择会话')}</span>
-                {currentSession?.messageCount ? <span className="ai-session-title-count">{currentSession.messageCount}</span> : null}
-              </button>
-            )}
-            <Select
-              size="small"
-              placeholder="切换"
-              value={sessionId}
-              onChange={(value) => {
-                setRenaming(false);
-                const next = Number(value);
-                lastExplicitSessionIdRef.current = next;
-                setSessionId(next);
-                setMessages([]);
-              }}
-              style={{ width: 108 }}
-              loading={sessionsQuery.isLoading}
-              aria-label="切换会话"
-            >
-              {sessionsQuery.data?.map((session) => (
-                <Select.Option key={session.id} value={session.id}>
-                  {session.title}{session.messageCount ? `（${session.messageCount}）` : ''}
-                </Select.Option>
-              ))}
-            </Select>
-            <Button size="small" type="outline" icon={<Plus size={14} />} loading={createSessionMutation.isPending} onClick={handleNewSession}>新建</Button>
-            <Dropdown
-              droplist={
-                <div className="ai-session-menu">
-                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('md')}>导出 Markdown</button>
-                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('html')}>导出 HTML</button>
-                  <button type="button" disabled={exporting || sessionId === undefined} onClick={() => void exportSession('json')}>导出 JSON</button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={deleteSessionMutation.isPending || !sessionId || (sessionsQuery.data?.length ?? 0) <= 1}
-                    onClick={() => {
-                      if (sessionId === undefined) return;
-                      const target = sessionsQuery.data?.find((session) => session.id === sessionId) ?? null;
-                      setDeleteConfirmSession(target);
-                    }}
-                  >
-                    <Trash2 size={13} /> 删除会话
-                  </button>
-                </div>
-              }
-              position="br"
-              trigger="click"
-            >
-              <Button size="small" type="text" icon={<MoreHorizontal size={16} />} aria-label="会话更多操作" />
-            </Dropdown>
-          </div>
+          <SessionNavigation visible={aiOpen} sessions={sessionsQuery.data ?? []} currentId={sessionId}
+            busyId={streaming ? turn.activeSessionId : undefined}
+            loading={sessionsQuery.isLoading} error={sessionsQuery.isError} creating={createSessionMutation.isPending}
+            exporting={exporting} onRetry={() => { void sessionsQuery.refetch(); }} onCreate={handleNewSession}
+            onSelect={(next) => { lastExplicitSessionIdRef.current = next; setSessionId(next); setMessages([]); }}
+            onRename={renameSession} onGenerate={generateSessionTitle}
+            onDelete={async (id) => { await deleteSessionMutation.mutateAsync(id); }} onExport={exportSession} />
 
           <div className={`ai-context-card${contextMarkdown ? ' has-context' : ''}`}>
             <div className="ai-context-card-top">
@@ -1122,24 +1020,6 @@ export function AiAssistant(): JSX.Element {
           {!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
         </div>
-        <Modal
-          title="删除会话"
-          visible={deleteConfirmSession !== null}
-          onCancel={() => setDeleteConfirmSession(null)}
-          onOk={() => {
-            if (deleteConfirmSession) deleteSessionMutation.mutate(deleteConfirmSession.id);
-            setDeleteConfirmSession(null);
-          }}
-          okText="删除"
-          okButtonProps={{ status: 'danger' }}
-          cancelText="取消"
-          confirmLoading={deleteSessionMutation.isPending}
-          autoFocus={false}
-          focusLock
-          unmountOnExit
-        >
-          <Typography.Text>删除会话「{deleteConfirmSession?.title ?? ''}」？消息将一并删除，且不可恢复。</Typography.Text>
-        </Modal>
 
         {inspectorTarget ? (
           <ChatContextInspector

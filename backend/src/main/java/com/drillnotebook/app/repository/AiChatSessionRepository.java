@@ -24,6 +24,15 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class AiChatSessionRepository {
+    private static final String SELECT = """
+            SELECT s.*, COUNT(m.id) AS message_count,
+              EXISTS (SELECT 1 FROM ai_chat_turn t
+                JOIN ai_chat_message u ON u.id = t.user_message_id
+                JOIN ai_chat_message a ON a.id = t.assistant_message_id
+                WHERE t.session_id = s.id AND t.status = 'COMPLETED'
+                  AND t.persistence_status = 'saved' AND t.content_deleted_at IS NULL) AS can_generate_title
+            FROM ai_chat_session s LEFT JOIN ai_chat_message m ON m.session_id = s.id
+            """;
     private final JdbcTemplate jdbc;
     private final ImmediateTransaction immediate;
     private final ChatStorageLedger ledger;
@@ -42,8 +51,8 @@ public class AiChatSessionRepository {
 
     public List<Map<String, Object>> list(boolean includeArchived) {
         String sql = includeArchived
-                ? "SELECT s.id, s.title, s.archived, s.model, s.tags, s.created_at, s.updated_at, COUNT(m.id) AS message_count FROM ai_chat_session s LEFT JOIN ai_chat_message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.updated_at DESC, s.id DESC"
-                : "SELECT s.id, s.title, s.archived, s.model, s.tags, s.created_at, s.updated_at, COUNT(m.id) AS message_count FROM ai_chat_session s LEFT JOIN ai_chat_message m ON m.session_id = s.id WHERE s.archived = 0 GROUP BY s.id ORDER BY s.updated_at DESC, s.id DESC";
+                ? SELECT + " GROUP BY s.id ORDER BY s.updated_at DESC, s.id DESC"
+                : SELECT + " WHERE s.archived = 0 GROUP BY s.id ORDER BY s.updated_at DESC, s.id DESC";
         return jdbc.query(sql, (result, row) -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", result.getLong("id"));
@@ -54,16 +63,13 @@ public class AiChatSessionRepository {
             item.put("createdAt", result.getString("created_at"));
             item.put("updatedAt", result.getString("updated_at"));
             item.put("messageCount", result.getLong("message_count"));
+            titleMetadata(result, item);
             return item;
         });
     }
 
     public Map<String, Object> find(long id) {
-        return jdbc.queryForObject("""
-                SELECT s.id, s.title, s.archived, s.model, s.tags, s.created_at, s.updated_at, COUNT(m.id) AS message_count
-                FROM ai_chat_session s LEFT JOIN ai_chat_message m ON m.session_id = s.id
-                WHERE s.id = ? GROUP BY s.id
-                """, (result, row) -> {
+        return jdbc.queryForObject(SELECT + " WHERE s.id = ? GROUP BY s.id", (result, row) -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", result.getLong("id"));
             item.put("title", result.getString("title"));
@@ -73,18 +79,24 @@ public class AiChatSessionRepository {
             item.put("createdAt", result.getString("created_at"));
             item.put("updatedAt", result.getString("updated_at"));
             item.put("messageCount", result.getLong("message_count"));
+            titleMetadata(result, item);
             return item;
         }, id);
     }
 
     public long create(String title, String model) {
+        String name = title == null || title.isBlank() ? "新会话" : title.trim();
+        boolean temporary = "新会话".equals(name) || "默认会话".equals(name);
         KeyHolder holder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO ai_chat_session(title, model) VALUES (?, ?)",
+                    "INSERT INTO ai_chat_session(title, model, session_ref, title_source, title_status) VALUES (?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
-            statement.setString(1, title == null || title.isBlank() ? "新会话" : title.trim());
+            statement.setString(1, name);
             statement.setString(2, model);
+            statement.setString(3, java.util.UUID.randomUUID().toString().replace("-", ""));
+            statement.setString(4, temporary ? "temporary" : "manual");
+            statement.setString(5, temporary ? "pending" : "idle");
             return statement;
         }, holder);
         Number key = holder.getKey();
@@ -97,9 +109,65 @@ public class AiChatSessionRepository {
                     title = COALESCE(?, title),
                     archived = COALESCE(?, archived),
                     model = COALESCE(?, model),
-                    updated_at = datetime('now')
+                    title_source = CASE WHEN ? IS NULL THEN title_source ELSE 'manual' END,
+                    title_status = CASE WHEN ? IS NULL THEN title_status ELSE 'idle' END,
+                    title_revision = title_revision + CASE WHEN ? IS NULL THEN 0 ELSE 1 END
                 WHERE id = ?
-                """, title, archived == null ? null : (archived ? 1 : 0), model, id);
+                """, title == null ? null : title.trim(), archived == null ? null : (archived ? 1 : 0), model,
+                title, title, title, id);
+    }
+
+    private static void titleMetadata(ResultSet row, Map<String, Object> item) throws SQLException {
+        item.put("sessionLink", "drill-notebook://session/" + row.getString("session_ref"));
+        item.put("titleSource", row.getString("title_source"));
+        item.put("titleStatus", row.getString("title_status"));
+        item.put("titleRevision", row.getLong("title_revision"));
+        item.put("canGenerateTitle", row.getInt("can_generate_title") == 1);
+    }
+
+    public void fillTemporaryTitle(long id, String text) {
+        String compact = text.replaceAll("\\s+", " ").trim();
+        if (compact.isEmpty()) return;
+        int end = compact.offsetByCodePoints(0, Math.min(24, compact.codePointCount(0, compact.length())));
+        String title = compact.substring(0, end) + (end < compact.length() ? "…" : "");
+        jdbc.update("""
+                UPDATE ai_chat_session SET title = ? WHERE id = ? AND title_source = 'temporary'
+                AND title_status = 'pending' AND title IN ('新会话', '默认会话')
+                """, title, id);
+    }
+
+    public boolean claimTitle(long id, long revision, boolean automatic) {
+        return jdbc.update("""
+                UPDATE ai_chat_session SET title_status = 'generating', title_revision = title_revision + 1
+                WHERE id = ? AND title_revision = ? AND title_status <> 'generating'
+                """ + (automatic ? " AND title_source = 'temporary' AND title_status = 'pending'" : ""),
+                id, revision) == 1;
+    }
+
+    public boolean finishTitle(long id, long revision, String title) {
+        return jdbc.update("""
+                UPDATE ai_chat_session SET title = COALESCE(?, title),
+                  title_source = CASE WHEN ? IS NULL THEN title_source ELSE 'ai' END,
+                  title_status = ?, title_revision = title_revision + 1
+                WHERE id = ? AND title_revision = ? AND title_status = 'generating'
+                """, title, title, title == null ? "failed" : "ready", id, revision) == 1;
+    }
+
+    /** 只读首个持久化完整问答；不把中断半成品、工具结果或已清理正文当素材。 */
+    public List<MessageRow> firstCompleteExchange(long sessionId) {
+        return jdbc.query("""
+                SELECT m.* FROM ai_chat_message m WHERE m.id IN (
+                  SELECT u.id FROM ai_chat_turn t
+                  JOIN ai_chat_message u ON u.id IN (t.user_message_id, t.assistant_message_id)
+                  WHERE t.id = (SELECT t2.id FROM ai_chat_turn t2
+                    JOIN ai_chat_message q ON q.id = t2.user_message_id
+                    JOIN ai_chat_message a ON a.id = t2.assistant_message_id
+                    WHERE t2.session_id = ? AND t2.status = 'COMPLETED'
+                      AND t2.persistence_status = 'saved' AND t2.content_deleted_at IS NULL ORDER BY t2.id LIMIT 1)
+                ) ORDER BY m.id
+                """, (r, row) -> new MessageRow(r.getLong("id"), sessionId, r.getString("role"),
+                r.getString("content"), r.getString("content_cipher"), r.getString("content_meta"),
+                null, null, r.getString("created_at")), sessionId);
     }
 
     /**

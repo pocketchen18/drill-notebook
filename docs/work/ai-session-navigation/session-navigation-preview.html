@@ -283,6 +283,11 @@
       cancel.focus(); persist();
     }
     function closeDialog() { modal.hidden = true; modalKind = null; render(); (q('[data-row-menu="' + modalTarget + '"]') || q('[data-id="' + activeId + '"]') || q('.dn-current')).focus(); }
+    function newSessionHome() {
+      let blank = sessions.find(row => !row.count);
+      if (!blank) { blank = { id: 'demo-new-' + ++newCounter, title: '新会话', suggestion: '新的学习讨论', count: 0, time: '刚刚', status: 'empty', manual: false, revision: 0, question: '' }; sessions.unshift(blank); }
+      activeId = blank.id; listOpen = false; closeMenus(); render(); q('.dn-composer textarea').value = ''; q('.dn-composer textarea').focus();
+    }
     function applyScenario() {
       if (options.titleState !== lastTitleState) {
         const item = get('demo-a1');
@@ -316,16 +321,14 @@
           const chosen = get(modalTarget), kind = modalKind;
           if (kind === 'delete' && chosen && sessions.length > 1) {
             sessions = sessions.filter(row => row.id !== chosen.id);
-            if (activeId === chosen.id) { activeId = sessions[0].id; q('.dn-composer textarea').value = ''; }
+            if (activeId === chosen.id) newSessionHome();
             closeDialog(); toast('会话已删除');
           } else { closeDialog(); if (chosen && kind === 'regenerate') generateTitle(chosen); }
           persist(); break;
         }
         case 'new': {
           if (!saveRename()) break;
-          let blank = sessions.find(row => !row.count);
-          if (!blank) { blank = { id: 'demo-new-' + ++newCounter, title: '新会话', suggestion: '新的学习讨论', count: 0, time: '刚刚', status: 'empty', manual: false, revision: 0, question: '' }; sessions.unshift(blank); }
-          activeId = blank.id; listOpen = false; closeMenus(); render(); q('.dn-composer textarea').value = ''; q('.dn-composer textarea').focus(); persist(); break;
+          newSessionHome(); persist(); break;
         }
         case 'send': {
           const input = q('.dn-composer textarea'), text = input.value.trim(), current = get(activeId);

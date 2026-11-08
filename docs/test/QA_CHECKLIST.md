@@ -315,3 +315,26 @@
 | TC-AI7-09 | 发布配置 | 本地完成前后端全量及发布配置过滤器；云端运行完整发布配置回归和构建 | 检查 v0.7.1、v0.7.1-rc.1、v0.7.10、缺失/空白说明 | 完整基础版本匹配说明，缺失/空白即失败；云端不重复业务全量测试，发布配置或编译失败仍阻止打包，保持 Pre-release；本地不生成 ZIP |
 
 连接/工具切片的具体历史验收记录与未覆盖项见 [v0.7.1 施工归档](../archive/v0.7.1/README.md)。真实供应商矩阵、200% 缩放、读屏软件、云端 ZIP 解压启动需要独立验收，不能由自动化用例数量代替。
+
+## 模块十五：会话导航 MVP（v0.7.2，待人工验收）
+
+| 编号 | 场景 | 预期 |
+|---|---|---|
+| TC-SESSION-01 | 首次完整问答与异步标题 | 正文先保存、正常显示；后台用首次成功问答生成标题；后续聊天不重复命名；失败保留临时标题 |
+| TC-SESSION-02 | 人工改名与迟到结果 | 保留未保存草稿；人工保存后，旧自动/手动任务均不能覆盖；更晚的生成请求不能与旧任务重复外发 |
+| TC-SESSION-03 | 非当前会话菜单 | 右键与 `…` 操作同一固定目标；改名、复制、导出、删除不切当前聊天，不清正文或输入草稿 |
+| TC-SESSION-04 | 二级菜单与键盘 | 视口边界翻转；360px 视口点击进入带「返回」的子菜单，不因悬停误触；Esc 逐级返回，F2 / Shift+F10 与 IME 正常 |
+| TC-SESSION-05 | 删除与失败恢复 | 确认默认聚焦取消；删除当前后回到空白新会话并清空草稿/附件，已有空白则复用，否则先创建再删除；创建/删除失败保留原聊天并可重试；非当前删除保持当前；最后一条/正在回复不可删；已保存长期记忆保留 |
+| TC-SESSION-06 | 复制反馈 | 实际写入剪贴板后才成功；拒绝时保留可选文本；复制链接改名后不变，不冒充已实现跨会话读取 |
+| TC-SESSION-07 | 重启与升级 | schema 11 → 12 保留旧标题，不批量生成；引用稳定；残留 generating 转 failed，不自动重试 |
+
+本轮验证（2026-11-08 至 2026-11-09）：
+
+- 后端针对性回归 **88 / 88 通过**：`AiSessionTitleServiceTest`（9）、`AiChatSessionServiceTest`、`AiServiceTurnPathTest`、`AiServiceStateDurableTest`、`ChatTurnServiceLifecycleTest`、`ChatSessionMetadataRepositoryTest`、`AiChatSessionLegacyLedgerTest`、两组 `DatabaseInitializerTest` 与 `Schema9MigrationTest`。测试临时目录在工作区 `temp/`。
+- 前端会话导航、聊天请求/流式/历史/上下文及 hook 回归 **68 通过，2 跳过**；跳过项是原有需 `DRILL_EVIDENCE_DIR` 的证据输出用例。最终菜单修正后，8 项导航测试再次通过。存在 Arco Message/Transition 的既有 act 告警，无 unhandled error。
+- 2026-11-09 删除落点调整后，历史与导航 **22 / 22 通过**（含新增的 5 项：空白复用/新建、创建失败、删除失败后复用重试、非当前删除），TypeScript 检查通过；列表刷新不会改选其它历史会话，草图脚本语法检查通过。
+- `npm run build --prefix frontend`（含 TypeScript）通过；保留现有大 chunk 警告。后端使用已授权的默认 Maven 缓存离线 `-DskipTests package` 成功；仅构建开发 JAR，没有构建 Windows 发行包或 ZIP。
+- 隔离 APP_ROOT `temp/session-nav-app`、真实后端与本机模拟上游完成浏览器验收：自动标题、非当前改名/删除与草稿保留、实际复制内容、360px 返回式子菜单和 Esc。浏览器控制台无错误。截图为 `docs/work/ai-session-navigation/mvp-acceptance.jpg`，仅含虚构数据且已 gitignore。
+- 注册表/持久化环境变量静态审计无命中；运行时对原审计监控落点使用仅元数据版本，标题生成前后 55 个文件元数据无变化，不读取外部文件内容。
+
+本轮未执行前后端业务全量，不代表发布门禁已通过；跨会话工具、真实供应商矩阵、原生 Electron 保存对话框、200% 缩放和读屏仍未验收。人工确认前保留施工文档，不提交 Git。

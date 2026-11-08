@@ -181,6 +181,11 @@ export interface RetrievalStatus {
 export interface AiChatSession {
   id: number;
   title: string;
+  sessionLink?: string;
+  titleSource?: 'temporary' | 'manual' | 'ai' | 'legacy';
+  titleStatus?: 'pending' | 'idle' | 'generating' | 'ready' | 'failed';
+  titleRevision?: number;
+  canGenerateTitle?: boolean;
   archived?: boolean;
   model?: string;
   tags?: string;

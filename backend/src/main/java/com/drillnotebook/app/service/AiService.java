@@ -85,6 +85,14 @@ public class AiService {
     /** 上游调用客户端（CC/Anthropic 双格式 + SSE）；懒初始化（mapper 由构造器注入）。 */
     private volatile AiUpstreamClient upstreamClient;
     private volatile AiRuntimeSettingsRepository runtimeSettings;
+    private AiSessionTitleService sessionTitles;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSessionTitles(AiSessionTitleService service) { this.sessionTitles = service; }
+
+    public Map<String, Object> generateSessionTitle(long id, Map<String, Object> body) {
+        return sessionTitles.generate(id, body);
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setRuntimeSettings(AiRuntimeSettingsRepository runtimeSettings) { this.runtimeSettings = runtimeSettings; }
@@ -443,6 +451,7 @@ public class AiService {
         ChatTurnService.Lease lease = begun.lease();
         boolean finalized = false;
         try {
+            sessions.fillTemporaryTitle(request.sessionId(), request.userText());
             boolean memoryUseRequested = memoryUseRequested(body);
             AiUpstreamClient.Upstream target = chatTargetUpstream(config, request.masterPassword(), settings);
             boolean memoryToolsActive = target != null
@@ -465,7 +474,7 @@ public class AiService {
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
                     ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
             finalized = true;
-            maybeAutoTitle(request.sessionId(), request.userText());
+            maybeAutoTitle(request, done, config);
             reportLegacyFailure(request.protocolVersion(), done.status(), result);
             // requestId 用租约那份权威身份：客户端没带 requestId 时以前会回一个空串
             return chatResponse(request.protocolVersion(), lease.requestId(), request.sessionId(),
@@ -586,6 +595,7 @@ public class AiService {
         boolean finalized = false;
         ChatTurnService.FinalResult lastFinal = null;
         try {
+            sessions.fillTemporaryTitle(request.sessionId(), request.userText());
             UpstreamConfig upstream = decryptedChatUpstream(config, request.masterPassword());
             if (upstream == null) {
                 // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
@@ -608,7 +618,7 @@ public class AiService {
                         auditFor(dispatch.markSent(), dispatch.legacy()));
                 finalized = true;
                 lastFinal = done;
-                maybeAutoTitle(request.sessionId(), request.userText());
+                maybeAutoTitle(request, done, config);
                 return streamResult(request, lease, done, dispatch.markSent(), AiUpstreamClient.Usage.unknown(),
                         dispatch.legacy());
             }
@@ -630,7 +640,7 @@ public class AiService {
                     ChatTurnService.UpstreamReply.of(result), auditFor(sent, dispatch.legacy()));
             finalized = true;
             lastFinal = done;
-            maybeAutoTitle(request.sessionId(), request.userText());
+            maybeAutoTitle(request, done, config);
             if (!"saved".equals(done.persistenceStatus()) || !done.stateDurable()) {
                 throw new IllegalArgumentException("本轮回复未能保存，请检查本地存储后重试");
             }
@@ -1969,17 +1979,10 @@ public class AiService {
         }
     }
 
-    private void maybeAutoTitle(long sessionId, Object content) {
-        try {
-            Map<String, Object> session = sessions.find(sessionId);
-            String title = String.valueOf(session.get("title"));
-            if (!"新会话".equals(title) && !"默认会话".equals(title)) return;
-            String text = contentText(content).replaceAll("\\s+", " ").trim();
-            if (text.isBlank()) return;
-            if (text.length() > 24) text = text.substring(0, 24) + "…";
-            sessions.update(sessionId, text, null, null);
-        } catch (Exception ignored) {
-            // Title auto-fill is optional.
+    private void maybeAutoTitle(TurnRequest request, ChatTurnService.FinalResult done, AiConfigRepository.ConfigRow config) {
+        if (sessionTitles != null && "COMPLETED".equals(done.status()) && done.stateDurable()
+                && "saved".equals(done.persistenceStatus())) {
+            sessionTitles.afterCompleted(request.sessionId(), config, request.masterPassword());
         }
     }
 

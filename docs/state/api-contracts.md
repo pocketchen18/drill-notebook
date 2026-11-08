@@ -248,6 +248,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 |---|---|---|
 | GET / POST | `/ai/sessions` | 会话列表 / 新建 |
 | PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（运行中删除返回 409） |
+| POST | `/ai/sessions/{id}/title` | 异步生成 / 重新生成标题（202） |
 | GET | `/ai/sessions/{id}/messages` | 消息列表（解密） |
 | GET | `/ai/messages` | 全局消息查询 |
 | GET | `/ai/sessions/{id}/history` | 历史查询 |
@@ -256,6 +257,12 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 | GET | `/ai/sessions/{id}/export` | 导出会话 |
 
 轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
+
+会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议，当前 MVP 只支持复制，跨会话读取工具尚未接入。
+
+标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少应用模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
+
+新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用当前应用模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
 
 ### 3.5 记忆
 
