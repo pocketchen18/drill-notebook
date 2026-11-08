@@ -52,7 +52,7 @@ public final class StorageLedgerPrototype {
     }
 
     /**
-     * 测试临时目录放在仓库内 {@code tmp/}（已 gitignore），不写系统 %TEMP%：执行方案 §14.3
+     * 测试临时目录放在仓库内 {@code temp/}（已 gitignore），不写系统 %TEMP%：执行方案 §14.3
      * 要求新 fixture 显式定位 APP_ROOT 内的测试临时区。
      */
     public static java.nio.file.Path scratchDirectory(String prefix) throws java.io.IOException {

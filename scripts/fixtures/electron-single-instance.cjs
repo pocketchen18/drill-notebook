@@ -2,9 +2,9 @@
 const { app, BrowserWindow } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const testRoot = path.resolve(__dirname, '../../tmp');
+const testRoot = path.resolve(__dirname, '../../temp');
 if (!process.env.APP_ROOT || !path.resolve(process.env.APP_ROOT).startsWith(testRoot + path.sep)) {
-  throw new Error('This fixture requires an isolated APP_ROOT inside the workspace tmp directory.');
+  throw new Error('This fixture requires an isolated APP_ROOT inside the workspace temp directory.');
 }
 const bridgePath = require.resolve('../../electron-dist/java-bridge.js');
 let completeStartup;

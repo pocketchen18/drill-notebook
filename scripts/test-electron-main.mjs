@@ -30,7 +30,7 @@ function boot({ ownsLock = true } = {}) {
   const ready = deferred();
   const backendReady = deferred();
   const warningClosed = deferred();
-  const paths = { root: path.join(root, 'tmp', 'mock-app'), config: path.join(root, 'tmp', 'mock-app', 'config') };
+  const paths = { root: path.join(root, 'temp', 'mock-app'), config: path.join(root, 'temp', 'mock-app', 'config') };
   const handle = { baseUrl: 'http://127.0.0.1:54321' };
   const app = new EventEmitter();
   Object.assign(app, {

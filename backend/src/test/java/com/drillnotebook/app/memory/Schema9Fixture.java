@@ -16,7 +16,7 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 /**
  * schema9 迁移与约束测试的夹具：v8 旧库重建、代表性旧数据与对象计数。
  *
- * <p>临时库目录由 {@link TestWorkspace} 提供，一律落在 APP_ROOT 的 tmp/ 下
+ * <p>临时库目录由 {@link TestWorkspace} 提供，一律落在 APP_ROOT 的 temp/ 下
  * （不用 @TempDir，避免把测试产物写进系统 %TEMP%）；DataSource 走生产的
  * {@link DatabaseConfig}，pragma 组合与线上完全一致。</p>
  */

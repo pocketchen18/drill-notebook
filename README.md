@@ -1,6 +1,6 @@
 # Drill Notebook（面向开发者）
 
-当前发布准备：**v0.7.1（预发行）**，AI 连接、多模型预设、对话工具活动与全局运行限制。范围、验证及升级说明见 [发布说明](docs/plans/v0.7.1-release-notes.md)。
+当前发布准备：**v0.7.1（预发行）**，AI 连接、多模型预设、对话工具活动与全局运行限制。范围、验证及升级说明见 [发布说明](docs/release/v0.7.1-release-notes.md)。
 
 | 项 | 说明 |
 |---|---|
@@ -40,11 +40,11 @@
 
 | 功能 | 说明 |
 |---|---|
-| **PDF 导入** | 规则解析为主；可配置 AI 兜底解析（见 `docs/import-formats.md`） |
+| **PDF 导入** | 规则解析为主；可配置 AI 兜底解析（见 `docs/reference/import-formats.md`） |
 | **统一导入 AI 兜底** | PDF / Markdown / JSON 等路径可走同一套 AI 补全逻辑 |
 | **导出** | 题库 / 笔记 / 错题等支持 **Markdown、PDF、HTML** 等导出；可自定义勾选、多选（见前端 `ExportActions`） |
 | **高级挑题与打乱** | 刷题 / 背题 / 背知识点：按题型、章节、标签等筛选；随机 / 手动顺序 / 组内保序等策略（`AdvancedQuestionSelector`） |
-| **知识点导入** | Markdown 分级导入，可 AI 兜底与自定义分类（`docs/knowledge-point-import.md`） |
+| **知识点导入** | Markdown 分级导入，可 AI 兜底与自定义分类（`docs/reference/knowledge-point-import.md`） |
 
 ### 1.3 v0.4
 
@@ -64,9 +64,9 @@
 | 功能 | 说明 |
 |---|---|
 | **背知识点重构** | 树状大纲阅读与卡片工作区：左侧多级大纲导航（支持搜索过滤、按标签筛选、悬停完整标题气泡 Tooltip、统一层级缩进步长、视口自适应独立双向滚动） + 右侧卡片工作区；点卡片或按全屏按钮进入 `KnowledgeFullCardView` 全屏阅读视图（支持大纲拖拽调宽与阈值自动折叠、键盘快捷翻页、章节/整库/单卡总结与还原、修改/删除按钮，`Escape` 退出） |
-| **AI 总结知识点** | 丰富维度：①总结并导入（选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库）②整库/章节总结（对未总结卡逐条存原文+AI 浓缩+更新 `content`）③重新总结（对已总结卡从原文重跑）④未单独配置导入兜底模型时自动无缝回退主模型。详见 [docs/ai-summary.md](docs/ai-summary.md) |
+| **AI 总结知识点** | 丰富维度：①总结并导入（选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库）②整库/章节总结（对未总结卡逐条存原文+AI 浓缩+更新 `content`）③重新总结（对已总结卡从原文重跑）④未单独配置导入兜底模型时自动无缝回退主模型。详见 [docs/reference/ai-summary.md](docs/reference/ai-summary.md) |
 | **原文/总结双态切换** | 知识卡片标签栏提供单卡「显示原文 / 显示总结」切换；全屏视图支持单卡/章节/整库一键切换；后端提供 `restore-original` / `restore-summary` 批量恢复接口，`knowledge_point_original` 表存 `role=original`/`summary` 双快照，`knowledge_point.content` 在两态间切换 |
-| **笔记本混合检索（RAG）** | AI 侧栏对话可注入笔记本上下文。**BM25 关键词检索默认启用、无需下载**（FTS5 trigram，笔记保存即索引）；向量检索为 opt-in 增强。两层经 RRF 融合成统一引用列表，点 citation 深链跳回页面。详见 [docs/ai-retrieval.md](docs/ai-retrieval.md) |
+| **笔记本混合检索（RAG）** | AI 侧栏对话可注入笔记本上下文。**BM25 关键词检索默认启用、无需下载**（FTS5 trigram，笔记保存即索引）；向量检索为 opt-in 增强。两层经 RRF 融合成统一引用列表，点 citation 深链跳回页面。详见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) |
 | **检索范围与降级** | 范围 `all` / `current`（当前笔记本）；向量层任何故障静默降级为 BM25-only 并附 `retrievalNotice`，**对话不受影响** |
 | **本地 embedding 模型目录** | 设置页「嵌入 / 模型目录」：内置 `bge-small-zh-v1.5`（512 维，MIT），**默认不下载**；下载校验 size/sha256、断点续传、可取消、可彻底卸载（模型文件 + 向量） |
 | **远程 embedding（OpenAI/Ollama）** | 可选；**必须先勾选「同意发送笔记内容」**，授权绑定 endpoint/model，更换后失效。远程不可达时降级 BM25，对话仍 200 |
@@ -88,7 +88,7 @@
 | **多轮循环出场** | 所选条目每轮按编排顺序全部出场，共循环 R 轮（默认 3，1–10 可配）；会话界面按轮分组（跳转面板轮次分组、进度「第 r / R 轮」标签） |
 | **错题重复（百词斩式）** | 默认**组末复习**：每轮按组（默认 10 题）分段，答错插入本组末尾重现；可切「本轮末尾」「延迟重现」；额外重复上限可配（0=直到会为止） |
 | **过关与次轮顺序** | 连对达标算过关，可选「过关后跳过后续轮次」；下一轮可选保持原序 / 错题优先 / 随机 |
-| **背诵设置弹窗 + 预设** | 「记忆曲线 · 摘要」按钮打开弹窗：4 预设（快速过一遍 / 推荐三轮 / 百词斩式 / 强化五轮）+ 全部自定义项 + 出场规模预估；与设置页「会话内记忆曲线」卡片共用一份 localStorage 配置（详见 [docs/session-curve.md](docs/session-curve.md)） |
+| **背诵设置弹窗 + 预设** | 「记忆曲线 · 摘要」按钮打开弹窗：4 预设（快速过一遍 / 推荐三轮 / 百词斩式 / 强化五轮）+ 全部自定义项 + 出场规模预估；与设置页「会话内记忆曲线」卡片共用一份 localStorage 配置（详见 [docs/reference/session-curve.md](docs/reference/session-curve.md)） |
 | **背知识点专用选材页** | 轻量知识树级联勾选（勾父带子、节点带计数），**只背叶子卡片**；不再复用知识点阅读页，阅读页回归纯阅读 |
 | **题库选题继承** | 题库页勾选后「开始练习」跳转 `/quiz?bankId=…&questionIds=…&from=bank`，刷题页预选并可继续调整；无勾选按整库；错题「错题再练」不受影响 |
 | **会话 → 日历/跨天曲线联动** | 跨天评分以**会话最终判定**为准（重复同判定不重复推远，判定翻转才补交 `forceAdvance`）；会话内答错 ≥2 次或已放弃的条目识别为**顽固项**，会话结束弹窗内默认勾选，自动排入**明天 + 后天**各一轮加练并写入日历（后端零改动） |
@@ -121,7 +121,7 @@
 | **视觉系统重做** | `frontend/src/styles/app.css` 统一设计令牌（色板 / 字阶 / 4px 间距 / 圆角 4–16 / 三级阴影 / 120–240ms 动效），明暗两态同源；在 `body` 上覆盖 Arco 主题变量（`--arcoblue-*`、圆角、文本 / 边框 / 填充色）让 Arco 组件随令牌换肤，不再逐组件补丁 |
 | **品牌与图标** | 新品牌标识（渐变方块 + 折角页 + 对勾）：母版 `resources/icon/icon.svg`；`npm run build:icons` 用 Electron 自带 Chromium 渲染出 `icon.png`（512）与多尺寸 `icon.ico`（窗口图标 + 便携 exe 图标，打包随 `extraResources` 拷入）；侧栏品牌行（`BrandMark`）与 `frontend/public/favicon.svg` 复用同一几何 |
 | **壳层重排** | 侧栏改为分组导航（资料 / 学习 / 规划 + 底部设置），折叠 / 3 秒自动隐藏 / 悬停提示逻辑不变；顶栏改为页面标题 + 「AI 助手」快捷键药丸 + 明暗切换图标按钮 |
-| **页面精修** | 错题、知识点、练习（刷题 / 背诵：题卡圆角、选项字母徽章、进度条、反馈卡）、日历（今天徽章、月份头部自适应换行）、设置（pill Tab、分隔行）与 AI 侧栏（气泡、会话栏）逐页重构视觉层；笔记本与题库保持工作台几何契约（`DESIGN.md`）只做视觉微调 |
+| **页面精修** | 错题、知识点、练习（刷题 / 背诵：题卡圆角、选项字母徽章、进度条、反馈卡）、日历（今天徽章、月份头部自适应换行）、设置（pill Tab、分隔行）与 AI 侧栏（气泡、会话栏）逐页重构视觉层；笔记本与题库保持工作台几何契约（`docs/DESIGN.md`）只做视觉微调 |
 | **约束** | 不改变现有功能与交互逻辑，仅做不破坏性的微调（折叠按钮展开态显示「收起侧栏」文字、主题开关改为图标按钮）；既有测试与几何契约测试继续通过 |
 | **随手修补** | 笔记本命令行补回「新建笔记本」入口（v0.5 工作台重构时遗失，后端接口一直存在）；练习选题器、知识点关联题目改为 Markdown 内联渲染，错题表格 / 计划标题 / 下拉选项等纯文本场景用 `lib/markdownText` 剥离 Markdown 与 LaTeX 记号；AI 连接提示与后端报错统一为「Base URL + API Key」措辞 |
 | **笔记本 / 页面重命名** | 页面标题原先每敲一个字符就 PUT 一次，且从不失效 `['note-page', pageId]`，输入框被服务端旧标题顶回去，看起来「改不了名」；现改为本地成稿、失焦或回车提交一次，Esc 放弃。页面列表行支持双击标题或按 `F2`（作用域「笔记本」，设置 → 常规 → 快捷键可改绑）改名；笔记本在命令行的下拉旁新增改名按钮，编辑时下拉临时换成输入框。提交后直接回写 `['notebooks']` / `['note-pages', id]` / `['note-page', id]` 缓存，列表、编辑区标题、AI 引用同步更新 |
@@ -137,7 +137,7 @@
 
 ### 1.10 v0.6.2（笔记本编辑器现代化）
 
-仍基于 TipTap 2.27 原地增强，未迁移 v3；文档 JSON 向后兼容（新属性均有默认值），不新增落盘路径。编辑器交互契约见 `DESIGN.md` §5「Editor Canvas」。
+仍基于 TipTap 2.27 原地增强，未迁移 v3；文档 JSON 向后兼容（新属性均有默认值），不新增落盘路径。编辑器交互契约见 `docs/DESIGN.md` §5「Editor Canvas」。
 
 | 功能 | 说明 |
 |---|---|
@@ -165,9 +165,9 @@
 | **图片移动** | 修复内部拖动携带文件项时被误当成再次上传、产生副本；图片通过块手柄移动，阻止预览本体误拖，Ctrl 拖动仍可复制且不重复上传 |
 | **页面与显示** | 修复新建页面后跳回旧页、字体合成导致斜体显示异常 |
 
-公式往返仅对单块中来源记录与字面均未改变的片段恢复节点；跨多块只保留源码，手打的 `$…$` 不自动识别。验收与自动化覆盖见 [QA 清单](docs/testing/QA_CHECKLIST.md)模块十二。
+公式往返仅对单块中来源记录与字面均未改变的片段恢复节点；跨多块只保留源码，手打的 `$…$` 不自动识别。验收与自动化覆盖见 [QA 清单](docs/test/QA_CHECKLIST.md)模块十二。
 
-发行后修正（已纳入 v0.7.0 预发行）：同一便携目录重复双击 EXE，只恢复并聚焦已运行窗口；启动期间重复打开也不会再拉起后端或清理原实例资源。已有 v0.6.3 发行包不包含此修正，v0.7.0 预发行包含；回归步骤见 [QA 清单](docs/testing/QA_CHECKLIST.md)模块十三。
+发行后修正（已纳入 v0.7.0 预发行）：同一便携目录重复双击 EXE，只恢复并聚焦已运行窗口；启动期间重复打开也不会再拉起后端或清理原实例资源。已有 v0.6.3 发行包不包含此修正，v0.7.0 预发行包含；回归步骤见 [QA 清单](docs/test/QA_CHECKLIST.md)模块十三。
 
 ### 1.12 v0.7.0（AI 记忆系统）
 
@@ -176,7 +176,7 @@
 | **AI 跨会话记忆** | 侧栏对话跨会话持久记忆；GLOBAL / NOTEBOOK scope、关键词兜底、自动提取、删除/恢复安全与 V1 摘要拒用已接入 |
 | **用量与缓存** | OpenAI cached 子集与 Anthropic cache 读写分桶；官方端点尝试 Anthropic `cache_control`，缓存字段 400 自动单次降级并持久化 |
 | **删除与恢复** | 会话运行中删除 409；notebook 删除清理对应记忆 scope；恢复前安全备份、schema 校验、恢复后安全事务与 fail-closed |
-| **发行边界** | 预发行版；50 个 M/S/C/T/F/H 场景为 PARTIAL，完整 120 例 §7 未完成，详见 [v0.7.0 发布说明](docs/plans/v0.7.0-release-notes.md) |
+| **发行边界** | 预发行版；50 个 M/S/C/T/F/H 场景为 PARTIAL，完整 120 例 §7 未完成，详见 [v0.7.0 发布说明](docs/release/v0.7.0-release-notes.md) |
 
 ### 1.13 v0.7.1（AI 连接与对话工具）
 
@@ -187,11 +187,11 @@
 | **记忆工具与活动展示** | 检索、列出、新增、更新四种工具；对话内显示真实执行状态与安全摘要，历史可恢复，取消后保留已确认结果 |
 | **全局运行限制** | 设置 → AI 对话 → 运行限制，支持修改与恢复默认，切换模型不变；默认 50 个工具阶段 / 100 次执行 / 整轮 30 分钟 / 单请求 15 分钟，另可配置 Token 额度与重复调用阈值 |
 | **稳定性** | 流式生成时自由滚动；切换聊天模型复用同版本记忆索引；删除来源会话保留长期记忆，来源显示「来源已被删除」；模型 ID 编辑保留未保存参数 |
-| **发行与升级** | 延续预发行渠道，数据库升级至 schema 11；详细范围、验证与升级说明见 [v0.7.1 发布说明](docs/plans/v0.7.1-release-notes.md) |
+| **发行与升级** | 延续预发行渠道，数据库升级至 schema 11；详细范围、验证与升级说明见 [v0.7.1 发布说明](docs/release/v0.7.1-release-notes.md) |
 
 ### 1.14 明确后置（未作为当前目标）
 
-当前 MVP 核心闭环、下一迭代与 Non-Goals 统一维护在 [docs/features.md](docs/features.md)，本节不再单独维护列表。
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)。当前版本的范围与推进状态单独维护在 [v0.7.2 功能需求清单](docs/state/v0.7.2-features.md)，发布前再将实际交付能力同步到全局清单。
 
 ---
 
@@ -230,7 +230,7 @@
 
 1. **练习 → 背诵** → 子切换选择「背题（题库）」或「背知识点」。  
 2. 选择范围与顺序：背题用高级挑题（筛选/全选取消、随机重排、拖拽编排）；背知识点在知识树上勾选范围（见 2.4.3）。  
-3. 点「开始」旁 **「记忆曲线 · 摘要」** 按钮可调整会话内短周期曲线（见 2.4.2 与 [docs/session-curve.md](docs/session-curve.md)）；评分同时写入跨天复习方案（SM-2）。  
+3. 点「开始」旁 **「记忆曲线 · 摘要」** 按钮可调整会话内短周期曲线（见 2.4.2 与 [docs/reference/session-curve.md](docs/reference/session-curve.md)）；评分同时写入跨天复习方案（SM-2）。
 4. 会话中按界面评分（背题 / 背知识点均为「会 / 不会」，映射 SM-2 quality 4 / 0）；答错条目按记忆曲线策略在会话内重复出现。  
 5. 可随时 **加入计划**；结束后走会话结束推荐弹窗（可将需复习条目加入今日队列 / 未来三天 / 自定义区间），弹窗底部的 **顽固项加练** 默认勾选，会把本会话反复答错的条目排进明天、后天的日历（见 2.4.4）。
 
@@ -254,7 +254,7 @@
 5. **AI 总结与兜底机制**：  
    - 顶部 **AI 总结** 按钮支持「总结并导入」、「总结当前知识库」与「重新总结当前知识库」。  
    - 当未单独配置「导入兜底」模型时，自动平滑回退使用「主模型」配置。  
-   细节见 [docs/ai-summary.md](docs/ai-summary.md)。
+   细节见 [docs/reference/ai-summary.md](docs/reference/ai-summary.md)。
 
 #### 2.4.2 会话内循环背诵（v0.5.1 短周期记忆曲线）
 
@@ -276,7 +276,7 @@
 2. 会话结束弹出「本轮结束后的学习计划」时，底部出现 **顽固项加练（N）** 卡片，**默认勾选**，列出条目名，可随时取消。  
 3. 保持勾选并提交 → 除常规候选的计划组外，额外写入 **「顽固项加练 · 第 1 天 / 第 2 天」两个计划组（明天、后天各一轮）**，固定排在紧邻两天，不受你选的日期窗口均分影响；顽固项即使没出现在常规候选里，也会一并「加入记忆曲线」。  
 4. 关闭「加入学习日历」时卡片内会提示排程不会写入；只开「加入记忆曲线」则仅入队、不写日历。  
-5. 到点后这些条目出现在**日历对应日期**与**今日队列**中，按既有计划项流程「去学习」即可。细节见 [docs/session-curve.md](docs/session-curve.md) 第 5 节。
+5. 到点后这些条目出现在**日历对应日期**与**今日队列**中，按既有计划项流程「去学习」即可。细节见 [docs/reference/session-curve.md](docs/reference/session-curve.md) 第 5 节。
 
 ### 2.5 错题
 
@@ -323,7 +323,7 @@
 - 题与题之间单独一行 `===`。  
 - 每题 YAML frontmatter：`type`、`answer`（按题型）、`tags`、`chapter` 等。  
 - 选择题：选项 + `answer`；判断：`true`/`false`；填空：文本答案；解答题可无固定答案，可写参考答案。  
-- 细则与 PDF/JSON：`docs/import-formats.md`、`docs/quiz-markdown-flow.md`。
+- 细则与 PDF/JSON：`docs/reference/import-formats.md`、`docs/reference/quiz-markdown-flow.md`。
 
 ### 2.10 AI 助手
 
@@ -333,7 +333,7 @@
 4. 支持多会话：新建 / 切换 / 双击标题重命名 / 删除；消息落库加密。  
 5. 助手消息可 **插入笔记**（选笔记本+页面）。  
 6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。  
-7. **笔记本检索（v0.5）**：侧栏内开启「检索」，选范围 `全部笔记本` / `当前笔记本`；回答下方列出引用来源，点击跳回对应页面。向量检索需在设置页启用本地模型或远程 embedding（见 [docs/ai-retrieval.md](docs/ai-retrieval.md)）。
+7. **笔记本检索（v0.5）**：侧栏内开启「检索」，选范围 `全部笔记本` / `当前笔记本`；回答下方列出引用来源，点击跳回对应页面。向量检索需在设置页启用本地模型或远程 embedding（见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md)）。
 8. **长期记忆与工具**：开启记忆且模型支持工具时，助手可按需检索、列出、新增和更新记忆；回复内的工具活动组显示执行中、成功、失败或未执行等真实状态，可展开安全摘要并在历史中恢复。删除来源会话不删除长期记忆。
 9. **阅读与长轮次**：流式生成期间向上滚动会暂停自动跟随，回到底部后恢复；达到运行限制会保留已有结果并说明原因，「继续」开启同会话新一轮。思考参数使用模型设置中的默认值；侧栏直接选择模型和思考档位留待后续改版。
 
@@ -346,7 +346,7 @@
 5. **会话偏好**：是否默认加入复习、默认计划、强制推进等（localStorage）。  
 6. **界面状态记忆**：「记住上次停留位置与各页选择」开关（默认开启）+「清除已记住的位置」按钮；关闭时立即清空已存状态。  
 7. **快捷键**（v0.5.3）：常规分区按「全局 / 刷题 / 知识卡片全屏 / 笔记编辑器 / 题库 / AI 助手」分组，每个动作可绑多个组合键；点「+」录入新键，Esc 取消，Backspace 清空该项，× 移除单个，行内图标还原单项，「全部恢复默认」一键还原；会在同一时机触发的重复组合键会被拒绝。  
-8. **AI 对话**：全局「运行限制」可修改每轮工具阶段、执行次数、总时长、单请求时长、Token 额度与重复调用阈值，可恢复默认；保存后从下一轮生效，切换供应商或模型不会改变。字段约束见 [接口契约](docs/api-contracts.md)。
+8. **AI 对话**：全局「运行限制」可修改每轮工具阶段、执行次数、总时长、单请求时长、Token 额度与重复调用阈值，可恢复默认；保存后从下一轮生效，切换供应商或模型不会改变。字段约束见 [接口契约](docs/state/api-contracts.md)。
 
 ### 2.12 主题（深色模式）
 
@@ -397,9 +397,9 @@
 | `backend/` | REST、导入解析、SRS、AI 代理、SQLite；新增 `note_attachment` 表与附件上传/列表/内容/删除 API |
 | `resources/` | 示例题库等静态资源 |
 | `scripts/` | 启动、smoke、便携审计、辅助脚本 |
-| `docs/` | 专题说明（导入/导出/打包/附件等） |
+| `docs/` | 全局文档、状态（state）、施工（work）、测试（test）、参考（reference）、发布（release）与归档（archive） |
 
-更细的模块说明见 [docs/architecture.md](docs/architecture.md)。
+更细的模块说明见 [docs/state/architecture.md](docs/state/architecture.md)。
 
 ---
 
@@ -429,14 +429,14 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 ### 4.3 云端便携发布
 
-发行包只在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/testing/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证，本地不生成发行包或模拟 ZIP。
+发行包只在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/test/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证，本地不生成发行包或模拟 ZIP。
 
-1. 更新对应的 `docs/plans/<版本>-release-notes.md`，完成测试并提交、推送准备发布的代码。
+1. 更新对应的 `docs/release/<版本>-release-notes.md`，完成测试并提交、推送准备发布的代码。
 2. 在该提交上创建并推送标签：`git tag v0.7.1`，随后 `git push origin v0.7.1`。
 3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.1-win-x64-portable.zip`。云端不重复执行前后端业务全量测试；后端使用 `-DskipTests package`，仍执行编译检查。
 4. 标签推送自动创建 **Pre-release**，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.7.1`，默认仅上传构建产物，勾选 `publish_release` 才发布。
 
-工作流按完整基础版本选择发布说明，`v0.7.1-rc.1` 共用 `v0.7.1-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 11 的迁移与回退边界见 [发布说明](docs/plans/v0.7.1-release-notes.md)。
+工作流按完整基础版本选择发布说明，`v0.7.1-rc.1` 共用 `v0.7.1-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 11 的迁移与回退边界见 [发布说明](docs/release/v0.7.1-release-notes.md)。
 
 云端 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地全量测试仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
 
@@ -469,30 +469,32 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 ## 5. 文档索引
 
-文档按生命周期分为状态文档、施工文档与交接记忆，规则见 [docs/README.md](docs/README.md)。
+各版本功能需求清单与架构、数据模型、接口契约放 `docs/state/`，当前施工文档放 `docs/work/`，测试文档放 `docs/test/`，专题与历史说明放 `docs/reference/`，发布说明放 `docs/release/`，施工归档放 `docs/archive/`。全局功能清单 `features.md`、设计规范 `DESIGN.md`、便携 JRE 说明 `jlink.md` 与文档入口 `README.md` 放在 `docs/` 根目录；版本发布前按最终验收结果更新全局功能清单。根 README / AGENTS / MEMORY 继续作为项目入口、代理规则与交接记忆，维护规则见 [docs/README.md](docs/README.md)。
 
 | 文档 | 内容 |
 |---|---|
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
-| [docs/features.md](docs/features.md) | 功能清单：当前 MVP 核心闭环、当前规划摘要、后续候选、Non-Goals；历史版本见 §1 |
-| [docs/data-model.md](docs/data-model.md) | 已落地数据模型与关键约束（schema 11） |
-| [docs/api-contracts.md](docs/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
-| [docs/architecture.md](docs/architecture.md) | 架构、模块边界、数据与主题 |
-| [docs/import-formats.md](docs/import-formats.md) | PDF / JSON 等导入格式 |
-| [docs/knowledge-point-import.md](docs/knowledge-point-import.md) | 知识点 Markdown 导入 |
-| [docs/quiz-markdown-flow.md](docs/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
-| [docs/review-srs.md](docs/review-srs.md) | 间隔重复复习（SM-2 风格）：数据库、API、今日队列、日历叠加 |
-| [docs/session-curve.md](docs/session-curve.md) | 会话内短周期记忆曲线（循环背诵）：配置、队列算法、页面交互、兼容边界、会话↔日历/跨天曲线联动（评分最终态、顽固项加练、日历实时今天）、测试 |
+| [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
+| [docs/state/v0.7.2-features.md](docs/state/v0.7.2-features.md) | v0.7.2 功能需求清单：本版范围、功能切片与推进状态 |
+| [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 11） |
+| [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
+| [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
+| [docs/DESIGN.md](docs/DESIGN.md) | 全局视觉、交互与编辑器契约 |
+| [docs/reference/import-formats.md](docs/reference/import-formats.md) | PDF / JSON 等导入格式 |
+| [docs/reference/knowledge-point-import.md](docs/reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
+| [docs/reference/quiz-markdown-flow.md](docs/reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
+| [docs/reference/review-srs.md](docs/reference/review-srs.md) | 间隔重复复习（SM-2 风格）：数据库、API、今日队列、日历叠加 |
+| [docs/reference/session-curve.md](docs/reference/session-curve.md) | 会话内短周期记忆曲线（循环背诵）：配置、队列算法、页面交互、兼容边界、会话↔日历/跨天曲线联动（评分最终态、顽固项加练、日历实时今天）、测试 |
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
-| [docs/ai-summary.md](docs/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
-| [docs/ai-retrieval.md](docs/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
-| [docs/plans/v0.7.1-release-notes.md](docs/plans/v0.7.1-release-notes.md) | v0.7.1 发布准备、验证、升级与已知边界 |
+| [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
+| [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
+| [docs/release/v0.7.1-release-notes.md](docs/release/v0.7.1-release-notes.md) | v0.7.1 发布准备、验证、升级与已知边界 |
 | [docs/archive/v0.7.1/](docs/archive/v0.7.1/) | v0.7.1 连接设置与记忆工具施工归档；后续讨论不代表已交付 |
-| [docs/plans/v0.7.0-release-notes.md](docs/plans/v0.7.0-release-notes.md) | v0.7.0 发行记录与升级说明 |
+| [docs/release/v0.7.0-release-notes.md](docs/release/v0.7.0-release-notes.md) | v0.7.0 发行记录与升级说明 |
 | [docs/archive/v0.7.0/](docs/archive/v0.7.0/) | v0.7.0 施工文档与验收证据（只读归档） |
-| [docs/testing/QA_CHECKLIST.md](docs/testing/QA_CHECKLIST.md) | 功能验收与回归测试手册（分模块用例表） |
-| [docs/testing/TESTING_GUIDELINES.md](docs/testing/TESTING_GUIDELINES.md) | 测试编写规范与提交前三道质量门禁 |
-| [docs/testing/BUG_REPORT_TEMPLATE.md](docs/testing/BUG_REPORT_TEMPLATE.md) | 缺陷报告模板 |
+| [docs/test/QA_CHECKLIST.md](docs/test/QA_CHECKLIST.md) | 功能验收与回归测试手册（分模块用例表） |
+| [docs/test/TESTING_GUIDELINES.md](docs/test/TESTING_GUIDELINES.md) | 测试编写规范与提交前三道质量门禁 |
+| [docs/test/BUG_REPORT_TEMPLATE.md](docs/test/BUG_REPORT_TEMPLATE.md) | 缺陷报告模板 |
 
 ---
 
@@ -501,7 +503,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 - **便携**：用户数据、日志、缓存应落在应用根目录策略下（开发态见启动脚本使用的便携数据目录）。  
 - **网络**：业务 API 仅本机回环；外发仅为用户配置的 AI Endpoint。  
 - **密钥与会话**：API Key 与 AI 消息加密存储；前端不长期持有明文 Key。  
-- **检索隐私**：BM25 与本地 embedding 不出本机；远程 embedding（OpenAI/Ollama）仅在用户当前授权下发送笔记内容，授权绑定 endpoint/model（见 [docs/ai-retrieval.md](docs/ai-retrieval.md)）。  
+- **检索隐私**：BM25 与本地 embedding 不出本机；远程 embedding（OpenAI/Ollama）仅在用户当前授权下发送笔记内容，授权绑定 endpoint/model（见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md)）。
 - **健康检查**：生产构建避免在健康接口暴露敏感路径。  
 
 ---

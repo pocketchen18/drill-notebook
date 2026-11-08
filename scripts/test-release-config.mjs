@@ -56,7 +56,7 @@ test('锁文件安装与发布配置检查通过后构建发布，不重复本�
   assert.ok(notes > steps.findIndex(step => step.id === 'ver') && notes < install);
   assert.equal(steps[notes].if, undefined);
   assert.equal(steps[notes]['continue-on-error'], undefined);
-  assert.ok(existsSync(join(root, `docs/plans/v${defaultVersion}-release-notes.md`)));
+  assert.ok(existsSync(join(root, `docs/release/v${defaultVersion}-release-notes.md`)));
 });
 
 test('云端后端使用预装 Maven 跳过测试执行，保留 Java 17 编译和 JAR 产物路径', () => {
@@ -125,11 +125,11 @@ test('发布说明按完整版本选择，预发行复用同版正文，缺失�
     assert.ok(pathInCache && !pathInCache.startsWith(`..${sep}`) && !pathInCache.includes(sep));
     rmSync(dir, { recursive: true, force: true });
   });
-  mkdirSync(join(dir, 'docs/plans'), { recursive: true });
+  mkdirSync(join(dir, 'docs/release'), { recursive: true });
   for (const tag of ['v0.7.0', 'v0.7.1', 'v0.7.10']) {
-    writeFileSync(join(dir, `docs/plans/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
+    writeFileSync(join(dir, `docs/release/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
   }
-  writeFileSync(join(dir, 'docs/plans/v0.7.2-release-notes.md'), ' \n');
+  writeFileSync(join(dir, 'docs/release/v0.7.2-release-notes.md'), ' \n');
   const script = join(dir, 'select-notes.ps1');
   const output = join(dir, 'notes-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'notes').run);
@@ -144,7 +144,7 @@ test('发布说明按完整版本选择，预发行复用同版正文，缺失�
       assert.equal(existsSync(output), false);
     } else {
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      assert.equal(readFileSync(output, 'utf8').trim(), `path=docs/plans/${tag.split('-')[0]}-release-notes.md`);
+      assert.equal(readFileSync(output, 'utf8').trim(), `path=docs/release/${tag.split('-')[0]}-release-notes.md`);
       rmSync(output);
     }
   }

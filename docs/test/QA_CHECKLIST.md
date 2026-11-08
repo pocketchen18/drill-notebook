@@ -2,7 +2,7 @@
 
 本文档定义了 QA 测试人员、产品及开发人员在发版或功能合并前的验收用例与回归步骤。
 
-当前发布基线为 v0.7.1；本轮实际执行结果统一记录在 [发布说明](../plans/v0.7.1-release-notes.md#验证)。下列用例是可复用的验收步骤，不表示每项都已在本轮人工执行；带旧版本和日期的验证段落仅作历史记录。
+当前发布基线为 v0.7.1；本轮实际执行结果统一记录在 [发布说明](../release/v0.7.1-release-notes.md#验证)。下列用例是可复用的验收步骤，不表示每项都已在本轮人工执行；带旧版本和日期的验证段落仅作历史记录。
 
 ---
 
@@ -26,7 +26,7 @@
 
 ## 模块二：SRS 记忆曲线与循环背诵
 
-> 会话内短周期记忆曲线（多轮循环 + 错题重复）的设计说明见 [docs/session-curve.md](../session-curve.md)；跨天 SM-2 见 [docs/review-srs.md](../review-srs.md)。
+> 会话内短周期记忆曲线（多轮循环 + 错题重复）的设计说明见 [docs/reference/session-curve.md](../reference/session-curve.md)；跨天 SM-2 见 [docs/reference/review-srs.md](../reference/review-srs.md)。
 
 | 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -147,7 +147,7 @@
 
 ## 模块八：界面状态记忆（v0.5.2）
 
-> 设计与约束见 [docs/architecture.md](../architecture.md) §2.3 与 README §2.13。存储位置：`localStorage['ui.viewState.v1']`。
+> 设计与约束见 [docs/state/architecture.md](../state/architecture.md) §2.3 与 README §2.13。存储位置：`localStorage['ui.viewState.v1']`。
 
 | 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -194,7 +194,7 @@
 
 ## 模块十：v0.6 UI 视觉回归
 
-> 设计令牌与几何契约见 [DESIGN.md](../../DESIGN.md)；图标产物由 `npm run build:icons` 生成到 `resources/icon/`。
+> 设计令牌与几何契约见 [DESIGN.md](../DESIGN.md)；图标产物由 `npm run build:icons` 生成到 `resources/icon/`。
 
 | 用例编号 | 功能特性 | 前置条件 | 操作步骤 | 预期结果 | 优先级 |
 | :--- | :--- | :--- | :--- | :--- | :--- |

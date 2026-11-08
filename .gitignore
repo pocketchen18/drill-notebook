@@ -192,24 +192,21 @@ backend/src/test/resources/fixtures/java.pdf
 *.doc
 *.docm
 
-# docs/: ignore by default; re-include only public product docs (not design/plan trees)
+# docs/: include global docs and state/work/test/reference/release/archive trees
 docs/**
 !docs/
 !docs/jlink.md
-!docs/import-formats.md
-!docs/knowledge-point-import.md
-!docs/quiz-markdown-flow.md
-!docs/ai-summary.md
-!docs/ai-retrieval.md
-!docs/architecture.md
-!docs/review-srs.md
-!docs/session-curve.md
-!docs/README.md
+!docs/DESIGN.md
 !docs/features.md
-!docs/data-model.md
-!docs/api-contracts.md
-!docs/testing/
-!docs/testing/**
+!docs/README.md
+!docs/reference/
+!docs/reference/**
+!docs/release/
+!docs/release/**
+!docs/state/
+!docs/state/**
+!docs/test/
+!docs/test/**
 !docs/work/
 !docs/work/**
 !docs/archive/
@@ -223,9 +220,6 @@ docs/**
 /docs/**/*.bmp
 /docs/**/*.avif
 /docs/**/*.svg
-# Release records: the workflow selects the notes for the requested version.
-!docs/plans/
-!docs/plans/v*-release-notes.md
 # Persistent eval fixtures and live-eval sources are part of the release evidence.
 !backend/src/test/resources/eval/
 !backend/src/test/resources/eval/**

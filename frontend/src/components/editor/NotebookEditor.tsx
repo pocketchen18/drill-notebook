@@ -36,7 +36,7 @@ const emptyDocument = { type: 'doc', content: [{ type: 'paragraph' }] };
 const scrollInsets = { top: 88, bottom: 48, left: 8, right: 8 };
 const closedFind: FindRequest = { open: false, replace: false, seed: '', token: 0 };
 
-// 工作台几何契约（DESIGN.md）：编辑器画布 padding 与工具栏最小高度以内联
+// 工作台几何契约（docs/DESIGN.md）：编辑器画布 padding 与工具栏最小高度以内联
 // 承载（jsdom 契约测试可读），其余视觉层由 app.css 的 .editor-canvas 提供。
 const canvasPadding: CSSProperties = { paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 24 };
 const focusCanvasPadding: CSSProperties = { paddingTop: 0, paddingLeft: 0, paddingRight: 0, paddingBottom: 0 };

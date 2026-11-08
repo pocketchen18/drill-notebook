@@ -287,4 +287,4 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 | POST | `/ai/embeddings/models/{id}/activate` / `disable` | 启用 / 停用模型 |
 | DELETE | `/ai/embeddings/models/{id}` | 卸载模型与向量 |
 
-检索、嵌入、摘要的请求 / 响应细节见 [ai-retrieval.md](ai-retrieval.md) 与 [ai-summary.md](ai-summary.md)。
+检索、嵌入、摘要的请求 / 响应细节见 [ai-retrieval.md](../reference/ai-retrieval.md) 与 [ai-summary.md](../reference/ai-summary.md)。
