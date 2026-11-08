@@ -429,16 +429,16 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 ### 4.3 云端便携发布
 
-发行包只在 GitHub Actions 构建；本地按 [测试规范](docs/testing/TESTING_GUIDELINES.md) 验证，不生成发行包或模拟 ZIP。
+发行包只在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/testing/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证，本地不生成发行包或模拟 ZIP。
 
 1. 更新对应的 `docs/plans/<版本>-release-notes.md`，完成测试并提交、推送准备发布的代码。
 2. 在该提交上创建并推送标签：`git tag v0.7.1`，随后 `git push origin v0.7.1`。
-3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归、前后端全量测试全部通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.1-win-x64-portable.zip`。
+3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.1-win-x64-portable.zip`。云端不重复执行前后端业务全量测试；后端使用 `-DskipTests package`，仍执行编译检查。
 4. 标签推送自动创建 **Pre-release**，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.7.1`，默认仅上传构建产物，勾选 `publish_release` 才发布。
 
 工作流按完整基础版本选择发布说明，`v0.7.1-rc.1` 共用 `v0.7.1-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 11 的迁移与回退边界见 [发布说明](docs/plans/v0.7.1-release-notes.md)。
 
-云端后端测试与 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
+云端 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地全量测试仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
 
 ### 4.4 建议自测清单
 

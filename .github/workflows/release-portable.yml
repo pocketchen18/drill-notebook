@@ -94,13 +94,6 @@ jobs:
       - name: 验证发布配置与本地打包脚本
         run: node --test scripts/test-release-config.mjs
 
-      - name: 前端全量测试
-        run: npm run test:frontend
-
-      - name: 后端全量测试
-        # 使用 runner 预装 Maven，不经本地 wrapper 再下载 Maven 发行包；日志保留实际工具版本。
-        run: mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml test
-
       - name: 生成内嵌 JRE（docs/jlink.md 的模块清单）
         # 精简 JRE 必须覆盖 Spring Boot 3 + 内嵌 Tomcat 启动的全部依赖模块，否则后端在启动早期即退出、
         # Electron 侧表现为「Backend did not become healthy within 30 seconds」+ 前端 Failed to fetch。
@@ -118,8 +111,9 @@ jobs:
       - name: 构建前端与 Electron 主进程
         run: npm run build
 
-      # 上方已单独执行测试门禁，此处只构建，避免重复运行。
-      - name: 构建后端 jar（测试已通过，产物名固定为 drill-notebook-backend-0.1.0.jar）
+      # 前后端全量测试由发布者在本地完成；云端只做发布配置检查、编译和打包。
+      # 使用 runner 预装 Maven，不经 wrapper 下载 Maven 本体；保留 Java 17 编译检查。
+      - name: 构建后端 jar（跳过测试执行，产物名固定为 drill-notebook-backend-0.1.0.jar）
         run: mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml -DskipTests package
 
       # 目录模式打包：绿色便携以「zip 解压即用」的文件夹分发（data/logs/runtime 固定写在 exe 旁）。

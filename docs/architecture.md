@@ -104,7 +104,7 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 
 - 开发：未打包时默认在工作区旁建立便携数据根（`APP_ROOT`，不入库）。  
 - 生产：`electron/paths.ts` 将 userData/cache/temp 指到可执行文件旁。  
-- 发行包只在 `.github/workflows/release-portable.yml` 构建。标签注入版本，前后端与发布配置测试通过后生成内嵌 JRE、应用目录和 ZIP；按版本选择发布说明，继续使用 Pre-release。操作见 [README §4.3](../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](jlink.md)。本地仅构建与验证，不生成发行包。
+- 发行包只在 `.github/workflows/release-portable.yml` 构建。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、应用目录和 ZIP。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](jlink.md)。本地不生成发行包。
 
 ## 6. 测试
 

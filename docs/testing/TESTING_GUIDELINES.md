@@ -52,7 +52,9 @@ npm run test:backend
 
 Electron 主进程有改动时，执行 `npm run test:electron` 和 `npm run build:electron`。入口回归在内存中执行真实 `electron/main.ts`，隔离 Electron / 后端 API；已接入根目录 `npm test`。另用 `npm run test:electron:native` 在 Windows 桌面会话中验证原生单实例锁和窗口恢复：加载重构建后的真实入口 / 路径模块，使用独立工作区 `tmp/` 和后端桩，结束后清理；不运行真实 Java 或发行打包。原生测试不并入默认无桌面测试流程。
 
-发布配置有改动时，本地执行 `node --test --test-name-pattern='^(发布默认值|锁文件安装|云端后端|发布说明)' scripts/test-release-config.mjs`：检查配置、测试门禁顺序、预装 Maven，以及发布说明按完整基础版本选择、缺失/空白时拒绝；不构建或生成模拟 ZIP。完整 `node --test scripts/test-release-config.mjs` 还包含假打包器 / ZIP 用例，留在 GitHub Actions 执行。云端在 `npm ci` 后完成发布配置回归及前后端全量测试才构建、打包、发布；后端测试与 JAR 构建均使用 runner 预装 `mvn`、同一 POM 和 Java 17，本地测试命令仍用 wrapper。发行打包只在 GitHub Actions 上执行。
+发布配置有改动时，本地执行 `node --test --test-name-pattern='^(发布默认值|锁文件安装|云端后端|发布说明)' scripts/test-release-config.mjs`：检查发布配置检查与构建顺序、预装 Maven 和跳过测试执行的约定，以及发布说明按完整基础版本选择、缺失/空白时拒绝；不构建或生成模拟 ZIP。完整 `node --test scripts/test-release-config.mjs` 还包含假打包器 / ZIP 用例，留在 GitHub Actions 执行。
+
+前后端业务全量测试在本地作为发布前门禁，发布者应确认结果对应待发布提交，并在发布说明记录实际范围与未解决问题；云端不会自动验证本地测试是否执行。GitHub Actions 在 `npm ci` 后运行轻量发布配置回归，再进行前端类型检查、前端/Electron 构建、后端 Java 17 编译、打包及产物校验。后端使用 runner 预装 `mvn -DskipTests package` 跳过测试执行，本地全量测试仍用 wrapper。不得将取消云端重复测试描述为已修复某个测试失败；发现的业务缺陷仍需独立定位。发行打包只在 GitHub Actions 上执行。
 
 ---
 
