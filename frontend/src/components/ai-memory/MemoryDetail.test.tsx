@@ -66,6 +66,18 @@ beforeEach(() => {
 });
 
 describe('MemoryDetail', () => {
+  it('自动记忆删除来源后保留正文与自动类型，只标记来源已被删除', async () => {
+    const row = item({ sources: [] });
+    apiGet.mockResolvedValue(row);
+    renderDetail({ item: row });
+    expect(await screen.findByText('来源已被删除')).toBeInTheDocument();
+    expect(screen.getByText('自动整理')).toBeInTheDocument();
+    expect(screen.getByLabelText('记忆正文')).toHaveValue(row.value);
+    expect(screen.queryByText('人工记录')).toBeNull();
+    expect(screen.queryByText('人工添加的记忆没有聊天原话。')).toBeNull();
+    expect(apiPatch).not.toHaveBeenCalled();
+  });
+
   it('保存带的是详情里取回的版本，不是列表快照那一版', async () => {
     apiGet.mockResolvedValue(item({ version: 3 }));
     renderDetail({ item: item({ version: 1 }) });

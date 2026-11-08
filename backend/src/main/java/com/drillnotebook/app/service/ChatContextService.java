@@ -478,7 +478,7 @@ public class ChatContextService {
             if (sensitivity == MemorySensitivity.Level.SENSITIVE) {
                 return MemoryWrite.rejected("SENSITIVE");
             }
-            MemoryApiResult edited = items.edit(target.memoryId(), new MemoryItemService.EditInput(
+            MemoryApiResult edited = items.editFromAi(target.memoryId(), new MemoryItemService.EditInput(
                     target.expectedVersion(), null, null, newValue, validUntil, null), MAX_CREATE_TEXT_CODE_POINTS);
             if (edited.status() != 200) return mapEditFailure(edited);
             Object editedVersion = edited.body().get("version");
@@ -628,7 +628,6 @@ public class ChatContextService {
             Optional<MemoryRepository.VaultEnvelope> envelope = memory.readEnvelope();
             if (envelope.isEmpty()) return;
             MemoryRepository.VaultEnvelope current = envelope.get();
-            indexes.requestBuild(current.vaultId(), current.epoch(), current.revision());
             indexes.buildNow(current.vaultId(), current.epoch(), current.revision());
         } catch (RuntimeException | SQLException error) {
             log.warn("写入后重建记忆索引失败: {}", error.getClass().getSimpleName());

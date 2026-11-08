@@ -210,16 +210,16 @@ class IndexedMemorySourceTest {
     // ---- §9.1-1 快照的版本一致、异步构建与锁定清理 ----
 
     @Test
-    void staleSnapshotIsNeverReusedAfterTheVaultRevisionMoves() {
+    void smallRevisionRefreshReturnsCurrentMemoriesOnTheFirstRead() {
         add("GOAL", "GLOBAL", 0L, "study.goal", "goal-old", "旧目标：准备雅思", null);
         rebuild();
         assertEquals(1, select("GLOBAL", 0L, "我在备考什么").topical().size());
 
         add("GOAL", "GLOBAL", 0L, "study.goal", "goal-new", "新目标：准备托福", null);
         ContextMemorySource.Selection duringRebuild = select("GLOBAL", 0L, "我在备考什么");
-        assertEquals(ContextMemorySource.Availability.BUILDING, duringRebuild.availability(),
-                "库版本一变，旧快照就必须当作不可用（§9.1-1、交接 B 项）");
-        assertTrue(duringRebuild.topical().isEmpty(), "重建期间宁可整轮不带记忆，也不能只带旧的那半份");
+        assertEquals(ContextMemorySource.Availability.READY, duringRebuild.availability(),
+                "少量记忆可在读取预算内完成后台构建，不应直接丢掉本轮");
+        assertTrue(values(duringRebuild).contains("新目标：准备托福"), "不能以旧快照冒充新版本");
 
         rebuild();
         List<String> injected = values(select("GLOBAL", 0L, "我的备考目标有两个"));
@@ -227,14 +227,14 @@ class IndexedMemorySourceTest {
     }
 
     @Test
-    void firstTurnAfterUnlockDegradesToNoMemoryWhileTheSnapshotIsBuiltInBackground() throws Exception {
+    void firstTurnWithASmallColdIndexWaitsWithinItsBudget() throws Exception {
         add("GOAL", "GLOBAL", 0L, "study.goal", "goal-async", "正在准备雅思考试", null);
         indexes.clear();
 
         ContextMemorySource.Selection first = select("GLOBAL", 0L, "我在备考什么");
-        assertEquals(ContextMemorySource.Availability.BUILDING, first.availability(),
-                "解锁后第一条聊天不陪跑几千次解密（§9.1-1）");
-        assertTrue(first.topical().isEmpty() && first.candidatesSeen() == 0, "本轮就是不带记忆，不半投");
+        assertEquals(ContextMemorySource.Availability.READY, first.availability(),
+                "后台快速完成的快照应在本次读取返回，避免用户再问一轮");
+        assertTrue(values(first).contains("正在准备雅思考试"));
 
         awaitSnapshot();
         ContextMemorySource.Selection ready = select("GLOBAL", 0L, "我在备考什么");

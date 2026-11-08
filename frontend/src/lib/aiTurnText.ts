@@ -367,8 +367,8 @@ export function cleanupImpactLine(preview: {
   const parts: string[] = [];
   if (preview.affectedEvidence > 0) parts.push(`${preview.affectedEvidence} 条原话证据一起删除`);
   if (preview.affectedProposals > 0) parts.push(`${preview.affectedProposals} 条建议随原话一起删除`);
-  if (preview.autoFactsRemoved > 0) parts.push(`${preview.autoFactsRemoved} 条自动记忆失去唯一来源会消失`);
-  if (preview.protectedFactsKept > 0) parts.push(`${preview.protectedFactsKept} 条受保护记忆只断来源、内容保留`);
+  if (preview.autoFactsRemoved > 0) parts.push(`${preview.autoFactsRemoved} 条待确认记忆随原话一起删除`);
+  if (preview.protectedFactsKept > 0) parts.push(`${preview.protectedFactsKept} 条已保存记忆只断来源、内容保留`);
   if (!parts.length) return '不涉及已保存的记忆';
   return parts.join('；');
 }

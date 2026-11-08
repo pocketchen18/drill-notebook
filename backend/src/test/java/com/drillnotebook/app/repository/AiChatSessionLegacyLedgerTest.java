@@ -151,8 +151,8 @@ class AiChatSessionLegacyLedgerTest {
 
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_evidence"), "原话不得以快照名义留存");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_memory_item_evidence"));
-        assertTrue(memory.findCurrent(VAULT, auto.memoryId()).isEmpty(),
-                "自动事实的唯一来源被删 → 同一事务里作为孤儿移除");
+        assertTrue(memory.findCurrent(VAULT, auto.memoryId()).isPresent(),
+                "删除会话只清来源，已保存的自动记忆继续保留");
         assertTrue(memory.findCurrent(VAULT, manual.memoryId()).isPresent(),
                 "人工保护记忆保留内容，只去掉被删来源");
         assertTrue(ledger.reconcile().consistent(), "记忆重算、删行与账本扣减同批提交");

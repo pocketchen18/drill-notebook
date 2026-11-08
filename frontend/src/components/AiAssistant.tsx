@@ -213,7 +213,13 @@ export function AiAssistant(): JSX.Element {
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
     const el = event.currentTarget;
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
-    stickyBottomRef.current = distanceFromBottom < 80;
+    // 即使只向上移动了几像素，也视为用户开始阅读旧消息；否则 80px 阈值内的上滑
+    // 会继续被流式跟随拉回底部。向下滚回接近底部时再恢复自动跟随。
+    if (el.scrollTop < lastScrollTopRef.current) {
+      stickyBottomRef.current = false;
+    } else if (el.scrollTop > lastScrollTopRef.current) {
+      stickyBottomRef.current = distanceFromBottom < 80;
+    }
     lastScrollTopRef.current = el.scrollTop;
     // 滚到顶部附近就取更早的一页（§7.4：向上滚动可重新加载），并记住当前高度以便补回位移
     if (el.scrollTop < 60) requestOlder();
@@ -233,20 +239,25 @@ export function AiAssistant(): JSX.Element {
     if (!el || anchor === null) return;
     olderAnchorRef.current = null;
     el.scrollTop += el.scrollHeight - anchor;
+    lastScrollTopRef.current = el.scrollTop;
   }, [history.messages]);
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     if (!stickyBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
+    lastScrollTopRef.current = el.scrollTop;
   }, [visibleMessages]);
   useEffect(() => {
     if (!streaming) return;
-    if (!stickyBottomRef.current) return;
     let frame = 0;
     const tick = (): void => {
       const el = chatContainerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      // 每帧读取最新状态：用户上滑后暂停跟随，回到底部后在同一轮生成中恢复。
+      if (el && stickyBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+        lastScrollTopRef.current = el.scrollTop;
+      }
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);

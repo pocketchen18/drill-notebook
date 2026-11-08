@@ -81,7 +81,7 @@ export function AiConnectionsPanel({ registerGuard }: { registerGuard?: (guard: 
       const value = await apiRequest<Connections>(`/api/ai/connections${path}`, { method, body: JSON.stringify({ ...body, revision }) });
       client.setQueryData(['ai-connections'], value);
       void client.invalidateQueries({ queryKey: ['ai-config'] });
-      void client.invalidateQueries({ queryKey: ['memory-settings'] });
+      void client.invalidateQueries({ queryKey: ['ai-memory-settings'] });
       return true;
     } catch (error) { setError(error instanceof Error ? error.message : '保存失败，请重试'); return false; }
     finally { busyRef.current = false; setBusy(false); }

@@ -34,7 +34,8 @@ import org.springframework.stereotype.Service;
  *       永远不写授权列。</li>
  *   <li><b>授权</b>：指纹是 {@code purpose + normalizedEndpoint + apiFormat + model + policyVersion}
  *       的摘要。每次判定都拿<b>当前</b>配置重算比对，所以换 endpoint、换模型、换 API 格式、
- *       换 policy 版本或切换 chat/dedicated 都会让旧授权自动失效，不需要额外"撤销"代码。</li>
+ *       换 policy 版本或切换 chat/dedicated 都会让旧授权自动失效。已开启记忆时，AI 连接的
+ *       模型应用事务会同步新目标的授权，避免依赖设置页补齐。</li>
  *   <li><b>资格</b>：手动录入只要库存在且已解锁（不外发，所以不要授权）；自动提取与摘要还要开关
  *       和对应授权；注入还要 {@code enabled}。上限 2,000 ACTIVE / 500 PENDING 只拦自动新增，
  *       不暗中删人工记忆（§6.2）。</li>
@@ -367,7 +368,7 @@ public class MemoryPolicyService {
     }
 
     /** 授权指纹：purpose + 归一化 endpoint + apiFormat + model + policyVersion 的 SHA-256 摘要。 */
-    public String consentFingerprint(String purpose, String normalizedEndpoint, String apiFormat, String model) {
+    public static String consentFingerprint(String purpose, String normalizedEndpoint, String apiFormat, String model) {
         String canonical = String.join("|", purpose, normalizedEndpoint, apiFormat, model, POLICY_VERSION);
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
