@@ -27,16 +27,18 @@ test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () 
   assert.match(packageJson.scripts['package:portable'], /^pwsh .* -File scripts\/package-portable\.ps1$/);
 });
 
-test('锁文件安装及前后端测试必须成功后才可打包发布', () => {
+test('锁文件安装与发布配置检查通过后构建发布，不重复本地业务全量测试', () => {
   const install = steps.findIndex(step => step.run === 'npm ci');
   const build = steps.findIndex(step => step.run === 'npm run build');
   assert.ok(install >= 0 && build > install);
-  for (const command of ['node --test scripts/test-release-config.mjs', 'npm run test:frontend', `${mavenCommand} test`]) {
+  for (const command of ['node --test scripts/test-release-config.mjs']) {
     const index = steps.findIndex(step => step.run === command);
     assert.ok(index > install && index < build, `${command} 必须在安装后、构建前`);
     assert.equal(steps[index]['continue-on-error'], undefined);
     assert.equal(steps[index].if, undefined);
   }
+  const commands = steps.map(step => step.run ?? '').join('\n');
+  assert.doesNotMatch(commands, /npm (?:run )?test(?::(?:frontend|backend|electron|rag))?\b|npm (?:--workspace|--prefix) frontend (?:run )?test\b|\bvitest\s+run\b|\bmvn[^\n]*\b(?:test|verify)\s*(?:\n|$)/);
   assert.equal(job['continue-on-error'], undefined);
   const pack = steps.findIndex(step => step.run?.includes('npx electron-builder'));
   const release = steps.findIndex(step => step.uses?.startsWith('softprops/action-gh-release@'));
@@ -57,12 +59,13 @@ test('锁文件安装及前后端测试必须成功后才可打包发布', () =>
   assert.ok(existsSync(join(root, `docs/plans/v${defaultVersion}-release-notes.md`)));
 });
 
-test('云端后端使用预装 Maven，保留测试门禁、Java 17 和 JAR 产物路径', () => {
-  const backendTest = steps.findIndex(step => step.name === '后端全量测试');
+test('云端后端使用预装 Maven 跳过测试执行，保留 Java 17 编译和 JAR 产物路径', () => {
+  const configCheck = steps.findIndex(step => step.run === 'node --test scripts/test-release-config.mjs');
   const backendBuild = steps.findIndex(step => step.name.startsWith('构建后端 jar'));
   const pack = steps.findIndex(step => step.run?.includes('npx electron-builder'));
-  assert.ok(backendTest >= 0 && backendBuild > backendTest && pack > backendBuild);
-  assert.equal(steps[backendTest].run, `${mavenCommand} test`);
+  assert.ok(configCheck >= 0 && backendBuild > configCheck && pack > backendBuild);
+  assert.equal(steps.findIndex(step => step.name === '后端全量测试'), -1);
+  assert.equal(steps.findIndex(step => step.name === '前端全量测试'), -1);
   assert.equal(steps[backendBuild].run, `${mavenCommand} -DskipTests package`);
   assert.equal(steps[backendBuild]['continue-on-error'], undefined);
   assert.equal(steps[backendBuild].if, undefined);
