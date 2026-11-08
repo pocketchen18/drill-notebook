@@ -2,7 +2,7 @@ name: Build portable pre-release
 
 # 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 两种触发方式：
-#   1) 打标签推送：git tag v0.7.0 && git push origin v0.7.0  → 自动编译并发布 v0.7.0 预发行版
+#   1) 打标签推送：git tag v0.7.1 && git push origin v0.7.1  → 自动编译并发布 v0.7.1 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
 # 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '预发行版本号（含 v 前缀），例如 v0.7.0'
+        description: '预发行版本号（含 v 前缀），例如 v0.7.1'
         required: true
-        default: 'v0.7.0'
+        default: 'v0.7.1'
       publish_release:
         description: '是否发布为 GitHub Pre-release（关闭则仅上传构建产物）'
         type: boolean
@@ -63,7 +63,7 @@ jobs:
       - name: 解析版本号
         id: ver
         env:
-          # 手动触发用输入值；标签推送用 tag 名（如 v0.6.3）
+          # 手动触发用输入值；标签推送用 tag 名（如 v0.7.1）
           RAW: ${{ inputs.version || github.ref_name }}
         run: |
           $tag = $env:RAW
@@ -74,6 +74,19 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "发布标签：$tag  版本号：$ver"
+
+      - name: 校验并选择发布说明
+        id: notes
+        env:
+          RELEASE_TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          # v0.7.1-rc.1 与 v0.7.1 共用对应版本说明；不以 startsWith 混淆 v0.7.10。
+          $baseTag = ($env:RELEASE_TAG -split '-', 2)[0]
+          $notes = "docs/plans/$baseTag-release-notes.md"
+          if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) { throw "缺少发布说明：$notes" }
+          if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notes -Raw -Encoding utf8))) { throw "发布说明为空：$notes" }
+          "path=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "发布说明：$notes"
 
       - name: 安装依赖（含 frontend workspace 与 electron-builder）
         run: npm ci
@@ -131,19 +144,14 @@ jobs:
           $zip | ForEach-Object { Write-Host $_.FullName }
 
       # 标签推送时必发；手动触发时按 publish_release 开关（严格匹配布尔）决定是否发预发行版
-      - name: 校验 v0.7.0 发布说明
-        if: startsWith(steps.ver.outputs.tag, 'v0.7.0')
-        run: |
-          $notes = 'docs\plans\v0.7.0-release-notes.md'
-          if (-not (Test-Path -LiteralPath $notes)) { throw "缺少发布说明：$notes" }
-          Write-Host "发布说明：$notes"
-
       - name: 发布 GitHub Release（预发行版）
         if: github.event_name == 'push' || inputs.publish_release == true
         uses: softprops/action-gh-release@v2
         with:
           name: Drill Notebook ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ steps.notes.outputs.path }}
           prerelease: true
           fail_on_unmatched_files: true
           generate_release_notes: true

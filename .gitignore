@@ -223,9 +223,9 @@ docs/**
 /docs/**/*.bmp
 /docs/**/*.avif
 /docs/**/*.svg
-# Release records: the release gate reads this exact path.
+# Release records: the workflow selects the notes for the requested version.
 !docs/plans/
-!docs/plans/v0.7.0-release-notes.md
+!docs/plans/v*-release-notes.md
 # Persistent eval fixtures and live-eval sources are part of the release evidence.
 !backend/src/test/resources/eval/
 !backend/src/test/resources/eval/**

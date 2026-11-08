@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**9**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**11**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -42,17 +42,23 @@
 | `retrieval_embedding` | 分块向量 | `(chunk_id, embedding_space_id)` 唯一 |
 | `embedding_job` | 向量化任务队列 | 输入版本唯一；状态含 QUEUED / CLAIMED / RETRY / COMPLETED / SUPERSEDED / FAILED |
 
-## 4. AI 会话、记忆与用量域（schema v9）
+## 4. AI 配置、会话、记忆与用量域（schema v9–v11）
 
 ### 4.1 配置与会话
 
 | 表 | 职责 | 关键约束 |
 |---|---|---|
-| `ai_config` | 模型配置 | `purpose` 主键；密钥密文；`params` JSON 存 `apiFormat`、`streaming`、`tools`、`cacheBreakpoints` 等开关 |
+| `ai_config` | 旧配置迁移源与其他用途配置 | `purpose` 主键；chat/import 迁移后由集合绑定解析；memory/embedding 仍使用原表 |
+| `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，主模型与可空导入模型绑定不复制配置 |
+| `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；不存在时读取默认值，保存按 revision 检查冲突，不随模型切换 |
 | `ai_chat_session` | 会话 | 标题、归档、模型、标签 |
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
 | `ai_chat_attachment` | 轮次附件 | `TEXT` / `IMAGE` 密文；`byte_length` 校验 |
+
+`ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随主模型。两张单行设置表各自独立检查 revision。
+
+工具活动复用 `ai_chat_turn.result_meta_cipher/result_meta_crypto` 加密保存，最多 1200 项白名单摘要。开始和完成时更新检查点，首条活动建立助手占位，最终回答复用同一消息；检查点不推进历史 revision。活动不保存工具原始参数/结果，历史查询只读取，不重放工具。终止原因保存在 `finish_reason` 及结果元数据。
 
 ### 4.2 记忆
 
@@ -71,6 +77,8 @@
 
 v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memories` 读取 `MemoryIndexService` 的内存快照（由 `ai_memory_item` 的 ACTIVE 版本构建），工具结果不落库。`list_memories` 的 `updatedAt` 取自 `ai_memory_item.last_confirmed_at`。
 
+已保存的长期记忆独立于聊天来源存活。删除会话/清理历史时，同一事务清理证据与关联、废弃依赖旧证据的待处理状态；不因来源消失删除长期事实，也不将其 `origin` 改为 `MANUAL`。管理页缺少来源时显示「来源已被删除」。删除笔记本仍清理其 NOTEBOOK scope，不等同于删除来源会话。
+
 `create_memory` 复用 `ai_memory_item` / `ai_memory_evidence` / `ai_memory_item_evidence`：事实与证据在同一事务写入，证据的 `session_id` / `turn_id` / `message_id` 指向当前轮，`source_block_id = user-message`；归一值重复时不插行。受 v9 的 `origin CHECK (AUTO, MANUAL)` 约束，工具写入记为 `AUTO`，载荷内 `createdBy = AI_TOOL` 保留真实来源；管理页来源列仍显示自动。事实同时记为 `manual_protected = 1`，删除来源会话时只断证据、不删除这条长期记忆。写入会推进 `ai_memory_vault.revision`，并同步重建内存检索快照。若同一 `FAMILY` 键已有删除留下的抑制，只有用户当轮明确要求记住时 `create_memory` 才解除该 `FAMILY` 抑制（`PREDICATE` / `EVIDENCE` 保留），否则返回 `SUPPRESSED` 且不插行。解除抑制本身不推进 revision；若只命中已有同值行（`DUPLICATE`），仍会重建内存检索快照，让该行重新可见。
 
 `update_memory` 不新增表：按 `currentText` 定位时用 `value_hmac` 在当前可见作用域内查当前版本，按 `memoryId + expectedVersion` 定位时走版本 CAS。成功更新复用 `ai_memory_item` 的版本链，旧版本转 `SUPERSEDED`、新版本 `ACTIVE`，`ai_memory_item_evidence` 链接复制到新版本；内容变更后 `origin` 转 `MANUAL` 且 `manual_protected = 1`。归一值未变化时不产生新版本；vault revision 只在真正写入时推进。
@@ -83,10 +91,11 @@ v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memori
 | `ai_usage_daily` | 按日聚合 | `(budget_date, budget_timezone, target_fingerprint, purpose)` 主键 |
 | `ai_chat_storage` | 逻辑容量账本 | 单行；历史与附件上限、已用与预留字节 |
 
-工具循环的每次上游请求仍按 `ai_usage_attempt` 单独结算；工具结果本身不计费，也不写入会话历史。
+工具循环的每次上游请求按 `ai_usage_attempt` 单独结算，供应商缺少 usage 时按未知记账。工具结果发送给模型后已包含在上游输入用量内，不另重复计费；原始工具结果不写入会话历史。结果元数据原文上限 512 KiB，单轮回复容量预留 3 MiB，包含正文、思考与加密开销；检查点已用字节在最终结算时扣除，避免双计。
 
 ## 5. 版本与迁移
 
-- `schema_version` 表记录当前迁移版本；v8 → v9 的迁移与兼容逻辑在 `DatabaseInitializer` 及迁移测试中。
+- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`。升级前 `DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建快照；失败则停止升级，未来版本的库拒绝降级打开。
+- `AiConnectionsStore` 在首次管理读取时幂等迁移旧 chat/import，保留密文与参数；旧表保留为迁移源，已迁移的用途写入统一走连接接口。全局预算不由模型参数迁移，不创建重复的每模型副本。
 - 旧备份缺列时按兼容路径读取；恢复流程在换库前做 staged 校验，换库后执行安全事务（重置记忆启用/同意指纹、推进 vault epoch 与会话 generation、处理 RUNNING turn 与活动 job）。
 - 修改表结构时同步更新本文与 `schema.sql`，并补迁移测试；数据模型属于状态文档，不写未落地的计划字段。

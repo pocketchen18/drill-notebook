@@ -79,14 +79,16 @@ class HangingStreamTurnTest {
         assertTrue(server.isHung(), "夹具确实停在\"头已发、正文不结束\"的位置");
         assertTrue(waitedMillis < 8_000, "到期就要退出读取，不能把线程挂到超时上限：" + waitedMillis + "ms");
         assertFalse(result.terminalObserved(), "没有终止帧就不能算正常结束");
-        assertTrue(result.downstreamGone(), "期限到期按中断处理");
+        assertFalse(result.downstreamGone(), "请求超时不等于用户停止或前端断开");
+        assertEquals("deadline", result.finishReason(), "期限到期必须保留真实原因");
+        assertFalse(lease.handle().cancelRequested(), "超时不能冒充用户取消整轮");
         assertEquals(List.of("悬挂前的半句"), deltas, "已经吐给前端的增量不撤回");
 
         wiring.turnService().settleUsage(attempt, result.usage());
         ChatTurnService.FinalResult done = wiring.turnService().finalizeTurn(lease,
                 ChatTurnService.UpstreamReply.of(result), null);
 
-        assertEquals(ChatTurnRepository.STATUS_ABORTED, done.status());
+        assertEquals(ChatTurnRepository.STATUS_FAILED, done.status());
         assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE request_id = '" + lease.requestId() + "'"),
                 "一轮只留一行");
         assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'RUNNING'"),
@@ -99,7 +101,7 @@ class HangingStreamTurnTest {
         // 晚到的"完整正文"绝不能把这一轮二次改写成 COMPLETED：终态只认第一次 claim
         ChatTurnService.FinalResult late = wiring.turnService().finalizeTurn(lease,
                 ChatTurnService.UpstreamReply.of("晚到的完整正文", null, "stop"), null);
-        assertEquals(ChatTurnRepository.STATUS_ABORTED, late.status(), "只有一个终态（§7.2.2）");
+        assertEquals(ChatTurnRepository.STATUS_FAILED, late.status(), "只有一个终态（§7.2.2）");
         assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_message WHERE turn_id = (SELECT id FROM ai_chat_turn"
                 + " WHERE request_id = '" + lease.requestId() + "') AND role = 'assistant'"),
                 "半句正文照样落库，不假装什么都没发生："
