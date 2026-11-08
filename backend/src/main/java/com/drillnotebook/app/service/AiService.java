@@ -5,6 +5,9 @@ import com.drillnotebook.app.model.ContextAudit;
 import com.drillnotebook.app.model.QuestionRecord;
 import com.drillnotebook.app.model.RetrievalHit;
 import com.drillnotebook.app.model.RetrievalQuery;
+import com.drillnotebook.app.model.ToolActivity;
+import com.drillnotebook.app.model.AiRuntimeSettings;
+import com.drillnotebook.app.repository.AiRuntimeSettingsRepository;
 import com.drillnotebook.app.repository.AiChatSessionRepository;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
@@ -37,16 +40,9 @@ public class AiService {
     private static final CallOptions DEFAULT_CALL = new CallOptions(180, 4096, false);
     /** 结构化解析（PDF/知识点 JSON）：关闭 thinking，给足输出与超时。 */
     private static final CallOptions STRUCTURED_CALL = new CallOptions(300, 32000, true);
-    /** 工具循环硬上限：最多 2 个工具阶段、3 次执行、3 次普通模型请求。 */
-    private static final int TOOL_MAX_STAGES = 2;
-    private static final int TOOL_MAX_EXECUTIONS = 3;
-    private static final int TOOL_MAX_MEMORY_WRITES = 3;
-    private static final int TOOL_MAX_REQUESTS = 3;
-    private static final int TOOL_MAX_OUTPUT_TOKENS = 4096;
     private static final int TOOL_MAX_MEMORIES_PER_CALL = 5;
-    private static final int TOOL_MAX_MEMORIES_TOTAL = 15;
     private static final int TOOL_MAX_ARGUMENT_BYTES = 4 * 1024;
-    private static final int TOOL_MAX_RESULT_BYTES = 16 * 1024;
+    private static final int TOOL_MAX_RESULT_BYTES = 64 * 1024;
     private static final String MEMORY_TOOL_INSTRUCTION =
             "需要用户已授权保存的个人记忆（背景、偏好、跨会话目标）时可调用 search_memories 检索事实，"
                     + "或调用 list_memories 查看记忆标题；"
@@ -88,6 +84,16 @@ public class AiService {
 
     /** 上游调用客户端（CC/Anthropic 双格式 + SSE）；懒初始化（mapper 由构造器注入）。 */
     private volatile AiUpstreamClient upstreamClient;
+    private volatile AiRuntimeSettingsRepository runtimeSettings;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setRuntimeSettings(AiRuntimeSettingsRepository runtimeSettings) { this.runtimeSettings = runtimeSettings; }
+
+    private AiRuntimeSettings runtimeSettings() {
+        return runtimeSettings == null ? AiRuntimeSettings.DEFAULTS : runtimeSettings.read().values();
+    }
+
+    public void cancelActive(String requestId) { chatTurns.cancelActive(requestId); }
 
     /**
      * 一轮内可用的记忆工具端口。生产适配由记忆工具实现方提供；这里只依赖已定契约
@@ -425,6 +431,7 @@ public class AiService {
     }
 
     private Map<String, Object> chatWithConfig(Map<String, Object> body, AiConfigRepository.ConfigRow config) {
+        AiRuntimeSettings settings = runtimeSettings();
         TurnRequest request = turnRequest(body);
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
@@ -437,10 +444,10 @@ public class AiService {
         boolean finalized = false;
         try {
             boolean memoryUseRequested = memoryUseRequested(body);
-            AiUpstreamClient.Upstream target = chatTargetUpstream(config, request.masterPassword());
+            AiUpstreamClient.Upstream target = chatTargetUpstream(config, request.masterPassword(), settings);
             boolean memoryToolsActive = target != null
                     && memoryToolsActive(config, request, memoryUseRequested);
-            Dispatch dispatch = prepare(body, request, lease, config, memoryToolsActive);
+            Dispatch dispatch = prepare(body, request, lease, config, memoryToolsActive, settings);
             requirePlanStillCurrent(dispatch, lease);
             AiUpstreamClient.Result result;
             if (target == null) {
@@ -452,7 +459,7 @@ public class AiService {
                 }
             } else {
                 result = runTurn(new TurnCall(config, lease, dispatch, dispatch.messages(), target, false, null,
-                        memoryUseRequested, memoryToolsActive, request.userText()));
+                        memoryUseRequested, memoryToolsActive, request.userText(), null, settings));
             }
             ChatContextPlan sent = dispatch.markSent();
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
@@ -501,6 +508,7 @@ public class AiService {
         private final String code;
         private final String persistenceStatus;
         private final boolean stateDurable;
+        private List<ToolActivity> toolActivities = List.of();
 
         StreamFailure(String requestId, long sessionId, String code, String persistenceStatus, boolean stateDurable,
                       RuntimeException cause) {
@@ -531,6 +539,10 @@ public class AiService {
         public boolean stateDurable() {
             return stateDurable;
         }
+
+        public List<ToolActivity> toolActivities() {
+            return toolActivities;
+        }
     }
 
     /**
@@ -559,6 +571,7 @@ public class AiService {
     private ChatResult chatStreamWithConfig(Map<String, Object> body, AiUpstreamClient.StreamListener listener,
                                             java.util.function.Consumer<Map<String, Object>> metadataSender,
                                             AiConfigRepository.ConfigRow config) {
+        AiRuntimeSettings settings = runtimeSettings();
         TurnRequest request = turnRequest(body);
         ChatTurnService.BeginResult begun = chatTurns.begin(request.beginInput());
         if (begun.replayed()) {
@@ -576,7 +589,7 @@ public class AiService {
             UpstreamConfig upstream = decryptedChatUpstream(config, request.masterPassword());
             if (upstream == null) {
                 // mock://local：一次性吐出整段正文，模拟流式；本地演示没有任何真实用量可报
-                Dispatch dispatch = prepare(body, request, lease, config, false);
+                Dispatch dispatch = prepare(body, request, lease, config, false, settings);
                 attempt = chatTurns.startUsage(lease, chatTarget(config), dispatch.planId());
                 emitMetadata(metadataSender, dispatch, lease);
                 String reply = mockReply(dispatch.messages());
@@ -601,15 +614,16 @@ public class AiService {
             }
             boolean memoryUseRequested = memoryUseRequested(body);
             boolean memoryToolsActive = memoryToolsActive(config, request, memoryUseRequested);
-            Dispatch dispatch = prepare(body, request, lease, config, memoryToolsActive);
+            Dispatch dispatch = prepare(body, request, lease, config, memoryToolsActive, settings);
             emitMetadata(metadataSender, dispatch, lease);
             AiUpstreamClient.Upstream target = new AiUpstreamClient.Upstream(
                     upstream.baseUrl(), upstream.apiKey(), upstream.model(), upstream.apiFormat(),
-                    AiModelLimits.output(config, DEFAULT_CALL.maxTokens()), DEFAULT_CALL.disableThinking(), false,
+                    AiModelLimits.output(config, settings.requestOutputTokens()), DEFAULT_CALL.disableThinking(), false,
                     cacheBreakpointsEnabled(config, upstream.baseUrl(), upstream.apiFormat(), upstream.model()),
                     () -> persistCacheUnsupported(config)).withReasoning(AiReasoningSettings.from(config));
             AiUpstreamClient.Result result = runTurn(new TurnCall(config, lease, dispatch, dispatch.messages(),
-                    target, upstream.streaming(), listener, memoryUseRequested, memoryToolsActive, request.userText()));
+                    target, upstream.streaming(), listener, memoryUseRequested, memoryToolsActive, request.userText(),
+                    metadataSender, settings));
             // 正文与思考链都为空才算无效；只有思考链（如流式中断在思考阶段）也照常落库，但不算完成
             ChatContextPlan sent = dispatch.markSent();
             ChatTurnService.FinalResult done = chatTurns.finalizeTurn(lease,
@@ -617,7 +631,11 @@ public class AiService {
             finalized = true;
             lastFinal = done;
             maybeAutoTitle(request.sessionId(), request.userText());
-            if (ChatTurnRepository.STATUS_FAILED.equals(done.status())) {
+            if (!"saved".equals(done.persistenceStatus()) || !done.stateDurable()) {
+                throw new IllegalArgumentException("本轮回复未能保存，请检查本地存储后重试");
+            }
+            if (ChatTurnRepository.STATUS_FAILED.equals(done.status())
+                    && !List.of("request_timeout", "request_timeout_idle", "budget_time", "stream_error").contains(result.finishReason())) {
                 throw new IllegalArgumentException("AI 服务返回内容为空（模型可能只返回了思考过程，请重试或换模型）");
             }
             return streamResult(request, lease, done, sent, result.usage(), dispatch.legacy());
@@ -631,9 +649,13 @@ public class AiService {
             }
             // 收尾事实跟着异常一起出去：error 帧要带 persistenceStatus/stateDurable（§4.2 末段），
             // 只带一句 message 的话，前端无法区分"这轮已作废"和"这轮可能还在跑"。
-            throw new StreamFailure(lease.requestId(), lease.sessionId(), code,
+            StreamFailure failure = new StreamFailure(lease.requestId(), lease.sessionId(), code,
                     lastFinal == null ? "failed" : lastFinal.persistenceStatus(),
                     lastFinal != null && lastFinal.stateDurable(), error);
+            // 保存失败时，仍向当前客户端交代内存中已经确认的写入；未结束的操作只报未知。
+            failure.toolActivities = lease.handle().toolActivities().stream()
+                    .map(item -> "RUNNING".equals(item.state()) ? item.unknown() : item).toList();
+            throw failure;
         }
     }
 
@@ -689,12 +711,12 @@ public class AiService {
     }
 
     private Dispatch prepare(Map<String, Object> body, TurnRequest request, ChatTurnService.Lease lease,
-                             AiConfigRepository.ConfigRow config, boolean memoryToolsActive) {
+                             AiConfigRepository.ConfigRow config, boolean memoryToolsActive, AiRuntimeSettings settings) {
         if (request.protocolVersion() != 2) {
             RetrievalOutcome legacy = maybeRetrieve(body.get("retrievalOptions"), request.modelMessages());
             return new Dispatch(null, legacy, withContext(request.modelMessages(), legacy));
         }
-        ChatContextPlan plan = planFor(request, lease, body, config, memoryToolsActive);
+        ChatContextPlan plan = planFor(request, lease, body, config, memoryToolsActive, settings);
         return new Dispatch(plan, null, plan.messages());
     }
 
@@ -703,7 +725,7 @@ public class AiService {
      * 不能留下一个"已经占用容量却永远不会完成"的 RUNNING。
      */
     private ChatContextPlan planFor(TurnRequest request, ChatTurnService.Lease lease, Map<String, Object> body,
-                                    AiConfigRepository.ConfigRow config, boolean memoryToolsActive) {
+                                    AiConfigRepository.ConfigRow config, boolean memoryToolsActive, AiRuntimeSettings settings) {
         RetrievalCall call = retrieve(body.get("retrievalOptions"), request.userText());
         // 工具模式由模型自行检索记忆：关闭同一轮的词法记忆预注入，避免同一事实被注入两次。
         Map<String, Object> memoryOptions = memoryToolsActive ? Map.of("use", false)
@@ -712,7 +734,8 @@ public class AiService {
             ChatContextPlan plan = contexts.plan(lease, request.userText(), call.hits(),
                     mapValue(body.get("pageContext")), memoryOptions,
                     contextWindowOf(config), windowConfigured(config),
-                    AiModelLimits.ceiling(config, "maxInputTokens", Integer.MAX_VALUE), AiModelLimits.output(config, DEFAULT_CALL.maxTokens()));
+                    AiModelLimits.ceiling(config, "maxInputTokens", Integer.MAX_VALUE),
+                    AiModelLimits.output(config, Math.min(settings.requestOutputTokens(), contextWindowOf(config) / 2)));
             return call.notice() == null ? plan : plan.withExtraNotices(List.of("RETRIEVAL_UNAVAILABLE"));
         } catch (ChatTurnRejectException error) {
             chatTurns.abandon(lease, "context_rejected");
@@ -913,11 +936,16 @@ public class AiService {
         result.put("requestId", requestId);
         result.put("sessionId", sessionId);
         result.put("status", status);
+        if (stateDurable) {
+            try { result.put("finishReason", chatTurns.finishReason(requestId)); }
+            catch (RuntimeException ignored) { /* 附带状态读取不能覆盖真实的收尾结果。 */ }
+        }
         // 落库没收住就不能说状态是持久的：以前这里硬编码 true，SSE 那条却如实回 false，两条路径口径不一致（§7.2 末段）
         result.put("stateDurable", stateDurable);
         result.put("persistenceStatus", persistenceStatus);
         result.put("replayed", replayed);
         result.put("reply", reply);
+        result.put("toolActivities", chatTurns.toolActivities(requestId, masterPassword));
         if (plan != null) {
             result.put("citations", plan.citations());
             result.put("memoryContext", plan.memoryContext());
@@ -1002,11 +1030,11 @@ public class AiService {
 
     /** 聊天专用的上游目标；mock://local 返回 null，由调用方短路成本地回复。 */
     private AiUpstreamClient.Upstream chatTargetUpstream(AiConfigRepository.ConfigRow config,
-                                                         String masterPassword) {
+                                                         String masterPassword, AiRuntimeSettings settings) {
         if (config.endpoint().equalsIgnoreCase("mock://local")) return null;
         String apiKey = decryptApiKey(config, masterPassword);
         return new AiUpstreamClient.Upstream(config.endpoint(), apiKey, config.model(), apiFormatOf(config),
-                AiModelLimits.output(config, DEFAULT_CALL.maxTokens()), DEFAULT_CALL.disableThinking(), false,
+                AiModelLimits.output(config, settings.requestOutputTokens()), DEFAULT_CALL.disableThinking(), false,
                 cacheBreakpointsEnabled(config, config.endpoint(), apiFormatOf(config), config.model()),
                 () -> persistCacheUnsupported(config)).withReasoning(AiReasoningSettings.from(config));
     }
@@ -1015,14 +1043,18 @@ public class AiService {
     private record TurnCall(AiConfigRepository.ConfigRow config, ChatTurnService.Lease lease, Dispatch dispatch,
                             List<Map<String, Object>> messages, AiUpstreamClient.Upstream target,
                             boolean stream, AiUpstreamClient.StreamListener listener,
-                            boolean memoryUseRequested, boolean memoryToolsAllowed, String userText) {
+                            boolean memoryUseRequested, boolean memoryToolsAllowed, String userText,
+                            java.util.function.Consumer<Map<String, Object>> activitySender, AiRuntimeSettings settings) {
     }
 
     private record ToolCallContext(ChatContextPlan plan, boolean memoryUseRequested, String userText,
-                                   int remainingMemories, long turnId, long userMessageId) {
+                                   long turnId, long userMessageId) {
     }
 
-    private record ToolPayload(String json, int memories) {
+    private record ToolPayload(String json, int memories, boolean outcomeUnknown) {
+        private ToolPayload(String json, int memories) {
+            this(json, memories, false);
+        }
     }
 
     private record BufferedDelta(String type, String text) {
@@ -1041,19 +1073,32 @@ public class AiService {
         List<Map<String, Object>> messages = new ArrayList<>(call.messages());
         if (toolMode) messages = withMemoryInstruction(messages);
         DeltaBuffer buffer = toolMode ? new DeltaBuffer() : null;
-        int stages = 0;
-        int executions = 0;
-        int writes = 0;
-        int requests = 0;
-        int memories = 0;
-        int remainingOutput = TOOL_MAX_OUTPUT_TOKENS;
-        AiUpstreamClient.Result last = null;
+        AiTurnBudget limits = new AiTurnBudget(call.settings());
+        int finalReserve = Math.min(Math.min(call.target().maxTokens(), call.settings().finalOutputTokens()),
+                Math.max(256, AiModelLimits.availableOutput(call.config(), messages, tools, contextWindowOf(call.config())) / 2));
+        String stopReason = null;
+        List<ToolActivity> activities = new ArrayList<>();
         while (true) {
+            if (call.lease().handle().cancelRequested()) return new AiUpstreamClient.Result("", null, "aborted");
             requirePlanStillCurrent(call.dispatch(), call.lease());
-            int budget = toolMode ? Math.min(Math.min(call.target().maxTokens(), TOOL_MAX_OUTPUT_TOKENS / TOOL_MAX_REQUESTS),
-                    remainingOutput) : call.target().maxTokens();
-            if (budget <= 0) return last;
-            remainingOutput -= budget;
+            if (!tools.isEmpty()) {
+                stopReason = limits.stopReason(finalReserve);
+                if (stopReason == null && AiModelLimits.availableOutput(call.config(), messages, tools,
+                        contextWindowOf(call.config())) < finalReserve + 1024) stopReason = "budget_context";
+            }
+            if (!tools.isEmpty() && stopReason != null) {
+                tools = List.of();
+                messages.add(Map.of("role", "system", "content",
+                        "本轮工具已停止（" + stopReason + "）。请依据已有结果回答并说明尚未完成的任务，不要继续调用工具。"
+                                + "只有已确认成功的写入才能说已保存或已更新，结果未知的操作不要假设成功。"));
+            }
+            if (!activities.isEmpty()) emitToolActivity(call, activities, "answer");
+            int seconds = limits.requestSeconds();
+            if (seconds <= 0) return budgetStopped("budget_time");
+            int requested = stopReason == null ? call.target().maxTokens() : finalReserve;
+            int budget = Math.min(limits.allocation(requested, tools.isEmpty() ? 0 : finalReserve),
+                    AiModelLimits.availableOutput(call.config(), messages, tools, contextWindowOf(call.config())));
+            if (budget <= 0) return budgetStopped(stopReason == null ? "budget_output" : stopReason);
             AiUpstreamClient.Upstream target = withMaxTokens(call.target(), budget);
             AiModelLimits.validate(call.config(), messages, tools, budget);
             String attempt = chatTurns.startUsage(call.lease(),
@@ -1064,56 +1109,113 @@ public class AiService {
             AiUpstreamClient.Result result;
             try {
                 result = upstream().callWithTools(target, messages, tools, call.stream(),
-                        buffer == null ? call.listener() : buffer, DEFAULT_CALL.timeoutSeconds(),
+                        buffer == null ? call.listener() : buffer, seconds,
                         call.lease().handle());
             } catch (RuntimeException error) {
                 chatTurns.settleUsage(attempt, null);
                 throw error;
             }
             chatTurns.settleUsage(attempt, result.usage());
-            requests++;
-            last = result;
+            limits.consume(result.usage(), budget);
             log.info("AI 请求：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={} captureLimited={}",
                     System.currentTimeMillis() - start,
                     result.text() == null ? 0 : result.text().length(),
                     result.reasoning() == null ? 0 : result.reasoning().length(),
                     result.finishReason(), result.terminalObserved(), result.captureLimited());
-            if (result.downstreamGone() || result.captureLimited()) return result;
-            if (!toolMode || result.toolCalls().isEmpty()) return replay(call, buffer, result);
-            boolean canExecute = stages < TOOL_MAX_STAGES && executions < TOOL_MAX_EXECUTIONS
-                    && requests < TOOL_MAX_REQUESTS;
-            if (!canExecute) {
-                if (requests < TOOL_MAX_REQUESTS) {
-                    tools = List.of();
-                    continue;
-                }
-                return result;
+            if ("deadline".equals(result.finishReason())) {
+                return replay(call, buffer, withFinishReason(result, limits.secondsLeft() <= 1 ? "budget_time"
+                        : (result.text().isBlank() && result.reasoning().isBlank() ? "request_timeout_idle" : "request_timeout")));
             }
-            stages++;
+            if (result.downstreamGone() || result.captureLimited()) return replay(call, buffer, result);
+            if (!result.terminalObserved()) return replay(call, buffer, withFinishReason(result, "stream_error"));
+            if (!toolMode || result.toolCalls().isEmpty()) {
+                return replay(call, buffer, stopReason == null || "length".equals(result.finishReason())
+                        ? result : withFinishReason(result, stopReason));
+            }
+            // 已关闭工具后供应商仍返回调用，不能执行或把空内容当作完成。
+            if (tools.isEmpty()) return budgetStopped(stopReason == null ? "unexpected_tool_calls" : stopReason);
+            List<Map<String, Object>> batch = new ArrayList<>(messages);
+            batch.add(assistantToolMessage(result));
+            for (AiUpstreamClient.ToolCall toolCall : result.toolCalls()) {
+                batch.add(toolResultMessage(toolCall.id(), "{\"status\":\"CONTEXT_LIMIT\",\"incomplete\":true}"));
+            }
+            if (AiModelLimits.availableOutput(call.config(), batch, List.of(), contextWindowOf(call.config())) < finalReserve + 1024) {
+                limits.stop("budget_context");
+                continue;
+            }
+            limits.stage();
             messages.add(assistantToolMessage(result));
             for (AiUpstreamClient.ToolCall toolCall : result.toolCalls()) {
+                if (call.lease().handle().cancelRequested()) return new AiUpstreamClient.Result("", null, "aborted");
                 MemoryTool selected = toolsByName.get(toolCall.name());
+                int activityIndex = activities.size();
+                ToolActivity activity = ToolActivity.started(activityIndex + 1, toolCall.name());
+                boolean tracked = activityIndex < ToolActivity.MAX_ENTRIES;
+                if (tracked) {
+                    activities.add(activity);
+                    chatTurns.recordToolActivities(call.lease(), activities);
+                    emitToolActivity(call, activities, "tools");
+                }
+                if (call.lease().handle().cancelRequested()) return new AiUpstreamClient.Result("", null, "aborted");
+                long activityStart = System.nanoTime();
                 ToolPayload payload;
-                if (executions >= TOOL_MAX_EXECUTIONS) {
-                    payload = limitReachedPayload(selected == null ? "facts" : selected.resultKey());
-                } else if (selected != null && selected.mutatesMemory() && writes >= TOOL_MAX_MEMORY_WRITES) {
-                    payload = limitReachedPayload(selected.resultKey());
+                boolean executed = false;
+                if (!limits.canExecute()) {
+                    String reason = limits.stopReason(finalReserve);
+                    payload = errorPayload("budget_repeated".equals(reason) ? "REPEATED_CALL"
+                            : "budget_time".equals(reason) ? "TIME_LIMIT" : "budget_context".equals(reason) ? "CONTEXT_LIMIT" : "LIMIT_REACHED",
+                            selected == null ? "facts" : selected.resultKey());
                 } else {
-                    executions++;
+                    limits.executed();
+                    executed = true;
                     payload = executeMemoryCall(toolCall, toolsByName, new ToolCallContext(
                             call.dispatch().plan(), call.memoryUseRequested(), call.userText(),
-                            TOOL_MAX_MEMORIES_TOTAL - memories, call.lease().turnId(),
-                            call.lease().userMessageId()));
-                    if (selected != null && selected.mutatesMemory()) {
-                        writes++;
-                        // 写入已推进 vault revision：不刷新本轮计划，下一次工具调用与下一次发送复核都会误判 STALE
-                        call.dispatch().refreshPlan(contexts.refreshAfterMemoryWrite(call.dispatch().plan()));
-                    }
+                            call.lease().turnId(), call.lease().userMessageId()));
+                    limits.observe(toolCall, payload.json(), mapper);
                 }
-                memories += payload.memories();
+                // 成对保留该批所有调用/结果，容量不足时只缩减读结果，写入确认永不改写。
+                int resultIndex = messages.size();
+                batch.set(resultIndex, toolResultMessage(toolCall.id(), payload.json()));
+                if (AiModelLimits.availableOutput(call.config(), batch, List.of(), contextWindowOf(call.config())) < finalReserve + 1024) {
+                    if (selected == null || !selected.mutatesMemory()) {
+                        payload = errorPayload("CONTEXT_LIMIT", selected == null ? "facts" : selected.resultKey());
+                        batch.set(resultIndex, toolResultMessage(toolCall.id(), payload.json()));
+                    }
+                    limits.stop("budget_context");
+                }
+                // 先保留工具的实际结果，再刷新上下文；刷新失败也不能抹掉已确认写入。
+                if (tracked) {
+                    activities.set(activityIndex, payload.outcomeUnknown() ? activity.unknown()
+                            : activity.finished(payload.json(), (System.nanoTime() - activityStart) / 1_000_000));
+                    chatTurns.recordToolActivities(call.lease(), activities);
+                    emitToolActivity(call, activities, "tools");
+                }
+                if (executed && selected != null && selected.mutatesMemory()) {
+                    call.dispatch().refreshPlan(contexts.refreshAfterMemoryWrite(call.dispatch().plan()));
+                }
                 messages.add(toolResultMessage(toolCall.id(), payload.json()));
             }
-            if (requests >= TOOL_MAX_REQUESTS) return result;
+        }
+    }
+
+    private static AiUpstreamClient.Result withFinishReason(AiUpstreamClient.Result result, String reason) {
+        return new AiUpstreamClient.Result(result.text(), result.reasoning(), reason, result.terminalObserved(),
+                result.captureLimited(), result.downstreamGone(), result.usage(), result.toolCalls(), result.thinkingBlocks());
+    }
+
+    private static AiUpstreamClient.Result budgetStopped(String reason) {
+        return new AiUpstreamClient.Result("本轮已停止。已确认的工具操作已保留，可以继续完成剩余任务。", "", reason,
+                true, false, false, AiUpstreamClient.Usage.unknown());
+    }
+
+    private static void emitToolActivity(TurnCall call, List<ToolActivity> activities, String phase) {
+        if (call.activitySender() == null) return;
+        try {
+            call.activitySender().accept(Map.of("requestId", call.lease().requestId(),
+                    "sessionId", call.lease().sessionId(), "toolActivities", List.copyOf(activities), "phase", phase));
+        } catch (RuntimeException error) {
+            call.lease().handle().requestCancel();
+            throw error;
         }
     }
 
@@ -1186,26 +1288,25 @@ public class AiService {
                 || arguments.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > TOOL_MAX_ARGUMENT_BYTES) {
             return invalidArgumentPayload(key);
         }
-        if (context.remainingMemories() <= 0) return limitReachedPayload(key);
         Map<String, Object> raw;
         try {
             raw = tool.execute(context.plan(), arguments, context.memoryUseRequested(), context.userText(),
                     context.turnId(), context.userMessageId());
         } catch (RuntimeException error) {
-            return unavailablePayload(key);
+            ToolPayload unavailable = unavailablePayload(key);
+            return new ToolPayload(unavailable.json(), 0, tool.mutatesMemory());
         }
-        return boundMemoryPayload(raw, context.remainingMemories(), key, tool.maxItemsPerCall());
+        return boundMemoryPayload(raw, key, tool.maxItemsPerCall());
     }
 
-    /** 工具结果再次收紧：按工具的 resultKey 截断、整轮 15 条、序列化后最多 16KiB；超限只回状态。 */
-    private ToolPayload boundMemoryPayload(Map<String, Object> raw, int remainingMemories, String key,
+    /** 结果遵守工具自身条数与 64 KiB 字节上限，不再共享整轮 15 条配额。 */
+    private ToolPayload boundMemoryPayload(Map<String, Object> raw, String key,
                                            int perCallCap) {
         if (raw == null) return unavailablePayload(key);
-        if (remainingMemories <= 0) return limitReachedPayload(key);
         Object value = raw.get(key);
         boolean hasRows = raw.containsKey(key);
         List<?> rows = value instanceof List<?> list ? list : List.of();
-        int cap = Math.min(Math.max(1, perCallCap), remainingMemories);
+        int cap = Math.max(1, perCallCap);
         List<Object> bounded = new ArrayList<>();
         for (Object row : rows) {
             if (bounded.size() >= cap) break;
@@ -1213,6 +1314,11 @@ public class AiService {
         }
         Map<String, Object> body = new LinkedHashMap<>(raw);
         if (hasRows) body.put(key, bounded);
+        // 旧只读工具用 LIMIT_REACHED 表示单次条数截断，不能误报成整轮调用耗尽。
+        if (!bounded.isEmpty() && "LIMIT_REACHED".equals(body.get("status"))) {
+            body.put("status", "OK");
+            body.put("incomplete", true);
+        }
         if (hasRows && bounded.size() < rows.size()) {
             body.put("incomplete", true);
             body.remove("nextCursor");
@@ -1224,7 +1330,7 @@ public class AiService {
             return unavailablePayload(key);
         }
         if (json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > TOOL_MAX_RESULT_BYTES) {
-            return limitReachedPayload(key);
+            return errorPayload("RESULT_TOO_LARGE", key);
         }
         return new ToolPayload(json, bounded.size());
     }
@@ -1235,10 +1341,6 @@ public class AiService {
 
     private ToolPayload invalidArgumentPayload(String key) {
         return errorPayload("INVALID_ARGUMENT", key);
-    }
-
-    private ToolPayload limitReachedPayload(String key) {
-        return errorPayload("LIMIT_REACHED", key);
     }
 
     private ToolPayload errorPayload(String status, String key) {

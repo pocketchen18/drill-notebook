@@ -128,16 +128,42 @@ describe('useAiChatTurn 请求体', () => {
       turn.result.current.send({ sessionId: 10, userText: '直接问' });
     });
 
-    expect(streamChatMock).not.toHaveBeenCalled();
-    expect(apiPost).toHaveBeenCalledWith('/api/ai/chat', expect.objectContaining({
+    expect(streamChatMock).toHaveBeenCalledWith('/api/ai/chat/stream', expect.objectContaining({
       protocolVersion: 2,
       input: { role: 'user', userText: '直接问' }
-    }));
-    expect(events.at(-1)).toMatchObject({ type: 'result', reply: 'ANSWER', view: { persistenceStatus: 'saved' } });
+    }), expect.any(Object));
+    expect(apiPost).not.toHaveBeenCalled();
+    act(() => callbacks!.onDone(donePayload('ANSWER')));
+    expect(events.at(-1)).toMatchObject({ type: 'result', reply: 'ANSWER' });
   });
 });
 
 describe('useAiChatTurn 停止与取消', () => {
+  it('停止后只读确认工具结果，迟到确认不会结束后来开始的新一轮', async () => {
+    vi.useFakeTimers();
+    const turn = renderTurn();
+    const activity = { sequence: 1, toolName: 'create_memory' as const, state: 'RUNNING' as const,
+      outcome: 'UNKNOWN', startedAt: '2026-11-08T01:00:00.000Z', elapsedMs: null, count: 0, availability: null, incomplete: false };
+    await act(async () => { turn.result.current.send({ sessionId: 10, userText: '记住' }); });
+    const oldId = turnId();
+    apiGet.mockResolvedValueOnce({ requestId: oldId, status: 'RUNNING', active: true, toolActivities: [activity] })
+      .mockResolvedValueOnce({ requestId: oldId, status: 'ABORTED', active: false,
+        toolActivities: [{ ...activity, state: 'FINISHED', outcome: 'CREATED', elapsedMs: 60, count: 1 }] });
+    await act(async () => {
+      callbacks!.onToolActivity!({ requestId: oldId, phase: 'tools', toolActivities: [activity] });
+      turn.result.current.stop();
+      await Promise.resolve();
+    });
+    await act(async () => { turn.result.current.send({ sessionId: 10, userText: '下一轮' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+    expect(turn.result.current.busy).toBe(true);
+    expect(turn.result.current.requestId).not.toBe(oldId);
+    expect(events.filter((event) => event.type === 'reconciled').at(-1)).toMatchObject({
+      requestId: oldId, status: { toolActivities: [{ state: 'FINISHED', outcome: 'CREATED' }] }
+    });
+    expect(apiPost.mock.calls.filter((call) => call[0] === '/api/ai/chat')).toHaveLength(0);
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+  });
   it('停止掐断连接并带着本轮 requestId 调取消接口', async () => {
     const abort = vi.fn();
     streamChatMock.mockImplementation(() => Promise.resolve(abort));
@@ -234,12 +260,13 @@ describe('useAiChatTurn 失败出口', () => {
 
     await act(async () => {
       turn.result.current.send({ sessionId: 10, userText: '被占住的会话' });
+      callbacks!.onError({ message: '该会话已有一轮正在进行', code: 'SESSION_BUSY' });
       await new Promise((resolve) => {
         window.setTimeout(resolve, 150);
       });
     });
 
-    expect(chatPosts).toBe(2);
+    expect(chatPosts).toBe(1);
     expect(turnGets).toBe(2);
     expect(events.at(-1)).toMatchObject({ type: 'failure', message: '该会话已有一轮正在进行' });
     expect(turn.result.current.busy).toBe(false);
@@ -271,11 +298,12 @@ describe('useAiChatTurn 失败出口', () => {
 
     await act(async () => {
       turn.result.current.send({ sessionId: 10, userText: '重放我' });
+      callbacks!.onError({ message: '相同 requestId 的轮次仍在进行', code: 'SESSION_BUSY' });
       await Promise.resolve();
     });
 
     expect(apiGet).toHaveBeenCalled();
-    expect(events.at(-1)).toMatchObject({ type: 'status', status: { status: 'RUNNING' } });
+    expect(events.find((event) => event.type === 'status')).toMatchObject({ type: 'status', status: { status: 'RUNNING' } });
   });
 });
 

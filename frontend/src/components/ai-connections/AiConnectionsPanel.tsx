@@ -17,7 +17,11 @@ type Editor = { kind: 'provider' | 'model'; providerId?: string; model?: Connect
 export function AiConnectionsPanel({ registerGuard }: { registerGuard?: (guard: SettingsLeaveGuard | null) => void }) {
   const client = useQueryClient();
   const router = useContext(UNSAFE_DataRouterContext);
-  const query = useQuery({ queryKey: ['ai-connections'], queryFn: () => get<Connections>('/api/ai/connections'), staleTime: Infinity, refetchOnWindowFocus: false });
+  const query = useQuery({ queryKey: ['ai-connections'], queryFn: async () => {
+    const value = await get<Connections>('/api/ai/connections');
+    const current = client.getQueryData<Connections>(['ai-connections']);
+    return current && current.revision > value.revision ? current : value;
+  }, staleTime: Infinity, refetchOnWindowFocus: false });
   const data = query.data;
   const currentRevision = () => client.getQueryData<Connections>(['ai-connections'])?.revision ?? data?.revision ?? 0;
   const [selected, setSelected] = useState<string>();
@@ -152,8 +156,12 @@ export function AiConnectionsPanel({ registerGuard }: { registerGuard?: (guard: 
       setVerification(undefined); void query.refetch();
       if (saved) { finishEditor(); if (pending) { setPending(undefined); pending.go(); } }
     }} verify={async (model, masterPassword, requestId, signal) => {
-      const value = await apiRequest<VerificationResponse>(`/api/ai/connections/providers/${verification.provider.id}/verify-add`, { method: 'POST', signal, body: JSON.stringify({ model, masterPassword, requestId, revision: currentRevision() }) });
-      if (!signal.aborted && value.connections) { client.setQueryData(['ai-connections'], value.connections); if (verification.fromEditor && value.added) finishEditor(); }
+      const value = await apiRequest<VerificationResponse>(`/api/ai/connections/providers/${verification.provider.id}/verify-add`, { method: 'POST', signal, body: JSON.stringify({ model, masterPassword, requestId, revision: currentRevision(), connectionVersion: verification.provider.connectionVersion }) });
+      if (!signal.aborted && value.connections) {
+        const next = value.connections;
+        client.setQueryData<Connections>(['ai-connections'], current => current && current.revision > next.revision ? current : next);
+        if (verification.fromEditor && value.added) finishEditor();
+      }
       return value;
     }} />}
     {testing && <TestDialog provider={testing.provider} model={testing.model} close={() => setTesting(undefined)} />}

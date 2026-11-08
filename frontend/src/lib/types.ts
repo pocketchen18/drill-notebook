@@ -226,6 +226,8 @@ export interface RetrievalOptions {
 export type TurnResult = ChatResultView & { requestId: string };
 
 export interface ChatMessage {
+  toolActivities?: import('./toolActivity').ToolActivity[];
+  toolPhase?: import('./toolActivity').ToolPhase;
   id?: number;
   role: 'user' | 'assistant' | 'system';
   content: string | ChatContentPart[];

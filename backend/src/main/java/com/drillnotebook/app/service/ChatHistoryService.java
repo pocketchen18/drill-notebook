@@ -1,5 +1,6 @@
 package com.drillnotebook.app.service;
 
+import com.drillnotebook.app.model.ToolActivity;
 import com.drillnotebook.app.repository.ChatHistoryRepository;
 import com.drillnotebook.app.repository.ChatHistoryRepository.HistoryRow;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
@@ -88,6 +89,16 @@ public class ChatHistoryService {
         item.put("legacy", row.legacy());
         item.put("readable", content.status() == ChatMessageCipher.ReadStatus.DECRYPTED
                 || content.status() == ChatMessageCipher.ReadStatus.EMPTY);
+        if ("assistant".equals(row.role()) && !row.contentDeleted()) {
+            ChatMessageCipher.Read meta = cipher.read(row.resultMetaCipher(), row.resultMetaCrypto(), password);
+            if (meta.status() == ChatMessageCipher.ReadStatus.DECRYPTED) {
+                item.put("toolActivities", ToolActivity.readMeta(meta.value(), false));
+                try {
+                    String reason = new com.fasterxml.jackson.databind.ObjectMapper().readTree(meta.value()).path("finishReason").asText("");
+                    if (reason.matches("[a-z_]{1,40}")) item.put("finishReason", reason);
+                } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { /* 旧或损坏元数据不补造原因。 */ }
+            }
+        }
         return item;
     }
 

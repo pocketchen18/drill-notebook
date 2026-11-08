@@ -113,6 +113,41 @@ class ChatTurnRepositoryTest {
     }
 
     @Test
+    void toolCheckpointsReuseAssistantAndSettleOnlyTheirByteDifference() throws Exception {
+        turns.begin(draft("req-tools", List.of()));
+        long initialRevision = revision();
+        assertTrue(turns.saveRunningResultMeta("req-tools", "first-long-checkpoint", "meta"));
+        long assistantId = turns.findByRequestId("req-tools").orElseThrow().assistantMessageId();
+        assertTrue(ledger.reconcile().consistent());
+        assertTrue(turns.saveRunningResultMeta("req-tools", "short", "meta"));
+        assertEquals(initialRevision, revision(), "元数据不能使同轮冻结计划失效");
+        assertTrue(ledger.reconcile().consistent(), "较小快照也要正确退回预留");
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"));
+
+        turns.finalizeTurn("req-tools", new Terminal(ChatTurnRepository.STATUS_COMPLETED,
+                null, "encrypted-answer", "crypto", null, null, "final-meta", "crypto", "stop", "saved", LATER));
+        assertEquals(assistantId, turns.findByRequestId("req-tools").orElseThrow().assistantMessageId());
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"), "不重复插入助手消息");
+        assertEquals(0, ledger.read().reservedHistoryBytes());
+        assertTrue(ledger.reconcile().consistent());
+        turns.clearContent("req-tools", LATER);
+        assertEquals(0, ledger.read().historyBytes());
+        assertTrue(ledger.reconcile().consistent());
+    }
+
+    @Test
+    void interruptedToolOnlyTurnRetainsItsPlaceholderAndCheckpoint() throws Exception {
+        turns.begin(draft("req-interrupted-tools", List.of()));
+        turns.saveRunningResultMeta("req-interrupted-tools", "confirmed-tool-meta", "crypto");
+        turns.markInterrupted("req-interrupted-tools", LATER);
+        assertNotNull(turns.findByRequestId("req-interrupted-tools").orElseThrow().assistantMessageId());
+        assertEquals("confirmed-tool-meta", turns.findResultMeta("req-interrupted-tools").orElseThrow().cipher());
+        assertFalse(turns.saveRunningResultMeta("req-interrupted-tools", "late-meta", "crypto"));
+        assertEquals(0, ledger.read().reservedHistoryBytes());
+        assertTrue(ledger.reconcile().consistent());
+    }
+
+    @Test
     void onlyOneRunningTurnPerSessionButOtherSessionsProceed() throws Exception {
         turns.begin(draft("req-a", List.of()));
         assertSame(StartOutcome.RUNNING_EXISTS, turns.begin(draft("req-b", List.of())).outcome());
@@ -209,8 +244,8 @@ class ChatTurnRepositoryTest {
         turns.begin(draft("req-1", List.of()));
         ChatStorageLedger.Snapshot before = ledger.read();
 
-        // 3 MiB 密文超过 2 MiB 预留：新适配器改变封装必须重新核验上界，这里拒绝结算而不是临时无界放大
-        String oversized = "A".repeat(3_000_000);
+        // 超出当前预留仍须拒绝，不能因长工具链改动放开容量检查。
+        String oversized = "A".repeat((int) ChatStorageSizer.REPLY_RESERVATION_BYTES + 1000);
         assertThrows(ChatTurnRepository.ReservationExceededException.class, () ->
                 turns.finalizeTurn("req-1", terminal(ChatTurnRepository.STATUS_COMPLETED, oversized)));
 

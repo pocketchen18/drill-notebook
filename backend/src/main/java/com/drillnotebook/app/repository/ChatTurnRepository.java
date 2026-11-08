@@ -225,17 +225,33 @@ public class ChatTurnRepository {
             }
 
             long assistantBytes = 0;
-            long assistantMessageId = 0;
+            long assistantMessageId = orZero(turn.assistantMessageId());
             if (hasContent(terminal.assistantContent()) || hasContent(terminal.assistantContentCipher())
-                    || hasContent(terminal.reasoningCipher())) {
-                assistantMessageId = insertMessage(connection, turn.sessionId(), "assistant", turn.id(), "ASSISTANT",
-                        terminal.assistantContent(), terminal.assistantContentCipher(), terminal.assistantContentMeta(),
-                        terminal.reasoningCipher(), terminal.reasoningMeta());
+                    || hasContent(terminal.reasoningCipher()) || assistantMessageId != 0) {
+                if (assistantMessageId == 0) {
+                    assistantMessageId = insertMessage(connection, turn.sessionId(), "assistant", turn.id(), "ASSISTANT",
+                            terminal.assistantContent(), terminal.assistantContentCipher(), terminal.assistantContentMeta(),
+                            terminal.reasoningCipher(), terminal.reasoningMeta());
+                } else {
+                    // 工具活动已创建空助手占位；定稿复用它，使历史消息身份保持稳定。
+                    try (PreparedStatement statement = connection.prepareStatement("""
+                            UPDATE ai_chat_message SET content = ?, content_cipher = ?, content_meta = ?,
+                                reasoning_cipher = ?, reasoning_meta = ? WHERE id = ?
+                            """)) {
+                        statement.setString(1, terminal.assistantContent() == null ? "" : terminal.assistantContent());
+                        statement.setString(2, terminal.assistantContentCipher());
+                        statement.setString(3, terminal.assistantContentMeta());
+                        statement.setString(4, terminal.reasoningCipher());
+                        statement.setString(5, terminal.reasoningMeta());
+                        statement.setLong(6, assistantMessageId);
+                        requireOneRow(statement.executeUpdate(), "工具回复定稿");
+                    }
+                }
                 assistantBytes = messageBytes(terminal.assistantContent(), terminal.assistantContentCipher(),
                         terminal.assistantContentMeta(), terminal.reasoningCipher(), terminal.reasoningMeta());
             }
             long resultMetaBytes = ChatStorageSizer.storedBytes(terminal.resultMetaCipher(), terminal.resultMetaCrypto());
-            long delta = Math.addExact(assistantBytes, resultMetaBytes);
+            long delta = Math.addExact(assistantBytes, resultMetaBytes) - resultMetaBytes(connection, turn.id());
             if (delta > turn.reservedHistoryBytes()) {
                 throw new ReservationExceededException(turn.id(), delta, turn.reservedHistoryBytes());
             }
@@ -276,6 +292,53 @@ public class ChatTurnRepository {
             return new TerminalOutcome(true, false, terminal.status(), newStored,
                     bumpSession(connection, turn.sessionId()));
         });
+    }
+
+    /** 工具活动检查点：只使用本轮已有预留，元数据与容量在同一事务中更新。 */
+    public boolean saveRunningResultMeta(String requestId, String cipher, String crypto) throws SQLException {
+        return immediate.execute(connection -> {
+            TurnRow turn = findByRequestId(connection, requestId).orElseThrow();
+            if (!STATUS_RUNNING.equals(turn.status()) || turn.contentDeletedAt() != null) return false;
+            long delta = ChatStorageSizer.storedBytes(cipher, crypto) - resultMetaBytes(connection, turn.id());
+            if (delta > turn.reservedHistoryBytes()) {
+                throw new ReservationExceededException(turn.id(), delta, turn.reservedHistoryBytes());
+            }
+            long assistantId = orZero(turn.assistantMessageId());
+            if (assistantId == 0) {
+                assistantId = insertMessage(connection, turn.sessionId(), "assistant", turn.id(), "ASSISTANT",
+                        "", null, null, null, null);
+            }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE ai_chat_turn SET result_meta_cipher = ?, result_meta_crypto = ?,
+                        assistant_message_id = ?, stored_history_bytes = stored_history_bytes + ?,
+                        reserved_history_bytes = reserved_history_bytes - ? WHERE id = ? AND status = 'RUNNING'
+                    """)) {
+                statement.setString(1, cipher);
+                statement.setString(2, crypto);
+                statement.setLong(3, assistantId);
+                statement.setLong(4, delta);
+                statement.setLong(5, delta);
+                statement.setLong(6, turn.id());
+                requireOneRow(statement.executeUpdate(), "工具活动检查点");
+            }
+            ledger.settle(connection, delta, delta);
+            if (ChatStorageSizer.turnStoredBytes(connection, turn.id()) != turn.storedHistoryBytes() + delta) {
+                throw new SQLException("工具活动存量与容量账本不一致");
+            }
+            // 活动元数据和空占位不参与模型上下文；此处不推进 history_revision，
+            // 否则同轮的冻结计划会被自己的工具检查点误判为过期。定稿仍统一推进版本。
+            return true;
+        });
+    }
+
+    private static long resultMetaBytes(Connection connection, long turnId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT result_meta_cipher, result_meta_crypto FROM ai_chat_turn WHERE id = ?")) {
+            statement.setLong(1, turnId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? ChatStorageSizer.storedBytes(result.getString(1), result.getString(2)) : 0;
+            }
+        }
     }
 
     /**

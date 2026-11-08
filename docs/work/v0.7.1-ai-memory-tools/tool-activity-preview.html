@@ -1,0 +1,672 @@
+<div id="dn-tool-activity-preview" class="viz-dotted-background">
+  <style>
+    #dn-tool-activity-preview {
+      --dn-panel: light-dark(#ffffff, #1b1e24);
+      --dn-subtle: light-dark(#f6f8fb, #20242b);
+      --dn-text: light-dark(#1e2433, #e2e6ee);
+      --dn-muted: light-dark(#6b7385, #a4adbd);
+      --dn-line: light-dark(#e4e7ee, #353c48);
+      --dn-accent: light-dark(#2f54eb, #a5b7ff);
+      --dn-user: light-dark(#2f54eb, #3656cb);
+      --dn-on-user: light-dark(#ffffff, #ffffff);
+      --dn-success: light-dark(#247354, #88c9ac);
+      --dn-warning: light-dark(#9b5b16, #edbf7e);
+      --dn-warning-bg: light-dark(#fff8ed, #30291f);
+      --dn-hover: light-dark(#f1f4f9, #282e38);
+      --dn-shadow: light-dark(#1e24330b, #00000026);
+      --dn-row-padding: 10px;
+      color: var(--dn-text);
+      font: 14px/1.65 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+      padding: 20px 14px;
+      background-color: transparent;
+    }
+    #dn-tool-activity-preview * { box-sizing: border-box; }
+    #dn-tool-activity-preview [hidden] { display: none !important; }
+    #dn-tool-activity-preview button,
+    #dn-tool-activity-preview select,
+    #dn-tool-activity-preview textarea {
+      font: inherit;
+      color: inherit;
+    }
+    #dn-tool-activity-preview button { -webkit-tap-highlight-color: transparent; }
+    #dn-tool-activity-preview .preview-controls {
+      max-width: 480px;
+      margin: 0 auto 18px;
+    }
+    #dn-tool-activity-preview .preview-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 12px;
+      padding-right: 90px;
+      margin-bottom: 12px;
+    }
+    #dn-tool-activity-preview .preview-title { font-size: 15px; font-weight: 500; }
+    #dn-tool-activity-preview .preview-label { font-size: 12px; color: var(--dn-muted); }
+    #dn-tool-activity-preview .state-picker {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    #dn-tool-activity-preview .state-picker label { color: var(--dn-muted); font-size: 13px; }
+    #dn-tool-activity-preview select {
+      min-width: 150px;
+      max-width: 100%;
+      padding: 5px 28px 5px 10px;
+      border: 1px solid var(--dn-line);
+      border-radius: 7px;
+      background: var(--dn-panel);
+      font-size: 13px;
+    }
+    #dn-tool-activity-preview .product-shell {
+      width: 100%;
+      max-width: 480px;
+      margin: 0 auto;
+      background: var(--dn-panel);
+      border: 1px solid var(--dn-line);
+      border-radius: 14px;
+      box-shadow: 0 8px 30px var(--dn-shadow);
+      overflow: hidden;
+    }
+    #dn-tool-activity-preview .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--dn-line);
+    }
+    #dn-tool-activity-preview .app-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+    }
+    #dn-tool-activity-preview .app-title > .dn-icon { color: var(--dn-accent); }
+    #dn-tool-activity-preview .session-name { color: var(--dn-muted); font-size: 12px; }
+    #dn-tool-activity-preview .conversation {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
+      min-height: 306px;
+      margin: 12px;
+      padding: 14px;
+      border: 1px solid var(--dn-line);
+      border-radius: 12px;
+      background: var(--dn-subtle);
+    }
+    #dn-tool-activity-preview .conversation-time {
+      align-self: center;
+      color: var(--dn-muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    #dn-tool-activity-preview .message {
+      max-width: 94%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      overflow-wrap: anywhere;
+    }
+    #dn-tool-activity-preview .user-message {
+      align-self: flex-end;
+      background: var(--dn-user);
+      color: var(--dn-on-user);
+    }
+    #dn-tool-activity-preview .assistant-message {
+      align-self: flex-start;
+      width: 100%;
+      background: var(--dn-panel);
+      border: 1px solid var(--dn-line);
+      box-shadow: 0 2px 4px var(--dn-shadow);
+    }
+    #dn-tool-activity-preview .activity { min-width: 0; }
+    #dn-tool-activity-preview .group-toggle,
+    #dn-tool-activity-preview .tool-toggle {
+      display: flex;
+      width: 100%;
+      align-items: flex-start;
+      gap: 9px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      text-align: left;
+    }
+    #dn-tool-activity-preview .group-toggle:hover,
+    #dn-tool-activity-preview .tool-toggle:hover { background: var(--dn-hover); }
+    #dn-tool-activity-preview .dn-icon {
+      display: inline-flex;
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      align-items: center;
+      justify-content: center;
+    }
+    #dn-tool-activity-preview .dn-icon > svg { width: 16px; height: 16px; }
+    #dn-tool-activity-preview .group-status-icon { margin-top: 3px; }
+    #dn-tool-activity-preview .group-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+    #dn-tool-activity-preview .group-title { font-size: 13px; font-weight: 500; }
+    #dn-tool-activity-preview .group-meta {
+      font-size: 12px;
+      color: var(--dn-muted);
+      font-variant-numeric: tabular-nums;
+      margin-top: 1px;
+    }
+    #dn-tool-activity-preview .chevron { color: var(--dn-muted); margin-top: 3px; transition: transform 120ms ease; }
+    #dn-tool-activity-preview .chevron.is-open { transform: rotate(90deg); }
+    #dn-tool-activity-preview .tool-list { list-style: none; padding: 0; margin: 12px 0 0; }
+    #dn-tool-activity-preview .tool-item { position: relative; margin: 0; padding: 0; }
+    #dn-tool-activity-preview .tool-item:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      width: 1px;
+      background: var(--dn-line);
+      top: 26px;
+      bottom: -10px;
+      left: 8px;
+    }
+    #dn-tool-activity-preview .tool-toggle { position: relative; padding: var(--dn-row-padding) 0; }
+    #dn-tool-activity-preview .tool-status-icon {
+      position: relative;
+      margin-top: 3px;
+      background: var(--dn-panel);
+      box-shadow: 0 0 0 4px var(--dn-panel);
+    }
+    #dn-tool-activity-preview .tool-copy { flex: 1; min-width: 0; }
+    #dn-tool-activity-preview .tool-name { display: block; font-size: 13px; font-weight: 500; }
+    #dn-tool-activity-preview .tool-result { display: block; font-size: 12px; color: var(--dn-muted); }
+    #dn-tool-activity-preview .tool-end {
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+      color: var(--dn-muted);
+      white-space: nowrap;
+    }
+    #dn-tool-activity-preview .duration { font-size: 12px; font-variant-numeric: tabular-nums; }
+    #dn-tool-activity-preview .hide-durations .duration { display: none; }
+    #dn-tool-activity-preview .state-running { color: var(--dn-accent); }
+    #dn-tool-activity-preview .state-success { color: var(--dn-success); }
+    #dn-tool-activity-preview .state-neutral { color: var(--dn-muted); }
+    #dn-tool-activity-preview .state-warning { color: var(--dn-warning); }
+    #dn-tool-activity-preview .tool-details {
+      position: relative;
+      margin: 0 0 10px 25px;
+      padding: 10px 12px;
+      background: var(--dn-subtle);
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    #dn-tool-activity-preview .detail-row {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr);
+      gap: 8px;
+      margin: 0;
+      padding: 3px 0;
+    }
+    #dn-tool-activity-preview .detail-row dt { color: var(--dn-muted); }
+    #dn-tool-activity-preview .detail-row dd { margin: 0; overflow-wrap: anywhere; }
+    #dn-tool-activity-preview .detail-row code { font: 12px/1.6 Consolas, monospace; color: var(--dn-muted); }
+    #dn-tool-activity-preview .group-notice {
+      padding: 9px 11px;
+      margin: 10px 0 2px 25px;
+      border-radius: 6px;
+      color: var(--dn-warning);
+      background: var(--dn-warning-bg);
+      font-size: 12px;
+    }
+    #dn-tool-activity-preview .answer { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--dn-line); }
+    #dn-tool-activity-preview .no-tools .answer { padding-top: 0; margin-top: 0; border-top: 0; }
+    #dn-tool-activity-preview .answer p { margin: 0 0 10px; }
+    #dn-tool-activity-preview .answer p:last-child { margin: 0; }
+    #dn-tool-activity-preview .answer strong { font-weight: 500; }
+    #dn-tool-activity-preview .generating {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-top: 14px;
+      color: var(--dn-muted);
+      font-size: 12px;
+    }
+    #dn-tool-activity-preview .message-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      color: var(--dn-muted);
+      font-size: 12px;
+      margin-top: 16px;
+    }
+    #dn-tool-activity-preview .existing-action { display: inline-flex; align-items: center; gap: 5px; }
+    #dn-tool-activity-preview .turn-notice { font-size: 12px; color: var(--dn-muted); margin-top: 14px; }
+    #dn-tool-activity-preview .composer { padding: 0 12px 12px; }
+    #dn-tool-activity-preview .composer-box {
+      border: 1px solid var(--dn-line);
+      border-radius: 10px;
+      background: var(--dn-panel);
+      padding: 10px 12px;
+    }
+    #dn-tool-activity-preview .composer textarea {
+      width: 100%;
+      min-width: 0;
+      resize: none;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #dn-tool-activity-preview textarea::placeholder { color: var(--dn-muted); }
+    #dn-tool-activity-preview .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+    #dn-tool-activity-preview .attachment-hint { color: var(--dn-muted); display: flex; align-items: center; }
+    #dn-tool-activity-preview .send-button {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 0;
+      border-radius: 7px;
+      color: var(--dn-on-user);
+      background: var(--dn-user);
+      font-size: 12px;
+    }
+    #dn-tool-activity-preview .send-button:disabled { opacity: .45; }
+    #dn-tool-activity-preview .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+    #dn-tool-activity-preview .spinning { animation: dn-tool-spin 1.6s linear infinite; }
+    @keyframes dn-tool-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      #dn-tool-activity-preview .spinning { animation: none; }
+      #dn-tool-activity-preview .chevron { transition: none; }
+    }
+    @media (max-width: 400px) {
+      #dn-tool-activity-preview { padding: 16px 8px; }
+      #dn-tool-activity-preview .app-header { padding: 13px; }
+      #dn-tool-activity-preview .conversation { padding: 10px; margin: 10px; gap: 14px; }
+      #dn-tool-activity-preview .message { max-width: 100%; padding: 11px; }
+      #dn-tool-activity-preview .tool-toggle { flex-wrap: wrap; gap: 6px; }
+      #dn-tool-activity-preview .tool-copy { flex-basis: calc(100% - 25px); }
+      #dn-tool-activity-preview .tool-end { margin-left: 22px; }
+      #dn-tool-activity-preview .tool-end .chevron { margin-top: 1px; }
+      #dn-tool-activity-preview .detail-row { grid-template-columns: 1fr; gap: 1px; padding: 4px 0; }
+      #dn-tool-activity-preview .session-name { max-width: 90px; text-align: right; }
+    }
+    @media (pointer: coarse) {
+      #dn-tool-activity-preview button,
+      #dn-tool-activity-preview select { min-height: 44px; }
+      #dn-tool-activity-preview .composer textarea { font-size: 16px; }
+    }
+  </style>
+
+  <div class="preview-controls">
+    <div class="preview-heading">
+      <span class="preview-title">对话中的工具活动</span>
+      <span class="preview-label">交互草图 · 示例数据</span>
+    </div>
+    <div class="state-picker">
+      <label for="dn-tool-scenario">预览状态</label>
+      <select id="dn-tool-scenario" class="cursor-interaction">
+        <option value="running">工具执行中</option>
+        <option value="generating">生成回答</option>
+        <option value="completed">已完成</option>
+        <option value="updated">读取并更新</option>
+        <option value="empty">无匹配结果</option>
+        <option value="unavailable">工具不可用</option>
+        <option value="cancelled">已中断</option>
+        <option value="history">历史记录</option>
+        <option value="no-tools">未调用工具</option>
+      </select>
+    </div>
+  </div>
+
+  <section class="product-shell" aria-label="AI 助手工具活动设计">
+    <header class="app-header">
+      <div class="app-title"><span class="dn-icon"><i data-lucide="sparkles" aria-hidden="true"></i></span>AI 助手</div>
+      <span class="session-name">学习偏好 · 当前会话</span>
+    </header>
+    <div class="conversation">
+      <div class="conversation-time" id="dn-conversation-time">今天 14:32</div>
+      <div class="message user-message" id="dn-user-message">记住以后回答先给结论，再给步骤；也看看我之前的学习偏好。</div>
+      <article class="message assistant-message" aria-label="助手回复">
+        <section class="activity" id="dn-tool-group" aria-label="本轮工具调用">
+          <button type="button" class="group-toggle cursor-interaction" id="dn-group-toggle" aria-expanded="true" aria-controls="dn-tool-group-body">
+            <span class="dn-icon group-status-icon state-running spinning" id="dn-group-icon"><i data-lucide="loader-circle" aria-hidden="true"></i></span>
+            <span class="group-copy">
+              <span class="group-title" id="dn-group-title">正在新增记忆</span>
+              <span class="group-meta" id="dn-group-meta">已完成 1 项 · 2 次工具调用</span>
+            </span>
+            <span class="dn-icon chevron is-open" id="dn-group-chevron"><i data-lucide="chevron-right" aria-hidden="true"></i></span>
+          </button>
+          <div id="dn-tool-group-body">
+            <ol class="tool-list" id="dn-tool-list"></ol>
+            <div class="group-notice" id="dn-group-notice" hidden></div>
+          </div>
+        </section>
+        <div class="answer" id="dn-tool-answer" hidden></div>
+        <div class="generating" id="dn-generating" hidden>
+          <span class="dn-icon spinning"><i data-lucide="loader-circle" aria-hidden="true"></i></span>
+          正在生成回答
+        </div>
+        <div class="turn-notice" id="dn-turn-notice" hidden></div>
+        <div class="message-actions" id="dn-message-actions" hidden>
+          <span class="existing-action"><span class="dn-icon"><i data-lucide="file-plus-2" aria-hidden="true"></i></span>插入笔记</span>
+          <span class="existing-action"><span class="dn-icon"><i data-lucide="layers" aria-hidden="true"></i></span>本轮上下文</span>
+        </div>
+      </article>
+    </div>
+    <div class="composer">
+      <div class="composer-box">
+        <textarea rows="2" readonly aria-label="消息输入框（草图）" placeholder="继续提问…"></textarea>
+        <div class="composer-bottom">
+          <span class="attachment-hint"><span class="dn-icon"><i data-lucide="paperclip" aria-hidden="true"></i></span></span>
+          <button type="button" class="send-button cursor-interaction" id="dn-turn-control">
+            <span class="dn-icon" id="dn-turn-control-icon"><i data-lucide="square" aria-hidden="true"></i></span>
+            <span id="dn-turn-control-label">中断生成</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+  <div class="visually-hidden" id="dn-tool-announcement" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    (() => {
+      const root = document.getElementById("dn-tool-activity-preview");
+      const byId = (id) => root.querySelector("#" + id);
+      const scenarioPicker = byId("dn-tool-scenario");
+      const group = byId("dn-tool-group");
+      const groupToggle = byId("dn-group-toggle");
+      const groupBody = byId("dn-tool-group-body");
+      const list = byId("dn-tool-list");
+      const assistant = root.querySelector(".assistant-message");
+      const product = root.querySelector(".product-shell");
+      const scenarioNames = {
+        running: "工具执行中", generating: "生成回答", completed: "已完成", updated: "读取并更新",
+        empty: "无匹配结果", unavailable: "工具不可用", cancelled: "已中断",
+        history: "历史记录", "no-tools": "未调用工具"
+      };
+      const defaults = {
+        version: 1, scenario: "running", expanded: true, details: [],
+        cancelMode: "after-write", rowPadding: 10, showDuration: true
+      };
+      const state = { ...defaults };
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[char]);
+      }
+      function icon(name) {
+        return '<i data-lucide="' + name + '" aria-hidden="true"></i>';
+      }
+      function refreshIcons() {
+        if (globalThis.lucide && typeof globalThis.lucide.createIcons === "function") {
+          globalThis.lucide.createIcons({ attrs: { width: 16, height: 16 } });
+        }
+      }
+      function restore(snapshot) {
+        const saved = snapshot && snapshot.privateContent;
+        if (!saved || saved.version !== 1 || !Object.hasOwn(scenarioNames, saved.scenario)) return false;
+        Object.assign(state, {
+          ...defaults,
+          scenario: saved.scenario,
+          expanded: typeof saved.expanded === "boolean" ? saved.expanded : defaults.expanded,
+          details: Array.isArray(saved.details) ? saved.details.filter((id) => typeof id === "string").slice(0, 4) : [],
+          cancelMode: ["after-write", "during-write", "after-tools"].includes(saved.cancelMode) ? saved.cancelMode : "after-write",
+          rowPadding: typeof saved.rowPadding === "number" ? Math.max(6, Math.min(14, saved.rowPadding)) : 10,
+          showDuration: typeof saved.showDuration === "boolean" ? saved.showDuration : true
+        });
+        return true;
+      }
+      function save() {
+        const host = window.openai;
+        if (!host || typeof host.setWidgetState !== "function") return;
+        const snapshot = {
+          modelContent: {
+            design: "回复内可折叠工具活动",
+            previewScenario: scenarioNames[state.scenario],
+            showRowDuration: state.showDuration,
+            rowPadding: state.rowPadding
+          },
+          privateContent: { ...state, details: [...state.details] }
+        };
+        try {
+          Promise.resolve(host.setWidgetState(snapshot)).catch(() => {});
+        } catch (_) {}
+      }
+      function baseSearch() {
+        return {
+          id: "search", name: "检索记忆", tool: "search_memories", status: "success",
+          caption: "完成 · 已返回 2 条", started: "14:32:08", duration: "0.6 s",
+          scope: "当前有权访问的记忆", result: "返回 2 条相关记忆"
+        };
+      }
+      function baseCreate() {
+        return {
+          id: "create", name: "新增记忆", tool: "create_memory", status: "success",
+          caption: "完成 · 已新增 1 条", started: "14:32:09", duration: "0.3 s",
+          scope: "本轮用户明确要求保存的偏好", result: "已写入 1 条新记忆"
+        };
+      }
+      function scene() {
+        const data = {
+          user: "记住以后回答先给结论，再给步骤；也看看我之前的学习偏好。",
+          title: "已检索记忆 · 已新增 1 条",
+          meta: "2 次工具调用 · 0.9 s",
+          status: "success",
+          rows: [baseSearch(), baseCreate()],
+          answer: "<p>记住了，<strong>以后我会先给结论，再展开步骤。</strong></p><p>你之前保存的学习偏好还包括：用具体例子解释概念，以及把复杂任务拆成小步骤。</p>",
+          notice: "", turnNotice: "", generating: false, busy: false,
+          time: "今天 14:32"
+        };
+        if (state.scenario === "running") {
+          data.title = "正在新增记忆";
+          data.meta = "已完成 1 项 · 2 次工具调用";
+          data.status = "running";
+          data.rows[1] = {
+            ...baseCreate(), status: "running", caption: "执行中", duration: "0.2 s",
+            result: "等待写入结果，尚未确认保存"
+          };
+          data.answer = "";
+          data.busy = true;
+        } else if (state.scenario === "generating") {
+          data.answer = "";
+          data.generating = true;
+          data.busy = true;
+        } else if (state.scenario === "updated") {
+          data.user = "我之前的每日复习目标是 20 分钟，现在帮我改成 30 分钟。";
+          data.title = "已读取记忆 · 已更新 1 条";
+          data.meta = "2 次工具调用 · 0.7 s";
+          data.rows = [
+            {
+              ...baseSearch(), id: "list", name: "读取记忆", tool: "list_memories",
+              caption: "完成 · 本次返回 3 条", duration: "0.4 s",
+              result: "本次返回 3 条记忆，不代表全部记忆数量"
+            },
+            {
+              ...baseCreate(), id: "update", name: "更新记忆", tool: "update_memory",
+              caption: "完成 · 已更新 1 条", scope: "本轮用户明确指定的复习目标",
+              result: "已更新 1 条记忆"
+            }
+          ];
+          data.answer = "<p>已把你的每日复习目标改为 <strong>30 分钟</strong>。</p>";
+        } else if (state.scenario === "empty") {
+          data.user = "我之前有没有保存过英语复习方面的偏好？";
+          data.title = "已检索记忆 · 无匹配结果";
+          data.meta = "1 次工具调用 · 0.4 s";
+          data.status = "neutral";
+          data.rows = [{
+            ...baseSearch(), status: "neutral", caption: "完成 · 未找到相关记忆",
+            duration: "0.4 s", result: "本次查询没有匹配结果"
+          }];
+          data.answer = "<p>这次没有找到与英语复习相关的记忆。你可以告诉我你的复习习惯，我再据此给出建议。</p>";
+        } else if (state.scenario === "unavailable") {
+          data.user = "看看我之前的学习偏好，帮我安排一下今天的复习。";
+          data.title = "工具暂不可用";
+          data.meta = "1 次工具调用 · 检索未完成";
+          data.status = "warning";
+          data.rows = [{
+            ...baseSearch(), status: "warning", caption: "未完成 · 读取超时",
+            duration: "5.0 s", result: "没有取得检索结果；不代表记忆库为空"
+          }];
+          data.notice = "本次未取得记忆。稍后可重新提问，或到记忆库查看已有内容。";
+          data.answer = "<p>这次暂时没能读取已保存的学习偏好。我可以先根据你当前提供的信息继续安排。</p>";
+        } else if (state.scenario === "cancelled") {
+          data.status = "warning";
+          data.answer = "";
+          data.title = "已中断 · 已新增 1 条";
+          data.meta = "2 次工具调用 · 1 项结果未确认";
+          data.rows = [
+            { ...baseCreate(), started: "14:32:08" },
+            {
+              ...baseSearch(), started: "14:32:09", status: "warning",
+              caption: "执行结果未确认", duration: "—",
+              result: "请求中断，未收到最终检索结果"
+            }
+          ];
+          data.turnNotice = "已停止生成。已新增的 1 条记忆会保留。";
+          if (state.cancelMode === "during-write") {
+            data.title = "已中断 · 写入结果未确认";
+            data.rows = [
+              baseSearch(),
+              {
+                ...baseCreate(), status: "warning", caption: "执行结果未确认", duration: "—",
+                result: "请求中断，未收到最终写入结果"
+              }
+            ];
+            data.turnNotice = "已停止生成。新增记忆的结果尚未确认，可到记忆库核对。";
+          } else if (state.cancelMode === "after-tools") {
+            data.status = "neutral";
+            data.meta = "2 次工具调用已完成 · 回答已中断";
+            data.rows = [baseSearch(), baseCreate()];
+          }
+        } else if (state.scenario === "history") {
+          data.time = "2026年11月8日 14:32";
+          data.rows = data.rows.map((row) => ({ ...row, started: "2026-11-08 " + row.started }));
+        } else if (state.scenario === "no-tools") {
+          data.user = "简单解释一下什么是主动回忆。";
+          data.rows = [];
+          data.answer = "<p><strong>主动回忆，就是先不看答案，尝试从记忆中提取知识。</strong></p><p>例如读完一页笔记后把它合上，用自己的话复述重点，再打开检查遗漏。</p>";
+        }
+        return data;
+      }
+      const statusIcons = { running: "loader-circle", success: "check", neutral: "minus", warning: "triangle-alert" };
+      function detailRow(label, value, technical) {
+        return '<div class="detail-row"><dt>' + label + '</dt><dd>' +
+          (technical ? "<code>" + escapeHtml(value) + "</code>" : escapeHtml(value)) + "</dd></div>";
+      }
+      function toolMarkup(row) {
+        const open = state.details.includes(row.id);
+        return '<li class="tool-item"><button type="button" class="tool-toggle cursor-interaction" data-tool-id="' + row.id +
+          '" aria-expanded="' + open + '" aria-controls="dn-detail-' + row.id + '">' +
+          '<span class="dn-icon tool-status-icon state-' + row.status + (row.status === "running" ? " spinning" : "") + '">' +
+          icon(statusIcons[row.status]) + '</span><span class="tool-copy"><span class="tool-name">' + row.name +
+          '</span><span class="tool-result">' + row.caption + '</span></span><span class="tool-end"><span class="duration">' +
+          row.duration + '</span><span class="dn-icon chevron' + (open ? " is-open" : "") + '">' + icon("chevron-right") +
+          '</span></span></button><dl class="tool-details" id="dn-detail-' + row.id + '"' + (open ? "" : " hidden") + ">" +
+          detailRow("开始时间", row.started) +
+          detailRow(row.status === "running" ? "已执行" : "执行耗时", row.duration === "—" ? "未取得最终耗时" : row.duration) +
+          detailRow("操作范围", row.scope) +
+          detailRow("执行结果", row.result) +
+          detailRow("工具名称", row.tool, true) + "</dl></li>";
+      }
+      function applyAppearance() {
+        root.style.setProperty("--dn-row-padding", state.rowPadding + "px");
+        product.classList.toggle("hide-durations", !state.showDuration);
+      }
+      function applyDisclosure() {
+        groupToggle.setAttribute("aria-expanded", String(state.expanded));
+        groupBody.hidden = !state.expanded;
+        byId("dn-group-chevron").classList.toggle("is-open", state.expanded);
+      }
+      function renderScene() {
+        const data = scene();
+        scenarioPicker.value = state.scenario;
+        byId("dn-user-message").textContent = data.user;
+        byId("dn-conversation-time").textContent = data.time;
+        byId("dn-group-title").textContent = data.title;
+        byId("dn-group-meta").textContent = data.meta;
+        const groupIcon = byId("dn-group-icon");
+        groupIcon.className = "dn-icon group-status-icon state-" + data.status + (data.status === "running" ? " spinning" : "");
+        groupIcon.innerHTML = icon(statusIcons[data.status]);
+        group.hidden = data.rows.length === 0;
+        assistant.classList.toggle("no-tools", !data.rows.length);
+        list.innerHTML = data.rows.map(toolMarkup).join("");
+        byId("dn-group-notice").textContent = data.notice;
+        byId("dn-group-notice").hidden = !data.notice;
+        byId("dn-tool-answer").innerHTML = data.answer;
+        byId("dn-tool-answer").hidden = !data.answer;
+        byId("dn-generating").hidden = !data.generating;
+        byId("dn-turn-notice").textContent = data.turnNotice;
+        byId("dn-turn-notice").hidden = !data.turnNotice;
+        byId("dn-message-actions").hidden = !data.answer;
+        byId("dn-turn-control").disabled = !data.busy;
+        byId("dn-turn-control-label").textContent = data.busy ? "中断生成" : "发送";
+        byId("dn-turn-control-icon").innerHTML = icon(data.busy ? "square" : "send");
+        applyDisclosure();
+        applyAppearance();
+        refreshIcons();
+      }
+      function announce() {
+        byId("dn-tool-announcement").textContent = "预览：" + scenarioNames[state.scenario] + "。" +
+          (scene().rows.length ? scene().title : "本轮未调用工具。");
+      }
+      scenarioPicker.addEventListener("change", () => {
+        state.scenario = scenarioPicker.value;
+        state.expanded = ["running", "generating", "unavailable", "cancelled"].includes(state.scenario);
+        state.details = [];
+        state.cancelMode = "after-write";
+        renderScene();
+        announce();
+        save();
+      });
+      groupToggle.addEventListener("click", () => {
+        state.expanded = !state.expanded;
+        applyDisclosure();
+        save();
+      });
+      list.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-tool-id]");
+        if (!button || !list.contains(button)) return;
+        const id = button.dataset.toolId;
+        const open = !state.details.includes(id);
+        state.details = open ? [...state.details, id] : state.details.filter((item) => item !== id);
+        button.setAttribute("aria-expanded", String(open));
+        button.querySelector(".chevron").classList.toggle("is-open", open);
+        byId("dn-detail-" + id).hidden = !open;
+        save();
+      });
+      byId("dn-turn-control").addEventListener("click", () => {
+        if (!["running", "generating"].includes(state.scenario)) return;
+        state.cancelMode = state.scenario === "running" ? "during-write" : "after-tools";
+        state.scenario = "cancelled";
+        renderScene();
+        announce();
+        save();
+      });
+      restore(window.openai && window.openai.widgetState);
+      renderScene();
+      window.addEventListener("openai:set_globals", (event) => {
+        if (restore(event.detail && event.detail.globals && event.detail.globals.widgetState)) renderScene();
+      });
+      if (globalThis.Tweak) {
+        const tweak = new globalThis.Tweak({
+          container: product,
+          onChange: () => { applyAppearance(); save(); }
+        });
+        tweak.addSlider(state, "rowPadding", { label: "工具行上下留白", min: 6, max: 14, step: 2, unit: "px" });
+        tweak.addToggle(state, "showDuration", { label: "显示行内耗时" });
+      }
+    })();
+  </script>
+</div>

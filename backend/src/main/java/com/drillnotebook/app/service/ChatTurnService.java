@@ -1,5 +1,6 @@
 package com.drillnotebook.app.service;
 
+import com.drillnotebook.app.model.ToolActivity;
 import com.drillnotebook.app.config.ProcessIdentity;
 import com.drillnotebook.app.model.UuidV7;
 import com.drillnotebook.app.repository.ChatSessionMetadataRepository;
@@ -49,7 +50,7 @@ import org.springframework.stereotype.Service;
 public class ChatTurnService {
     private static final Logger log = LoggerFactory.getLogger(ChatTurnService.class);
     /** result_meta 明文上限（contracts §2.7）：超限只留终态，不冒险写无界 JSON。 */
-    static final int MAX_RESULT_META_BYTES = 16 * 1024;
+    static final int MAX_RESULT_META_BYTES = (int) com.drillnotebook.app.repository.ChatStorageSizer.RESULT_META_PLAIN_MAX_BYTES;
     /** 规范化选项只留标识字段（§2.2）；这个天花板是本包自定的，挡的是"拿元数据当垃圾场"。 */
     static final int MAX_REQUEST_OPTIONS_BYTES = 4 * 1024;
 
@@ -260,7 +261,8 @@ public class ChatTurnService {
                     ? null : cipher.encrypt(reply.text(), lease.masterPassword());
             ChatMessageCipher.Encrypted reasoning = reply.reasoning() == null || reply.reasoning().isEmpty()
                     ? null : cipher.encrypt(reply.reasoning(), lease.masterPassword());
-            ChatMessageCipher.Encrypted result = cipher.encrypt(resultMeta(status, reply, audit),
+            ChatMessageCipher.Encrypted result = cipher.encrypt(resultMeta(status, reply, audit,
+                            lease.handle().toolActivities()),
                     lease.masterPassword());
             TerminalOutcome outcome = turns.finalizeTurn(lease.requestId(),
                     new Terminal(status, content == null ? "" : null, content == null ? null : content.cipher(),
@@ -365,6 +367,13 @@ public class ChatTurnService {
         return status(requestId, null);
     }
 
+    public String finishReason(String requestId) { return readTurn(requestId).finishReason(); }
+
+    /** 连接关闭时只取消仍在运行的句柄，不读取或重放历史。 */
+    public void cancelActive(String requestId) {
+        if (requestId != null) registry.find(requestId).ifPresent(ActiveTurnRegistry.Handle::requestCancel);
+    }
+
     public Map<String, Object> status(String requestId, String masterPassword) {
         TurnRow turn = readTurn(requestId);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -386,7 +395,40 @@ public class ChatTurnService {
                 ? reasoning.value() : null);
         body.put("replyStatus", reply.status().name());
         body.put("reasoningStatus", reasoning.status().name());
+        body.put("toolActivities", turn.contentDeletedAt() == null
+                ? toolActivities(requestId, masterPassword) : List.of());
         return body;
+    }
+
+    /** 仅允许白名单活动对象进入检查点，原始工具结果永远不写会话存储。 */
+    public void recordToolActivities(Lease lease, List<ToolActivity> activities) {
+        List<ToolActivity> boundedActivities = List.copyOf(activities.subList(0,
+                Math.min(activities.size(), ToolActivity.MAX_ENTRIES)));
+        lease.handle().toolActivities(boundedActivities);
+        try {
+            ChatMessageCipher.Encrypted encrypted = cipher.encrypt(
+                    mapper.writeValueAsString(Map.of("schemaVersion", 1, "toolActivities", boundedActivities)),
+                    lease.masterPassword());
+            if (!turns.saveRunningResultMeta(lease.requestId(), encrypted.cipher(), encrypted.meta())) {
+                throw new IllegalStateException("轮次已经结束，不能继续执行工具");
+            }
+        } catch (SQLException | com.fasterxml.jackson.core.JsonProcessingException | ChatCryptoException error) {
+            throw new IllegalStateException("工具活动未能保存，本轮已停止", error);
+        }
+    }
+
+    public List<ToolActivity> toolActivities(String requestId, String masterPassword) {
+        Optional<ActiveTurnRegistry.Handle> active = registry.find(requestId);
+        if (active.isPresent()) return active.get().toolActivities();
+        try {
+            Optional<ChatTurnRepository.MetaColumns> meta = turns.findResultMeta(requestId);
+            if (meta.isEmpty()) return List.of();
+            ChatMessageCipher.Read read = cipher.read(meta.get().cipher(), meta.get().crypto(), masterPassword);
+            return read.status() == ChatMessageCipher.ReadStatus.DECRYPTED
+                    ? ToolActivity.readMeta(read.value(), false) : List.of();
+        } catch (SQLException ignored) {
+            return List.of();
+        }
     }
 
     /**
@@ -705,7 +747,8 @@ public class ChatTurnService {
         return reply.finishReason();
     }
 
-    private String resultMeta(String status, UpstreamReply reply, Map<String, Object> audit) {
+    private String resultMeta(String status, UpstreamReply reply, Map<String, Object> audit,
+                              List<ToolActivity> activities) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("schemaVersion", 1);
         meta.put("status", status);
@@ -720,6 +763,7 @@ public class ChatTurnService {
                 "outputTokens", reply.usage() == null || reply.usage().outputTokens() == null
                         ? 0 : reply.usage().outputTokens()));
         if (audit != null) meta.put("audit", audit);
+        if (!activities.isEmpty()) meta.put("toolActivities", activities);
         return bounded(meta);
     }
 
@@ -829,7 +873,9 @@ public class ChatTurnService {
             Map<String, Object> minimal = new LinkedHashMap<>();
             minimal.put("schemaVersion", meta.get("schemaVersion"));
             minimal.put("status", meta.get("status"));
+            minimal.put("finishReason", meta.get("finishReason"));
             minimal.put("truncatedMeta", true);
+            if (meta.containsKey("toolActivities")) minimal.put("toolActivities", meta.get("toolActivities"));
             return mapper.writeValueAsString(minimal);
         } catch (Exception error) {
             return "{\"truncatedMeta\":true}";

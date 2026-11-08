@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
 import { isUuidV7 } from '../lib/uuidV7';
+import type { StreamCallbacks, StreamDonePayload } from '../lib/aiStream';
 
 /**
  * P9c-4 在界面上的接线（执行方案 §12、contracts §4.5、验收 C08/H12）：
@@ -13,6 +14,14 @@ import { isUuidV7 } from '../lib/uuidV7';
  */
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
+
+// 将既有统一结果 fixture 交给 SSE done，保留上下文检查器本身的断言。
+vi.mock('../lib/aiStream', () => ({
+  streamChat: async (_path: string, body: unknown, callbacks: StreamCallbacks) => {
+    void apiPost('/api/ai/chat', body).then((view: StreamDonePayload) => callbacks.onDone({ ...view, reasoning: view.reasoning ?? '' }));
+    return () => undefined;
+  }
+}));
 
 /** ApiError 必须留真身：徽标与检查器靠 `instanceof` 分辨"需要解锁"和"读不出来"。 */
 vi.mock('../lib/api', async (importOriginal) => {

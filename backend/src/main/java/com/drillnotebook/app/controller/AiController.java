@@ -38,6 +38,17 @@ public class AiController {
         return thread;
     });
     private final ObjectMapper mapper;
+    private final java.util.concurrent.ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "ai-chat-heartbeat");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    @jakarta.annotation.PreDestroy
+    public void close() {
+        heartbeatExecutor.shutdownNow();
+        chatStreamExecutor.shutdownNow();
+    }
 
     public AiController(
             AiService ai,
@@ -90,14 +101,33 @@ public class AiController {
         return ai.chat(body);
     }
 
-    /** 流式聊天（SSE）：event=metadata|text|reasoning|done|error，data 为 JSON。 */
+    /** 流式聊天（SSE）：event=metadata|tool_activity|text|reasoning|done|error，data 为 JSON。 */
     @PostMapping(value = "/chat/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter chatStream(@RequestBody Map<String, Object> body) {
-        var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(300_000L);
+        // 整轮期限由执行预算管理；心跳维持长思考连接并及时发现客户端离开。
+        var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(0L);
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        var requestId = new java.util.concurrent.atomic.AtomicReference<String>();
+        var heartbeat = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.ScheduledFuture<?>>();
+        Runnable disconnect = () -> {
+            closed.set(true);
+            var timer = heartbeat.get();
+            if (timer != null) timer.cancel(false);
+            ai.cancelActive(requestId.get());
+        };
+        emitter.onCompletion(disconnect);
+        emitter.onError(error -> disconnect.run());
+        emitter.onTimeout(disconnect);
+        heartbeat.set(heartbeatExecutor.scheduleAtFixedRate(() -> {
+            if (closed.get()) return;
+            try { emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event().comment("keep-alive")); }
+            catch (Exception error) { disconnect.run(); }
+        }, 10, 10, java.util.concurrent.TimeUnit.SECONDS));
         chatStreamExecutor.submit(() -> {
             // 本轮是否产出过增量：error 帧要如实带 partial，前端据此判断能不能自动回退（§7.3）
             boolean[] produced = {false};
             try {
+                if (closed.get()) return;
                 AiService.ChatResult result = ai.chatStream(body, (type, text) -> {
                     try {
                         emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
@@ -109,13 +139,20 @@ public class AiController {
                         return false; // 下游断开，中止上游读取
                     }
                 }, metadata -> {
+                    if (metadata.get("requestId") instanceof String id) requestId.set(id);
+                    if (closed.get()) {
+                        ai.cancelActive(requestId.get());
+                        throw new IllegalStateException("对话连接已中断");
+                    }
                     try {
                         // 首个 metadata 只是 prepared/not_sent：发送状态与最终 planId 以后端结果为准（§4.2）
                         emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
-                                .name("metadata")
+                                .name(metadata.containsKey("toolActivities") ? "tool_activity" : "metadata")
                                 .data(mapperValueToJson(metadata)));
-                    } catch (Exception ignored) {
-                        // 推送失败不撤销本轮：前端断了由 onDelta 的 false 负责裁决
+                        if (metadata.containsKey("toolActivities")) produced[0] = true;
+                    } catch (Exception sendError) {
+                        disconnect.run();
+                        throw new IllegalStateException("对话连接已中断", sendError);
                     }
                 });
                 // done 与 POST /chat 同一份字段集，由服务层单点构造；这里只补流式才有的 reasoning。
@@ -142,6 +179,7 @@ public class AiController {
                         if (failure.code() != null) frame.put("code", failure.code());
                         frame.put("persistenceStatus", failure.persistenceStatus());
                         frame.put("stateDurable", failure.stateDurable());
+                        frame.put("toolActivities", failure.toolActivities());
                     } else if (error instanceof ChatTurnRejectException reject) {
                         // begin() 之前就被拒（请求形状不对）：这一轮还不存在，只有 code
                         frame.put("code", reject.code());
@@ -153,6 +191,10 @@ public class AiController {
                     // 下游已断开
                 }
                 emitter.completeWithError(error);
+            } finally {
+                closed.set(true);
+                var timer = heartbeat.get();
+                if (timer != null) timer.cancel(false);
             }
         });
         return emitter;
