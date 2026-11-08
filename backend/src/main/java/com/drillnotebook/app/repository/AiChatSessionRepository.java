@@ -104,6 +104,12 @@ public class AiChatSessionRepository {
     }
 
     public void update(long id, String title, Boolean archived, String model) {
+        if(archived!=null) {
+            try {
+                if(metadata.setArchived(id,archived,archived ? java.time.Instant.now().toString() : null) == ChatSessionMetadataRepository.ArchiveResult.REFUSED_RUNNING)
+                    throw new com.drillnotebook.app.service.ChatTurnRejectException(409,"SESSION_BUSY","请先停止正在运行和待发送的消息",Map.of());
+            } catch(SQLException e) { throw new IllegalStateException("会话归档失败",e); }
+        }
         jdbc.update("""
                 UPDATE ai_chat_session SET
                     title = COALESCE(?, title),
@@ -178,6 +184,8 @@ public class AiChatSessionRepository {
         try {
             ledger.ensureRebuiltInProcess();
             immediate.execute(connection -> {
+                if (SessionDispatchRepository.busy(connection,id)) throw new com.drillnotebook.app.service.ChatTurnRejectException(
+                        409,"SESSION_BUSY","会话有运行或待发送消息，请先停止",Map.of());
                 memory.purgeEvidence(connection, id, List.of(), List.of());
                 long historyBytes = ChatStorageSizer.sessionHistoryBytes(connection, id);
                 long attachmentBytes = ChatStorageSizer.sessionAttachmentBytes(connection, id);

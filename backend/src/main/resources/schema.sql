@@ -658,3 +658,16 @@ CREATE TABLE IF NOT EXISTS ai_chat_storage (
 );
 
 INSERT OR IGNORE INTO ai_chat_storage(id) VALUES (1);
+
+-- Dispatch receipts contain identities only; queued prompts and credentials never go here.
+CREATE TABLE IF NOT EXISTS ai_session_dispatch (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL UNIQUE,
+    session_id INTEGER NOT NULL,
+    source_key TEXT UNIQUE,
+    fingerprint TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('QUEUED','RUNNING','COMPLETED','FAILED','ABORTED','INTERRUPTED','CANCELLED','TRUNCATED')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_session ON ai_session_dispatch(session_id, sequence);

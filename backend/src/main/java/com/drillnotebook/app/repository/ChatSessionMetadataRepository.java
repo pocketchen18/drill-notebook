@@ -370,6 +370,7 @@ public class ChatSessionMetadataRepository {
     }
 
     private static boolean hasRunningTurn(Connection connection, long sessionId) throws SQLException {
+        if (SessionDispatchRepository.busy(connection,sessionId)) return true;
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM ai_chat_turn WHERE session_id = ? AND status = 'RUNNING'")) {
             statement.setLong(1, sessionId);

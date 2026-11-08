@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Message, Modal } from '@arco-design/web-react';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy, Download, Link, LoaderCircle, MoreHorizontal, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Clock, Copy, Download, Link, LoaderCircle, MoreHorizontal, Pencil, Plus, Sparkles, Square, Trash2, TriangleAlert } from 'lucide-react';
+import { isSessionRunning, type SessionRuntime } from '../../hooks/useAiChatTurn';
 import type { AiChatSession } from '../../lib/types';
 import './session-navigation.css';
 
@@ -10,6 +11,9 @@ interface Props {
   sessions: AiChatSession[];
   currentId?: number;
   busyId?: number;
+  runtimes?: SessionRuntime[];
+  reconnecting?: boolean;
+  onStop?: (id: number) => Promise<void>;
   loading: boolean;
   error: boolean;
   creating: boolean;
@@ -41,6 +45,25 @@ function recentTime(value?: string): string {
 export function SessionNavigation(props: Props): JSX.Element {
   const { sessions, currentId, visible } = props;
   const current = sessions.find((s) => s.id === currentId);
+  const runtimeFor = (id: number): SessionRuntime | undefined => props.runtimes?.find((item) => item.sessionId === id);
+  const busy = (id: number): boolean => id === props.busyId || isSessionRunning(runtimeFor(id));
+  const runningCount = props.runtimes?.filter((item) => item.status === 'RUNNING').length ?? 0;
+  const waitingCount = props.runtimes?.filter((item) => item.status === 'QUEUED').length ?? 0;
+  const statusIcon = (id: number): JSX.Element | null => {
+    const runtime = runtimeFor(id);
+    if (busy(id)) {
+      const waiting = runtime?.status === 'QUEUED';
+      const label = props.reconnecting ? '正在重新连接' : waiting ? '等待执行'
+        : ({ tools: '正在调用工具', waiting: '等待会话回复', thinking: '正在思考', stopping: '正在停止…', answer: '正在生成回复' }[runtime?.phase ?? ''] ?? '正在运行');
+      return waiting || props.reconnecting ? <Clock size={14} aria-label={label}><title>{label}</title></Clock>
+        : <LoaderCircle size={14} className="session-nav-spin" aria-label={label}><title>{label}</title></LoaderCircle>;
+    }
+    if (runtime && ['FAILED', 'ABORTED', 'INTERRUPTED', 'TRUNCATED'].includes(runtime.status)) {
+      const label = runtime.status === 'FAILED' ? '上次运行失败' : '上次回复未完成';
+      return <TriangleAlert size={14} aria-label={label}><title>{label}</title></TriangleAlert>;
+    }
+    return null;
+  };
   const bar = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -68,7 +91,7 @@ export function SessionNavigation(props: Props): JSX.Element {
   const target = sessions.find((s) => s.id === menu?.id);
   const menuWidth = Math.min(196, viewport.width - 16);
   const menuX = clamp(menu?.x ?? 8, viewport.width - menuWidth - 8);
-  const menuY = clamp(menu?.y ?? 8, viewport.height - 224 - 8);
+  const menuY = clamp(menu?.y ?? 8, viewport.height - 258 - 8);
   const stacked = viewport.width < menuWidth * 2 + 24
     || (menuX - 8 < menuWidth && viewport.width - menuX - menuWidth - 8 < menuWidth);
   const childX = menuX + menuWidth * 2 + 8 <= viewport.width ? menuX + menuWidth : menuX - menuWidth;
@@ -244,7 +267,7 @@ export function SessionNavigation(props: Props): JSX.Element {
         }}
         onDoubleClick={() => { if (current) void beginRename(current); }}>
         <span>{current?.title ?? (props.loading ? '正在加载会话…' : '新会话')}</span>
-        {current?.titleStatus === 'generating' && <LoaderCircle className="session-nav-spin" size={13} aria-label="正在生成标题" />}
+        {current && statusIcon(current.id)}
         <ChevronDown size={14} />
       </button>
       <button className="session-nav-icon" aria-label="新建会话" title="新建会话" disabled={props.creating}
@@ -254,7 +277,8 @@ export function SessionNavigation(props: Props): JSX.Element {
     </div>
     {open && visible && createPortal(<div ref={list} className="session-nav-list" role="dialog" aria-label="会话列表"
       style={{ left: position.left, top: position.top, width: position.width, maxHeight: position.height }}>
-      <div className="session-nav-heading">会话 <span>{sessions.length}</span></div>
+      <div className="session-nav-heading">会话 <span>{sessions.length}</span>
+        {runningCount > 0 && <span>{runningCount} 个进行中</span>}{waitingCount > 0 && <span>{waitingCount} 个等待执行</span>}</div>
       <div className="session-nav-rows" onScroll={() => closeMenu()}>
         {props.loading ? <p className="session-nav-empty">正在加载会话…</p> : props.error ?
           <div className="session-nav-empty">会话加载失败 <button onClick={props.onRetry}>重试</button></div> :
@@ -286,8 +310,10 @@ export function SessionNavigation(props: Props): JSX.Element {
                 }}>
                 <span className="session-nav-mark">{session.id === currentId && <Check size={14} />}</span>
                 <span className="session-nav-copy"><span className="session-nav-name">{session.title}</span>
-                  <span className="session-nav-meta">{session.messageCount ?? 0} 条消息 · {recentTime(session.updatedAt)}</span></span>
-                {session.titleStatus === 'generating' && <LoaderCircle size={13} className="session-nav-spin" aria-label="正在生成标题" />}
+                  <span className="session-nav-meta">{session.messageCount ?? 0} 条消息 · {recentTime(session.updatedAt)}
+                    {!!runtimeFor(session.id)?.queueCount && ` · 待发送 ${runtimeFor(session.id)?.queueCount}`}
+                    {session.titleStatus === 'generating' && ' · 正在生成标题'}</span></span>
+                {statusIcon(session.id)}
               </button>
               <button className="session-nav-row-more" aria-label={`更多操作：${session.title}`} onClick={(e) => rowMenu(session, e.currentTarget)}><MoreHorizontal size={16} /></button>
             </>}
@@ -307,8 +333,12 @@ export function SessionNavigation(props: Props): JSX.Element {
           <button role="menuitem" data-child="copy" aria-haspopup="menu" aria-expanded={sub === 'copy'} onMouseEnter={() => { if (!stacked) setSub('copy'); }} onClick={() => openChild('copy')}><Copy size={14} />复制 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <button role="menuitem" data-child="export" aria-haspopup="menu" aria-expanded={sub === 'export'} onMouseEnter={() => { if (!stacked) setSub('export'); }} onClick={() => openChild('export')}><Download size={14} />导出 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <div role="separator" />
+          {busy(target.id) && props.onStop && <button role="menuitem" disabled={runtimeFor(target.id)?.phase === 'stopping'} onClick={() => {
+            void props.onStop!(target.id).then(() => closeMenu()).catch((error) => Message.error(errorText(error)));
+          }}><Square size={14} />{runtimeFor(target.id)?.phase === 'stopping' ? '正在停止…'
+            : runtimeFor(target.id)?.queueCount ? '停止并取消待发送消息' : '停止生成'}</button>}
           <button role="menuitem" className="session-nav-danger" onMouseEnter={() => setSub(null)}
-            disabled={target.id === props.busyId} title={target.id === props.busyId ? '请先停止正在生成的回复' : undefined}
+            disabled={busy(target.id)} title={busy(target.id) ? '请先停止正在生成的回复和待发送消息' : undefined}
             onClick={() => { closeMenu(); setConfirm({ kind: 'delete', session: target }); setConfirmError(''); }}><Trash2 size={14} />删除会话</button>
         </>}
       </div>

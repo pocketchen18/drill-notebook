@@ -139,34 +139,33 @@ describe('useAiChatTurn 请求体', () => {
 });
 
 describe('useAiChatTurn 停止与取消', () => {
-  it('停止后只读确认工具结果，迟到确认不会结束后来开始的新一轮', async () => {
-    vi.useFakeTimers();
+  it('停止确认之前禁止重发，旧轮迟到事件不会结束新一轮', async () => {
     const turn = renderTurn();
     const activity = { sequence: 1, toolName: 'create_memory' as const, state: 'RUNNING' as const,
       outcome: 'UNKNOWN', startedAt: '2026-11-08T01:00:00.000Z', elapsedMs: null, count: 0, availability: null, incomplete: false };
     await act(async () => { turn.result.current.send({ sessionId: 10, userText: '记住' }); });
     const oldId = turnId();
-    apiGet.mockResolvedValueOnce({ requestId: oldId, status: 'RUNNING', active: true, toolActivities: [activity] })
-      .mockResolvedValueOnce({ requestId: oldId, status: 'ABORTED', active: false,
-        toolActivities: [{ ...activity, state: 'FINISHED', outcome: 'CREATED', elapsedMs: 60, count: 1 }] });
+    const oldCallbacks = callbacks!;
     await act(async () => {
       callbacks!.onToolActivity!({ requestId: oldId, phase: 'tools', toolActivities: [activity] });
       turn.result.current.stop();
       await Promise.resolve();
     });
     await act(async () => { turn.result.current.send({ sessionId: 10, userText: '下一轮' }); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(450); });
     expect(turn.result.current.busy).toBe(true);
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    await act(async () => oldCallbacks.onDone({ ...donePayload(''), requestId: oldId, status: 'ABORTED',
+      toolActivities: [{ ...activity, state: 'FINISHED', outcome: 'CREATED', elapsedMs: 60, count: 1 }] }));
+    await act(async () => { turn.result.current.send({ sessionId: 10, userText: '下一轮' }); });
+    await act(async () => oldCallbacks.onDone({ ...donePayload('迟到'), requestId: oldId, status: 'ABORTED' }));
     expect(turn.result.current.requestId).not.toBe(oldId);
-    expect(events.filter((event) => event.type === 'reconciled').at(-1)).toMatchObject({
-      requestId: oldId, status: { toolActivities: [{ state: 'FINISHED', outcome: 'CREATED' }] }
-    });
+    expect(turn.result.current.busy).toBe(true);
     expect(apiPost.mock.calls.filter((call) => call[0] === '/api/ai/chat')).toHaveLength(0);
     expect(streamChatMock).toHaveBeenCalledTimes(2);
   });
-  it('停止掐断连接并带着本轮 requestId 调取消接口', async () => {
+  it('停止携带本轮标识并保留订阅，终态确认前仍然忙碌', async () => {
     const abort = vi.fn();
-    streamChatMock.mockImplementation(() => Promise.resolve(abort));
+    streamChatMock.mockImplementation((_path: string, _body: unknown, hooks: StreamCallbacks) => { callbacks = hooks; return Promise.resolve(abort); });
     const turn = renderTurn();
     await act(async () => {
       turn.result.current.send({ sessionId: 10, userText: '太长不要了' });
@@ -174,14 +173,16 @@ describe('useAiChatTurn 停止与取消', () => {
     });
     const id = turnId();
 
-    act(() => turn.result.current.stop());
+    await act(async () => turn.result.current.stop());
 
-    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).not.toHaveBeenCalled();
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith(`/api/ai/turns/${id}/cancel`, {}));
+    expect(turn.result.current.busy).toBe(true);
+    await act(async () => callbacks!.onDone({ ...donePayload('部分回复'), status: 'ABORTED' }));
     expect(turn.result.current.busy).toBe(false);
   });
 
-  it('取消接口失败也不影响界面收口（前端断开已成事实）', async () => {
+  it('取消接口失败不能假装停止，保留忙碌并提示重连', async () => {
     streamChatMock.mockImplementation(() => Promise.resolve(vi.fn()));
     apiPost.mockRejectedValue(new ApiError('TURN_NOT_FOUND', '没有这个轮次', 404));
     const turn = renderTurn();
@@ -190,10 +191,11 @@ describe('useAiChatTurn 停止与取消', () => {
       await Promise.resolve();
     });
 
-    act(() => turn.result.current.stop());
+    await act(async () => turn.result.current.stop());
 
-    expect(turn.result.current.busy).toBe(false);
-    expect(events).toHaveLength(0);
+    expect(turn.result.current.busy).toBe(true);
+    expect(turn.result.current.reconnecting).toBe(true);
+    expect(events.filter((event) => event.type !== 'begun')).toHaveLength(0);
   });
 });
 
@@ -229,7 +231,7 @@ describe('useAiChatTurn 失败出口', () => {
     });
 
     expect(apiPost.mock.calls.filter((call) => call[0] === '/api/ai/chat')).toHaveLength(0);
-    expect(apiGet).not.toHaveBeenCalled();
+    expect(apiGet.mock.calls.filter(([url]) => String(url).startsWith('/api/ai/turns/'))).toHaveLength(0);
     expect(events.at(-1)).toMatchObject({
       type: 'failure',
       message: 'AI 响应读取失败：连接被重置',
@@ -303,7 +305,8 @@ describe('useAiChatTurn 失败出口', () => {
     });
 
     expect(apiGet).toHaveBeenCalled();
-    expect(events.find((event) => event.type === 'status')).toMatchObject({ type: 'status', status: { status: 'RUNNING' } });
+    expect(events.find((event) => event.type === 'snapshot')).toMatchObject({ type: 'snapshot', status: { status: 'RUNNING' } });
+    expect(turn.result.current.busy).toBe(true);
   });
 });
 
@@ -364,13 +367,47 @@ describe('useAiChatTurn 无 done 的 EOF', () => {
       await vi.advanceTimersByTimeAsync(6000);
     });
 
-    expect(apiGet).toHaveBeenCalledTimes(4);
+    expect(apiGet.mock.calls.filter(([url]) => String(url).startsWith('/api/ai/turns/'))).toHaveLength(4);
     expect(events.at(-1)).toMatchObject({ type: 'unresolved', message: '轮次状态暂时读不到' });
     expect(turn.result.current.busy).toBe(false);
   });
 });
 
 describe('useAiChatTurn 会话隔离', () => {
+  it('切换后可在另一会话发送，前一个会话由快照恢复而不重发', async () => {
+    vi.useFakeTimers();
+    const turn = renderTurn();
+    await act(async () => turn.result.current.send({ sessionId: 10, userText: '并行 A' }));
+    const a = turnId();
+    turn.rerender({ sessionId: 11, streamEnabled: true });
+    expect(turn.result.current.busy).toBe(false);
+    await act(async () => turn.result.current.send({ sessionId: 11, userText: '并行 B' }));
+    const b = String(streamChatMock.mock.calls[1][1].requestId);
+    apiGet.mockImplementation(async (url: string) => ({
+      sessions: [{ sessionId: 10, requestId: a, status: 'RUNNING', queueCount: 1 }, { sessionId: 11, requestId: b, status: 'RUNNING', queueCount: 0 }],
+      current: url.endsWith('=10') ? { sessionId: 10, requestId: a, status: 'RUNNING', active: true, reply: '后台产生的内容' } : undefined
+    }));
+    await act(async () => turn.rerender({ sessionId: 10, streamEnabled: true }));
+    expect(events.at(-1)).toMatchObject({ type: 'snapshot', requestId: a, status: { reply: '后台产生的内容' } });
+    expect(turn.result.current.busy).toBe(true);
+    expect(turn.result.current.requestId).toBe(a);
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+    await act(async () => turn.result.current.stopSession(11));
+    expect(apiPost).toHaveBeenCalledWith(`/api/ai/turns/${b}/cancel`, {});
+  });
+
+  it('重连只读后台状态，外部工具启动的会话也能停止', async () => {
+    const id = '019a6100-0000-7000-8000-000000000001';
+    apiGet.mockResolvedValue({ sessions: [{ sessionId: 10, requestId: id, status: 'RUNNING', queueCount: 2 }],
+      current: { sessionId: 10, requestId: id, active: true, status: 'RUNNING', userText: '工具发来的提问', reply: '已有正文' } });
+    const turn = renderTurn();
+    await waitFor(() => expect(turn.result.current.busy).toBe(true));
+    expect(events.at(-1)).toMatchObject({ type: 'snapshot', status: { userText: '工具发来的提问' } });
+    expect(streamChatMock).not.toHaveBeenCalled();
+    await act(async () => turn.result.current.stopSession(10));
+    expect(apiPost).toHaveBeenCalledWith(`/api/ai/turns/${id}/cancel`, {});
+  });
+
   it('切到别的会话后，旧轮的增量与结果都不再进界面，但状态照旧收干净', async () => {
     const turn = renderTurn();
     await act(async () => {
@@ -385,7 +422,7 @@ describe('useAiChatTurn 会话隔离', () => {
       await Promise.resolve();
     });
 
-    expect(events).toHaveLength(0);
+    expect(events.filter((event) => event.type !== 'begun')).toHaveLength(0);
     expect(turn.result.current.busy).toBe(false);
     expect(turn.result.current.requestId).toBeNull();
   });

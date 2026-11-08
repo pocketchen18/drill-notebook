@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>会话工具与并行运行 · 交互草图</title>
+  <style>
+    :root{color-scheme:light;--bg:#f4f6fa;--surface:#fff;--subtle:#f6f8fb;--text:#1e2433;--muted:#6b7385;--line:#e4e7ee;--accent:#2f54eb;--selected:#eef2ff;--danger:#d4484f}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei",sans-serif}
+    button,textarea,input{font:inherit}
+    button{cursor:pointer}
+    button:disabled{cursor:default;opacity:.48}
+    button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+    button,a{-webkit-tap-highlight-color:transparent}
+    .icon{width:16px;height:16px;display:inline-block;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-3px}
+    .symbols{position:absolute;width:0;height:0;overflow:hidden}
+    .workbench{max-width:1160px;margin:0 auto;padding:30px 28px}
+    .page-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-end;margin-bottom:22px}
+    .eyebrow{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 5px}
+    h1{margin:0;font-size:23px;line-height:1.4;font-weight:650}
+    .page-head p{margin:5px 0 0;color:var(--muted);font-size:13px}
+    .design-tag{border:1px solid var(--line);border-radius:6px;padding:5px 10px;background:#fff;color:var(--muted);font-size:12px;white-space:nowrap}
+    .layout{display:grid;grid-template-columns:minmax(360px,460px) minmax(280px,1fr);gap:38px;align-items:start}
+    .pane{height:746px;position:relative;display:flex;flex-direction:column;background:var(--surface);border:1px solid #dce1e9;border-radius:14px;box-shadow:0 9px 32px #1e243309;overflow:hidden}
+    .pane-head{height:52px;display:flex;align-items:center;gap:8px;padding:0 18px;border-bottom:1px solid var(--line);font-size:14px;font-weight:600;flex:none}
+    .configured{margin-left:2px;color:#448468;background:#f0f8f2;border-radius:4px;padding:0 5px;font-size:10px;font-weight:400}
+    .pane-head .close{margin-left:auto;color:var(--muted)}
+    .nav-bar{display:flex;gap:6px;align-items:center;padding:14px 14px 10px;flex:none}
+    .current{display:flex;gap:9px;align-items:center;min-width:0;flex:1;padding:7px 10px;border:1px solid var(--line);background:var(--subtle);border-radius:7px;text-align:left;font-size:13px;height:36px}
+    .current-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .icon-button{width:30px;height:32px;display:grid;place-items:center;border:0;background:transparent;border-radius:5px;color:var(--text);flex:none}
+    .icon-button:hover{background:var(--subtle)}
+    .context{margin:0 14px;padding:10px 12px;background:var(--subtle);border:1px solid var(--line);border-radius:8px;flex:none;font-size:12px}
+    .context-label{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-bottom:3px}
+    .context-label span:last-child{color:var(--accent)}
+    .chat{padding:18px 18px 10px;overflow:auto;flex:1;min-height:0;font-size:13px}
+    .chat p{margin:0 0 12px;line-height:1.85}
+    .user-message{margin:0 0 22px 28px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--subtle);line-height:1.7}
+    .user-message p{margin:0}
+    .assistant-label{font-size:11px;font-weight:600;color:var(--muted);margin-bottom:7px}
+    .activity{background:#fafbfd;border:1px solid var(--line);border-radius:8px;margin:12px 0 14px;overflow:hidden}
+    .activity summary{display:flex;align-items:center;gap:7px;padding:9px 11px;cursor:pointer;font-size:12px;list-style:none;background:#f1f4f8}
+    .activity summary::-webkit-details-marker{display:none}
+    .activity summary .icon:last-child{margin-left:auto;color:var(--muted);width:13px}
+    .activity-count{color:var(--muted);font-size:11px}
+    .tool-item{padding:10px 12px;border-top:1px solid #eef0f4;font-size:12px}
+    .tool-item-head{display:flex;gap:6px;align-items:center}
+    .success{color:#4e9370}
+    .tool-item-head .tool-cost{margin-left:auto;color:var(--muted);font-size:10px}
+    .tool-meta{margin-left:22px;color:var(--muted);font-size:11px}
+    .open-target{display:flex;align-items:center;gap:6px;border:0;padding:2px 0 1px 22px;background:none;color:var(--text);max-width:100%;font-size:12px}
+    .open-target span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .open-target .icon{width:12px;height:12px;color:var(--muted)}
+    .open-target:hover{color:var(--accent)}
+    .run-line{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px;margin:12px 0}
+    .footer{padding:0 14px 14px;flex:none}
+    .storage{display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--muted);padding:7px 3px}
+    .storage span:last-child{font-size:11px}
+    .composer{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 11px 8px}
+    textarea{width:100%;min-height:46px;max-height:100px;resize:vertical;display:block;border:0;background:transparent;color:var(--text);font-size:13px;line-height:1.6;outline:none}
+    textarea::placeholder{color:#9aa1ae}
+    .composer-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:10px;color:#8c94a3}
+    .composer-actions{display:flex;gap:7px}
+    .send-button{border:0;background:var(--accent);color:white;border-radius:7px;width:30px;height:29px;display:grid;place-items:center}
+    .send-button.stop{background:#222936}
+    .session-list{position:absolute;top:100px;left:14px;right:14px;background:var(--surface);border:1px solid #dce1e9;border-radius:9px;box-shadow:0 10px 26px #1e24331a;z-index:5;padding:5px}
+    [hidden]{display:none!important}
+    .list-heading{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 8px;color:var(--muted);font-size:11px}
+    .list-heading b{font-weight:500;color:var(--text)}
+    .session-rows{max-height:294px;overflow:auto}
+    .session-row{display:flex;align-items:center;position:relative;min-height:54px;border-radius:5px;margin:1px 0}
+    .session-row:hover{background:#f2f4f7}
+    .session-row.current-row{background:#eef1f5}
+    .pick{flex:1;min-width:0;display:flex;align-items:flex-start;gap:7px;border:0;background:transparent;text-align:left;padding:7px 4px 7px 8px;color:var(--text)}
+    .select-slot{display:block;width:14px;flex:none;padding-top:2px}
+    .select-slot .icon{width:13px;height:13px;color:#717b8e}
+    .row-copy{min-width:0;flex:1}
+    .row-title{font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .row-meta{color:var(--muted);font-size:11px;display:block}
+    .status-slot{width:18px;flex:none;margin:0 4px;display:grid;place-items:center;color:#7b8491}
+    .status-slot .icon{width:14px;height:14px}
+    .row-more{width:26px;height:28px;margin-right:5px;opacity:0;color:var(--muted)}
+    .session-row:hover .row-more,.session-row:focus-within .row-more,.current-row .row-more{opacity:1}
+    .ring{display:inline-block;width:13px;height:13px;border:1.6px solid #cbd1d9;border-right-color:#75808f;border-top-color:#75808f;border-radius:50%;animation:rotate .9s linear infinite;flex:none}
+    @keyframes rotate{to{transform:rotate(360deg)}}
+    .menu{position:absolute;right:18px;z-index:9;width:206px;padding:5px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 22px #1e24331a}
+    .menu button{width:100%;text-align:left;border:0;background:none;padding:7px 9px;font-size:12px;border-radius:4px;display:flex;align-items:center;gap:8px}
+    .menu button:hover{background:var(--subtle)}
+    .menu button.danger{color:var(--danger)}
+    .menu hr{border:0;border-top:1px solid var(--line);margin:4px}
+    .new-empty{padding:45px 6px;color:var(--muted);text-align:center;font-size:13px}
+    .new-empty .icon{width:26px;height:26px;margin:0 auto 12px;display:block;color:#8b95a7}
+    .board{padding:7px 0}
+    .board h2{font-size:17px;margin:0 0 8px;font-weight:600}
+    .board p{margin:0 0 16px;color:var(--muted);font-size:13px}
+    .section-label{font-size:11px;color:var(--muted);margin:20px 0 8px}
+    .controls{display:flex;flex-wrap:wrap;gap:7px}
+    .demo-button{border:1px solid var(--line);background:white;border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px}
+    .demo-button:hover{border-color:#a7b5db}
+    .demo-button.selected{color:var(--accent);background:var(--selected);border-color:#c8d3fc}
+    .note{margin-top:22px;padding:16px 18px;background:#fff;border:1px solid var(--line);border-radius:9px}
+    .note h3{font-size:13px;margin:0 0 7px;font-weight:600}
+    .note p{font-size:12px;line-height:1.8;margin:0}
+    .tools-summary{margin:22px 0 0}
+    .tools-summary div{padding:12px 0;border-top:1px solid var(--line)}
+    .tools-summary strong{display:block;font-size:12px;font-weight:600;margin-bottom:4px}
+    .tools-summary code{font:11px Consolas,monospace;color:var(--muted);margin-left:5px}
+    .tools-summary p{font-size:12px;line-height:1.75;margin:0}
+    .session-states{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+    .state-item{display:flex;gap:7px;align-items:center;margin-bottom:7px}
+    .state-item .icon{width:13px;height:13px}
+    .toast{margin-top:18px;min-height:42px;font-size:12px;line-height:1.7;color:var(--accent);padding:9px 11px;border-radius:6px;background:var(--selected)}
+    .hint{margin-top:14px;color:#9299a6;font-size:11px}
+    @media(prefers-reduced-motion:reduce){.ring{animation:none}}
+    @media(hover:none){.row-more{opacity:1}}
+    @media(max-width:850px){.workbench{max-width:540px;padding:20px 16px}.layout{grid-template-columns:minmax(0,1fr);gap:20px}.page-head{display:block}.design-tag{display:inline-block;margin-top:10px}.pane{width:100%}.board{padding:0}.page-head h1{font-size:20px}}
+    @media(max-width:380px){.workbench{padding:16px 8px}.pane{height:726px}.nav-bar{gap:3px;padding-left:10px;padding-right:10px}.context{margin:0 10px}.session-list{left:10px;right:10px}.chat{padding-left:13px;padding-right:13px}.footer{padding:0 10px 10px}.current{padding:7px}.row-more{opacity:1}}
+  </style>
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true"><defs>
+    <symbol id="spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></symbol>
+    <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></symbol>
+    <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="link" viewBox="0 0 24 24"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 -1) scale(.9)"/></symbol>
+    <symbol id="open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4 10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="paperclip" viewBox="0 0 24 24"><path d="m8 12 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7l9-9M6 14l9-9"/></symbol>
+    <symbol id="warning" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/></symbol>
+    <symbol id="rename" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"/></symbol>
+  </defs></svg>
+  <main class="workbench">
+    <header class="page-head"><div><p class="eyebrow">Drill Notebook · v0.7.2</p><h1>会话工具与并行运行</h1><p>会话仍是普通会话，运行状态跟着各自的任务走。</p></div><span class="design-tag">交互草图 · 仅示例数据</span></header>
+    <div class="layout">
+      <section class="pane" aria-label="AI 助手设计草图">
+        <header class="pane-head"><svg class="icon"><use href="#spark"/></svg>AI 学习助手<span class="configured">已配置</span><svg class="icon close"><use href="#close"/></svg></header>
+        <nav class="nav-bar" aria-label="会话导航">
+          <button class="current" aria-label="切换会话" aria-expanded="true" aria-controls="session-list"><span class="current-title"></span><span class="current-status"></span><svg class="icon"><use href="#down"/></svg></button>
+          <button class="icon-button" data-action="new" aria-label="新建会话" title="新建会话"><svg class="icon"><use href="#plus"/></svg></button>
+          <button class="icon-button" data-action="current-menu" aria-label="会话更多操作"><svg class="icon"><use href="#more"/></svg></button>
+        </nav>
+        <section class="context"><div class="context-label"><span>当前上下文</span><span>☑ 使用</span></div>笔记 · 线性代数复习</section>
+        <section class="chat" aria-label="当前会话消息"></section>
+        <footer class="footer">
+          <div class="storage"><span>本地存储 18.4 KB / 256 MB</span><span>清理历史</span></div>
+          <div class="composer"><textarea aria-label="消息草稿" placeholder="提问… Enter 发送 · Shift+Enter 换行"></textarea><div class="composer-bottom"><span class="compose-hint">Enter 发送 · Shift+Enter 换行</span><div class="composer-actions"><button class="icon-button" data-action="attachment" aria-label="添加附件"><svg class="icon"><use href="#paperclip"/></svg></button><button class="send-button" data-action="submit" aria-label="发送消息"></button></div></div></div>
+        </footer>
+        <section id="session-list" class="session-list" role="dialog" aria-label="会话列表"><div class="list-heading"><span>会话 <b class="session-count"></b></span><span class="running-count"></span></div><div class="session-rows"></div></section>
+        <div class="menu" role="menu" aria-label="会话操作" hidden></div>
+      </section>
+      <aside class="board" aria-label="草图说明与演示控制">
+        <h2>三条会话，各自继续</h2>
+        <p>点击左侧会话行切换。灰色圆环表示进行中，右侧更多菜单仍可独立使用。没有创建者标签，也不需要人工接管。</p>
+        <div class="section-label">切换演示场景</div>
+        <div class="controls"><button class="demo-button selected" data-demo="parallel">并行运行</button><button class="demo-button" data-demo="queued">工具消息排队</button><button class="demo-button" data-demo="complete">全部完成</button><button class="demo-button" data-demo="offline">状态暂时断连</button></div>
+        <div class="section-label">模拟一次操作</div>
+        <div class="controls"><button class="demo-button" data-demo="create">AI 新建并发送</button><button class="demo-button" data-demo="send">AI 向已有会话发送</button><button class="demo-button" data-demo="finish">完成选中会话的一轮</button><button class="demo-button" data-demo="show-list">展开会话列表</button></div>
+        <div class="note"><h3>工具先返回受理结果</h3><p>「已创建 / 已发送 / 已排队」说明任务已提交。需要汇总时，再用读取会话工具等待并取回结果。不会把“已发送”写成“任务完成”。</p></div>
+        <div class="tools-summary"><div><strong>新建会话 <code>create_session</code></strong><p>必须携带第一条消息。立即建立普通会话并开始运行，返回可打开的会话链接。</p></div><div><strong>发送消息 <code>send_message</code></strong><p>可发给新会话或已有会话；目标忙碌时按顺序排队，当前回复结束后接续。</p></div></div>
+        <div class="session-states"><div class="state-item"><span class="ring"></span><span>进行中：生成、工具执行或等待其他会话结果</span></div><div class="state-item"><svg class="icon"><use href="#clock"/></svg><span>静止时钟：等待执行或重新连接，提示说明原因</span></div><div class="state-item"><svg class="icon"><use href="#stop"/></svg><span>停止只作用于目标会话，其他会话继续</span></div></div>
+        <div class="toast" role="status" aria-live="polite">先试着切换会话，正在执行的任务不会被切换操作停止。</div>
+        <p class="hint">人工输入框排队、引导与编辑消息：等四个工具提交后单独实现。本草图未添加这些控件。</p>
+      </aside>
+    </div>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+      const q = (selector) => document.querySelector(selector);
+      const icon = (name, cls) => '<svg class="icon ' + (cls || '') + '" aria-hidden="true"><use href="#' + name + '"/></svg>';
+      const escape = (text) => String(text).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      let sessions, selected, listOpen = true, menuId = null, connected = true, counter = 0, scene = 'parallel';
+      const drafts = new Map();
+      const reading = new Map();
+      let activities = [];
+      function reset(mode = 'parallel') {
+        sessions = [
+          {id:'plan',title:'本周线性代数复习',count:12,status:'waiting',phase:'等待其他会话回复',queue:[],question:'分别检查特征值计算和矩阵对角化，再帮我汇总一份复习建议。',reply:'我会分别检查这两部分，再读取结果进行汇总。'},
+          {id:'eigen',title:'特征值计算检查',count:3,status:'running',phase:'正在生成回复',queue:[],question:'请核对这组特征值计算，给出容易漏掉的步骤。',reply:'先检查特征多项式的展开，再核对每个特征值的重数。'},
+          {id:'matrix',title:'矩阵对角化练习',count:5,status:'running',phase:'正在调用工具',queue:[],question:'根据之前的练习，整理矩阵对角化的判定步骤。',reply:'矩阵能否对角化，关键在于是否有足够多线性无关的特征向量。'},
+          {id:'probability',title:'概率论错题整理',count:8,status:'idle',phase:'',queue:[],question:'条件概率和独立性有哪些容易混淆的地方？',reply:'先写清条件，再判断事件是否独立。上次错题集中在忽略条件变化。'}
+        ];
+        activities = [
+          {kind:'新建会话',target:'eigen',outcome:'首条消息已提交'},
+          {kind:'发送消息',target:'matrix',outcome:'消息已发送'}
+        ];
+        drafts.clear(); reading.clear(); selected = 'plan'; menuId = null; listOpen = true; connected = mode !== 'offline'; scene = mode;
+        if (mode === 'queued') {sessions[2].queue.push('请再补一道含重根的例题，并解释判断依据。'); activities.push({kind:'发送消息',target:'matrix',outcome:'已排队 · 当前回复完成后发送'}); selected = 'matrix';}
+        if (mode === 'complete') {sessions.forEach((s) => {s.status = 'idle';s.phase = '';}); sessions[0].reply = '两部分都已核对完成。建议先练特征值，再检查重根对应的特征向量数量，最后做对角化综合题。';}
+        render();
+      }
+      const get = (id) => sessions.find((s) => s.id === id);
+      const current = () => get(selected);
+      const busy = (s) => !!s && (s.status === 'running' || s.status === 'waiting');
+      const note = (text) => {q('.toast').textContent = text;};
+      function status(s) {
+        if (!connected && busy(s)) return '<span title="正在重新连接，运行状态尚未确认" aria-label="正在重新连接">' + icon('clock') + '</span>';
+        if (busy(s)) return '<span class="ring" role="img" aria-label="' + escape(s.phase) + '" title="' + escape(s.phase) + '"></span>';
+        return '';
+      }
+      function saveView() {drafts.set(selected || 'draft', q('textarea').value);reading.set(selected || 'draft',q('.chat').scrollTop);}
+      function choose(id) {saveView();selected = id;listOpen = false;menuId = null;render();q('.chat').scrollTop = reading.get(id || 'draft') || 0;}
+      function renderRows() {
+        q('.session-count').textContent = sessions.length;
+        const count = sessions.filter(busy).length;
+        q('.running-count').textContent = !connected ? '状态正在重新连接' : count ? count + ' 个进行中' : '';
+        q('.session-rows').innerHTML = sessions.map((s) =>
+          '<div class="session-row ' + (s.id === selected ? 'current-row' : '') + '" data-row="' + s.id + '">' +
+          '<button class="pick" data-session="' + s.id + '" aria-label="' + escape(s.title) + '">' +
+          '<span class="select-slot">' + (s.id === selected ? icon('check') : '') + '</span>' +
+          '<span class="row-copy"><span class="row-title">' + escape(s.title) + '</span><span class="row-meta">' + s.count + ' 条消息 · ' + (s.id === 'probability' ? '昨天' : '刚刚') + (s.queue.length ? ' · 待发送 ' + s.queue.length : '') + '</span></span></button>' +
+          '<span class="status-slot">' + status(s) + '</span><button class="icon-button row-more" data-menu="' + s.id + '" aria-label="更多操作：' + escape(s.title) + '" aria-haspopup="menu">' + icon('more') + '</button></div>'
+        ).join('');
+      }
+      function renderChat() {
+        const s = current();
+        if (!s) {q('.chat').innerHTML = '<div class="new-empty">' + icon('spark') + '从一个问题开始<br>发送第一条消息后，才会建立会话。</div>';return;}
+        let html = '<div class="user-message"><p>' + escape(s.question) + '</p></div><div class="assistant-label">AI</div><p>' + escape(s.reply) + '</p>';
+        if (s.id === 'plan') {
+          html += '<details class="activity" open><summary>' + icon('check','success') + '<span>会话操作</span><span class="activity-count">' + activities.length + ' 次调用</span>' + icon('down') + '</summary>';
+          activities.forEach((a) => {
+            const target = get(a.target);
+            html += '<div class="tool-item"><div class="tool-item-head">' + icon('check','success') + '<span>' + a.kind + '</span><span class="tool-cost">0.1 秒</span></div><button class="open-target" data-open="' + a.target + '" title="打开会话"><span>' + escape(target.title) + '</span>' + icon('open') + '</button><div class="tool-meta">' + escape(a.outcome) + '</div></div>';
+          });
+          html += '</details>';
+          if (busy(s)) html += '<p>两边会并行处理；读取各自结果后，再整理复习建议。</p>';
+        } else if (s.id === 'matrix') html += '<p>先求特征值，再比较每个特征值的几何重数与代数重数。重根并不直接代表不能对角化。</p>';
+        if (busy(s)) html += '<div class="run-line">' + status(s) + '<span>' + (!connected ? '正在重新连接…' : escape(s.phase) + '…') + '</span></div>';
+        else if (s.status === 'stopped') html += '<div class="run-line">' + icon('stop') + '<span>已停止，已生成内容保留</span></div>';
+        q('.chat').innerHTML = html;
+      }
+      function renderMenu() {
+        const s = get(menuId), menu = q('.menu');
+        menu.hidden = !s;
+        if (!s) return;
+        const row = document.querySelector('[data-row="' + s.id + '"]');
+        const pane = q('.pane').getBoundingClientRect();
+        const top = listOpen && row ? row.getBoundingClientRect().bottom - pane.top : 94;
+        menu.style.top = Math.min(top - 3, 500) + 'px';
+        menu.innerHTML = (busy(s) ? '<button data-action="stop-target">' + icon('stop') + (s.queue.length ? '停止并取消待发送消息' : '停止生成') + '</button><hr>' : '') +
+          '<button data-action="rename-demo">' + icon('rename') + '重命名</button><button data-action="link-demo">' + icon('link') + '复制会话链接</button><hr><button data-action="delete-demo" class="danger" ' + (busy(s) ? 'disabled title="请先停止该会话"' : '') + '>' + icon('close') + '删除会话</button>';
+      }
+      function render() {
+        const s = current();
+        q('.current-title').textContent = s ? s.title : '新会话';
+        q('.current-status').innerHTML = status(s);
+        q('.current').setAttribute('aria-expanded',String(listOpen));
+        q('[data-action="current-menu"]').disabled = !s;
+        q('#session-list').hidden = !listOpen;
+        renderRows();renderChat();renderMenu();
+        q('.chat').scrollTop = reading.get(selected || 'draft') || 0;
+        const input = q('textarea');
+        input.value = drafts.get(selected || 'draft') || '';
+        input.placeholder = busy(s) ? '正在回复，可先输入下一条问题' : '提问… Enter 发送 · Shift+Enter 换行';
+        q('.compose-hint').textContent = busy(s) ? '正在回复 · 可切换其他会话' : 'Enter 发送 · Shift+Enter 换行';
+        const button = q('[data-action="submit"]');
+        button.classList.toggle('stop',busy(s));
+        button.innerHTML = icon(busy(s) ? 'stop' : 'up');
+        button.setAttribute('aria-label',busy(s) ? (s.queue.length ? '停止并取消待发送消息' : '停止生成') : '发送消息');
+        document.querySelectorAll('[data-demo]').forEach((b) => b.classList.toggle('selected',b.dataset.demo === scene));
+      }
+      function stop(id) {
+        saveView();
+        const s = get(id); if (!s) return;
+        const canceled = s.queue.length;s.queue = [];s.status = 'stopped';s.phase = '';menuId = null;
+        render();note('已停止「' + s.title + '」' + (canceled ? '，并取消 ' + canceled + ' 条待发送消息' : '') + '。其他会话继续运行。');
+      }
+      function finish() {
+        saveView();const s = current();if (!busy(s)) {note('请先选择一个进行中的会话。');return;}
+        s.count++;
+        if (s.queue.length) {s.question = s.queue.shift();s.count++;s.status = 'running';s.phase = '正在生成回复';s.reply = '收到补充问题，接着上一轮继续处理。';note('上一轮已完成，按顺序开始下一条工具消息。');}
+        else {s.status = 'idle';s.phase = '';note('「' + s.title + '」已完成，运行圆环移除。');}
+        render();
+      }
+      function createByTool() {
+        saveView();const id = 'new-' + ++counter;
+        sessions.push({id,title:'特征向量例题检查',count:1,status:'running',phase:'正在生成回复',queue:[],question:'请独立检查一个重根的特征向量例题，给出逐步解法。',reply:'先从对应的齐次方程组求解特征向量。'});
+        activities.push({kind:'新建会话',target:id,outcome:'首条消息已提交'});listOpen = true;menuId = null;render();
+        note('工具创建了普通会话并提交首条消息。当前选中项与草稿保持不变。');
+      }
+      function sendByTool() {
+        saveView();const s = get('matrix');
+        if (busy(s)) {s.queue.push('请补充一道重根例题，并把关键判定写清楚。');activities.push({kind:'发送消息',target:s.id,outcome:'已排队 · 前方 ' + s.queue.length + ' 轮'});note('已向原有会话发送，排在当前回复之后。没有中断正在生成的内容。');}
+        else {s.question = '请补充一道重根例题，并把关键判定写清楚。';s.count++;s.status = 'running';s.phase = '正在生成回复';activities.push({kind:'发送消息',target:s.id,outcome:'消息已发送'});note('已向原有会话发送新消息并开始回复。');}
+        listOpen = true;menuId = null;render();
+      }
+      function manualSend() {
+        if (busy(current())) return;
+        const message = q('textarea').value.trim();if (!message) return;
+        saveView();let s = current();
+        if (!s) {s = {id:'manual-' + ++counter,title:message.slice(0,20),count:0,status:'idle',phase:'',queue:[],question:'',reply:''};sessions.push(s);selected = s.id;drafts.delete('draft');}
+        s.question = message;s.reply = '正在整理这个问题的回答。';s.count++;s.status = 'running';s.phase = '正在生成回复';drafts.set(s.id,'');listOpen = false;menuId = null;render();note('普通消息已发送。其他会话仍可独立运行。');
+      }
+      q('textarea').addEventListener('input',() => drafts.set(selected || 'draft',q('textarea').value));
+      q('textarea').addEventListener('keydown',(event) => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {event.preventDefault();if (busy(current())) note('当前会话正在回复；可先保留草稿，或切换其他会话继续。');else manualSend();}});
+      document.addEventListener('click',(event) => {
+        const button = event.target.closest('button');
+        if (!button || button.disabled) return;
+        if (button.classList.contains('current')) {saveView();listOpen = !listOpen;menuId = null;render();return;}
+        if (button.dataset.session) {choose(button.dataset.session);return;}
+        if (button.dataset.open) {choose(button.dataset.open);note('已打开普通会话。返回后，来源会话的草稿和阅读位置仍保留。');return;}
+        if (button.dataset.menu) {menuId = button.dataset.menu;renderMenu();return;}
+        const demo = button.dataset.demo;
+        if (demo) {
+          if (['parallel','queued','complete','offline'].includes(demo)) {reset(demo);note(demo === 'queued' ? '工具消息已排队。选中「矩阵对角化练习」，点击“完成选中会话的一轮”可观察接续。' : demo === 'offline' ? '状态读不到时显示重新连接，不把旧圆环当成最新状态。点击“并行运行”恢复演示。' : demo === 'complete' ? '回复已结束，圆环消失。会话仍是普通历史记录。' : '三个会话并行，切换不会停止后台任务。');}
+          if (demo === 'create') createByTool();
+          if (demo === 'send') sendByTool();
+          if (demo === 'finish') finish();
+          if (demo === 'show-list') {saveView();listOpen = true;menuId = null;render();}
+          return;
+        }
+        switch(button.dataset.action) {
+          case 'new': choose(null);note('这里只进入新会话页。列表数量不变，发送首条消息后才创建。');q('textarea').focus();break;
+          case 'current-menu': menuId = selected;renderMenu();break;
+          case 'stop-target': stop(menuId);break;
+          case 'submit': if (busy(current())) stop(selected);else manualSend();break;
+          case 'attachment': note('草图沿用附件入口；本轮两个会话工具先只发送文本。');break;
+          case 'rename-demo': note('沿用已有重命名交互。AI 创建的会话同样可人工改名。');menuId = null;renderMenu();break;
+          case 'link-demo': note('沿用稳定会话链接；草图未写入系统剪贴板。');menuId = null;renderMenu();break;
+          case 'delete-demo': note('沿用已有删除确认；此草图只演示并行状态。');menuId = null;renderMenu();break;
+        }
+      });
+      document.addEventListener('contextmenu',(event) => {const row = event.target.closest('[data-row]');if (!row) return;event.preventDefault();menuId = row.dataset.row;renderMenu();});
+      document.addEventListener('pointerdown',(event) => {if (event.target.closest('.session-list,.nav-bar,.menu,.board')) return;if (listOpen || menuId) {listOpen = false;menuId = null;q('#session-list').hidden = true;q('.menu').hidden = true;q('.current').setAttribute('aria-expanded','false');}});
+      document.addEventListener('keydown',(event) => {if (event.key !== 'Escape') return;if (menuId) {menuId = null;renderMenu();} else {listOpen = false;q('#session-list').hidden = true;q('.current').setAttribute('aria-expanded','false');q('.current').focus();}});
+      reset();
+    })();
+  </script>
+</body>
+</html>

@@ -45,7 +45,11 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 学习页通过 `useRegisterPageContext` 注册 `{ kind, title, markdown, ... }`。  
 仅内容变化时写入 store，防止 React #185 最大更新深度错误。
 
-会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；真实完成状态来自会话列表，前端仅在存在 generating 时轮询。自动标题不进入聊天正文或工具活动；跨会话查阅工具尚未实现。
+会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；会话列表每 1.5 秒刷新以发现后台新会话和标题变化，自动标题不进入聊天正文或工具活动，也不使用聊天运行圆环。
+
+跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行四个记忆工具与四个会话工具，`MemoryTool` 子接口仍受记忆开关控制。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿。
+
+`useAiChatTurn` 按 sessionId 跟踪请求，每 900ms 查询运行快照；SSE 负责当前本地发送的增量，快照恢复切换、外部工具启动和断线后的正文。每个会话独立保存本次前端生命周期内的草稿、附件与阅读位置；只有当前会话忙碌才禁止发送。运行圆环、等待时钟、待发送数量和菜单停止均按目标会话展示，临时失联显示重连状态。人工排队输入框尚未实现。
 
 新会话页作为无 ID 的前端草稿存在，点击新建或删除当前会话只切换到该页。首次发送才显式创建会话，随后发送同一份输入；同步防重复与渲染后发送保证快速流式事件不会丢失。列表允许为空，初始化和只读查询不补建默认会话；迁移仅为已有未归属的旧消息建立会话。
 
@@ -85,7 +89,7 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 | AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-当前 schema 11，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+当前 schema 13，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
 
 ### 3.1 AI 连接、轮次与工具（v0.7.1）
 
@@ -96,6 +100,13 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 - 前端连接页使用供应商/模型列表与二级编辑页；`ToolActivityGroup` 展示、折叠活动，保留用户手动选择和滚动位置。失败轮次提示归属助手回复；正文流式更新不强制打断向上阅读。
 - 记忆词法索引以 vault、epoch、revision 判定是否可复用，同版本构建合并、解锁时异步预热；聊天模型不参与索引身份。实际记忆变更或重启后的预热仍可能需要时间，不承诺零延迟。
 - 删除来源会话/历史只清理来源证据，长期记忆及原 origin 保留；删除笔记本仍清理所属 NOTEBOOK scope。接口与安全边界见 [api-contracts.md](api-contracts.md)。
+
+### 3.2 后台会话派发（v0.7.2）
+
+- v2 聊天由 `SessionDispatchService` 持有执行任务，浏览器 SSE 只订阅；切页、收起侧栏、刷新和断开订阅不取消任务。停止必须显式调用，并核对当前 requestId，避免迟到请求误伤新轮。
+- `SessionCreateTool` / `SessionSendTool` 先受理后异步运行，正常会话无创建者标签。同会话 FIFO、跨会话并行；当前配置在受理时冻结，开始执行时获取最新目标历史，复用现有加密、用量、标题与轮次结算。
+- 进程最多持有 64 项任务，执行线程与 8 个上游请求许可分开；`read_session` 的有界等待不持有上游许可。同一派发链共享时间、输出与工具预算，输出预留和阶段/执行计数原子更新，禁止向自身或祖先会话派发。
+- SQLite 仅保存幂等收据。排队正文及配置只在内存；失败/停止取消本目标后续项，其他会话独立继续。进程退出后不重放任务；重启恢复中断/取消终态，前端不保留假圆环。
 
 ## 4. 导入 / 导出
 

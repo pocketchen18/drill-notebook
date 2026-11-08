@@ -1,6 +1,8 @@
 /** 工具记录只接收安全元数据；参数、正文和任意错误文本不进入展示层。 */
 export const TOOL_NAMES = {
   search_memories: '检索记忆', list_memories: '读取记忆',
+  list_sessions: '查找历史会话', read_session: '读取会话',
+  create_session: '新建会话', send_message: '发送消息',
   create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
 } as const;
 export type ToolName = keyof typeof TOOL_NAMES;
@@ -14,14 +16,16 @@ export interface ToolActivity {
   count: number;
   availability: string | null;
   incomplete: boolean;
+  sessionLink?: string;
+  requestId?: string;
 }
 export type ToolPhase = 'tools' | 'answer';
 const OUTCOMES = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE',
   'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED',
-  'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT']);
+  'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT', 'SENT', 'QUEUED', 'RUNNING', 'CANCELLED', 'CYCLE_BLOCKED', 'ARCHIVED', 'LOCKED']);
 export const MAX_TOOL_ACTIVITIES = 1200;
-const AVAILABILITIES = new Set(['READY', 'BUILDING', 'LOCKED', 'TIMEOUT', 'NOT_REQUESTED', 'DENIED']);
-const NORMAL = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE', 'SUPPRESSED']);
+const AVAILABILITIES = new Set(['READY', 'BUILDING', 'LOCKED', 'UNREADABLE', 'TIMEOUT', 'NOT_REQUESTED', 'DENIED']);
+const NORMAL = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE', 'SUPPRESSED', 'SENT', 'QUEUED', 'RUNNING']);
 
 export function readToolActivities(value: unknown): ToolActivity[] {
   if (!Array.isArray(value)) return [];
@@ -38,7 +42,9 @@ export function readToolActivities(value: unknown): ToolActivity[] {
       elapsedMs: typeof row.elapsedMs === 'number' && Number.isFinite(row.elapsedMs) ? Math.max(0, row.elapsedMs) : null,
       count: Number.isInteger(row.count) ? Math.max(0, Math.min(1000, row.count)) : 0,
       availability: AVAILABILITIES.has(row.availability) ? row.availability : null,
-      incomplete: row.incomplete === true
+      incomplete: row.incomplete === true,
+      ...(typeof row.sessionLink === 'string' && /^drill-notebook:\/\/session\/[a-f0-9]{32}$/.test(row.sessionLink) ? { sessionLink: row.sessionLink } : {}),
+      ...(typeof row.requestId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(row.requestId) ? { requestId: row.requestId } : {})
     });
   }
   return [...rows.values()].sort((a, b) => a.sequence - b.sequence);
@@ -70,6 +76,32 @@ export function toolTone(row: ToolActivity): 'running' | 'success' | 'neutral' |
 export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return '执行结果未确认';
+  if (row.toolName === 'create_session' && row.outcome === 'CREATED') return '会话已创建，首条消息已提交';
+  if (row.outcome === 'SENT') return '消息已提交，等待目标回复';
+  if (row.outcome === 'QUEUED') return row.toolName === 'read_session' ? '目标消息仍在排队，尚无回复' : '已排队，等待当前回复结束';
+  if (row.outcome === 'RUNNING') return '目标仍在回复';
+  if (row.outcome === 'CANCELLED') return '待发送消息已取消';
+  if (row.outcome === 'CYCLE_BLOCKED') return '无法向自身或上游会话派发';
+  if (row.outcome === 'ARCHIVED') return '目标会话已归档';
+  if (row.outcome === 'LOCKED') return '目标会话需要解锁';
+  if (row.toolName === 'create_session' || row.toolName === 'send_message') {
+    if (row.outcome === 'UNAVAILABLE') return '会话派发暂不可用';
+    if (row.outcome === 'STALE') return '会话状态已变化，请重新确认';
+    if (row.outcome === 'NOT_FOUND') return '会话不存在或已被删除';
+  }
+  if (row.toolName === 'list_sessions' || row.toolName === 'read_session') {
+    switch (row.outcome) {
+      case 'OK': return row.toolName === 'list_sessions'
+        ? `本次找到 ${row.count} 个会话${row.incomplete ? '（分批结果）' : ''}`
+        : `本次读取 ${row.count} 段消息${row.incomplete ? '（部分记录）' : ''}`;
+      case 'NO_MATCH': return '未找到匹配会话';
+      case 'NOT_FOUND': return '会话不存在或已被删除';
+      case 'AMBIGUOUS': return '找到多个会话，待明确目标';
+      case 'STALE': return '会话历史已变化，需要重新读取';
+      case 'UNAVAILABLE': return row.availability === 'LOCKED' ? '会话需要解锁后读取'
+        : row.availability === 'UNREADABLE' ? '会话内容无法解密' : '会话暂时无法读取';
+    }
+  }
   switch (row.outcome) {
     case 'OK': return row.count > 0 ? `${row.toolName === 'list_memories' || row.incomplete ? '本次' : '已'}返回 ${row.count} 条`
       : row.toolName === 'list_memories' ? '当前范围没有记忆' : '未找到相关记忆';
@@ -106,7 +138,12 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
   const parts: string[] = [];
   if (rows.some((row) => row.toolName === 'search_memories')) parts.push('已检索记忆');
   if (rows.some((row) => row.toolName === 'list_memories')) parts.push('已读取记忆');
-  const created = rows.filter((row) => row.outcome === 'CREATED').length;
+  if (rows.some((row) => row.toolName === 'list_sessions')) parts.push('已查找历史会话');
+  if (rows.some((row) => row.toolName === 'read_session' && row.outcome === 'OK' && row.count > 0)) parts.push('已读取会话');
+  else if (rows.some((row) => row.toolName === 'read_session')) parts.push('已查询会话状态');
+  if (rows.some((row) => row.toolName === 'create_session' && row.outcome === 'CREATED')) parts.push('已新建会话');
+  if (rows.some((row) => row.toolName === 'send_message' && ['SENT', 'QUEUED'].includes(row.outcome))) parts.push('已提交消息');
+  const created = rows.filter((row) => row.toolName === 'create_memory' && row.outcome === 'CREATED').length;
   const updated = rows.filter((row) => row.outcome === 'UPDATED').length;
   if (created) parts.push(`已新增 ${created} 条`);
   if (updated) parts.push(`已更新 ${updated} 条`);

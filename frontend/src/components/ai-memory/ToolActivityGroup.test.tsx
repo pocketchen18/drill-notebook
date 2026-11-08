@@ -9,6 +9,42 @@ const started: ToolActivity = { sequence: 1, toolName: 'search_memories', state:
 const ended: ToolActivity = { ...started, state: 'FINISHED', outcome: 'OK', count: 2, elapsedMs: 620 };
 
 describe('工具活动折叠和真实结果', () => {
+  it('派发成功只表示受理，等待中的消息不冒充已读回复，点击才打开目标', () => {
+    const link = `drill-notebook://session/${'a'.repeat(32)}`;
+    const openSession = vi.fn();
+    const rows = readToolActivities([
+      { ...ended, toolName: 'create_session', outcome: 'CREATED', count: 1, sessionLink: link },
+      { ...ended, sequence: 2, toolName: 'read_session', outcome: 'QUEUED', count: 0, incomplete: true }
+    ]);
+    render(<ToolActivityGroup activities={rows} onOpenSession={openSession} />);
+    const group = screen.getByRole('button', { name: /已查询会话状态 · 已新建会话/ });
+    expect(group).not.toHaveAccessibleName(/已读取会话/);
+    expect(openSession).not.toHaveBeenCalled();
+    fireEvent.click(group);
+    expect(screen.getByRole('button', { name: /读取会话 目标消息仍在排队，尚无回复/ })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /新建会话 会话已创建，首条消息已提交/ }));
+    fireEvent.click(screen.getByRole('button', { name: '打开会话 ↗' }));
+    expect(openSession).toHaveBeenCalledWith(link);
+    expect(readToolActivities([{ ...ended, sessionLink: 'https://example.com/unsafe', requestId: 'not-a-request' }])[0].sessionLink).toBeUndefined();
+  });
+
+  it('会话工具展示真实进度和分页，不沿用记忆结果文案', () => {
+    const view = render(<ToolActivityGroup activities={[{ ...started, toolName: 'list_sessions' }]} active phase="tools" />);
+    expect(screen.getByRole('button', { name: /正在查找历史会话/ })).toBeVisible();
+    const listed = { ...ended, toolName: 'list_sessions' as const, incomplete: true };
+    const reading = { ...started, sequence: 2, toolName: 'read_session' as const };
+    view.rerender(<ToolActivityGroup activities={[listed, reading]} active phase="tools" />);
+    expect(screen.getByRole('button', { name: /正在读取会话/ })).toBeVisible();
+    expect(screen.getAllByText('本次找到 2 个会话（分批结果）')[0]).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /查找历史会话 本次找到/ }));
+    expect(screen.getAllByText('当前本地数据中的会话')[0]).toBeVisible();
+    expect(toolResultText({ ...ended, toolName: 'read_session', incomplete: true })).toBe('本次读取 2 段消息（部分记录）');
+    expect(toolResultText({ ...ended, toolName: 'read_session', outcome: 'AMBIGUOUS' })).toBe('找到多个会话，待明确目标');
+    expect(toolResultText({ ...ended, toolName: 'read_session', outcome: 'NOT_FOUND' })).toBe('会话不存在或已被删除');
+    expect(toolResultText({ ...ended, toolName: 'read_session', outcome: 'STALE' })).toBe('会话历史已变化，需要重新读取');
+    expect(toolResultText({ ...ended, toolName: 'read_session', outcome: 'UNAVAILABLE', availability: 'LOCKED' })).toBe('会话需要解锁后读取');
+    expect(readToolActivities([listed, reading])[1].toolName).toBe('read_session');
+  });
   it('百次工具记录完整保留，读取 20 条不被显示成 15 条', () => {
     const rows = Array.from({ length: 100 }, (_, i) => ({ ...ended, sequence: i + 1, count: 20 }));
     expect(readToolActivities(rows)).toHaveLength(100);

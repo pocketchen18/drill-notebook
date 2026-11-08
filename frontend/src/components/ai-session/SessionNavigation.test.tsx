@@ -21,6 +21,20 @@ const openTarget = async () => {
 };
 
 describe('会话导航', () => {
+  it('多会话状态独立，忙碌目标可停止但不可删除，标题生成不冒充聊天运行', async () => {
+    const onStop = vi.fn().mockResolvedValue(undefined);
+    const view = setup({ onStop, runtimes: [{ sessionId: 2, requestId: 'b', status: 'RUNNING', phase: 'tools', queueCount: 2 }],
+      sessions: [{ ...sessions[0], titleStatus: 'generating' }, sessions[1]] });
+    expect(screen.queryByLabelText('正在生成标题')).toBeNull();
+    await openTarget();
+    expect(screen.getByText('1 个进行中')).toBeVisible();
+    expect(screen.getByLabelText('正在调用工具')).toBeVisible();
+    expect(screen.getByRole('menuitem', { name: '删除会话' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('menuitem', { name: '停止并取消待发送消息' }));
+    await waitFor(() => expect(onStop).toHaveBeenCalledWith(2));
+    expect(view.props.onSelect).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
     Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });

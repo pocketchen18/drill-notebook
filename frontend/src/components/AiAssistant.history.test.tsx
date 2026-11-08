@@ -83,6 +83,112 @@ beforeEach(() => {
   });
 });
 
+describe('AiAssistant 会话引用', () => {
+  it('后台会话完成会刷新容量，重复轮询不反复读取账本且保持当前草稿', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    let status = 'RUNNING';
+    let polls = 0;
+    apiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/ai/sessions/runtime')) {
+        polls += 1;
+        return Promise.resolve({ sessions: [{ sessionId: 11, requestId: 'background', status, queueCount: 0 }] });
+      }
+      if (url === '/api/ai/history/storage') {
+        return Promise.resolve({ historyBytes: 1024, reservedHistoryBytes: status === 'RUNNING' ? 3 * 1024 * 1024 : 0,
+          usedHistoryBytes: status === 'RUNNING' ? 3 * 1024 * 1024 : 1024, historyLimitBytes: 64 * 1024 * 1024,
+          attachmentBytes: 0, attachmentLimitBytes: 64 * 1024 * 1024, historyWarning: false, attachmentWarning: false, revision: 1 });
+      }
+      return getOther(url);
+    });
+    const { unmount, queryClient } = renderAssistant();
+    try {
+      await screen.findByText('答一');
+      await screen.findByRole('progressbar', { name: /3 MB/ });
+      fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '当前会话未发送草稿' } });
+      const storageReads = () => apiGet.mock.calls.filter(([url]) => url === '/api/ai/history/storage').length;
+      const readsWhileRunning = storageReads();
+      const firstPoll = polls;
+      await waitFor(() => expect(polls).toBeGreaterThan(firstPoll), { timeout: 2000 });
+      expect(storageReads()).toBe(readsWhileRunning);
+
+      status = 'COMPLETED';
+      await waitFor(() => expect(screen.getByRole('progressbar', { name: /1 KB/ })).toBeVisible(), { timeout: 2000 });
+      expect(storageReads()).toBe(readsWhileRunning + 1);
+      expect(screen.getByLabelText('切换会话')).toHaveTextContent('S');
+      expect(screen.getByPlaceholderText(/提问/)).toHaveValue('当前会话未发送草稿');
+      expect(screen.getByText('答一')).toBeVisible();
+    } finally {
+      unmount();
+      queryClient.clear();
+    }
+  });
+
+  it('恢复正常完成的后台回复时不误报内容不完整', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url.startsWith('/api/ai/sessions/runtime')
+      ? Promise.resolve({ sessions: [{ sessionId: 10, requestId: 'completed', status: 'COMPLETED', queueCount: 0 }],
+        current: { sessionId: 10, requestId: 'completed', status: 'COMPLETED', active: false, reply: '后台已完整回答', finishReason: 'stop' } })
+      : getOther(url));
+    renderAssistant();
+    await screen.findByText('后台已完整回答');
+    expect(screen.queryByText('这一轮已完成，显示的内容可能不完整')).not.toBeInTheDocument();
+  });
+
+  it('尚未开始的派发只显示等待状态，不提前插入聊天正文', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url.startsWith('/api/ai/sessions/runtime')
+      ? Promise.resolve({ sessions: [{ sessionId: 10, requestId: 'queued', status: 'QUEUED', queueCount: 0 }],
+        current: { sessionId: 10, requestId: 'queued', status: 'QUEUED', active: true, userText: '尚未执行的提问' } })
+      : getOther(url));
+    renderAssistant();
+    await screen.findByText('答一');
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/ai/sessions/runtime?sessionId=10'));
+    expect(screen.queryByText('尚未执行的提问')).not.toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('切换保存各会话的未发送草稿，外部运行不会清空输入', async () => {
+    renderAssistant();
+    await screen.findByText('答一');
+    const input = screen.getByPlaceholderText(/提问…/);
+    fireEvent.change(input, { target: { value: '会话 A 的草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /S2 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    fireEvent.change(input, { target: { value: '会话 B 的草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /^S 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue('会话 A 的草稿'));
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /S2 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue('会话 B 的草稿'));
+    expect(apiStream).not.toHaveBeenCalled();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('预览旧会话不切换当前聊天、不清空输入或创建记录', async () => {
+    const link = 'drill-notebook://session/0123456789abcdef0123456789abcdef';
+    setContext([row({ id: 2, role: 'assistant', content: `根据[此前讨论](${link})继续。` })]);
+    const original = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/ai/sessions?includeArchived=true') return Promise.resolve([{ id: 11, title: '来源会话', sessionLink: link }]);
+      if (url.startsWith('/api/ai/sessions/11/history')) return Promise.resolve({ ...historyPage([
+        row({ id: 30, role: 'user', content: '来源的旧提问' })]), sessionId: 11 });
+      return original(url);
+    });
+    const { queryClient } = renderAssistant();
+    await screen.findByRole('link', { name: '此前讨论' });
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '尚未发送的当前草稿' } });
+    fireEvent.click(screen.getByRole('link', { name: '此前讨论' }));
+    expect(await screen.findByText('来源的旧提问')).toBeVisible();
+    expect(screen.getByPlaceholderText(/提问/)).toHaveValue('尚未发送的当前草稿');
+    expect(screen.getByRole('link', { name: '此前讨论' })).toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(apiDel).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+});
+
 describe('AiAssistant 未保存的新会话页', () => {
   const setupSessions = (initial?: AiChatSession[]): void => {
     let sessions: AiChatSession[] = initial ?? [
@@ -302,7 +408,7 @@ describe('AiAssistant 历史分页', () => {
     const before = apiGet.mock.calls.length;
     fireEvent.scroll(document.querySelector('.ai-drawer-chat') as HTMLDivElement);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    expect(apiGet).toHaveBeenCalledTimes(before);
+    expect(apiGet.mock.calls.slice(before).filter(([url]) => String(url).includes('/history'))).toHaveLength(0);
   }, 20_000);
 
   it('读不出的历史只留占位，不再要求密码', async () => {
