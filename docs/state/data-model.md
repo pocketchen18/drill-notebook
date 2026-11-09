@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**11**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**12**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -42,7 +42,7 @@
 | `retrieval_embedding` | 分块向量 | `(chunk_id, embedding_space_id)` 唯一 |
 | `embedding_job` | 向量化任务队列 | 输入版本唯一；状态含 QUEUED / CLAIMED / RETRY / COMPLETED / SUPERSEDED / FAILED |
 
-## 4. AI 配置、会话、记忆与用量域（schema v9–v11）
+## 4. AI 配置、会话、记忆与用量域（schema v9–v12）
 
 ### 4.1 配置与会话
 
@@ -51,10 +51,14 @@
 | `ai_config` | 旧配置迁移源与其他用途配置 | `purpose` 主键；chat/import 迁移后由集合绑定解析；memory/embedding 仍使用原表 |
 | `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，主模型与可空导入模型绑定不复制配置 |
 | `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；不存在时读取默认值，保存按 revision 检查冲突，不随模型切换 |
-| `ai_chat_session` | 会话 | 标题、归档、模型、标签 |
+| `ai_chat_session` | 会话 | 标题、归档、模型、标签；v12 增加唯一 `session_ref`、`title_source`、`title_status`、`title_revision`，标题更新不推进聊天活动时间 |
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
 | `ai_chat_attachment` | 轮次附件 | `TEXT` / `IMAGE` 密文；`byte_length` 校验 |
+
+v12 会话引用为随机 128 位标识的 32 位小写十六进制表示，改名和重启保持不变。标题来源为 temporary/manual/ai/legacy；状态为 pending/idle/generating/ready/failed。任务认领、结果提交和人工改名按标题 revision 条件更新，人工保存使更早的任务失效；不改变 history_revision。迁移保留已有标题和消息，已有历史的旧会话为 legacy/idle；重启把残留 generating 标为 failed，不重新外发。
+
+标题请求用量复用 CHAT 分类，以 `session-title:<ref>:<revision>` 独立 operation 标识，不生成额外聊天消息或记忆。标题与引用跟随现有数据库和升级前快照保存，不引入新应用外写盘目录。
 
 `ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随主模型。两张单行设置表各自独立检查 revision。
 

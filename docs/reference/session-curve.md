@@ -1,6 +1,6 @@
 # 会话内短周期记忆曲线（循环背诵）
 
-本文档描述 Drill Notebook 的**会话内（短周期）记忆曲线**：一次背诵会话中的「多轮循环出场 + 错题重复」模型、配置项、队列算法与界面交互。与跨天间隔重复（SM-2 风格，`review_schedule` 表）相互独立，详见 [docs/review-srs.md](review-srs.md)。
+本文档描述 Drill Notebook 的**会话内（短周期）记忆曲线**：一次背诵会话中的「多轮循环出场 + 错题重复」模型、配置项、队列算法与界面交互。与跨天间隔重复（SM-2 风格，`review_schedule` 表）相互独立，详见 [docs/reference/review-srs.md](review-srs.md)。
 
 前端实现：
 

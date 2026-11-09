@@ -1,0 +1,38 @@
+.session-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-nav button { color: inherit; font: inherit; }
+.session-nav-trigger { flex: 1; min-width: 0; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); cursor: pointer; text-align: left; }
+.session-nav-trigger > span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.session-nav-trigger svg, .session-nav-menu svg { flex-shrink: 0; }
+.session-nav-icon { width: 30px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.session-nav-list, .session-nav-menu { position: fixed; z-index: 1500; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-bg); color: var(--text); box-shadow: 0 10px 32px #0002; font-size: 13px; }
+.session-nav-list { display: flex; flex-direction: column; padding: 5px; }
+.session-nav-heading { padding: 7px 9px 9px; color: var(--muted); font-size: 12px; }
+.session-nav-heading span { margin-left: 6px; }
+.session-nav-rows { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+.session-nav-row { min-height: 52px; display: flex; align-items: center; border-radius: 6px; }
+.session-nav-row:hover, .session-nav-icon:hover, .session-nav-menu button:hover:not(:disabled) { background: var(--hover-bg); }
+.session-nav-row.is-current { background: var(--accent-soft); }
+.session-nav-select { border: 0; background: transparent; color: inherit; font: inherit; flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 7px 6px; cursor: pointer; text-align: left; border-radius: 6px; }
+.session-nav-mark { width: 14px; flex-shrink: 0; color: var(--accent); }
+.session-nav-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.session-nav-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.session-nav-meta { font-size: 12px; color: var(--muted); }
+.session-nav-row-more { margin: 0 4px; padding: 6px; border: 0; background: transparent; border-radius: 5px; color: var(--muted); display: flex; opacity: 0; cursor: pointer; }
+.session-nav-row:hover .session-nav-row-more, .session-nav-row:focus-within .session-nav-row-more, .session-nav-row.is-current .session-nav-row-more, .session-nav-row.has-menu .session-nav-row-more { opacity: 1; }
+.session-nav-menu { padding: 5px; z-index: 1501; max-height: calc(100vh - 16px); overflow-y: auto; }
+.session-nav-menu button { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; white-space: nowrap; }
+.session-nav-menu kbd, .session-nav-chevron { margin-left: auto; color: var(--muted); font: inherit; font-size: 11px; }
+.session-nav-menu [role='separator'] { height: 1px; background: var(--line); margin: 5px 3px; }
+.session-nav-menu button:disabled, .session-nav button:disabled { opacity: .45; cursor: not-allowed; }
+.session-nav-menu .session-nav-danger, .session-nav-danger { color: var(--danger-text, #d33d4b); }
+.session-nav button:focus-visible, .session-nav-list button:focus-visible, .session-nav-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-nav-edit { width: 100%; padding: 6px; }
+.session-nav-edit input { width: 100%; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 5px; background: var(--panel-bg); color: var(--text); padding: 6px 8px; font: inherit; outline: none; }
+.session-nav-edit small { display: block; padding: 5px 2px 0; color: var(--danger-text, #d33d4b); }
+.session-nav-empty { padding: 14px; color: var(--muted); font-size: 13px; }
+.session-nav-empty button { margin-left: 5px; background: transparent; border: 0; color: var(--accent); cursor: pointer; }
+.session-nav-spin { animation: ai-tool-spin 1s linear infinite; color: var(--muted); }
+.session-nav-confirm-title { overflow-wrap: anywhere; }
+.session-nav-copy-fallback { width: 100%; min-height: 100px; box-sizing: border-box; resize: vertical; background: var(--subtle-bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+@media (pointer: coarse) { .session-nav-row-more { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .session-nav-spin { animation: none; } }

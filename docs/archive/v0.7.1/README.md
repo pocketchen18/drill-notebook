@@ -15,11 +15,11 @@
 
 ## 当前事实来源
 
-- [功能清单](../../features.md)
-- [数据模型（schema 11）](../../data-model.md)
-- [REST / SSE 接口契约](../../api-contracts.md)
-- [架构](../../architecture.md)与[交互契约](../../../DESIGN.md)
-- [QA 清单](../../testing/QA_CHECKLIST.md)
-- [v0.7.1 发布说明、验证与升级](../../plans/v0.7.1-release-notes.md)
+- [全局功能清单](../../features.md)
+- [数据模型（schema 11）](../../state/data-model.md)
+- [REST / SSE 接口契约](../../state/api-contracts.md)
+- [架构](../../state/architecture.md)与[交互契约](../../DESIGN.md)
+- [QA 清单](../../test/QA_CHECKLIST.md)
+- [v0.7.1 发布说明、验证与升级](../../release/v0.7.1-release-notes.md)
 
-后续需求变化在新的当前切片中规划，已落地现状覆盖更新上述状态文档；不在本目录追加补充决策。
+后续需求维护在对应版本清单，当前切片按需规划；已落地的数据模型、接口等覆盖更新状态文档，版本发布前再同步全局功能清单，不在本目录追加补充决策。

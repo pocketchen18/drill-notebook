@@ -133,6 +133,7 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
   stop: () => void;
   busy: boolean;
   requestId: string | null;
+  activeSessionId?: number;
 } {
   const activeRef = useRef<ActiveTurn | null>(null);
   const sessionRef = useRef(sessionId);
@@ -344,5 +345,5 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
     setRequestId(null);
   };
 
-  return { send, stop, busy, requestId };
+  return { send, stop, busy, requestId, activeSessionId: activeRef.current?.sessionId };
 }

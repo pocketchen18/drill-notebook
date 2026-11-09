@@ -6,7 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * 测试临时工作区：一律建在 APP_ROOT 的 tmp/ 下（可用 -Ddrill.notebook.test.tmp 改到别处），
+ * 测试临时工作区：一律建在 APP_ROOT 的 temp/ 下（可用 -Ddrill.notebook.test.tmp 改到别处），
  * 不写系统 %TEMP%，与绿色便携约束一致。
  */
 public final class TestWorkspace {
@@ -17,7 +17,7 @@ public final class TestWorkspace {
         Path module = Paths.get(System.getProperty("basedir", System.getProperty("user.dir", ".")))
                 .toAbsolutePath().normalize();
         Path repoRoot = module.getParent() == null ? module : module.getParent();
-        Path base = Paths.get(System.getProperty("drill.notebook.test.tmp", repoRoot.resolve("tmp").toString()));
+        Path base = Paths.get(System.getProperty("drill.notebook.test.tmp", repoRoot.resolve("temp").toString()));
         Files.createDirectories(base);
         return Files.createTempDirectory(base, prefix);
     }

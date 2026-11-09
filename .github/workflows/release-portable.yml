@@ -82,7 +82,7 @@ jobs:
         run: |
           # v0.7.1-rc.1 与 v0.7.1 共用对应版本说明；不以 startsWith 混淆 v0.7.10。
           $baseTag = ($env:RELEASE_TAG -split '-', 2)[0]
-          $notes = "docs/plans/$baseTag-release-notes.md"
+          $notes = "docs/release/$baseTag-release-notes.md"
           if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) { throw "缺少发布说明：$notes" }
           if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notes -Raw -Encoding utf8))) { throw "发布说明为空：$notes" }
           "path=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

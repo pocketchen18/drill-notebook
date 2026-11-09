@@ -16,7 +16,7 @@ const fixture = path.join(root, 'scripts/fixtures/electron-single-instance.cjs')
 test('原生锁：重复进程退出，启动中/最小化/隐藏窗口复用，退出后可重开', {
   skip: process.platform !== 'win32', timeout: 60_000,
 }, async () => {
-  const tempParent = path.join(root, 'tmp');
+  const tempParent = path.join(root, 'temp');
   fs.mkdirSync(tempParent, { recursive: true });
   const appRoot = fs.mkdtempSync(path.join(tempParent, 'single-instance-'));
   const runtimeTmp = path.join(appRoot, 'runtime/tmp');

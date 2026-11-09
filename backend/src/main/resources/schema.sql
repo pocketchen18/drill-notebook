@@ -130,6 +130,10 @@ CREATE TABLE IF NOT EXISTS ai_config (
 CREATE TABLE IF NOT EXISTS ai_chat_session (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    session_ref TEXT,
+    title_source TEXT NOT NULL DEFAULT 'legacy',
+    title_status TEXT NOT NULL DEFAULT 'idle',
+    title_revision INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     model TEXT,
     tags TEXT,

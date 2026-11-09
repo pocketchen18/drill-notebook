@@ -250,6 +250,12 @@ public class AiController {
         ai.deleteSession(id);
     }
 
+    @PostMapping("/sessions/{id}/title")
+    public ResponseEntity<Map<String, Object>> generateSessionTitle(@PathVariable long id,
+            @RequestBody Map<String, Object> body) {
+        return ResponseEntity.accepted().body(ai.generateSessionTitle(id, body));
+    }
+
     @GetMapping("/sessions/{id}/messages")
     public List<Map<String, Object>> sessionMessages(@PathVariable long id, @RequestParam(required = false) String masterPassword) {
         return ai.sessionMessages(id, masterPassword == null ? "" : masterPassword);

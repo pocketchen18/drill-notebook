@@ -5,10 +5,10 @@
 当前事实请看：
 
 - [../../features.md](../../features.md)
-- [../../data-model.md](../../data-model.md)
-- [../../api-contracts.md](../../api-contracts.md)
-- [../../architecture.md](../../architecture.md)
-- 发行记录：[../../plans/v0.7.0-release-notes.md](../../plans/v0.7.0-release-notes.md)
+- [../../state/data-model.md](../../state/data-model.md)
+- [../../state/api-contracts.md](../../state/api-contracts.md)
+- [../../state/architecture.md](../../state/architecture.md)
+- 发行记录：[../../release/v0.7.0-release-notes.md](../../release/v0.7.0-release-notes.md)
 
 | 文档 | 内容 |
 |---|---|

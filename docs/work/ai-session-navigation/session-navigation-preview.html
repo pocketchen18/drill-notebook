@@ -1,0 +1,421 @@
+<!-- v0.7.2 UI/UX 草案；虚构数据与本地模拟，未接入真实应用。 -->
+<div id="dn-session-navigation" class="viz-dotted-background">
+  <style>
+    #dn-session-navigation {
+      --dn-surface: light-dark(#ffffff, #1b1e24);
+      --dn-subtle: light-dark(#f6f8fb, #20242b);
+      --dn-text: light-dark(#1e2433, #e2e6ee);
+      --dn-muted: light-dark(#6b7385, #a4adbd);
+      --dn-line: light-dark(#e4e7ee, #353c48);
+      --dn-hover: light-dark(#eff2f7, #2a303a);
+      --dn-selected: light-dark(#eef2ff, #253254);
+      --dn-accent: light-dark(#2f54eb, #a5b7ff);
+      --dn-fill: light-dark(#2f54eb, #4b6bf0);
+      --dn-on-fill: light-dark(#ffffff, #ffffff);
+      --dn-danger: light-dark(#d8323e, #ff8d92);
+      --dn-shadow: light-dark(#1e24331f, #00000055);
+      --dn-overlay: light-dark(#18213435, #00000070);
+      --dn-row-height: 52px;
+      color: var(--dn-text);
+      font: 14px/1.55 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+      padding: 18px 12px;
+      background-color: transparent;
+    }
+    #dn-session-navigation * { box-sizing: border-box; }
+    #dn-session-navigation [hidden] { display: none !important; }
+    #dn-session-navigation button, #dn-session-navigation input, #dn-session-navigation textarea { font: inherit; color: inherit; }
+    #dn-session-navigation button { border: 0; background: transparent; }
+    #dn-session-navigation button:disabled { opacity: .45; cursor: not-allowed; }
+    #dn-session-navigation .dn-stage { position: relative; width: 100%; max-width: 760px; min-height: 650px; margin: auto; }
+    #dn-session-navigation .dn-sidebar { width: min(460px, 100%); min-height: 628px; margin-left: auto; background: var(--dn-surface); border: 1px solid var(--dn-line); border-radius: 12px; }
+    #dn-session-navigation .dn-heading { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--dn-line); font-weight: 500; }
+    #dn-session-navigation .dn-heading i, #dn-session-navigation .dn-heading svg { color: var(--dn-accent); }
+    #dn-session-navigation .dn-heading small { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--dn-muted); }
+    #dn-session-navigation .dn-session-bar { display: flex; align-items: center; gap: 6px; padding: 12px; }
+    #dn-session-navigation .dn-current { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; background: var(--dn-subtle); font-size: 13px; font-weight: 500; text-align: left; }
+    #dn-session-navigation .dn-current span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dn-session-navigation .dn-icon { display: inline-flex; flex: 0 0 32px; width: 32px; height: 32px; align-items: center; justify-content: center; border-radius: 7px; }
+    #dn-session-navigation .dn-icon:hover, #dn-session-navigation .dn-current:hover { background: var(--dn-hover); }
+    #dn-session-navigation .dn-existing { padding: 0 12px 12px; }
+    #dn-session-navigation .dn-context { background: var(--dn-subtle); border: 1px solid var(--dn-line); border-radius: 9px; padding: 10px 12px; }
+    #dn-session-navigation .dn-context-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--dn-muted); font-size: 12px; }
+    #dn-session-navigation .dn-context-top label { display: flex; align-items: center; gap: 4px; }
+    #dn-session-navigation .dn-context-top input { accent-color: var(--dn-fill); }
+    #dn-session-navigation .dn-context-name { margin-top: 4px; font-size: 13px; }
+    #dn-session-navigation .dn-chat { min-height: 315px; padding: 20px 0; display: flex; flex-direction: column; gap: 14px; }
+    #dn-session-navigation .dn-user { align-self: flex-end; max-width: 88%; padding: 10px 13px; background: var(--dn-fill); color: var(--dn-on-fill); border-radius: 12px 12px 3px 12px; font-size: 13px; overflow-wrap: anywhere; }
+    #dn-session-navigation .dn-answer { background: var(--dn-surface); border: 1px solid var(--dn-line); border-radius: 12px 12px 12px 3px; padding: 12px 14px; font-size: 13px; }
+    #dn-session-navigation .dn-answer p { margin: 0 0 8px; }
+    #dn-session-navigation .dn-answer p:last-child { margin: 0; }
+    #dn-session-navigation .dn-empty { text-align: center; color: var(--dn-muted); padding: 74px 12px; font-size: 13px; }
+    #dn-session-navigation .dn-composer { border: 1px solid var(--dn-line); background: var(--dn-surface); border-radius: 9px; padding: 8px 10px; }
+    #dn-session-navigation .dn-composer textarea { display: block; width: 100%; min-height: 54px; resize: vertical; border: 0; background: transparent; font-size: 13px; }
+    #dn-session-navigation .dn-compose-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    #dn-session-navigation .dn-compose-bottom span { font-size: 12px; color: var(--dn-muted); }
+    #dn-session-navigation .dn-send { background: var(--dn-fill); color: var(--dn-on-fill); }
+    #dn-session-navigation .dn-list { position: absolute; z-index: 10; top: 102px; right: 12px; width: min(436px, calc(100% - 24px)); border: 1px solid var(--dn-line); border-radius: 10px; background: var(--dn-surface); box-shadow: 0 8px 28px var(--dn-shadow); padding: 6px; }
+    #dn-session-navigation .dn-list-heading { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px 8px; color: var(--dn-muted); font-size: 12px; }
+    #dn-session-navigation .dn-rows { max-height: 352px; overflow-y: auto; }
+    #dn-session-navigation .dn-row { display: flex; align-items: center; min-width: 0; min-height: var(--dn-row-height); border-radius: 7px; padding-right: 6px; }
+    #dn-session-navigation .dn-row:hover, #dn-session-navigation .dn-row:focus-within, #dn-session-navigation .dn-row.is-target { background: var(--dn-hover); }
+    #dn-session-navigation .dn-row.is-current { background: var(--dn-selected); }
+    #dn-session-navigation .dn-pick { display: flex; flex: 1; min-width: 0; gap: 8px; align-items: center; padding: 8px 8px; text-align: left; }
+    #dn-session-navigation .dn-check { width: 16px; flex: 0 0 16px; color: var(--dn-accent); }
+    #dn-session-navigation .dn-title-wrap { min-width: 0; flex: 1; }
+    #dn-session-navigation .dn-row-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    #dn-session-navigation .dn-meta { display: block; font-size: 12px; margin-top: 2px; color: var(--dn-muted); }
+    #dn-session-navigation .dn-more { opacity: 0; }
+    #dn-session-navigation .dn-row:hover .dn-more, #dn-session-navigation .dn-row:focus-within .dn-more, #dn-session-navigation .dn-row.is-current .dn-more, #dn-session-navigation .dn-row.is-target .dn-more { opacity: 1; }
+    #dn-session-navigation .dn-progress { display: inline-flex; color: var(--dn-accent); margin: 0 5px; }
+    #dn-session-navigation .dn-popup { position: absolute; z-index: 25; width: min(196px, calc(100% - 16px)); padding: 5px; border: 1px solid var(--dn-line); border-radius: 8px; background: var(--dn-surface); box-shadow: 0 5px 22px var(--dn-shadow); }
+    #dn-session-navigation .dn-submenu { width: min(214px, calc(100% - 16px)); z-index: 26; }
+    #dn-session-navigation .dn-command { display: flex; width: 100%; min-height: 34px; align-items: center; gap: 9px; border-radius: 5px; padding: 7px 9px; text-align: left; font-size: 13px; white-space: nowrap; }
+    #dn-session-navigation .dn-command:hover:not(:disabled), #dn-session-navigation .dn-command.is-expanded { background: var(--dn-hover); }
+    #dn-session-navigation .dn-command span { flex: 1; }
+    #dn-session-navigation .dn-command kbd { color: var(--dn-muted); font: 11px/1.5 "Segoe UI", sans-serif; }
+    #dn-session-navigation .dn-danger { color: var(--dn-danger); }
+    #dn-session-navigation .dn-divider { border: 0; border-top: 1px solid var(--dn-line); margin: 5px 2px; }
+    #dn-session-navigation .dn-rename { flex: 1; min-width: 0; padding: 7px 8px 7px 32px; }
+    #dn-session-navigation .dn-rename input { width: 100%; background: var(--dn-surface); border: 1px solid var(--dn-accent); border-radius: 5px; padding: 6px 7px; font-size: 13px; }
+    #dn-session-navigation .dn-error { color: var(--dn-danger); font-size: 12px; padding-top: 4px; }
+    #dn-session-navigation .dn-modal-layer { position: absolute; z-index: 40; inset: 0; background: var(--dn-overlay); display: flex; justify-content: center; align-items: flex-start; padding: 155px 12px 20px; border-radius: 12px; }
+    #dn-session-navigation .dn-dialog { width: 370px; max-width: 100%; padding: 20px; background: var(--dn-surface); border: 1px solid var(--dn-line); border-radius: 12px; box-shadow: 0 10px 30px var(--dn-shadow); }
+    #dn-session-navigation .dn-dialog h3 { font-size: 16px; font-weight: 500; margin: 0 0 12px; }
+    #dn-session-navigation .dn-dialog p { font-size: 13px; margin: 8px 0; overflow-wrap: anywhere; }
+    #dn-session-navigation .dn-dialog .dn-dialog-note { color: var(--dn-muted); }
+    #dn-session-navigation .dn-dialog textarea { width: 100%; min-height: 90px; resize: vertical; margin: 5px 0; padding: 9px; border: 1px solid var(--dn-line); border-radius: 6px; background: var(--dn-subtle); font-size: 13px; overflow-wrap: anywhere; }
+    #dn-session-navigation .dn-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    #dn-session-navigation .dn-action { border: 1px solid var(--dn-line); border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+    #dn-session-navigation .dn-action:hover { background: var(--dn-hover); }
+    #dn-session-navigation .dn-action.is-primary { color: var(--dn-on-fill); border-color: var(--dn-fill); background: var(--dn-fill); }
+    #dn-session-navigation .dn-action.is-danger { color: var(--dn-danger); border-color: var(--dn-danger); }
+    #dn-session-navigation .dn-toast { position: absolute; z-index: 45; left: 8px; right: 8px; bottom: 8px; width: fit-content; max-width: calc(100% - 16px); margin: auto; padding: 9px 13px; border: 1px solid var(--dn-line); border-radius: 8px; background: var(--dn-surface); box-shadow: 0 3px 16px var(--dn-shadow); font-size: 13px; }
+    #dn-session-navigation .dn-stage i[data-lucide], #dn-session-navigation .dn-stage svg { width: 16px; height: 16px; flex-shrink: 0; }
+    #dn-session-navigation.dn-compact .dn-meta { display: none; }
+    @media (pointer: coarse) {
+      #dn-session-navigation .dn-more { opacity: 1; }
+      #dn-session-navigation .dn-icon, #dn-session-navigation .dn-command { min-height: 44px; min-width: 44px; }
+      #dn-session-navigation .dn-rename input, #dn-session-navigation textarea { font-size: 16px; }
+    }
+    @media (max-width: 420px) {
+      #dn-session-navigation { padding: 12px 2px; }
+      #dn-session-navigation .dn-heading { padding: 12px; }
+      #dn-session-navigation .dn-session-bar { gap: 3px; padding: 10px 8px; }
+      #dn-session-navigation .dn-current { padding: 8px; }
+      #dn-session-navigation .dn-list { top: 97px; right: 8px; width: calc(100% - 16px); }
+    }
+  </style>
+  <section class="dn-stage" aria-label="会话列表与菜单草图">
+    <section class="dn-sidebar" aria-label="AI 助手侧边栏">
+      <header class="dn-heading"><i data-lucide="sparkles" aria-hidden="true"></i>AI 助手<small>Drill Notebook</small></header>
+      <div class="dn-session-bar">
+        <button type="button" class="dn-current cursor-interaction" aria-label="展开会话列表" aria-expanded="true" aria-controls="dn-session-list"><span></span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+        <button type="button" class="dn-icon cursor-interaction" data-action="new" aria-label="新建会话" data-tooltip="新建会话"><i data-lucide="plus" aria-hidden="true"></i></button>
+        <button type="button" class="dn-icon cursor-interaction" data-action="current-menu" aria-label="当前会话更多操作" aria-haspopup="menu" data-tooltip="当前会话更多操作"><i data-lucide="ellipsis" aria-hidden="true"></i></button>
+      </div>
+      <div class="dn-existing">
+        <section class="dn-context" aria-label="当前上下文"><div class="dn-context-top"><span>当前上下文</span><label><input type="checkbox" checked>使用</label></div><div class="dn-context-name">复习笔记 · 间隔重复</div></section>
+        <div class="dn-chat" aria-label="示例对话"></div>
+        <div class="dn-composer"><textarea aria-label="示例消息输入" placeholder="输入消息…"></textarea><div class="dn-compose-bottom"><span>Enter 发送 · Shift+Enter 换行</span><button type="button" class="dn-icon dn-send cursor-interaction" data-action="send" aria-label="发送示例消息"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></div>
+      </div>
+    </section>
+    <section id="dn-session-list" class="dn-list" aria-label="会话列表"><div class="dn-list-heading"><span>会话</span><span class="dn-count"></span></div><div class="dn-rows" role="list"></div></section>
+    <div class="dn-popup dn-main-menu" role="menu" aria-label="会话操作">
+      <button type="button" role="menuitem" class="dn-command cursor-interaction" data-action="generate"><i data-lucide="sparkles" aria-hidden="true"></i><span>重新生成标题</span></button>
+      <button type="button" role="menuitem" class="dn-command cursor-interaction" data-action="rename"><i data-lucide="pencil" aria-hidden="true"></i><span>重命名</span><kbd>F2</kbd></button>
+      <hr class="dn-divider">
+      <button type="button" role="menuitem" class="dn-command cursor-interaction" data-sub="copy" aria-haspopup="menu" aria-expanded="true"><i data-lucide="copy" aria-hidden="true"></i><span>复制</span><i data-lucide="chevron-right" aria-hidden="true"></i></button>
+      <button type="button" role="menuitem" class="dn-command cursor-interaction" data-sub="export" aria-haspopup="menu" aria-expanded="false"><i data-lucide="download" aria-hidden="true"></i><span>导出</span><i data-lucide="chevron-right" aria-hidden="true"></i></button>
+      <hr class="dn-divider">
+      <button type="button" role="menuitem" class="dn-command dn-danger cursor-interaction" data-action="delete"><i data-lucide="trash-2" aria-hidden="true"></i><span>删除会话</span></button>
+    </div>
+    <div class="dn-popup dn-submenu" role="menu" aria-label="复制会话">
+      <button type="button" role="menuitem" class="dn-command dn-back cursor-interaction" data-action="back" hidden><i data-lucide="chevron-left" aria-hidden="true"></i><span>返回</span></button>
+      <div class="dn-sub-items"></div>
+    </div>
+    <div class="dn-modal-layer" hidden><section class="dn-dialog" role="dialog" aria-modal="true" aria-labelledby="dn-dialog-title"><h3 id="dn-dialog-title"></h3><p class="dn-dialog-target"></p><p class="dn-dialog-message"></p><p class="dn-dialog-note"></p><textarea readonly aria-label="待复制的示例内容" hidden></textarea><div class="dn-actions"><button type="button" class="dn-action cursor-interaction" data-action="cancel-dialog">取消</button><button type="button" class="dn-action is-danger cursor-interaction" data-action="confirm-dialog">删除会话</button></div></section></div>
+    <div class="dn-toast" role="status" aria-live="polite" hidden></div>
+  </section>
+  <script>
+  (() => {
+    const root = document.getElementById('dn-session-navigation');
+    const q = selector => root.querySelector(selector);
+    const qa = selector => [...root.querySelectorAll(selector)];
+    const stage = q('.dn-stage'), list = q('.dn-list'), rows = q('.dn-rows');
+    const menu = q('.dn-main-menu'), sub = q('.dn-submenu'), modal = q('.dn-modal-layer');
+    const options = { rowHeight: 52, showMetadata: true, titleState: '已生成' };
+    const initial = [
+      { id: 'demo-a1', title: '本周复习计划与间隔安排', suggestion: '本周复习计划与间隔安排', count: 12, time: '刚刚', status: 'ready', manual: false, question: '你能帮我安排一下本周的复习吗？' },
+      { id: 'demo-b2', title: '高数错题：积分换元法', suggestion: '积分换元法的错题整理', count: 8, time: '14:26', status: 'ready', manual: false, question: '能解释一下积分换元法的易错点吗？' },
+      { id: 'demo-c3', title: '神经递质的分类、作用与容易混淆的记忆要点', suggestion: '神经递质分类与记忆要点', count: 16, time: '昨天', status: 'ready', manual: false, question: '帮我比较几种常见的神经递质。' },
+      { id: 'demo-d4', title: '概率论期末复习', suggestion: '条件概率与独立性', count: 6, time: '11月5日', status: 'ready', manual: true, question: '条件概率和独立性有什么联系？' },
+      { id: 'demo-e5', title: '主动回忆与间隔重复', suggestion: '主动回忆与间隔重复的搭配', count: 24, time: '11月3日', status: 'ready', manual: false, question: '主动回忆和间隔重复怎么结合？' }
+    ];
+    let sessions = initial.map(item => ({ ...item, revision: 0 }));
+    let activeId = 'demo-a1', targetId = 'demo-b2', listOpen = true, menuOpen = true, subKind = 'copy';
+    let anchor = null, renameId = null, renameDraft = '', renameError = '', modalKind = null, modalTarget = null;
+    let toastTimer, hoverTimer, newCounter = 0, lastTitleState = options.titleState;
+    const get = id => sessions.find(item => item.id === id);
+    const esc = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    const icon = name => '<i data-lucide="' + name + '" aria-hidden="true"></i>';
+    function icons() { globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } }); }
+    function persist() {
+      window.openai?.setWidgetState?.({ modelContent: { design: '会话列表与二级菜单', rowHeight: options.rowHeight, showMetadata: options.showMetadata, titleState: options.titleState, menu: subKind || (menuOpen ? '会话操作' : '关闭') }, privateContent: { activeId, listOpen } })?.catch(() => {});
+    }
+    function restore(saved) {
+      const data = saved?.modelContent;
+      if (data?.design !== '会话列表与二级菜单') return;
+      if ([40, 44, 48, 52, 56, 60].includes(data.rowHeight)) options.rowHeight = data.rowHeight;
+      if (typeof data.showMetadata === 'boolean') options.showMetadata = data.showMetadata;
+      if (['已生成', '生成中', '生成失败', '空会话'].includes(data.titleState)) options.titleState = data.titleState;
+      if (get(saved.privateContent?.activeId)) activeId = saved.privateContent.activeId;
+    }
+    function toast(message) { clearTimeout(toastTimer); q('.dn-toast').textContent = message; q('.dn-toast').hidden = false; toastTimer = setTimeout(() => { q('.dn-toast').hidden = true; }, 3500); }
+    function renderRows() {
+      const focusedInput = q('.dn-rename input');
+      const hadFocus = focusedInput && document.activeElement === focusedInput;
+      const selection = hadFocus ? [focusedInput.selectionStart, focusedInput.selectionEnd] : null;
+      if (focusedInput) renameDraft = focusedInput.value;
+      rows.innerHTML = sessions.map(item => {
+        const selected = item.id === activeId, editing = item.id === renameId;
+        const state = item.status === 'generating' ? '<span class="dn-progress" data-tooltip="正在生成标题" aria-label="正在生成标题">' + icon('loader-circle') + '</span>' : '';
+        const body = editing ? '<div class="dn-rename"><input aria-label="重命名会话" value="' + esc(renameDraft) + '">' + (renameError ? '<div class="dn-error" role="alert">' + renameError + '</div>' : '') + '</div>' :
+          '<button type="button" class="dn-pick cursor-interaction" data-id="' + item.id + '"' + (selected ? ' aria-current="true"' : '') + '><span class="dn-check">' + (selected ? icon('check') : '') + '</span><span class="dn-title-wrap"><span class="dn-row-title" data-tooltip="' + esc(item.title) + '">' + esc(item.title) + '</span><span class="dn-meta">' + item.count + ' 条消息 · ' + item.time + '</span></span>' + state + '</button><button type="button" class="dn-icon dn-more cursor-interaction" data-row-menu="' + item.id + '" aria-label="更多操作：' + esc(item.title) + '" aria-haspopup="menu">' + icon('ellipsis') + '</button>';
+        return '<div role="listitem" class="dn-row' + (selected ? ' is-current' : '') + (menuOpen && item.id === targetId ? ' is-target' : '') + '" data-session="' + item.id + '">' + body + '</div>';
+      }).join('');
+      q('.dn-count').textContent = sessions.length + ' 个会话';
+      if (hadFocus && q('.dn-rename input')) { q('.dn-rename input').focus(); q('.dn-rename input').setSelectionRange(...selection); }
+      icons();
+    }
+    function renderChat() {
+      const active = get(activeId);
+      q('.dn-current span').textContent = active?.title || '选择会话';
+      q('.dn-current').setAttribute('data-tooltip', active?.title || '选择会话');
+      q('.dn-chat').innerHTML = !active?.count ? '<div class="dn-empty">开始一次新的讨论</div>' : '<div class="dn-user">' + esc(active.question) + '</div><div class="dn-answer"><p>可以，我们从已有的学习记录开始整理。</p><p>先找出最容易混淆的部分，再把练习分散到几天里。每次复习后记录难点，下一次优先检查这些内容。</p></div>';
+    }
+    function updateMenu() {
+      const target = get(targetId);
+      if (!target) menuOpen = false;
+      const generate = q('[data-action="generate"]');
+      generate.querySelector('span').textContent = target?.status === 'generating' ? '正在生成标题…' : target?.status === 'ready' ? '重新生成标题' : '生成会话标题';
+      generate.disabled = !target?.count || target?.status === 'generating';
+      generate.setAttribute('data-tooltip', !target?.count ? '首轮回复完成后可生成' : '根据首轮问答概括标题');
+      q('[data-action="delete"]').disabled = sessions.length <= 1;
+      q('[data-action="delete"]').setAttribute('data-tooltip', sessions.length <= 1 ? '至少保留一个会话' : '删除此会话与消息');
+      qa('[data-sub]').forEach(button => { button.classList.toggle('is-expanded', menuOpen && subKind === button.dataset.sub); button.setAttribute('aria-expanded', String(menuOpen && subKind === button.dataset.sub)); });
+      q('.dn-sub-items').innerHTML = subKind === 'export' ? ['Markdown', 'HTML', 'JSON'].map(format => '<button type="button" role="menuitem" class="dn-command cursor-interaction" data-export="' + format + '">' + icon('file-down') + '<span>' + format + '</span></button>').join('') :
+        '<button type="button" role="menuitem" class="dn-command cursor-interaction" data-copy="link">' + icon('link') + '<span>复制会话链接</span></button><button type="button" role="menuitem" class="dn-command cursor-interaction" data-copy="title">' + icon('copy') + '<span>复制会话标题</span></button>';
+      sub.setAttribute('aria-label', subKind === 'export' ? '导出会话' : '复制会话');
+      icons(); positionMenus();
+    }
+    function positionMenus() {
+      menu.hidden = !menuOpen; sub.hidden = !menuOpen || !subKind;
+      if (!menuOpen) return;
+      const base = stage.getBoundingClientRect();
+      const trigger = listOpen ? q('[data-row-menu="' + targetId + '"]') : q('[data-action="current-menu"]');
+      const box = trigger?.getBoundingClientRect();
+      const point = anchor || { x: (box?.right || base.right - 16) - base.left, y: (box?.bottom || base.top + 150) - base.top };
+      const width = menu.offsetWidth;
+      let x = point.x + 4;
+      if (x + width > base.width - 8) x = point.x - width - 4;
+      x = Math.max(8, Math.min(x, base.width - width - 8));
+      const y = Math.max(8, Math.min(point.y + 2, stage.offsetHeight - menu.offsetHeight - 12));
+      menu.style.left = x + 'px'; menu.style.top = y + 'px';
+      if (!subKind) return;
+      q('.dn-back').hidden = true;
+      let sx = x + width + 4;
+      if (sx + sub.offsetWidth > base.width - 8) sx = x - sub.offsetWidth - 4;
+      const stacked = sx < 8;
+      const parent = q('[data-sub="' + subKind + '"]').getBoundingClientRect();
+      let sy = parent.top - base.top - 5;
+      if (stacked) { sx = x; sy = y; q('.dn-back').hidden = false; menu.hidden = true; }
+      sy = Math.max(8, Math.min(sy, stage.offsetHeight - sub.offsetHeight - 12));
+      sub.style.left = Math.max(8, Math.min(sx, base.width - sub.offsetWidth - 8)) + 'px'; sub.style.top = sy + 'px';
+    }
+    function render() {
+      root.style.setProperty('--dn-row-height', options.rowHeight + 'px');
+      root.classList.toggle('dn-compact', !options.showMetadata);
+      list.hidden = !listOpen; q('.dn-current').setAttribute('aria-expanded', String(listOpen));
+      renderRows(); renderChat(); updateMenu();
+    }
+    function closeMenus() { menuOpen = false; subKind = null; anchor = null; updateMenu(); renderRows(); }
+    function openMenu(id, point = null) { if (!saveRename()) return; targetId = id; menuOpen = true; subKind = null; anchor = point; updateMenu(); renderRows(); persist(); }
+    function beginRename(id) {
+      const item = get(id); if (!item) return;
+      closeMenus(); listOpen = true; renameId = id; renameDraft = item.title; renameError = '';
+      render(); const input = q('.dn-rename input'); input.focus(); input.select(); persist();
+    }
+    function saveRename() {
+      if (!renameId) return true;
+      const value = (q('.dn-rename input')?.value ?? renameDraft).trim();
+      if (!value) { renameDraft = ''; renameError = '标题不能为空'; renderRows(); q('.dn-rename input')?.focus(); return false; }
+      const item = get(renameId);
+      if (item && item.title !== value) { item.title = value; item.manual = true; item.status = 'ready'; item.revision++; item.pendingTitle = null; toast('会话已重命名'); }
+      else if (item?.pendingTitle) { item.title = item.pendingTitle; item.status = 'ready'; item.pendingTitle = null; }
+      const id = renameId; renameId = null; renameError = ''; render(); q('[data-id="' + id + '"]')?.focus(); return true;
+    }
+    function cancelRename() {
+      const item = get(renameId), id = renameId;
+      if (item?.pendingTitle) { item.title = item.pendingTitle; item.status = 'ready'; item.pendingTitle = null; }
+      renameId = null; renameError = ''; render(); q('[data-id="' + id + '"]')?.focus();
+    }
+    function generateTitle(item) {
+      if (!item || item.count === 0 || item.status === 'generating') return;
+      const revision = ++item.revision;
+      item.status = 'generating'; closeMenus(); render();
+      setTimeout(() => {
+        const current = get(item.id); if (!current || current.revision !== revision) return;
+        if (renameId === item.id) { current.pendingTitle = current.suggestion; return; }
+        current.title = current.suggestion; current.status = 'ready'; current.manual = false; render();
+      }, 1600);
+    }
+    function openDialog(kind, item, copyType) {
+      closeMenus(); modalKind = kind; modalTarget = item.id; modal.hidden = false;
+      q('.dn-dialog-target').textContent = '「' + item.title + '」';
+      const confirm = q('[data-action="confirm-dialog"]'), cancel = q('[data-action="cancel-dialog"]'), value = q('.dn-dialog textarea');
+      value.hidden = kind !== 'copy'; confirm.hidden = kind === 'copy';
+      cancel.textContent = kind === 'copy' ? '关闭' : '取消'; confirm.classList.toggle('is-danger', kind === 'delete'); confirm.classList.toggle('is-primary', kind === 'regenerate');
+      q('#dn-dialog-title').textContent = kind === 'delete' ? '删除会话？' : kind === 'regenerate' ? '替换手动设置的标题？' : '待复制的会话' + (copyType === 'link' ? '链接' : '标题');
+      q('.dn-dialog-message').textContent = kind === 'delete' ? '会话和消息将被删除，且不可恢复。' : kind === 'regenerate' ? '将根据首次问答重新生成；生成失败时保留原名。' : '以下为草图示例，未写入系统剪贴板。';
+      q('.dn-dialog-note').textContent = kind === 'delete' ? '已保存的长期记忆会保留。' : '';
+      confirm.textContent = kind === 'delete' ? '删除会话' : '重新生成';
+      if (kind === 'copy') value.value = copyType === 'link' ? 'drill-notebook://session/' + item.id : item.title;
+      cancel.focus(); persist();
+    }
+    function closeDialog() { modal.hidden = true; modalKind = null; render(); (q('[data-row-menu="' + modalTarget + '"]') || q('[data-id="' + activeId + '"]') || q('.dn-current')).focus(); }
+    function newSessionHome() {
+      let blank = sessions.find(row => !row.count);
+      if (!blank) { blank = { id: 'demo-new-' + ++newCounter, title: '新会话', suggestion: '新的学习讨论', count: 0, time: '刚刚', status: 'empty', manual: false, revision: 0, question: '' }; sessions.unshift(blank); }
+      activeId = blank.id; listOpen = false; closeMenus(); render(); q('.dn-composer textarea').value = ''; q('.dn-composer textarea').focus();
+    }
+    function applyScenario() {
+      if (options.titleState !== lastTitleState) {
+        const item = get('demo-a1');
+        if (item) {
+          item.revision++; item.manual = false; item.pendingTitle = null;
+          item.status = options.titleState === '生成中' ? 'generating' : options.titleState === '生成失败' ? 'failed' : options.titleState === '空会话' ? 'empty' : 'ready';
+          item.title = options.titleState === '已生成' ? item.suggestion : options.titleState === '空会话' ? '新会话' : '你能帮我安排一下本周的复习吗？';
+          item.count = options.titleState === '空会话' ? 0 : 12;
+        }
+        lastTitleState = options.titleState;
+      }
+      render();
+    }
+    root.addEventListener('click', event => {
+      const button = event.target.closest('button'); if (!button || button.disabled) return;
+      if (button.classList.contains('dn-current')) { if (!saveRename()) return; listOpen = !listOpen; closeMenus(); render(); persist(); return; }
+      if (button.dataset.id) { if (!saveRename()) return; activeId = button.dataset.id; listOpen = false; closeMenus(); render(); persist(); return; }
+      if (button.dataset.rowMenu) { openMenu(button.dataset.rowMenu); return; }
+      if (button.dataset.sub) { subKind = button.dataset.sub; updateMenu(); if (event.detail === 0) sub.querySelector('.dn-sub-items button').focus(); persist(); return; }
+      const item = get(targetId);
+      if (button.dataset.copy && item) { openDialog('copy', item, button.dataset.copy); return; }
+      if (button.dataset.export && item) { closeMenus(); toast('草图演示：导出「' + item.title + '」为 ' + button.dataset.export); return; }
+      switch (button.dataset.action) {
+        case 'current-menu': openMenu(activeId); break;
+        case 'rename': beginRename(targetId); break;
+        case 'generate': if (item?.manual) openDialog('regenerate', item); else generateTitle(item); break;
+        case 'delete': if (item) openDialog('delete', item); break;
+        case 'back': { const previous = subKind; subKind = null; updateMenu(); q('[data-sub="' + previous + '"]')?.focus(); break; }
+        case 'cancel-dialog': closeDialog(); break;
+        case 'confirm-dialog': {
+          const chosen = get(modalTarget), kind = modalKind;
+          if (kind === 'delete' && chosen && sessions.length > 1) {
+            sessions = sessions.filter(row => row.id !== chosen.id);
+            if (activeId === chosen.id) newSessionHome();
+            closeDialog(); toast('会话已删除');
+          } else { closeDialog(); if (chosen && kind === 'regenerate') generateTitle(chosen); }
+          persist(); break;
+        }
+        case 'new': {
+          if (!saveRename()) break;
+          newSessionHome(); persist(); break;
+        }
+        case 'send': {
+          const input = q('.dn-composer textarea'), text = input.value.trim(), current = get(activeId);
+          if (!text || !current) break;
+          const first = current.count === 0; current.question = text; current.count += 2; current.time = '刚刚';
+          if (first && !current.manual) { current.title = text.slice(0, 28); current.suggestion = /复习/.test(text) ? '复习计划与学习方法' : text.replace(/^(请|帮我|能不能|可以|你能)/, '').slice(0, 18) || '学习问题与解答'; current.status = 'pending'; generateTitle(current); }
+          input.value = ''; render(); break;
+        }
+      }
+    });
+    root.addEventListener('contextmenu', event => {
+      const row = event.target.closest('[data-session]'); if (!row || event.target.closest('input')) return;
+      event.preventDefault(); const rect = stage.getBoundingClientRect(); openMenu(row.dataset.session, { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    });
+    q('.dn-current').addEventListener('dblclick', () => beginRename(activeId));
+    root.addEventListener('pointerover', event => {
+      const parent = event.target.closest('[data-sub]');
+      if (parent && menuOpen) { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (menuOpen) { subKind = parent.dataset.sub; updateMenu(); } }, 100); }
+      else if (event.target.closest('.dn-main-menu [data-action]')) { clearTimeout(hoverTimer); subKind = null; updateMenu(); }
+    });
+    root.addEventListener('pointerdown', event => {
+      if (!modal.hidden || event.target.closest('.dn-popup, .dn-list, .dn-session-bar')) return;
+      if (!saveRename()) return;
+      menuOpen = false; subKind = null; anchor = null; listOpen = false;
+      menu.hidden = true; sub.hidden = true; list.hidden = true;
+      q('.dn-current').setAttribute('aria-expanded', 'false');
+      qa('.dn-row.is-target').forEach(row => row.classList.remove('is-target'));
+    });
+    root.addEventListener('focusout', event => {
+      if (event.target.matches('.dn-rename input')) {
+        renameDraft = event.target.value;
+        setTimeout(() => { if (renameId && !q('.dn-rename')?.contains(document.activeElement)) saveRename(); }, 0);
+      }
+    });
+    root.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      if (!modal.hidden) {
+        if (event.key === 'Escape') { event.preventDefault(); closeDialog(); }
+        if (event.key === 'Tab') {
+          const controls = [...modal.querySelectorAll('button:not([hidden]), textarea:not([hidden])')];
+          if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1).focus(); }
+          else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0].focus(); }
+        }
+        return;
+      }
+      if (event.target.matches('.dn-rename input')) {
+        if (event.key === 'Enter') { event.preventDefault(); saveRename(); }
+        if (event.key === 'Escape') { event.preventDefault(); cancelRename(); }
+        return;
+      }
+      if (event.target.matches('.dn-composer textarea')) { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); q('[data-action="send"]').click(); } return; }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (subKind && menuOpen) { const previous = subKind; subKind = null; updateMenu(); q('[data-sub="' + previous + '"]').focus(); }
+        else if (menuOpen) { closeMenus(); (q('[data-row-menu="' + targetId + '"]') || q('.dn-current')).focus(); }
+        else { listOpen = false; render(); q('.dn-current').focus(); }
+        return;
+      }
+      const row = event.target.closest('[data-session]');
+      if (row && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); openMenu(row.dataset.session); menu.querySelector('button:not(:disabled)').focus(); return; }
+      if (row && event.key === 'F2') { event.preventDefault(); beginRename(row.dataset.session); return; }
+      if (menuOpen && event.target.closest('.dn-popup')) {
+        if (event.key === 'Tab') { closeMenus(); return; }
+        const inSub = event.target.closest('.dn-submenu');
+        if (event.key === 'ArrowRight' && event.target.dataset.sub) { event.preventDefault(); subKind = event.target.dataset.sub; updateMenu(); sub.querySelector('.dn-sub-items button').focus(); return; }
+        if (event.key === 'ArrowLeft' && inSub) { event.preventDefault(); const previous = subKind; subKind = null; updateMenu(); q('[data-sub="' + previous + '"]').focus(); return; }
+        if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+          event.preventDefault(); const scope = inSub ? sub : menu;
+          const buttons = [...scope.querySelectorAll('button:not(:disabled)')].filter(node => !node.hidden && node.offsetHeight);
+          const index = buttons.indexOf(document.activeElement), step = event.key === 'ArrowDown' ? 1 : -1;
+          buttons[(index + step + buttons.length) % buttons.length]?.focus();
+        }
+      } else if (listOpen && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+        event.preventDefault(); const buttons = qa('.dn-pick'); const index = buttons.indexOf(document.activeElement), step = event.key === 'ArrowDown' ? 1 : -1;
+        buttons[(index + step + buttons.length) % buttons.length]?.focus();
+      }
+    });
+    rows.addEventListener('scroll', () => { if (menuOpen) closeMenus(); });
+    restore(window.openai?.widgetState); applyScenario();
+    window.addEventListener('openai:set_globals', event => { if (event.detail?.globals?.widgetState) { restore(event.detail.globals.widgetState); applyScenario(); } });
+    new ResizeObserver(positionMenus).observe(stage);
+    if (globalThis.Tweak) {
+      const tweak = new Tweak({ container: stage, onChange: () => { applyScenario(); persist(); } });
+      tweak.addSlider(options, 'rowHeight', { label: '会话行高度', min: 40, max: 60, step: 4, unit: 'px' });
+      tweak.addToggle(options, 'showMetadata', { label: '显示消息条数与时间' });
+      tweak.addSelect(options, 'titleState', { label: '首条会话标题状态', options: ['已生成', '生成中', '生成失败', '空会话'] });
+    }
+  })();
+  </script>
+</div>

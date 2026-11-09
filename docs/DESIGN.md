@@ -370,12 +370,12 @@ Spacing is based on 4px. The touched workspace uses:
   group. Save, cancel, and restore-default controls apply to global values;
   model switching does not reset them. Saved values take effect next turn.
   Actual defaults and validation ranges are maintained in
-  [the API contract](docs/api-contracts.md), not duplicated here.
+  [the API contract](state/api-contracts.md), not duplicated here.
 
 The completed designs and sketches are retained in
-[the v0.7.1 archive](docs/archive/v0.7.1/README.md). They do not approve the
+[the v0.7.1 archive](archive/v0.7.1/README.md). They do not approve the
 future v0.8 sidebar redesign. The current release's accessibility and provider
-verification limits are recorded in [its release notes](docs/plans/v0.7.1-release-notes.md).
+verification limits are recorded in [its release notes](release/v0.7.1-release-notes.md).
 
 ## 6. Motion & Interaction
 

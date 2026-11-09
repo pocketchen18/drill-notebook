@@ -186,7 +186,7 @@ System prompt（`KNOWLEDGE_SUMMARIZE_IMPORT_V1`）：
 堆、栈、方法区的浓缩说明。
 ```
 
-**输出格式 = 标准导入格式**，能被 `KnowledgePointImportService.parse` 直接接住（`headingLevel=2`）。详见 [docs/knowledge-point-import.md](knowledge-point-import.md) §2。
+**输出格式 = 标准导入格式**，能被 `KnowledgePointImportService.parse` 直接接住（`headingLevel=2`）。详见 [docs/reference/knowledge-point-import.md](knowledge-point-import.md) §2。
 
 ## 6. 错误处理与降级
 

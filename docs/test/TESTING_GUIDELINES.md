@@ -50,7 +50,7 @@ npm run test:backend
 
 另外执行 `git diff --check` 检查差异格式。最新版本的已执行范围、测试数量和未验收项记录在 [QA_CHECKLIST.md](QA_CHECKLIST.md)，不能把“前端通过”写成“全端门禁通过”。
 
-Electron 主进程有改动时，执行 `npm run test:electron` 和 `npm run build:electron`。入口回归在内存中执行真实 `electron/main.ts`，隔离 Electron / 后端 API；已接入根目录 `npm test`。另用 `npm run test:electron:native` 在 Windows 桌面会话中验证原生单实例锁和窗口恢复：加载重构建后的真实入口 / 路径模块，使用独立工作区 `tmp/` 和后端桩，结束后清理；不运行真实 Java 或发行打包。原生测试不并入默认无桌面测试流程。
+Electron 主进程有改动时，执行 `npm run test:electron` 和 `npm run build:electron`。入口回归在内存中执行真实 `electron/main.ts`，隔离 Electron / 后端 API；已接入根目录 `npm test`。另用 `npm run test:electron:native` 在 Windows 桌面会话中验证原生单实例锁和窗口恢复：加载重构建后的真实入口 / 路径模块，使用独立工作区 `temp/` 和后端桩，结束后清理；不运行真实 Java 或发行打包。原生测试不并入默认无桌面测试流程。
 
 发布配置有改动时，本地执行 `node --test --test-name-pattern='^(发布默认值|锁文件安装|云端后端|发布说明)' scripts/test-release-config.mjs`：检查发布配置检查与构建顺序、预装 Maven 和跳过测试执行的约定，以及发布说明按完整基础版本选择、缺失/空白时拒绝；不构建或生成模拟 ZIP。完整 `node --test scripts/test-release-config.mjs` 还包含假打包器 / ZIP 用例，留在 GitHub Actions 执行。
 

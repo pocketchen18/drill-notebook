@@ -33,7 +33,7 @@ class DataBackupServiceTest {
     /**
      * 不用 @TempDir：JUnit 扩展收尾删目录时正好撞上 SQLite 文件的 Windows「待删除」状态，
      * 会以可观概率抛 "Failed to close extension context"，污染整轮全量验证。
-     * TestWorkspace 落在 APP_ROOT/tmp 且带重试，顺带不再往系统 %TEMP% 留垃圾。
+     * TestWorkspace 落在 APP_ROOT/temp 且带重试，顺带不再往系统 %TEMP% 留垃圾。
      */
     private Path tempRoot;
 

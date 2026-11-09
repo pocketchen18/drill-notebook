@@ -45,6 +45,8 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 学习页通过 `useRegisterPageContext` 注册 `{ kind, title, markdown, ... }`。  
 仅内容变化时写入 store，防止 React #185 最大更新深度错误。
 
+会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；真实完成状态来自会话列表，前端仅在存在 generating 时轮询。自动标题不进入聊天正文或工具活动；跨会话查阅工具尚未实现。
+
 ### 2.3 界面状态记忆（v0.5.2）
 
 `lib/viewState.ts` 用**单个** localStorage key `ui.viewState.v1` 保存「上次页面 + 各页视图状态」：
@@ -59,7 +61,7 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 
 ### 2.4 笔记编辑器稳定性（v0.6.3）
 
-仍使用 TipTap 2.27，交互契约见 [DESIGN.md](../DESIGN.md) §5，回归映射见 [QA 清单](testing/QA_CHECKLIST.md)模块十二。
+仍使用 TipTap 2.27，交互契约见 [DESIGN.md](../DESIGN.md) §5，回归映射见 [QA 清单](../test/QA_CHECKLIST.md)模块十二。
 
 - `blockCommands.ts` 统一工具栏、块菜单与快捷键转换，事务内摊平公式并映射选区；`CodeBlockView.tsx` 的 `mathSpans` 只进入 JSON。单块来源完全匹配才恢复，多块只保留源码，手打 `$…$` 不猜测转换。
 - `extensions.ts` 的公式 `renderText` 同时供 TipTap 默认剪贴板与 `getText()` 使用；状态栏复用 schema 序列化器，去空白并按 Unicode 码点计数。无需额外 `MathLeafText` 插件，软换行保持换行。
@@ -95,16 +97,16 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 
 ## 4. 导入 / 导出
 
-- **导入**：Markdown 解析器、PDF 服务（规则 + AI 兜底）、JSON 等，见 `docs/import-formats.md`；知识点 Markdown 导入见 `docs/knowledge-point-import.md`。  
+- **导入**：Markdown 解析器、PDF 服务（规则 + AI 兜底）、JSON 等，见 `docs/reference/import-formats.md`；知识点 Markdown 导入见 `docs/reference/knowledge-point-import.md`。  
 - **导出**：前端 `lib/export.ts` + 页面 `ExportActions`；题库/笔记/错题/会话等。  
-- **导出格式 round-trip**（v0.1.0+）：题库导出的叙述式 `.md`（`### 颜干` + `**答案：**` + `---` 分隔）可再走「导入 Markdown」入口导回，由 `ExportMarkdownParser` 解析，无需手动改成 frontmatter 格式。详见 `docs/import-formats.md` §3。  
-- **AI 总结知识点**（v0.5）：双角色快照 + 三条总结路径，见 `docs/ai-summary.md`。
+- **导出格式 round-trip**（v0.1.0+）：题库导出的叙述式 `.md`（`### 颜干` + `**答案：**` + `---` 分隔）可再走「导入 Markdown」入口导回，由 `ExportMarkdownParser` 解析，无需手动改成 frontmatter 格式。详见 `docs/reference/import-formats.md` §3。  
+- **AI 总结知识点**（v0.5）：双角色快照 + 三条总结路径，见 `docs/reference/ai-summary.md`。
 
 ## 5. 便携与打包
 
 - 开发：未打包时默认在工作区旁建立便携数据根（`APP_ROOT`，不入库）。  
 - 生产：`electron/paths.ts` 将 userData/cache/temp 指到可执行文件旁。  
-- 发行包只在 `.github/workflows/release-portable.yml` 构建。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、应用目录和 ZIP。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](jlink.md)。本地不生成发行包。
+- 发行包只在 `.github/workflows/release-portable.yml` 构建。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、应用目录和 ZIP。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](../jlink.md)。本地不生成发行包。
 
 ## 6. 测试
 
