@@ -119,6 +119,46 @@ describe('AiAssistant 流式会话状态', () => {
   const activity: ToolActivity = { sequence: 1, toolName: 'create_memory', state: 'FINISHED', outcome: 'CREATED',
     count: 1, startedAt: '2026-11-08T01:00:00.000Z', elapsedMs: 30, availability: null, incomplete: false };
 
+  it('回复中 Enter 排队、Ctrl+Enter 插话且不取消当前轮，组合输入不提交', async () => {
+    renderAssistant(); await send('第一问');
+    const input = await screen.findByPlaceholderText('正在回复，可先输入下一条问题');
+    fireEvent.change(input, { target: { value: '下一条' } });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: true });
+    expect(apiPost).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/sessions/10/queue', expect.objectContaining({ mode: 'queue', input: { role: 'user', userText: '下一条' } })));
+    await waitFor(() => expect(input).toHaveValue(''));
+    fireEvent.change(input, { target: { value: '补充条件' } });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/sessions/10/queue', expect.objectContaining({ mode: 'steer', targetRequestId: turnRequestId() })));
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    expect(apiPost.mock.calls.some((call) => String(call[0]).endsWith('/cancel'))).toBe(false);
+  });
+
+  it('入队响应延迟时只清已提交草稿，随后输入的文字保留', async () => {
+    let acknowledge!: (value: unknown) => void;
+    apiPost.mockImplementation((path: string) => path.endsWith('/queue') ? new Promise((resolve) => { acknowledge = resolve; }) : Promise.resolve({}));
+    renderAssistant(); await send('第一问');
+    const input = await screen.findByPlaceholderText('正在回复，可先输入下一条问题');
+    fireEvent.change(input, { target: { value: '排队消息' } }); fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(acknowledge).toBeTruthy());
+    fireEvent.change(input, { target: { value: '正在写的新草稿' } });
+    await act(async () => { acknowledge({ status: 'QUEUED' }); });
+    expect(input).toHaveValue('正在写的新草稿');
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('已自定义 Ctrl+Enter 为发送时仍排队，不被插话快捷键覆盖', async () => {
+    const shortcuts = useUiStore.getState().shortcutConfig;
+    try {
+      act(() => useUiStore.setState({ shortcutConfig: { ...shortcuts, aiSend: ['Ctrl+Enter'] } }));
+      renderAssistant(); await send('第一问');
+      const input = await screen.findByPlaceholderText('正在回复，可先输入下一条问题');
+      fireEvent.change(input, { target: { value: '排队' } }); fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/ai/sessions/10/queue', expect.objectContaining({ mode: 'queue' })));
+    } finally { act(() => useUiStore.setState({ shortcutConfig: shortcuts })); }
+  });
+
   it('历史达限说明与继续入口保留，继续开启新轮次且不覆盖草稿', async () => {
     serverMessages = [{ id: 1, role: 'user', content: '检查所有记忆' },
       { id: 2, role: 'assistant', content: '已完成部分查询', requestId: 'budget-turn', turnStatus: 'COMPLETED', finishReason: 'budget_stages', toolActivities: [activity] }];
@@ -155,9 +195,11 @@ describe('AiAssistant 流式会话状态', () => {
     act(() => streamCallbacks!.onToolActivity!({ requestId: turnRequestId(), toolActivities: [activity,
       { ...activity, sequence: 2, toolName: 'update_memory', state: 'RUNNING', outcome: 'UNKNOWN', elapsedMs: null }], phase: 'tools' }));
     fireEvent.click(screen.getByRole('button', { name: '中断生成' }));
+    expect(screen.getByRole('button', { name: '中断生成' })).toBeVisible();
+    act(() => streamCallbacks!.onDone({ requestId: turnRequestId(), status: 'ABORTED', reply: '', reasoning: '', toolActivities: [activity], stateDurable: true }));
     expect(screen.getByText('记住我的复习偏好')).toBeVisible();
     expect(screen.getByRole('button', { name: /新增记忆 已新增 1 条/ })).toBeVisible();
-    expect(screen.getByText(/回答已中断，已确认的工具结果已保留/)).toBeVisible();
+    expect(screen.getByText(/这一轮已中断/)).toBeVisible();
     expect(document.querySelector('.ai-tool-icon.is-running')).toBeNull();
     expect(streamChatMock).toHaveBeenCalledTimes(1);
     expect(apiPost.mock.calls.some((call) => call[0] === '/api/ai/chat')).toBe(false);
@@ -285,7 +327,7 @@ describe('AiAssistant 流式会话状态', () => {
     expect(nodes[4].querySelector('.chat-stream-cursor')).not.toBeNull();
   });
 
-  it('停止带着本轮 requestId 调取消接口，让后端立刻释放会话', async () => {
+  it('停止携带本轮 requestId，等待后端终态且保留已受理提问', async () => {
     serverMessages = [{ id: 1, role: 'user', content: '第一问', createdAt: '2026-10-12T12:00:00.000Z' }];
     renderAssistant();
     await screen.findByText('第一问');
@@ -305,9 +347,10 @@ describe('AiAssistant 流式会话状态', () => {
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith(`/api/ai/turns/${requestId}/cancel`, {}));
     await waitFor(() => expect(storageReads()).toBeGreaterThan(storageBefore));
-    // 停止后界面恢复可发送：占位与未送达的用户消息一起回滚
+    act(() => streamCallbacks!.onDone({ requestId, status: 'ABORTED', reply: '', reasoning: '', stateDurable: true }));
+    // 后端确认后恢复可发送；已经受理的提问不能从界面抹掉。
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument());
-    expect(messageNodes().some((node) => node.textContent?.includes('第二问'))).toBe(false);
+    expect(messageNodes().some((node) => node.textContent?.includes('第二问'))).toBe(true);
   });
 
   it('已有部分正文后收到 error：绝不自动回退重发，保留已生成内容', async () => {

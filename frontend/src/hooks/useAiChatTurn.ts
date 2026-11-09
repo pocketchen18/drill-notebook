@@ -7,6 +7,7 @@ import { generateUuidV7 } from '../lib/uuidV7';
 import type { RetrievalOptions } from '../lib/types';
 import { readToolActivities } from '../lib/toolActivity';
 import type { ToolActivity, ToolPhase } from '../lib/toolActivity';
+import type { ChatSupplement } from '../lib/chatQueue';
 
 /**
  * 聊天轮次的唯一出口（执行方案 §12、contracts §4.1/§4.2/§4.5）。
@@ -41,6 +42,7 @@ export interface TurnInput {
 
 /** GET /turns/{requestId} 的可见事实（§4.5）：界面只能拿这些字段描述这一轮。 */
 export interface TurnStatusView {
+  supplements?: ChatSupplement[];
   reply?: string;
   reasoning?: string;
   userText?: string;
@@ -57,6 +59,7 @@ export interface TurnStatusView {
 }
 
 export type TurnEvent =
+  | { type: 'supplements'; requestId: string; supplements: ChatSupplement[] }
   | { type: 'snapshot'; requestId: string; status: TurnStatusView }
   | { type: 'activity'; requestId: string; activities: ToolActivity[]; phase: ToolPhase }
   | { type: 'reconciled'; requestId: string; status: TurnStatusView }
@@ -95,6 +98,7 @@ export interface SessionRuntime {
   status: string;
   phase?: string;
   queueCount: number;
+  paused?: boolean;
 }
 export const isSessionRunning = (value?: SessionRuntime): boolean => !!value && ['RUNNING', 'QUEUED'].includes(value.status);
 
@@ -102,7 +106,7 @@ export const isSessionRunning = (value?: SessionRuntime): boolean => !!value && 
 const STATUS_BACKOFF_MS = [400, 1200, 3000];
 
 /** 请求体只在这里拼一次：流式与非流式回退复用同一份，才撞得到服务端的同一身份上。 */
-function buildTurnBody(requestId: string, input: TurnInput): Record<string, unknown> {
+export function buildTurnBody(requestId: string, input: TurnInput): Record<string, unknown> {
   const attachments = (input.attachments ?? []).map((item) => ({
     ...item,
     ...(item.kind === 'image' && item.dataBase64
@@ -312,9 +316,10 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
         turn.produced = true;
         emit(turn, { type: 'reasoning', requestId: turn.requestId, delta });
       },
-      onMetadata: () => {
+      onMetadata: (metadata) => {
         turn.begun = true;
         emit(turn, { type: 'begun', requestId: turn.requestId });
+        if (metadata.supplements) emit(turn, { type: 'supplements', requestId: turn.requestId, supplements: metadata.supplements });
       },
       onToolActivity: (event) => {
         if (event.requestId !== turn.requestId) return;
@@ -404,7 +409,15 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
     const current = runtimesRef.current.find((item) => item.sessionId === id);
     const expected = tracked?.requestId ?? current?.requestId;
     if (!expected) return;
-    await post(`/api/ai/turns/${expected}/cancel`, {});
+    for (let attempt = 0; ; attempt++) {
+      try { await post(`/api/ai/turns/${expected}/cancel`, {}); break; }
+      catch (error) {
+        // A fast click can precede the stream's begin receipt. Retry only this identity, never its successor.
+        if (!(error instanceof ApiError) || error.code !== 'TURN_NOT_FOUND' || !tracked
+          || activeRef.current.get(id) !== tracked || attempt >= 3) throw error;
+        await wait([100, 250, 500][attempt]);
+      }
+    }
     setRuntimes((items) => items.map((item) => item.sessionId === id ? { ...item, phase: 'stopping' } : item));
     // Keep the subscription and busy state until the server confirms terminal state.
   };

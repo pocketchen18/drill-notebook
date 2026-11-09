@@ -53,6 +53,16 @@ public class SessionLookupRepository {
         private final Connection connection;
         private Snapshot(Connection connection) { this.connection = connection; }
 
+        public List<com.drillnotebook.app.service.ChatSupplement> supplements(long messageId,
+                com.drillnotebook.app.service.ChatMessageCipher cipher,String password) throws SQLException {
+            try(var statement=connection.prepareStatement("SELECT request_id FROM ai_chat_turn WHERE assistant_message_id=?")){
+                statement.setLong(1,messageId);
+                try(var rows=statement.executeQuery()){
+                    return rows.next()?com.drillnotebook.app.service.ChatSupplement.read(connection,rows.getString(1),cipher,password):List.of();
+                }
+            }
+        }
+
         public Session byId(long id) throws SQLException { return find("id", id); }
         public Session byRef(String ref) throws SQLException { return find("session_ref", ref); }
 

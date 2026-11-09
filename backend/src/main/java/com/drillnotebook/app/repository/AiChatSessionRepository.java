@@ -222,6 +222,21 @@ public class AiChatSessionRepository {
         ), sessionId);
     }
 
+    /** Supplements belong to a turn, rather than separate legacy message rows. */
+    public List<com.drillnotebook.app.service.ChatSupplement> supplements(long assistantMessageId,
+            com.drillnotebook.app.service.ChatMessageCipher cipher, String password) {
+        return jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<List<com.drillnotebook.app.service.ChatSupplement>>) connection -> {
+            String requestId = null;
+            try (var statement = connection.prepareStatement("SELECT request_id FROM ai_chat_turn WHERE assistant_message_id = ? AND content_deleted_at IS NULL")) {
+                statement.setLong(1, assistantMessageId);
+                try (var rows = statement.executeQuery()) {
+                    if (rows.next()) requestId = rows.getString(1);
+                }
+            }
+            return com.drillnotebook.app.service.ChatSupplement.read(connection, requestId, cipher, password);
+        });
+    }
+
     /** 返回真实消息 ID：轮次回填、导出与来源绑定都要用，不能再靠"最后一条"猜。 */
     public long insertMessage(long sessionId, String role, String content, String contentCipher, String contentMeta) {
         return insertMessage(sessionId, role, content, contentCipher, contentMeta, null, null);

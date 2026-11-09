@@ -44,6 +44,7 @@ export interface UsageSnapshot {
 }
 
 export interface ChatResultView {
+  supplements?: import('./chatQueue').ChatSupplement[];
   finishReason?: string;
   toolActivities?: ToolActivity[];
   protocolVersion?: number;
@@ -103,7 +104,7 @@ export interface StreamCallbacks {
 
 const RESULT_VIEW_KEYS: Array<keyof ChatResultView> = [
   'protocolVersion', 'requestId', 'sessionId', 'status', 'stateDurable', 'persistenceStatus', 'replayed',
-  'citations', 'memoryContext', 'contextUsage', 'contextAudit', 'usage', 'planId', 'dispatchState', 'finishReason'
+  'citations', 'memoryContext', 'contextUsage', 'contextAudit', 'usage', 'planId', 'dispatchState', 'finishReason', 'supplements'
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {

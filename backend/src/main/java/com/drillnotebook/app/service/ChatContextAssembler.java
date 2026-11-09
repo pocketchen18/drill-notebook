@@ -72,7 +72,10 @@ public class ChatContextAssembler {
 
     /** 一轮近期对话（user + assistant 成对），带可选的历史图片。 */
     public record Turn(Long turnId, boolean legacy, Long userMessageId, Long assistantMessageId, String userText,
-                       String assistantText, List<Image> images, int estimatedTokens) {
+                       String assistantText, List<Image> images, int estimatedTokens,List<ChatSupplement> supplements) {
+        public Turn(Long turnId,boolean legacy,Long userMessageId,Long assistantMessageId,String userText,String assistantText,List<Image> images,int estimatedTokens){
+            this(turnId,legacy,userMessageId,assistantMessageId,userText,assistantText,images,estimatedTokens,List.of());
+        }
     }
 
     /** 组装产物：预算阶段唯一输入，所有取舍都从这里开始。 */
@@ -280,7 +283,7 @@ public class ChatContextAssembler {
                     : imagesByTurn.getOrDefault(item.turnId(), List.of());
             int estimated = item.estimatedTokens() + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS;
             turns.add(new Turn(item.legacy() ? null : item.turnId(), item.legacy(), item.userMessageId(),
-                    item.assistantMessageId(), item.userText(), item.assistantText(), images, estimated));
+                    item.assistantMessageId(), item.userText(), item.assistantText(), images, estimated,item.supplements()));
         }
         return List.copyOf(turns);
     }

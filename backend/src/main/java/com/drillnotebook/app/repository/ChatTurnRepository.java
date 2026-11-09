@@ -465,6 +465,9 @@ public class ChatTurnRepository {
 
     /** 一次事务里的单轮清理：清证据 → 删行 → 立墓碑，计数一并带回。 */
     private Released clearTurnContent(Connection connection, TurnRow turn, String deletedAt) throws SQLException {
+        try(var statement=connection.prepareStatement("UPDATE ai_chat_pending SET payload_cipher='',payload_meta='',payload_bytes=0,state='CONSUMED' WHERE parent_request_id=?")){
+            statement.setString(1,turn.requestId());statement.executeUpdate();
+        }
         long attachmentBytes = scalar(connection,
                 "SELECT COALESCE(SUM(byte_length), 0) FROM ai_chat_attachment WHERE turn_id = ?", turn.id());
         long storedBytes = turn.storedHistoryBytes();

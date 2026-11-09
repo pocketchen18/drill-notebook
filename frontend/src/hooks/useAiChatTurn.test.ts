@@ -182,7 +182,8 @@ describe('useAiChatTurn 停止与取消', () => {
     expect(turn.result.current.busy).toBe(false);
   });
 
-  it('取消接口失败不能假装停止，保留忙碌并提示重连', async () => {
+  it('取消接口持续查无轮次，有限重试后仍保留忙碌并提示重连', async () => {
+    vi.useFakeTimers();
     streamChatMock.mockImplementation(() => Promise.resolve(vi.fn()));
     apiPost.mockRejectedValue(new ApiError('TURN_NOT_FOUND', '没有这个轮次', 404));
     const turn = renderTurn();
@@ -191,8 +192,13 @@ describe('useAiChatTurn 停止与取消', () => {
       await Promise.resolve();
     });
 
-    await act(async () => turn.result.current.stop());
+    await act(async () => {
+      turn.result.current.stop();
+      await vi.advanceTimersByTimeAsync(850);
+    });
 
+    expect(apiPost).toHaveBeenCalledTimes(4);
+    expect(apiPost.mock.calls.every((call) => call[0] === `/api/ai/turns/${turnId()}/cancel`)).toBe(true);
     expect(turn.result.current.busy).toBe(true);
     expect(turn.result.current.reconnecting).toBe(true);
     expect(events.filter((event) => event.type !== 'begun')).toHaveLength(0);
@@ -374,6 +380,20 @@ describe('useAiChatTurn 无 done 的 EOF', () => {
 });
 
 describe('useAiChatTurn 会话隔离', () => {
+  it('停止早于服务端登记时只重试原身份，不重新发送消息', async () => {
+    vi.useFakeTimers();
+    const turn = renderTurn();
+    await act(async () => turn.result.current.send({ sessionId: 10, userText: '刚发送就停止' }));
+    apiPost.mockRejectedValueOnce(new ApiError('TURN_NOT_FOUND', '没有这个轮次', 404)).mockResolvedValue({ status: 'STOPPING' });
+    await act(async () => {
+      const stop = turn.result.current.stopSession(10);
+      await vi.advanceTimersByTimeAsync(1000); await stop;
+    });
+    expect(apiPost).toHaveBeenCalledTimes(2);
+    expect(apiPost.mock.calls[0]).toEqual(apiPost.mock.calls[1]);
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    expect(turn.result.current.busy).toBe(true);
+  });
   it('切换后可在另一会话发送，前一个会话由快照恢复而不重发', async () => {
     vi.useFakeTimers();
     const turn = renderTurn();

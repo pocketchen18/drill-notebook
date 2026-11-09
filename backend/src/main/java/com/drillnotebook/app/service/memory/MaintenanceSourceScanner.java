@@ -411,7 +411,15 @@ public class MaintenanceSourceScanner {
                 }
                 assistantText = reply.value();
             }
-            int tokens = estimator.estimateText(userText)
+            String sourceText=userText;
+            int supplementTokens=0;
+            try {
+                for(var supplement:history.supplements(row.requestId(),cipher,request.sessionPassword())){
+                    supplementTokens+=estimator.estimateText(supplement.userText());
+                    if(!extract)sourceText+="\n\n[本轮用户插话]\n"+supplement.userText();
+                }
+            }catch(com.drillnotebook.app.service.ChatCryptoException error){counters.unreadable++;continue;}
+            int tokens = estimator.estimateText(userText) + supplementTokens
                     + (assistantText == null ? 0 : estimator.estimateText(assistantText));
             if (turns.size() >= MaintenanceRules.MAX_TURNS_PER_BATCH || tokens > budget) {
                 if (turns.isEmpty() && tokens > budget) {
@@ -425,7 +433,7 @@ public class MaintenanceSourceScanner {
             }
             budget -= tokens;
             turns.add(new SourceTurn(row.turnId(), row.sourceRevision(), row.userMessageId(),
-                    row.assistantMessageId(), userText, assistantText, tokens,
+                    row.assistantMessageId(), sourceText, assistantText, tokens,
                     MemoryTimes.parseMillis(row.finishedAt()), blocks, row.userCreatedAt()));
         }
         Skips skips = counters.toSkips();
@@ -537,12 +545,13 @@ public class MaintenanceSourceScanner {
                     return -1;
                 }
                 total += estimator.estimateText(user.value()) + estimator.estimateText(reply.value());
+                for(var supplement:history.supplements(row.requestId(),cipher,sessionPassword))total+=estimator.estimateText(supplement.userText());
                 if (total >= MaintenanceRules.RECENT_TOKEN_BUDGET) {
                     return MaintenanceRules.RECENT_TOKEN_BUDGET;
                 }
             }
             return total;
-        } catch (SQLException error) {
+        } catch (SQLException | com.drillnotebook.app.service.ChatCryptoException error) {
             return -1;
         }
     }
@@ -590,6 +599,9 @@ public class MaintenanceSourceScanner {
                 if (!blockId.isBlank() && !text.isBlank()) {
                     authored.add(new SourceBlock(blockId, text));
                 }
+            }
+            for(var supplement:history.supplements(row.requestId(),cipher,sessionPassword)){
+                if(!supplement.userText().isBlank())authored.add(new SourceBlock("s-"+supplement.requestId(),supplement.userText()));
             }
             return new BlockRead(List.copyOf(authored), false);
         } catch (Exception error) {

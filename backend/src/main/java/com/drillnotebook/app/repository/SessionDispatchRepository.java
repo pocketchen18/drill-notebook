@@ -30,7 +30,8 @@ public class SessionDispatchRepository {
         return jdbc.query("""
                 SELECT * FROM ai_session_dispatch WHERE sequence IN (
                   SELECT COALESCE(MAX(CASE WHEN d.state <> 'CANCELLED' THEN d.sequence END),MAX(d.sequence))
-                  FROM ai_session_dispatch d JOIN ai_chat_session s ON s.id=d.session_id GROUP BY d.session_id)
+                  FROM ai_session_dispatch d JOIN ai_chat_session s ON s.id=d.session_id
+                  WHERE NOT EXISTS(SELECT 1 FROM ai_chat_pending p WHERE p.request_id=d.request_id AND p.parent_request_id IS NOT NULL) GROUP BY d.session_id)
                 """,
                 (r,n) -> row(r));
     }
@@ -94,7 +95,7 @@ public class SessionDispatchRepository {
         }
     }
     public static boolean blocksStart(Connection c,long session,String request) throws SQLException {
-        try(var s=c.prepareStatement("SELECT request_id FROM ai_session_dispatch WHERE session_id=? AND state IN ('QUEUED','RUNNING') ORDER BY sequence LIMIT 1")) {
+        try(var s=c.prepareStatement("SELECT request_id FROM ai_session_dispatch d WHERE session_id=? AND state IN ('QUEUED','RUNNING') AND NOT EXISTS(SELECT 1 FROM ai_chat_pending p WHERE p.request_id=d.request_id AND p.parent_request_id IS NOT NULL) ORDER BY sequence LIMIT 1")) {
             s.setLong(1,session); try(var r=s.executeQuery()) { return r.next() && !r.getString(1).equals(request); }
         }
     }

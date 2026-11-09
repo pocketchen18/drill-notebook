@@ -66,7 +66,11 @@ public class ConversationProjection {
     /** 一条候选：正文已解密，附件只带身份（要不要取密文由组装器按图片策略决定）。 */
     public record Item(long turnId, String requestId, boolean legacy, Long userMessageId, Long assistantMessageId,
                        String userText, String assistantText, List<AttachmentStub> attachments, String startedAt,
-                       int estimatedTokens) {
+                       int estimatedTokens, List<ChatSupplement> supplements) {
+        public Item(long turnId,String requestId,boolean legacy,Long userMessageId,Long assistantMessageId,
+                    String userText,String assistantText,List<AttachmentStub> attachments,String startedAt,int estimatedTokens){
+            this(turnId,requestId,legacy,userMessageId,assistantMessageId,userText,assistantText,attachments,startedAt,estimatedTokens,List.of());
+        }
     }
 
     /**
@@ -222,15 +226,18 @@ public class ConversationProjection {
                     scan.unfinished++;
                     continue;
                 }
+                Item item;
+                try { item=itemOf(row,userText,assistantText,request); }
+                catch(ChatCryptoException error){scan.unreadable++;continue;}
                 scan.completeSeen++;
                 // 最近两条完整轮次永远留原文：摘要替掉它们会让近期区凭空消失（T02）
                 if (isCovered(summary, row.turnId()) && scan.completeSeen > MIN_RECENT_TURNS) {
                     // 先留一份原文：摘要被预算舍弃时 coverage 不再成立，要用它做有界回补（§9.4）
-                    scan.coveredFirst.add(itemOf(row, userText, assistantText));
+                    scan.coveredFirst.add(item);
                     scan.covered++;
                     continue;
                 }
-                scan.newestFirst.add(itemOf(row, userText, assistantText));
+                scan.newestFirst.add(item);
             }
             if (batch.size() < limit) break;
             if (enough(scan.newestFirst, request.recentTokenBudget())) break;
@@ -238,10 +245,12 @@ public class ConversationProjection {
         return scan;
     }
 
-    private Item itemOf(TurnHistory row, String userText, String assistantText) {
+    private Item itemOf(TurnHistory row, String userText, String assistantText,Request request) throws SQLException {
+        var supplements=history.supplements(row.requestId(),cipher,request.masterPassword());
         return new Item(row.turnId(), row.requestId(), false, row.userMessageId(),
                 row.assistantMessageId(), userText, assistantText, List.of(), row.startedAt(),
-                estimator.estimateText(userText) + estimator.estimateText(assistantText));
+                estimator.estimateText(userText) + estimator.estimateText(assistantText)
+                        +supplements.stream().mapToInt(s->estimator.estimateText(s.contextText())).sum(),supplements);
     }
 
     /** 只在初始 generation 补 legacy（§2.2：切过作用域后旧正文不再自动带入上下文）。 */
@@ -315,7 +324,7 @@ public class ConversationProjection {
             enriched.add(stubs.isEmpty() ? item
                     : new Item(item.turnId(), item.requestId(), item.legacy(), item.userMessageId(),
                             item.assistantMessageId(), item.userText(), item.assistantText(), List.copyOf(stubs),
-                            item.startedAt(), item.estimatedTokens()));
+                            item.startedAt(), item.estimatedTokens(),item.supplements()));
         }
         return enriched;
     }
