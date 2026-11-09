@@ -3,6 +3,8 @@ export const TOOL_NAMES = {
   search_memories: '检索记忆', list_memories: '读取记忆',
   list_sessions: '查找历史会话', read_session: '读取会话',
   create_session: '新建会话', send_message: '发送消息',
+  read_current_page: '读取当前页面', search_materials: '查找学习资料', read_notebook: '读取笔记',
+  read_knowledge: '读取知识点', read_question_bank: '读取题库', read_wrong_questions: '读取错题',
   create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
 } as const;
 export type ToolName = keyof typeof TOOL_NAMES;
@@ -76,6 +78,15 @@ export function toolTone(row: ToolActivity): 'running' | 'success' | 'neutral' |
 export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return '执行结果未确认';
+  if (['read_current_page', 'search_materials', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName)) {
+    switch (row.outcome) {
+      case 'OK': return `本次${row.toolName === 'search_materials' ? '找到' : '读取'} ${row.count} 项${row.incomplete ? '（部分内容）' : ''}`;
+      case 'NO_MATCH': return '当前范围没有匹配资料';
+      case 'NOT_FOUND': return '资料或所选版本不存在，可能已被删除';
+      case 'STALE': return '资料已变化，需要重新读取';
+      case 'UNAVAILABLE': return '资料暂时无法读取';
+    }
+  }
   if (row.toolName === 'create_session' && row.outcome === 'CREATED') return '会话已创建，首条消息已提交';
   if (row.outcome === 'SENT') return '消息已提交，等待目标回复';
   if (row.outcome === 'QUEUED') return row.toolName === 'read_session' ? '目标消息仍在排队，尚无回复' : '已排队，等待当前回复结束';
@@ -136,6 +147,8 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
     ? '部分执行结果未确认' : warnings.length < rows.length ? '部分工具未完成'
       : warnings.every((row) => row.outcome === 'UNAVAILABLE') ? '工具暂不可用' : '工具未完成';
   const parts: string[] = [];
+  if (rows.some((row) => row.toolName === 'search_materials')) parts.push('已查找学习资料');
+  if (rows.some((row) => ['read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName))) parts.push('已读取学习资料');
   if (rows.some((row) => row.toolName === 'search_memories')) parts.push('已检索记忆');
   if (rows.some((row) => row.toolName === 'list_memories')) parts.push('已读取记忆');
   if (rows.some((row) => row.toolName === 'list_sessions')) parts.push('已查找历史会话');

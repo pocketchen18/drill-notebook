@@ -11,7 +11,7 @@ const LS_THEME_MODE = 'ui.themeMode';
 const LS_OUTLINE_SIDE = 'ui.outlineSide';
 export const LS_NOTEBOOK_PANELS_SWAPPED = 'ui.notebookPanelsSwapped';
 
-export type AiContextKind = 'none' | 'quiz' | 'wrong' | 'note' | 'bank' | 'manual';
+export type AiContextKind = 'none' | 'quiz' | 'wrong' | 'note' | 'knowledge' | 'bank' | 'manual';
 
 export interface AiPageContext {
   kind: AiContextKind;
@@ -21,6 +21,12 @@ export interface AiPageContext {
   notePageId?: number;
   notebookId?: number;
   questionId?: number;
+  bankId?: number;
+  pointId?: number;
+  selectedIds?: number[];
+  selection?: string;
+  isDraft?: boolean;
+  truncated?: boolean;
 }
 
 interface UiState {
@@ -134,6 +140,12 @@ export const useUiStore = create<UiState>((set) => ({
       && prev.notePageId === pageContext.notePageId
       && prev.notebookId === pageContext.notebookId
       && prev.questionId === pageContext.questionId
+      && prev.bankId === pageContext.bankId
+      && prev.pointId === pageContext.pointId
+      && prev.selection === pageContext.selection
+      && prev.isDraft === pageContext.isDraft
+      && prev.truncated === pageContext.truncated
+      && JSON.stringify(prev.selectedIds) === JSON.stringify(pageContext.selectedIds)
     ) {
       return state;
     }

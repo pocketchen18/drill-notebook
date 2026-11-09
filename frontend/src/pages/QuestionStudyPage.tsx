@@ -21,8 +21,10 @@ import { SessionCurveSettingsModal } from '../components/SessionCurveSettingsMod
 import type { StubbornCandidate } from '../components/SessionPlanRecommendModal';
 import { usePersistSlice } from '../hooks/useViewState';
 import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
+import { questionsToMarkdown } from '../lib/aiContext';
 
-export function QuestionStudyPage(): JSX.Element {
+export function QuestionStudyPage({ contextActive = true }: { contextActive?: boolean } = {}): JSX.Element {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { planItemId, planDate } = planScopeFromSearch(searchParams);
@@ -121,6 +123,12 @@ export function QuestionStudyPage(): JSX.Element {
   const byId = useMemo(() => new Map((questionsQuery.data ?? []).map((question) => [question.id, question])), [questionsQuery.data]);
   const currentEntry = curveQueue[index];
   const question = currentEntry ? byId.get(currentEntry.resourceId) : undefined;
+  useRegisterPageContext({ kind: 'quiz', title: question ? `背题 · 第 ${index + 1} 题` : '背题（未开始）',
+    route: '/memorize', bankId, questionId: question?.id,
+    markdown: question ? questionsToMarkdown([{ ...question, answer: revealed ? question.answer : undefined,
+      analysis: revealed ? question.analysis : undefined }]) : '',
+    selectedIds: question ? undefined : selectedIds
+  }, contextActive);
 
   const jump = (nextIndex: number): void => { setIndex(nextIndex); setRevealed(false); setSelectedOption(null); };
 

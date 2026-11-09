@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { Message } from '@arco-design/web-react';
 import type { NotePage, Notebook } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
@@ -148,7 +148,10 @@ function primeNotebookApi(opts: { slowPages?: boolean; slowPage37?: boolean; cre
 
 function LocationProbe(): JSX.Element {
   const location = useLocation();
-  return <div data-testid="loc">{location.pathname}{location.search}</div>;
+  const navigate = useNavigate();
+  return <><div data-testid="loc">{location.pathname}{location.search}</div>
+    <button onClick={() => navigate('/notebooks?pageId=37')}>打开另一来源</button>
+    <button onClick={() => navigate('/notebooks?notebookId=2')}>打开空笔记本来源</button></>;
 }
 
 function renderNotebookPage(initialEntries: string[] = ['/notebooks']): ReturnType<typeof render> {
@@ -168,6 +171,20 @@ function renderNotebookPage(initialEntries: string[] = ['/notebooks']): ReturnTy
 // =====================================================================
 
 describe('NotebookPage behavior — baseline regression (Task 1)', () => {
+  it('连续点击页面来源可切换目标，打开空笔记本不会保留旧本正文', async () => {
+    primeNotebookApi();
+    const originalGet = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((path: string) => path === '/api/notebooks'
+      ? Promise.resolve([...baseNotebooks, { id: 2, title: '空笔记本' }]) : originalGet(path));
+    renderNotebookPage(['/notebooks?pageId=11']);
+    await waitFor(() => expect(screen.getByTestId('notebook-editor')).toHaveAttribute('data-page-id', '11'));
+    fireEvent.click(screen.getByText('打开另一来源'));
+    await waitFor(() => expect(screen.getByTestId('notebook-editor')).toHaveAttribute('data-page-id', '37'));
+    fireEvent.click(screen.getByText('打开空笔记本来源'));
+    await waitFor(() => expect(screen.queryByTestId('notebook-editor')).not.toBeInTheDocument());
+    expect(useUiStore.getState().pageContext.markdown).not.toContain('原-37');
+    expect(useUiStore.getState().pageContext.notebookId).toBe(2);
+  });
   describe('Heading + notebook + page selector (NBK-01, NBK-04)', () => {
     beforeEach(() => primeNotebookApi());
 

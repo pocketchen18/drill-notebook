@@ -8,6 +8,7 @@ import { fireEvent, render, screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { KnowledgeMemorizeSession } from './KnowledgeMemorizeSession';
 import type { KnowledgePoint } from '../../lib/types';
+import { useUiStore } from '../../stores/uiStore';
 
 const { completeStudyMock } = vi.hoisted(() => ({ completeStudyMock: vi.fn() }));
 
@@ -62,6 +63,16 @@ describe('KnowledgeMemorizeSession 跨天评分', () => {
 
   afterEach(() => {
     localStorage.removeItem('session.curveConfig');
+  });
+
+  it('当前页快照只在揭示后包含正文，隐藏标签不能覆盖活动页面', () => {
+    useUiStore.getState().clearPageContext();
+    const view = render(<MemoryRouter><KnowledgeMemorizeSession points={[POINT]} questions={[]} ids={[1]} /></MemoryRouter>);
+    expect(useUiStore.getState().pageContext.markdown).not.toContain(POINT.content);
+    fireEvent.click(screen.getByText('显示内容'));
+    expect(useUiStore.getState().pageContext.markdown).toContain(POINT.content);
+    view.rerender(<MemoryRouter><KnowledgeMemorizeSession points={[POINT]} questions={[]} ids={[1]} contextActive={false} /></MemoryRouter>);
+    expect(useUiStore.getState().pageContext.markdown).toBe('');
   });
 
   it('submits once on the first rating', async () => {

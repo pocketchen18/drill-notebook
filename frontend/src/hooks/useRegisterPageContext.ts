@@ -1,37 +1,35 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
+import { businessSelection } from '../lib/pageSnapshot';
 
 function contextKey(context: AiPageContext): string {
-  return [
-    context.kind,
-    context.title,
-    context.markdown,
-    context.route ?? '',
-    context.notePageId ?? '',
-    context.notebookId ?? '',
-    context.questionId ?? ''
-  ].join('\u0001');
+  return JSON.stringify(context);
 }
 
 /**
  * Register AI page context without infinite re-render loops.
  * Only calls the store when the serialized context actually changes.
  */
-export function useRegisterPageContext(context: AiPageContext): void {
-  const lastKey = useRef<string>('');
-  const key = useMemo(() => contextKey(context), [
-    context.kind,
-    context.title,
-    context.markdown,
-    context.route,
-    context.notePageId,
-    context.notebookId,
-    context.questionId
-  ]);
-
+export function useRegisterPageContext(context: AiPageContext, enabled = true): void {
+  const live = useRef(context);
+  live.current = context;
+  const key = contextKey(context);
   useEffect(() => {
-    if (lastKey.current === key) return;
-    lastKey.current = key;
-    useUiStore.getState().setPageContext(context);
-  }, [context, key]);
+    if (!enabled) return;
+    let owned: AiPageContext = { ...live.current };
+    useUiStore.getState().setPageContext(owned);
+    owned = useUiStore.getState().pageContext;
+    const onSelection = (): void => {
+      if (useUiStore.getState().aiOpen || useUiStore.getState().pageContext !== owned) return;
+      const selection = businessSelection(live.current.markdown);
+      useUiStore.getState().setPageContext({ ...live.current, ...(selection ? { selection } : {}) });
+      owned = useUiStore.getState().pageContext;
+    };
+    document.addEventListener('selectionchange', onSelection);
+    return () => {
+      document.removeEventListener('selectionchange', onSelection);
+      // 不能清掉下一页面已经注册的内容。
+      if (useUiStore.getState().pageContext === owned) useUiStore.getState().clearPageContext();
+    };
+  }, [key, enabled]);
 }

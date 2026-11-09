@@ -30,6 +30,7 @@ export function NotebookPage(): JSX.Element {
   const [searchParams] = useSearchParams();
   const planItemId = Number(searchParams.get('planItemId')) || undefined;
   const pageIdFromQuery = Number(searchParams.get('pageId')) || undefined;
+  const notebookIdFromQuery = Number(searchParams.get('notebookId')) || undefined;
   const dayQueueMode = searchParams.get('dayQueue') === '1';
   const pageIdsFromQuery = useMemo(
     () => searchParams.get('pageIds')?.split(',').map(Number).filter(Boolean) ?? [],
@@ -39,8 +40,13 @@ export function NotebookPage(): JSX.Element {
   const setNotebookFocusMode = useUiStore((state) => state.setNotebookFocusMode);
   const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
   const cachedNotebooks = readPageSlice('notebooks');
-  const [notebookId, setNotebookId] = useState<number | undefined>(cachedNotebooks.notebookId);
-  const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery ?? cachedNotebooks.pageId);
+  const [notebookId, setNotebookId] = useState<number | undefined>(notebookIdFromQuery ?? cachedNotebooks.notebookId);
+  const [pageId, setPageId] = useState<number | undefined>(pageIdFromQuery ?? (notebookIdFromQuery ? undefined : cachedNotebooks.pageId));
+  useEffect(() => {
+    if (!notebookIdFromQuery || pageIdFromQuery) return;
+    setNotebookId(notebookIdFromQuery);
+    setPageId(undefined);
+  }, [notebookIdFromQuery, pageIdFromQuery]);
   const [newPageVisible, setNewPageVisible] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
   const [newNotebookVisible, setNewNotebookVisible] = useState(false);
@@ -66,7 +72,7 @@ export function NotebookPage(): JSX.Element {
   const listRenameInputRef = useRef<RefInputType>(null);
   const headerRenameInputRef = useRef<RefInputType>(null);
   const notebookRenameInputRef = useRef<RefInputType>(null);
-  const deepLinkApplied = useRef(false);
+  const deepLinkApplied = useRef<number>();
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
   const pagesQuery = useQuery({ queryKey: ['note-pages', notebookId], queryFn: () => get<NotePage[]>(`/api/notebooks/${notebookId}/pages`), enabled: notebookId !== undefined });
   const pageQuery = useQuery({ queryKey: ['note-page', pageId], queryFn: () => get<NotePage>(`/api/note-pages/${pageId}`), enabled: pageId !== undefined });
@@ -273,8 +279,9 @@ export function NotebookPage(): JSX.Element {
 
   // Deep link: select notebook + page from ?pageId=
   useEffect(() => {
-    if (deepLinkApplied.current || !pageIdFromQuery || !deepLinkPageQuery.data) return;
-    deepLinkApplied.current = true;
+    if (!pageIdFromQuery) { deepLinkApplied.current = undefined; return; }
+    if (deepLinkApplied.current === pageIdFromQuery || !deepLinkPageQuery.data) return;
+    deepLinkApplied.current = pageIdFromQuery;
     setNotebookId(deepLinkPageQuery.data.notebookId);
     setPageId(deepLinkPageQuery.data.id);
   }, [deepLinkPageQuery.data, pageIdFromQuery]);
@@ -283,7 +290,7 @@ export function NotebookPage(): JSX.Element {
     if (notebookId === undefined && notebooksQuery.data?.length && !pageIdFromQuery) {
       setNotebookId(notebooksQuery.data[0].id);
     }
-    if (notebookId === undefined && notebooksQuery.data?.length && pageIdFromQuery && deepLinkApplied.current === false && deepLinkPageQuery.isError) {
+    if (notebookId === undefined && notebooksQuery.data?.length && pageIdFromQuery && deepLinkApplied.current !== pageIdFromQuery && deepLinkPageQuery.isError) {
       // Fallback if deep-link page fetch failed
       setNotebookId(notebooksQuery.data[0].id);
     }
@@ -354,7 +361,7 @@ export function NotebookPage(): JSX.Element {
     return () => setNotebookFocusMode(false);
   }, [focusMode, setNotebookFocusMode]);
 
-  const currentPage = pageQuery.data;
+  const currentPage = pageQuery.data?.notebookId === notebookId ? pageQuery.data : undefined;
   const selectedNotebook = notebooksQuery.data?.find((notebook) => notebook.id === notebookId);
   const validSelectedPageIds = useMemo(() => {
     const available = new Set((pagesQuery.data ?? []).map((page) => page.id));
@@ -397,7 +404,8 @@ export function NotebookPage(): JSX.Element {
       markdown: notePageToMarkdown({ ...currentPage, content }),
       route: '/notebooks',
       notebookId: currentPage.notebookId,
-      notePageId: currentPage.id
+      notePageId: currentPage.id,
+      isDraft: draft?.pageId === currentPage.id && JSON.stringify(draft.content) !== JSON.stringify(currentPage.content)
     };
   }, [currentPage, notebookId, pageId, draft]);
 

@@ -28,7 +28,7 @@ export function PracticePage({ initialTab }: { initialTab?: PracticeTab }): JSX.
         onChange={(key) => setTab(key as PracticeTab)}
       >
         <Tabs.TabPane key="quiz" title="刷题">
-          <QuizPage />
+          <QuizPage contextActive={tab === 'quiz'} />
         </Tabs.TabPane>
         <Tabs.TabPane key="memorize" title="背诵">
           <div className="memorize-mode-bar">
@@ -37,7 +37,7 @@ export function PracticePage({ initialTab }: { initialTab?: PracticeTab }): JSX.
               <Radio value="knowledge">背知识点</Radio>
             </Radio.Group>
           </div>
-          {memorizeTarget === 'questions' ? <QuestionStudyPage /> : <KnowledgeMemorizePanel />}
+          {memorizeTarget === 'questions' ? <QuestionStudyPage contextActive={tab === 'memorize'} /> : <KnowledgeMemorizePanel contextActive={tab === 'memorize'} />}
         </Tabs.TabPane>
       </Tabs>
     </div>

@@ -3,6 +3,7 @@ import { Form, Input, InputNumber, Message, Modal, Select } from '@arco-design/w
 import { post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Question, QuestionOption, QuestionType } from '../lib/types';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 
 interface QuestionEditorModalProps {
   bankId: number;
@@ -27,6 +28,10 @@ export function QuestionEditorModal({ bankId, question, visible, onClose, onSave
   const [tags, setTags] = useState('');
   const [difficulty, setDifficulty] = useState(3);
   const [saving, setSaving] = useState(false);
+  useRegisterPageContext({ kind: 'bank', title: question ? '编辑题目' : '新建题目', route: '/banks',
+    bankId, questionId: question?.id, isDraft: true,
+    markdown: `题面：${stem}\n\n${type === 'single' || type === 'multiple' ? options : ''}\n\n答案：${answer}\n\n解析：${analysis}\n\n章节：${chapter}\n标签：${tags}\n难度：${difficulty}`
+  }, visible);
 
   useEffect(() => {
     if (!visible) return;

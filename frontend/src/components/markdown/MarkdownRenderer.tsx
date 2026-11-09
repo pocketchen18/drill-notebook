@@ -5,6 +5,7 @@ import { renderToString } from 'katex';
 import { ensureMermaidTheme, readDocumentTheme } from '../../lib/mermaidTheme';
 import { renderMermaid } from '../../lib/mermaidRender';
 import { useUiStore } from '../../stores/uiStore';
+import { materialLinkTarget } from '../../lib/pageSnapshot';
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -21,6 +22,11 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
   if (ref) {
     token.attrSet('href', `#ai-session-${ref}`);
     token.attrSet('data-session-ref', ref);
+  }
+  const material = materialLinkTarget(token.attrGet('href') ?? '');
+  if (material) {
+    token.attrSet('href', `#ai-material-${material.type}-${material.id}`);
+    token.attrSet('data-material-link', `drill-notebook://material/${material.type}/${material.id}`);
   }
   return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, renderer)
     : renderer.renderToken(tokens, index, options);
@@ -82,9 +88,10 @@ export interface MarkdownContentProps {
   className?: string;
   inline?: boolean;
   onSessionLink?: (link: string) => void;
+  onMaterialLink?: (link: string) => void;
 }
 
-export function MarkdownContent({ value = '', className = '', inline = false, onSessionLink }: MarkdownContentProps): JSX.Element {
+export function MarkdownContent({ value = '', className = '', inline = false, onSessionLink, onMaterialLink }: MarkdownContentProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const theme = useUiStore((state) => state.theme);
   const html = renderMarkdownHtml(value);
@@ -96,6 +103,8 @@ export function MarkdownContent({ value = '', className = '', inline = false, on
 
   return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()}
     onClick={(event) => {
+      const material = event.target instanceof Element ? event.target.closest('a[data-material-link]')?.getAttribute('data-material-link') : null;
+      if (material && materialLinkTarget(material)) { event.preventDefault(); onMaterialLink?.(material); return; }
       const ref = event.target instanceof Element ? event.target.closest('a[data-session-ref]')?.getAttribute('data-session-ref') : null;
       if (!ref || !/^[a-f0-9]{32}$/.test(ref)) return;
       event.preventDefault();

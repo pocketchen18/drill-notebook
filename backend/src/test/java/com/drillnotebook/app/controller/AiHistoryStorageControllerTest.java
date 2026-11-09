@@ -16,6 +16,7 @@ import com.drillnotebook.app.service.ChatStorageService;
 import com.drillnotebook.app.service.ChatTurnRejectException;
 import com.drillnotebook.app.service.RetrievalMaintenanceService;
 import com.drillnotebook.app.service.RetrievalStatusService;
+import com.drillnotebook.app.service.SessionDispatchService;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,8 @@ class AiHistoryStorageControllerTest {
     private RetrievalStatusService retrievalStatus;
     @MockBean
     private RetrievalMaintenanceService retrievalMaintenance;
+    @MockBean
+    private SessionDispatchService dispatch;
 
     @Test
     void storageSnapshotServesTheLedgerNumbers() throws Exception {

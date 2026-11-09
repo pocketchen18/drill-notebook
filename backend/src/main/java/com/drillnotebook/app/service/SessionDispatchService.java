@@ -85,7 +85,7 @@ public class SessionDispatchService {
     /** All human queue mutations share the scheduler lock, including a run's final input boundary. */
     public synchronized Map<String,Object> submitHuman(long session,Map<String,Object> raw) {
         var body=new LinkedHashMap<String,Object>();
-        for(String key:List.of("protocolVersion","requestId","input","pageContext","retrievalOptions","memoryOptions","retryOf"))
+        for(String key:List.of("protocolVersion","requestId","input","pageContext","pageSnapshot","retrievalOptions","memoryOptions","retryOf"))
             if(raw.containsKey(key))body.put(key,raw.get(key));
         body.put("sessionId",session);
         String id=Objects.toString(body.get("requestId"),"");
@@ -167,6 +167,7 @@ public class SessionDispatchService {
                 if(body.get("input") instanceof Map<?,?> input&&input.get("attachments") instanceof List<?> attachments)
                     view.put("attachments",attachments.stream().filter(Map.class::isInstance).map(x->{var a=(Map<?,?>)x;return Map.of("clientId",Objects.toString(a.get("clientId"),""),"name",Objects.toString(a.get("name"),"附件"),"kind",Objects.toString(a.get("kind"),"text"));}).toList());
                 if(body.get("pageContext") instanceof Map<?,?> context){view.put("context","笔记页面"+(context.get("pageId")==null?"快照":" #"+context.get("pageId")));}
+                if(body.get("pageSnapshot") instanceof Map<?,?> context) view.put("context", Objects.toString(context.get("title"), "页面快照"));
             }catch(RuntimeException error){view.put("error",error.getMessage());view.put("userText","[待发内容暂时无法读取]");}
             if(run!=null&&run.metadata.get("message") instanceof String error)view.put("error",error);
             (row.parent()==null?items:steering).add(view);

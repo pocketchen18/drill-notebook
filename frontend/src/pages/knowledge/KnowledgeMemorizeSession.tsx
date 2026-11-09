@@ -11,8 +11,10 @@ import type { CurveEntry, CurveItemState } from '../../lib/sessionCurve';
 import { finishDayQueueStep } from '../../components/DayQueueSessionBar';
 import { SessionPlanRecommendModal } from '../../components/SessionPlanRecommendModal';
 import type { StubbornCandidate } from '../../components/SessionPlanRecommendModal';
+import { useRegisterPageContext } from '../../hooks/useRegisterPageContext';
 
 export interface KnowledgeMemorizeSessionProps {
+  contextActive?: boolean;
   /** 全量知识点（按 id 查找会话条目） */
   points: KnowledgePoint[];
   /** 关联题目展示用 */
@@ -33,7 +35,7 @@ export interface KnowledgeMemorizeSessionProps {
  * 背知识点会话：短周期记忆曲线（多轮循环 + 错题重复）的播放界面。
  * 由「练习 → 背诵 → 背知识点」面板与知识点页深链（日历/今日队列）共用。
  */
-export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, planItemId, planDate, planResourceId, dayQueueMode, onFinish }: KnowledgeMemorizeSessionProps): JSX.Element {
+export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, planItemId, planDate, planResourceId, dayQueueMode, onFinish, contextActive = true }: KnowledgeMemorizeSessionProps): JSX.Element {
   const navigate = useNavigate();
   const [curveLoops] = useState(() => {
     const config = readSessionCurveConfig();
@@ -53,6 +55,9 @@ export function KnowledgeMemorizeSession({ points, questions, ids, singleLoop, p
   const pointById = new Map(points.map((point) => [point.id, point]));
   const currentEntry = curveQueue[index];
   const current = currentEntry ? pointById.get(currentEntry.resourceId) : undefined;
+  useRegisterPageContext({ kind: 'knowledge', title: current?.title ?? '背诵知识点', route: '/knowledge',
+    pointId: current?.id, bankId: current?.bankId,
+    markdown: current ? `${current.title}\n${revealed ? current.content : '（正文尚未揭示）'}` : '' }, contextActive);
 
   const jump = (next: number): void => { setIndex(next); setRevealed(false); };
 

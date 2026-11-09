@@ -71,7 +71,7 @@ function AddToNoteModal({ question, visible, onClose }: { question?: Question; v
   </Modal>;
 }
 
-export function QuizPage(): JSX.Element {
+export function QuizPage({ contextActive = true }: { contextActive?: boolean } = {}): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -172,19 +172,20 @@ export function QuizPage(): JSX.Element {
     }
     const body = questionsToMarkdown([{
       ...question,
-      answer: result?.correctAnswer ?? question.answer,
-      analysis: result?.analysis ?? question.analysis
+      answer: result ? result.correctAnswer ?? question.answer : undefined,
+      analysis: result ? result.analysis ?? question.analysis : undefined
     }]);
     return {
       kind: 'quiz' as const,
       title: `刷题 · 第 ${index + 1} 题`,
       markdown: body,
       route: '/quiz',
-      questionId: question.id
+      questionId: question.id,
+      bankId: question.bankId
     };
   }, [index, question, result]);
 
-  useRegisterPageContext(pageContext);
+  useRegisterPageContext(pageContext, contextActive);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
