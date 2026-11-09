@@ -351,6 +351,11 @@ public class MemoryVaultService {
         return Optional.ofNullable(sessionMaterials.get(sessionId));
     }
 
+    /** Newly created ordinary sessions can inherit in-process unlock material; never persisted. */
+    public void rememberSessionPassword(long sessionId,String password) {
+        if(password!=null && !password.isBlank()) sessionMaterials.put(sessionId,password);
+    }
+
     /** 锁定时的联动清理入口：P5 的索引缓存与 P6 的维护 worker 在此登记。 */
     public void onLock(Runnable hook) {
         lockHooks.add(hook);

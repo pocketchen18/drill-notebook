@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class ChatTurnController {
     private final ChatTurnService turns;
     private final ContextInspector inspector;
+    private com.drillnotebook.app.service.SessionDispatchService dispatch;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatch(com.drillnotebook.app.service.SessionDispatchService dispatch) { this.dispatch=dispatch; }
 
     public ChatTurnController(ChatTurnService turns, ContextInspector inspector) {
         this.turns = turns;
@@ -34,12 +37,12 @@ public class ChatTurnController {
     public Map<String, Object> status(@PathVariable String requestId,
                                       @RequestHeader(value = "X-Chat-Master-Password", required = false)
                                       String masterPassword) {
-        return turns.status(requestId, masterPassword);
+        return dispatch==null ? turns.status(requestId, masterPassword) : dispatch.status(requestId);
     }
 
     @PostMapping("/{requestId}/cancel")
     public Map<String, Object> cancel(@PathVariable String requestId) {
-        return turns.cancel(requestId);
+        return dispatch==null ? turns.cancel(requestId) : dispatch.cancelRequest(requestId);
     }
 
     /** 本轮实际发给模型的有界审计；没有快照时明确 unavailable。 */

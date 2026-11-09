@@ -13,6 +13,7 @@ final class AiTurnBudget {
     private int stages;
     private int executions;
     private long output;
+    private long inFlight;
     private String lastFingerprint;
     private int repeated;
     private String reason;
@@ -23,7 +24,7 @@ final class AiTurnBudget {
         this.clock = clock;
         this.started = clock.getAsLong();
     }
-    String stopReason(int reserve) {
+    synchronized String stopReason(int reserve) {
         if (reason != null) return reason;
         if (secondsLeft() <= Math.min(60, settings.turnTimeoutMinutes() * 6)) return "budget_time";
         if (stages >= settings.maxToolStages()) return "budget_stages";
@@ -31,22 +32,30 @@ final class AiTurnBudget {
         if (output >= settings.maxOutputTokens() - reserve) return "budget_output";
         return null;
     }
-    int allocation(int requested, int reserve) {
-        return (int) Math.max(0, Math.min(requested, (long) settings.maxOutputTokens() - output - reserve));
+    synchronized int allocation(int requested, int reserve) {
+        return (int) Math.max(0, Math.min(requested, (long) settings.maxOutputTokens() - output - inFlight - reserve));
     }
-    void consume(AiUpstreamClient.Usage usage, int allocated) {
+    synchronized int reserve(int requested) { int amount=allocation(requested,0); inFlight+=amount; return amount; }
+    synchronized void release(int allocated) { inFlight=Math.max(0,inFlight-allocated); }
+    synchronized void consume(AiUpstreamClient.Usage usage, int allocated) {
+        release(allocated);
         output += usage != null && usage.outputTokens() != null ? Math.max(0, usage.outputTokens()) : allocated;
     }
-    void stage() { stages++; }
-    boolean canExecute() { return executions < settings.maxToolExecutions() && secondsLeft() > 0 && reason == null; }
-    void executed() { executions++; }
-    void stop(String cause) { if (reason == null) reason = cause; }
+    synchronized void stage() { stages++; }
+    synchronized boolean tryStage() {
+        if(stages>=settings.maxToolStages()) return false;
+        stages++; return true;
+    }
+    synchronized boolean canExecute() { return executions < settings.maxToolExecutions() && secondsLeft() > 0 && reason == null; }
+    synchronized void executed() { executions++; }
+    synchronized boolean tryExecute() { if(!canExecute()) return false; executions++; return true; }
+    synchronized void stop(String cause) { if (reason == null) reason = cause; }
     long secondsLeft() {
         long remaining = settings.turnTimeoutMinutes() * 60_000_000_000L - Math.max(0, clock.getAsLong() - started);
         return Math.max(0, remaining / 1_000_000_000L);
     }
     int requestSeconds() { return (int) Math.min(settings.requestTimeoutMinutes() * 60L, secondsLeft()); }
-    void observe(AiUpstreamClient.ToolCall call, String result, ObjectMapper mapper) {
+    synchronized void observe(AiUpstreamClient.ToolCall call, String result, ObjectMapper mapper) {
         if (settings.repeatedToolLimit() == 0) return;
         String fingerprint;
         try {

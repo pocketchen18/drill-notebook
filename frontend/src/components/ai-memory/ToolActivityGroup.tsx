@@ -8,6 +8,7 @@ interface Props {
   active?: boolean;
   phase?: ToolPhase;
   onDisclosure?: () => void;
+  onOpenSession?: (link: string) => void;
 }
 
 function StatusIcon({ tone }: { tone: ReturnType<typeof toolTone> }): JSX.Element {
@@ -16,7 +17,7 @@ function StatusIcon({ tone }: { tone: ReturnType<typeof toolTone> }): JSX.Elemen
 }
 
 /** 折叠选择与服务端快照分开保存，事件更新不会抢走用户正在看的详情。 */
-export function ToolActivityGroup({ activities, active = false, phase, onDisclosure }: Props): JSX.Element | null {
+export function ToolActivityGroup({ activities, active = false, phase, onDisclosure, onOpenSession }: Props): JSX.Element | null {
   const id = useId();
   const historyOnMount = useRef(!active);
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
@@ -39,6 +40,7 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
     ? toolDuration(activities.reduce((sum, row) => sum + (row.elapsedMs ?? 0), 0)) : null;
   const written = activities.some((row) => row.state === 'FINISHED' && ['CREATED', 'UPDATED'].includes(row.outcome));
   const unknownWrite = activities.some((row) => row.state === 'UNKNOWN' && ['create_memory', 'update_memory'].includes(row.toolName));
+  const unknownDispatch = activities.some((row) => row.state === 'UNKNOWN' && ['create_session', 'send_message'].includes(row.toolName));
   const tone = running ? 'running' : warning ? 'warning' : activities.some((row) => toolTone(row) === 'success') ? 'success' : 'neutral';
   const toggle = (button: HTMLButtonElement, change: () => void): void => {
     onDisclosure?.();
@@ -81,13 +83,16 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
           <dl id={`${id}-${row.sequence}`} className="ai-tool-details" hidden={!details.has(row.sequence)}>
             <dt>开始时间</dt><dd>{toolStartedAt(row.startedAt)}</dd>
             <dt>执行耗时</dt><dd>{duration(row)}</dd>
-            <dt>{['create_memory', 'update_memory'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt><dd>当前有权访问的记忆</dd>
-            <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete ? '（部分结果）' : ''}</dd>
+            <dt>{['create_memory', 'update_memory', 'create_session', 'send_message'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
+            <dd>{['list_sessions', 'read_session', 'create_session', 'send_message'].includes(row.toolName) ? '当前本地数据中的会话' : '当前有权访问的记忆'}</dd>
+            <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete && !['list_sessions', 'read_session'].includes(row.toolName) ? '（部分结果）' : ''}</dd>
             <dt>工具名称</dt><dd><code>{row.toolName}</code></dd>
+            {row.sessionLink && onOpenSession ? <><dt>目标会话</dt><dd><button type="button" onClick={() => onOpenSession(row.sessionLink!)}>打开会话 ↗</button></dd></> : null}
           </dl>
         </li>)}
       </ol>
       {unknownWrite ? <p className="ai-tool-note">部分写入结果未确认，可到记忆库核对。{written ? '已确认的变更已保留。' : ''}</p> : null}
+      {unknownDispatch ? <p className="ai-tool-note">部分消息是否已提交尚未确认，可到会话列表核对。</p> : null}
     </div>
     {active && phase === 'answer' && !running ? <div className="ai-tool-answer" role="status">正在生成回答…</div> : null}
   </section>;

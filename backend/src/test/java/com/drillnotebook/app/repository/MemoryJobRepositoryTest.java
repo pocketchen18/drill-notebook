@@ -52,7 +52,7 @@ class MemoryJobRepositoryTest {
         new DatabaseInitializer(dataSource, Schema9Fixture.resolver(appRoot)).initialize();
         jdbc = new JdbcTemplate(dataSource);
         jobs = new MemoryJobRepository(dataSource, new ImmediateTransaction(dataSource));
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         jdbc.update("INSERT INTO ai_chat_session(title) VALUES ('第二个会话')");
         otherSessionId = jdbc.queryForObject("SELECT MAX(id) FROM ai_chat_session", Long.class);
     }

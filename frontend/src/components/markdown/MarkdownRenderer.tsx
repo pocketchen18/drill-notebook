@@ -13,6 +13,19 @@ const markdown = new MarkdownIt({
   typographer: true
 });
 
+// 内部会话引用转成页内链接，由调用方处理；不放宽 HTML 清洗器的协议白名单。
+const defaultLinkOpen = markdown.renderer.rules.link_open;
+markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+  const token = tokens[index];
+  const ref = /^drill-notebook:\/\/session\/([a-f0-9]{32})$/.exec(token.attrGet('href') ?? '')?.[1];
+  if (ref) {
+    token.attrSet('href', `#ai-session-${ref}`);
+    token.attrSet('data-session-ref', ref);
+  }
+  return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, renderer)
+    : renderer.renderToken(tokens, index, options);
+};
+
 const mathPattern = /(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^$\n]+?)\$|(?<!\\)\\\[([\s\S]+?)\\\]|(?<!\\)\\\(([^()\n]+?)\\\)/g;
 let mermaidId = 0;
 
@@ -68,9 +81,10 @@ export interface MarkdownContentProps {
   value?: string;
   className?: string;
   inline?: boolean;
+  onSessionLink?: (link: string) => void;
 }
 
-export function MarkdownContent({ value = '', className = '', inline = false }: MarkdownContentProps): JSX.Element {
+export function MarkdownContent({ value = '', className = '', inline = false, onSessionLink }: MarkdownContentProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const theme = useUiStore((state) => state.theme);
   const html = renderMarkdownHtml(value);
@@ -80,5 +94,11 @@ export function MarkdownContent({ value = '', className = '', inline = false }: 
     return renderMermaidBlocks(rootRef.current, theme ?? readDocumentTheme());
   }, [html, theme]);
 
-  return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()}
+    onClick={(event) => {
+      const ref = event.target instanceof Element ? event.target.closest('a[data-session-ref]')?.getAttribute('data-session-ref') : null;
+      if (!ref || !/^[a-f0-9]{32}$/.test(ref)) return;
+      event.preventDefault();
+      onSessionLink?.(`drill-notebook://session/${ref}`);
+    }} dangerouslySetInnerHTML={{ __html: html }} />;
 }

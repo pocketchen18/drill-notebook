@@ -25,6 +25,7 @@ import { attachmentLimitError } from '../lib/aiAttachmentLimits';
 import type { PendingAttachment } from '../lib/aiAttachmentLimits';
 import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
+import { SessionReferencePreview } from './ai-session/SessionReferencePreview';
 import { useUiStore } from '../stores/uiStore';
 import { ToolActivityGroup } from './ai-memory/ToolActivityGroup';
 import { mergeToolActivities, settleToolActivities } from '../lib/toolActivity';
@@ -98,7 +99,7 @@ export function AiAssistant(): JSX.Element {
   const sessionsQuery = useQuery({
     queryKey: ['ai-sessions'],
     queryFn: () => get<AiChatSession[]>('/api/ai/sessions'),
-    refetchInterval: (query) => query.state.data?.some((session) => session.titleStatus === 'generating') ? 1500 : false,
+    refetchInterval: 1500,
     enabled: aiOpen
   });
 
@@ -117,6 +118,7 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
+  const [sessionReference, setSessionReference] = useState<string>();
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
   const [inspectorTarget, setInspectorTarget] = useState<{ requestId: string; snapshot?: TurnResult } | null>(null);
   const selectedSessionRef = useRef(sessionId);
@@ -128,8 +130,10 @@ export function AiAssistant(): JSX.Element {
     messageKeyCounter.current += 1;
     return `m${messageKeyCounter.current}`;
   };
-  // 标记用户最近一次显式选中的会话 id，避免 sessions effect 在 refetch 时把用户切走。
-  const lastExplicitSessionIdRef = useRef<number | undefined>(undefined);
+  // undefined 是首次加载，null 是未保存的新会话页；刷新列表不能把草稿页切走。
+  const lastExplicitSessionIdRef = useRef<number | null | undefined>(undefined);
+  const firstSendPendingRef = useRef(false);
+  const pendingFirstTurnRef = useRef<TurnInput | null>(null);
   // 本轮结果落回哪一个气泡：流式先立占位，非流式收到整块结果才追加。
   const turnTargetRef = useRef<{ userKey: string; assistantKey: string | null } | null>(null);
   // 流式期间用户已向上滚动 → 暂停自动滚到底；回到接近底部时自动恢复。
@@ -138,10 +142,31 @@ export function AiAssistant(): JSX.Element {
   const lastScrollTopRef = useRef(0);
   // 往前翻页前的列表高度：用来把视口补回原来看着的那条消息
   const olderAnchorRef = useRef<number | null>(null);
+  const draftCache = useRef(new Map<number | 'new', { message: string; attachments: Attachment[]; messages: ChatMessage[];
+    target: typeof turnTargetRef.current; sticky: boolean; scroll: number }>());
+  const restoreScrollRef = useRef<number | null>(null);
+  const observedStatusRef = useRef(new Map<string, string>());
+  function selectSession(next: number | undefined): void {
+    if (firstSendPendingRef.current || next === sessionId) return;
+    draftCache.current.set(sessionId ?? 'new', { message, attachments, messages, target: turnTargetRef.current,
+      sticky: stickyBottomRef.current, scroll: chatContainerRef.current?.scrollTop ?? 0 });
+    const draft = draftCache.current.get(next ?? 'new');
+    lastExplicitSessionIdRef.current = next ?? null;
+    setSessionId(next); setMessage(draft?.message ?? ''); setAttachments(draft?.attachments ?? []); setMessages(draft?.messages ?? []);
+    turnTargetRef.current = draft?.target ?? null;
+    stickyBottomRef.current = draft?.sticky ?? true; restoreScrollRef.current = draft?.scroll ?? 0;
+    olderAnchorRef.current = null; setPendingInsert(undefined);
+  }
 
   const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
   const streaming = turn.busy;
+  // 后台会话不会向当前聊天发送事件；按轮次/状态变化同步全局容量，避免每次轮询重读账本。
+  const runtimeStorageSignature = turn.runtimes
+    .map((item) => `${item.sessionId}:${item.requestId}:${item.status}`).sort().join('|');
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: storageQueryKey });
+  }, [queryClient, runtimeStorageSignature]);
 
   const targetPagesQuery = useQuery({
     queryKey: ['ai-drawer-pages', targetNotebookId],
@@ -198,16 +223,19 @@ export function AiAssistant(): JSX.Element {
   }, [targetPageId, targetPagesQuery.data]);
 
   useEffect(() => {
-    if (!sessionsQuery.data?.length) return;
+    if (!sessionsQuery.data || lastExplicitSessionIdRef.current === null || firstSendPendingRef.current) return;
     // 用户最近一次显式选中的会话若仍在列表中（哪怕列表 refetch 重新排过序），不要把它重置到 data[0]。
     if (lastExplicitSessionIdRef.current !== undefined &&
         sessionsQuery.data.some((item) => item.id === lastExplicitSessionIdRef.current)) {
       if (sessionId !== lastExplicitSessionIdRef.current) setSessionId(lastExplicitSessionIdRef.current);
       return;
     }
-    // 仅在「当前没有选中会话」或「选中的会话已不存在（被删除）」时回退到 data[0]，避免新建会话后被立刻切走。
+    // 仅首次进入可恢复最近会话；已选会话消失后回到草稿页，空列表也不补建占位会话。
     if (sessionId === undefined || !sessionsQuery.data.some((item) => item.id === sessionId)) {
-      setSessionId(sessionsQuery.data[0].id);
+      const next = lastExplicitSessionIdRef.current === undefined ? sessionsQuery.data[0]?.id : undefined;
+      lastExplicitSessionIdRef.current = next ?? null;
+      setSessionId(next);
+      setMessages([]);
     }
   }, [sessionId, sessionsQuery.data]);
 
@@ -251,10 +279,13 @@ export function AiAssistant(): JSX.Element {
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
+    if (restoreScrollRef.current !== null && !history.isLoading) {
+      el.scrollTop = restoreScrollRef.current; lastScrollTopRef.current = el.scrollTop; restoreScrollRef.current = null;
+    }
     if (!stickyBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
-  }, [visibleMessages]);
+  }, [visibleMessages, history.isLoading]);
   useEffect(() => {
     if (!streaming) return;
     let frame = 0;
@@ -313,8 +344,7 @@ export function AiAssistant(): JSX.Element {
   const createSessionMutation = useMutation({
     mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
     onSuccess: (session) => {
-      // 乐观写入缓存：让新会话立即出现在列表中，避免 refetch 完成前旧列表触发
-      // 会话 effect 把选中会话切回旧值（表现为「第一次点新建不跳转」）。
+      // 只在首条消息发送时创建；先写缓存和选择，下一次渲染后再启动首轮。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
         const list = old ?? [];
         if (list.some((item) => item.id === session.id)) return list;
@@ -322,26 +352,16 @@ export function AiAssistant(): JSX.Element {
       });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = session.id;
+      draftCache.current.delete('new');
       setSessionId(session.id);
-      setMessages([]);
-    },
-    onError: (error) => Message.error(error.message)
+    }
   });
 
-  /** 新建/复用空白会话：列表中已存在 messageCount===0 的会话则复用，否则创建。 */
+  /** 新会话页只保存前端草稿，发送前没有数据库会话。 */
   const handleNewSession = (): void => {
-    if (createSessionMutation.isPending) return;
-    const sessions = sessionsQuery.data ?? [];
-    // 当前会话以"看得见的内容"为准（缓存 messageCount 可能因刚中断/未刷新而过期），
-    // 其余会话用缓存计数判断是否空白。
-    const blank = sessions.find((item) => !item.archived && (item.id === sessionId ? visibleMessages.length === 0 : (item.messageCount ?? 0) === 0));
-    if (blank) {
-      lastExplicitSessionIdRef.current = blank.id;
-      setSessionId(blank.id);
-      setMessages([]);
-      return;
-    }
-    createSessionMutation.mutate();
+    if (firstSendPendingRef.current || lastExplicitSessionIdRef.current === null) return;
+    selectSession(undefined);
+    setInspectorTarget(null);
   };
 
   const updateSessionCache = (session: AiChatSession): void => {
@@ -359,41 +379,12 @@ export function AiAssistant(): JSX.Element {
   };
 
   const deleteSessionMutation = useMutation({
-    mutationFn: async (id: number) => {
-      let home: AiChatSession | undefined;
-      if (selectedSessionRef.current === id) {
-        home = queryClient.getQueryData<AiChatSession[]>(['ai-sessions'])?.find((item) =>
-          item.id !== id && !item.archived && item.messageCount === 0 && item.id !== turn.activeSessionId);
-        // 先准备落点：新建失败时原会话仍然存在；删除失败时保留空白会话供重试复用。
-        if (!home) {
-          home = await post<AiChatSession>('/api/ai/sessions', { title: '新会话' });
-          const created = { ...home, messageCount: home.messageCount ?? 0 };
-          queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) =>
-            [created, ...(old ?? []).filter((item) => item.id !== created.id)]);
-        }
-      }
-      await del(`/api/ai/sessions/${id}`);
-      return home;
-    },
-    onSuccess: (home, deletedId) => {
-      // 一次更新列表与选中项，避免 refetch 将删除后的落点切到其它历史会话。
-      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
-        const remaining = (old ?? []).filter((item) => item.id !== deletedId);
-        return home && !remaining.some((item) => item.id === home.id)
-          ? [{ ...home, messageCount: home.messageCount ?? 0 }, ...remaining] : remaining;
-      });
+    mutationFn: (id: number) => del(`/api/ai/sessions/${id}`),
+    onSuccess: (_result, deletedId) => {
+      if (selectedSessionRef.current === deletedId) handleNewSession();
+      queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
       queryClient.removeQueries({ queryKey: historyQueryKey(deletedId) });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
-      if (selectedSessionRef.current === deletedId && home) {
-        lastExplicitSessionIdRef.current = home.id;
-        setSessionId(home.id);
-        setMessages([]);
-        setMessage('');
-        setAttachments([]);
-        setInspectorTarget(null);
-        stickyBottomRef.current = true;
-        olderAnchorRef.current = null;
-      }
     }
   });
 
@@ -507,6 +498,42 @@ export function AiAssistant(): JSX.Element {
 
   /** 轮次事件的界面落点：done、查到的终态、失败都只写回本轮那一个气泡（§4.2 统一结果）。 */
   function onTurnEvent(event: TurnEvent): void {
+    if (event.type === 'snapshot') {
+      const snapshot = event.status;
+      if (snapshot.sessionId !== selectedSessionRef.current) return;
+      // A waiting receipt is not yet a chat turn; its prompt enters history only when execution starts.
+      if (snapshot.status === 'QUEUED') return;
+      if (snapshot.contentDeleted) {
+        setMessages((current) => current.filter((item) => item.requestId !== event.requestId));
+        return;
+      }
+      const running = snapshot.active === true;
+      setMessages((current) => {
+        const next = current.map((item) => item.streaming && item.requestId !== event.requestId
+          ? { ...item, streaming: false, toolActivities: settleToolActivities(item.toolActivities) } : item);
+        if (snapshot.userText && !next.some((item) => item.role === 'user' && item.requestId === event.requestId)) {
+          next.push({ role: 'user', content: snapshot.userText, requestId: event.requestId, _key: `u-${event.requestId}` });
+        }
+        const index = next.findIndex((item) => item.role === 'assistant' && item.requestId === event.requestId);
+        const previous = index < 0 ? undefined : next[index];
+        if (!running && !previous && !snapshot.reply && !snapshot.reasoning && !snapshot.toolActivities?.length) return next;
+        const item: ChatMessage = { ...previous, role: 'assistant', content: snapshot.reply ?? previous?.content ?? '',
+          reasoning: snapshot.reasoning ?? previous?.reasoning, requestId: event.requestId, streaming: running,
+          toolActivities: running ? mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)
+            : settleToolActivities(mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)),
+          toolPhase: snapshot.phase === 'tools' ? 'tools' : 'answer',
+          notice: running ? undefined : snapshot.status === 'COMPLETED'
+            ? executionStopNotice(snapshot.finishReason) : statusNotice(snapshot), _key: previous?._key ?? `a-${event.requestId}` };
+        if (index < 0) next.push(item); else next[index] = item;
+        return next;
+      });
+      const key = `${sessionId}:${event.requestId}`;
+      if (observedStatusRef.current.get(key) !== snapshot.status) {
+        observedStatusRef.current.set(key, snapshot.status ?? 'UNKNOWN');
+        invalidateSessionLists(true);
+      }
+      return;
+    }
     if (event.type === 'reconciled') {
       // 取消后的确认按原 requestId 回填，不能套用指向新一轮的 turnTargetRef。
       setMessages((current) => current.map((item) => item.role === 'assistant' && item.requestId === event.requestId
@@ -568,47 +595,23 @@ export function AiAssistant(): JSX.Element {
     }
   }
 
-  /** 停止：断开连接并带着本轮身份取消，服务端立刻收尾（会话不再被"已有一轮正在进行"占住）。 */
+  /** 请求停止当前会话并取消待发送项；保持订阅，等待服务端确认终态。 */
   const stopGeneration = (): void => {
     turn.stop();
-    // 只刷新会话列表计数：否则该会话在缓存里仍是 messageCount=0，「新建」会把它误判为空白会话而复用。
+    // 只刷新会话列表计数，保持中断后的列表状态准确。
     // 不要在此 invalidate 该会话的消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存。
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
     // 取消会退还为回复预留的字节，容量条要跟着结算走（6a 复核留下的那条观察）
     void queryClient.invalidateQueries({ queryKey: storageQueryKey });
-    const key = turnTargetRef.current?.assistantKey;
-    setMessages((current) => {
-      const next = [...current];
-      const last = next[next.length - 1];
-      if (!key || !last || last._key !== key || !(last.role === 'assistant' && last.streaming)) return next;
-      const text = typeof last.content === 'string' ? last.content : '';
-      const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
-      if (text.trim() || reasoning.trim() || last.toolActivities?.length) {
-        // 思考链也算已生成内容：正文或思考链任一非空都定稿保留，绝不静默丢弃。
-        next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false,
-          toolActivities: settleToolActivities(last.toolActivities),
-          notice: last.toolActivities?.length ? { code: 'ABORTED', message: '回答已中断，已确认的工具结果已保留。' } : last.notice };
-      } else {
-        // 真正零生成（刚开始连接）：回滚占位与 user 消息，方便立即重发。
-        next.pop();
-        const prev = next[next.length - 1];
-        if (prev && prev.role === 'user' && prev._key === turnTargetRef.current?.userKey) next.pop();
-        turnTargetRef.current = null;
-      }
-      return next;
-    });
+    // 等待真实终态；停止按钮不提前撤销已经受理的提问或已生成内容。
   };
 
-  const submitMessage = (continuation?: string): void => {
+  const submitMessage = async (continuation?: string): Promise<void> => {
     // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
-    if (streaming) return;
+    if (streaming || firstSendPendingRef.current) return;
     if (!continuation && !message.trim() && !attachments.length) return;
     if (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')) {
       Message.warning('请先在设置中配置 API Key');
-      return;
-    }
-    if (sessionId === undefined) {
-      Message.warning('请先选择或新建会话');
       return;
     }
     const text = continuation ?? (message.trim() || '请分析附件内容');
@@ -618,20 +621,11 @@ export function AiAssistant(): JSX.Element {
     const content: string | ChatContentPart[] = images.length
       ? [{ type: 'text', text }, ...images.map((item) => ({ type: 'image_url' as const, image_url: { url: item.value } }))]
       : text;
-    const userKey = nextMessageKey();
-    const userMessage: ChatMessage = { role: 'user', content, displayContent: displayText, _key: userKey };
-    const assistantKey = nextMessageKey();
-    turnTargetRef.current = { userKey, assistantKey };
-    setMessages((current) => [...current, userMessage,
-      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
-    setMessage('');
-    setAttachments([]);
     // clientId 服务端限 64 码点且只用于本轮关联，不能拿文件名当身份
     const turnAttachments: TurnAttachment[] = attachments.map((item, index) => (item.kind === 'image'
       ? { clientId: `c${index}`, kind: 'image', name: item.name, mimeType: item.mime, dataBase64: item.value }
       : { clientId: `c${index}`, kind: 'text', name: item.name, mimeType: item.mime || 'text/plain', text: item.value }));
-    const input: TurnInput = {
-      sessionId,
+    const inputSnapshot: Omit<TurnInput, 'sessionId'> = {
       userText: text,
       ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
       ...(pageContext.kind === 'none' ? {} : {
@@ -643,9 +637,40 @@ export function AiAssistant(): JSX.Element {
       }),
       ...(retrievalOptions ? { retrievalOptions } : {})
     };
-    turn.send(input);
+    let targetSessionId = sessionId;
+    const isFirstSend = targetSessionId === undefined;
+    if (isFirstSend) {
+      // 同步锁防止同一渲染内的双击/连续回车重复创建；失败前保留输入和附件。
+      firstSendPendingRef.current = true;
+      try {
+        targetSessionId = (await createSessionMutation.mutateAsync()).id;
+      } catch (error) {
+        firstSendPendingRef.current = false;
+        Message.error(friendlyMessage(error, '创建会话失败，请重试'));
+        return;
+      }
+    }
+    const input: TurnInput = { ...inputSnapshot, sessionId: targetSessionId! };
+    const userKey = nextMessageKey();
+    const assistantKey = nextMessageKey();
+    turnTargetRef.current = { userKey, assistantKey };
+    setMessages((current) => [...current, { role: 'user', content, displayContent: displayText, _key: userKey },
+      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
+    setMessage('');
+    setAttachments([]);
+    if (isFirstSend) pendingFirstTurnRef.current = input;
+    else turn.send(input);
   };
-  const send = (): void => submitMessage();
+  const send = (): void => { void submitMessage(); };
+
+  useEffect(() => {
+    const input = pendingFirstTurnRef.current;
+    if (!input || input.sessionId !== sessionId) return;
+    // useAiChatTurn 已更新当前会话与回调，再接受首轮的同步/快速事件。
+    pendingFirstTurnRef.current = null;
+    firstSendPendingRef.current = false;
+    turn.send(input);
+  });
 
   const insertMutation = useMutation({
     mutationFn: async (markdown: string) => {
@@ -781,9 +806,10 @@ export function AiAssistant(): JSX.Element {
         <div className="ai-drawer-body">
           <SessionNavigation visible={aiOpen} sessions={sessionsQuery.data ?? []} currentId={sessionId}
             busyId={streaming ? turn.activeSessionId : undefined}
+            runtimes={turn.runtimes} reconnecting={turn.reconnecting} onStop={turn.stopSession}
             loading={sessionsQuery.isLoading} error={sessionsQuery.isError} creating={createSessionMutation.isPending}
             exporting={exporting} onRetry={() => { void sessionsQuery.refetch(); }} onCreate={handleNewSession}
-            onSelect={(next) => { lastExplicitSessionIdRef.current = next; setSessionId(next); setMessages([]); }}
+            onSelect={selectSession}
             onRename={renameSession} onGenerate={generateSessionTitle}
             onDelete={async (id) => { await deleteSessionMutation.mutateAsync(id); }} onExport={exportSession} />
 
@@ -869,8 +895,16 @@ export function AiAssistant(): JSX.Element {
                   ) : null}
                   {isAssistant && item.toolActivities?.length ? <ToolActivityGroup
                     activities={item.toolActivities} active={item.streaming} phase={item.toolPhase}
+                    onOpenSession={(link) => {
+                      const target = sessionsQuery.data?.find((entry) => entry.sessionLink === link);
+                      if (target) selectSession(target.id);
+                      else void sessionsQuery.refetch().then(({ data }) => {
+                        const entry = data?.find((candidate) => candidate.sessionLink === link);
+                        if (entry) selectSession(entry.id); else Message.error('目标会话不存在或已被删除');
+                      });
+                    }}
                     onDisclosure={() => { stickyBottomRef.current = false; }} /> : null}
-                  <MarkdownContent value={text} />
+                  <MarkdownContent value={text} onSessionLink={setSessionReference} />
                   {item.streaming && !item.toolActivities?.length ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
                   {item.notice ? (
                     <div className="ai-retrieval-notice">
@@ -927,7 +961,7 @@ export function AiAssistant(): JSX.Element {
               <div className="empty-state ai-empty">
                 <div>
                   <Sparkles size={28} />
-                  <p>当前会话还没有消息。可新建多个会话分别保存不同主题的对话。</p>
+                  <p>{sessionId === undefined ? '开始一段新对话' : '当前会话还没有消息。可新建多个会话分别保存不同主题的对话。'}</p>
                 </div>
               </div>
             )}
@@ -977,6 +1011,7 @@ export function AiAssistant(): JSX.Element {
           <div className="chat-compose ai-drawer-compose">
             <TextArea
               autoSize={{ minRows: 2, maxRows: 6 }}
+              disabled={createSessionMutation.isPending}
               value={message}
               onChange={setMessage}
               onKeyDown={(event) => {
@@ -987,7 +1022,7 @@ export function AiAssistant(): JSX.Element {
                   send();
                 }
               }}
-              placeholder={composePlaceholder}
+              placeholder={streaming ? '正在回复，可先输入下一条问题' : composePlaceholder}
             />
             <input
               ref={fileInput}
@@ -1001,11 +1036,12 @@ export function AiAssistant(): JSX.Element {
                 void addAttachments(files);
               }}
             />
-            <Button type="secondary" icon={<Paperclip size={16} />} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
+            <Button type="secondary" icon={<Paperclip size={16} />} disabled={createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             <Button
               type="primary"
               icon={streaming ? <Square size={14} /> : <Send size={16} />}
-              disabled={!streaming && (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || sessionId === undefined)}
+              loading={createSessionMutation.isPending}
+              disabled={!streaming && (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || createSessionMutation.isPending)}
               onClick={() => {
                 if (streaming) {
                   stopGeneration();
@@ -1031,6 +1067,8 @@ export function AiAssistant(): JSX.Element {
           />
         ) : null}
       </Drawer>
+      {sessionReference ? <SessionReferencePreview key={sessionReference} link={sessionReference}
+        onClose={() => setSessionReference(undefined)} onSessionLink={setSessionReference} /> : null}
     </>
   );
 }

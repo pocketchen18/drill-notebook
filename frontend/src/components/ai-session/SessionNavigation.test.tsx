@@ -21,6 +21,20 @@ const openTarget = async () => {
 };
 
 describe('会话导航', () => {
+  it('多会话状态独立，忙碌目标可停止但不可删除，标题生成不冒充聊天运行', async () => {
+    const onStop = vi.fn().mockResolvedValue(undefined);
+    const view = setup({ onStop, runtimes: [{ sessionId: 2, requestId: 'b', status: 'RUNNING', phase: 'tools', queueCount: 2 }],
+      sessions: [{ ...sessions[0], titleStatus: 'generating' }, sessions[1]] });
+    expect(screen.queryByLabelText('正在生成标题')).toBeNull();
+    await openTarget();
+    expect(screen.getByText('1 个进行中')).toBeVisible();
+    expect(screen.getByLabelText('正在调用工具')).toBeVisible();
+    expect(screen.getByRole('menuitem', { name: '删除会话' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('menuitem', { name: '停止并取消待发送消息' }));
+    await waitFor(() => expect(onStop).toHaveBeenCalledWith(2));
+    expect(view.props.onSelect).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
     Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
@@ -95,7 +109,7 @@ describe('会话导航', () => {
     expect(view.props.onSelect).not.toHaveBeenCalled();
   });
 
-  it('覆盖人工标题需要确认，并携带原版本；空会话不能生成或删除最后一项', async () => {
+  it('覆盖人工标题需要确认，并携带原版本；旧空会话不能生成但最后一项可删除', async () => {
     const view = setup(); await openTarget();
     fireEvent.click(screen.getByRole('menuitem', { name: '重新生成标题' }));
     const modal = await screen.findByRole('dialog', { name: '替换手动设置的标题？' });
@@ -106,7 +120,16 @@ describe('会话导航', () => {
     setup({ sessions: [{ id: 1, title: '新会话', canGenerateTitle: false }] });
     fireEvent.click(screen.getByRole('button', { name: '会话更多操作' }));
     expect(await screen.findByRole('menuitem', { name: '生成会话标题' })).toBeDisabled();
-    expect(screen.getByRole('menuitem', { name: '删除会话' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: '删除会话' })).toBeEnabled();
+  });
+
+  it('未保存的新会话页没有当前会话菜单，但仍可浏览已有会话', () => {
+    setup({ currentId: undefined });
+    expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('新会话');
+    expect(screen.getByRole('button', { name: '会话更多操作' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    expect(screen.getByRole('button', { name: /积分换元 2 条消息/ })).toBeVisible();
+    expect(document.querySelector('[aria-current="true"]')).toBeNull();
   });
 
   it('360px 使用返回式二级菜单；Esc 逐级退出，键盘菜单不切换会话', async () => {

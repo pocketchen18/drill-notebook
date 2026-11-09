@@ -47,7 +47,7 @@ class HangingStreamTurnTest {
         wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         server = new UpstreamFixtureServer();
         client = new AiUpstreamClient(java.net.http.HttpClient.newHttpClient(), new ObjectMapper());
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

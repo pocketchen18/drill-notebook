@@ -68,7 +68,7 @@ class MemoryVaultServiceTest {
         memory = new MemoryRepository(dataSource, immediate);
         vault = new MemoryVaultService(crypto, memory, new MemoryOperationRepository(dataSource, immediate),
                 new ChatSessionMetadataRepository(dataSource, immediate));
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         now = MemoryTimes.now();
     }
 

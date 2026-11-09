@@ -6,6 +6,7 @@ import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
 import type { ChatHistoryMessage } from '../hooks/useChatHistoryPages';
 import type { AiChatSession } from '../lib/types';
+import type { StreamCallbacks } from '../lib/aiStream';
 
 /**
  * P9c-5 抽屉接入（执行方案 §7.4、§12，contracts §3 尾段）：
@@ -13,7 +14,9 @@ import type { AiChatSession } from '../lib/types';
  * 主密码只走请求体；锁定、失败终态、读不出、空列表四种界面说法各不同；卸载与切会话都不删数据。
  */
 
-const { apiGet, apiPost, apiDel } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiDel: vi.fn() }));
+const { apiGet, apiPost, apiDel, apiStream } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiDel: vi.fn(), apiStream: vi.fn() }));
+
+vi.mock('../lib/aiStream', () => ({ streamChat: (...args: unknown[]) => apiStream(...args) }));
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
@@ -74,14 +77,123 @@ beforeEach(() => {
   setContext([row({ id: 1, role: 'user', content: '第一问' }), row({ id: 2, role: 'assistant', content: '答一' })]);
   apiPost.mockResolvedValue({});
   apiDel.mockResolvedValue(undefined);
+  apiStream.mockImplementation(async (_url: string, body: { sessionId: number; requestId: string }, callbacks: StreamCallbacks) => {
+    callbacks.onDone({ reply: '首条回复', reasoning: '', sessionId: body.sessionId, requestId: body.requestId });
+    return () => undefined;
+  });
 });
 
-describe('AiAssistant 删除后的会话落点', () => {
-  const setupSessions = (withBlank = false): void => {
-    let sessions: AiChatSession[] = [
+describe('AiAssistant 会话引用', () => {
+  it('后台会话完成会刷新容量，重复轮询不反复读取账本且保持当前草稿', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    let status = 'RUNNING';
+    let polls = 0;
+    apiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/ai/sessions/runtime')) {
+        polls += 1;
+        return Promise.resolve({ sessions: [{ sessionId: 11, requestId: 'background', status, queueCount: 0 }] });
+      }
+      if (url === '/api/ai/history/storage') {
+        return Promise.resolve({ historyBytes: 1024, reservedHistoryBytes: status === 'RUNNING' ? 3 * 1024 * 1024 : 0,
+          usedHistoryBytes: status === 'RUNNING' ? 3 * 1024 * 1024 : 1024, historyLimitBytes: 64 * 1024 * 1024,
+          attachmentBytes: 0, attachmentLimitBytes: 64 * 1024 * 1024, historyWarning: false, attachmentWarning: false, revision: 1 });
+      }
+      return getOther(url);
+    });
+    const { unmount, queryClient } = renderAssistant();
+    try {
+      await screen.findByText('答一');
+      await screen.findByRole('progressbar', { name: /3 MB/ });
+      fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '当前会话未发送草稿' } });
+      const storageReads = () => apiGet.mock.calls.filter(([url]) => url === '/api/ai/history/storage').length;
+      const readsWhileRunning = storageReads();
+      const firstPoll = polls;
+      await waitFor(() => expect(polls).toBeGreaterThan(firstPoll), { timeout: 2000 });
+      expect(storageReads()).toBe(readsWhileRunning);
+
+      status = 'COMPLETED';
+      await waitFor(() => expect(screen.getByRole('progressbar', { name: /1 KB/ })).toBeVisible(), { timeout: 2000 });
+      expect(storageReads()).toBe(readsWhileRunning + 1);
+      expect(screen.getByLabelText('切换会话')).toHaveTextContent('S');
+      expect(screen.getByPlaceholderText(/提问/)).toHaveValue('当前会话未发送草稿');
+      expect(screen.getByText('答一')).toBeVisible();
+    } finally {
+      unmount();
+      queryClient.clear();
+    }
+  });
+
+  it('恢复正常完成的后台回复时不误报内容不完整', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url.startsWith('/api/ai/sessions/runtime')
+      ? Promise.resolve({ sessions: [{ sessionId: 10, requestId: 'completed', status: 'COMPLETED', queueCount: 0 }],
+        current: { sessionId: 10, requestId: 'completed', status: 'COMPLETED', active: false, reply: '后台已完整回答', finishReason: 'stop' } })
+      : getOther(url));
+    renderAssistant();
+    await screen.findByText('后台已完整回答');
+    expect(screen.queryByText('这一轮已完成，显示的内容可能不完整')).not.toBeInTheDocument();
+  });
+
+  it('尚未开始的派发只显示等待状态，不提前插入聊天正文', async () => {
+    const getOther = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url.startsWith('/api/ai/sessions/runtime')
+      ? Promise.resolve({ sessions: [{ sessionId: 10, requestId: 'queued', status: 'QUEUED', queueCount: 0 }],
+        current: { sessionId: 10, requestId: 'queued', status: 'QUEUED', active: true, userText: '尚未执行的提问' } })
+      : getOther(url));
+    renderAssistant();
+    await screen.findByText('答一');
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/ai/sessions/runtime?sessionId=10'));
+    expect(screen.queryByText('尚未执行的提问')).not.toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('切换保存各会话的未发送草稿，外部运行不会清空输入', async () => {
+    renderAssistant();
+    await screen.findByText('答一');
+    const input = screen.getByPlaceholderText(/提问…/);
+    fireEvent.change(input, { target: { value: '会话 A 的草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /S2 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    fireEvent.change(input, { target: { value: '会话 B 的草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /^S 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue('会话 A 的草稿'));
+    fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    fireEvent.click(screen.getByRole('button', { name: /S2 0 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue('会话 B 的草稿'));
+    expect(apiStream).not.toHaveBeenCalled();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('预览旧会话不切换当前聊天、不清空输入或创建记录', async () => {
+    const link = 'drill-notebook://session/0123456789abcdef0123456789abcdef';
+    setContext([row({ id: 2, role: 'assistant', content: `根据[此前讨论](${link})继续。` })]);
+    const original = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/ai/sessions?includeArchived=true') return Promise.resolve([{ id: 11, title: '来源会话', sessionLink: link }]);
+      if (url.startsWith('/api/ai/sessions/11/history')) return Promise.resolve({ ...historyPage([
+        row({ id: 30, role: 'user', content: '来源的旧提问' })]), sessionId: 11 });
+      return original(url);
+    });
+    const { queryClient } = renderAssistant();
+    await screen.findByRole('link', { name: '此前讨论' });
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '尚未发送的当前草稿' } });
+    fireEvent.click(screen.getByRole('link', { name: '此前讨论' }));
+    expect(await screen.findByText('来源的旧提问')).toBeVisible();
+    expect(screen.getByPlaceholderText(/提问/)).toHaveValue('尚未发送的当前草稿');
+    expect(screen.getByRole('link', { name: '此前讨论' })).toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(apiDel).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+});
+
+describe('AiAssistant 未保存的新会话页', () => {
+  const setupSessions = (initial?: AiChatSession[]): void => {
+    let sessions: AiChatSession[] = initial ?? [
       { id: 10, title: '当前会话', messageCount: 2 },
-      { id: 11, title: '上一条会话', messageCount: 2 },
-      ...(withBlank ? [{ id: 12, title: '新会话', messageCount: 0 }] : [])
+      { id: 11, title: '上一条会话', messageCount: 2 }
     ];
     const originalGet = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((url: string) => {
@@ -108,42 +220,46 @@ describe('AiAssistant 删除后的会话落点', () => {
     fireEvent.click(within(await screen.findByRole('dialog', { name: '删除会话？' })).getByRole('button', { name: '删除会话' }));
   };
 
-  it.each([false, true])('删除当前会话回到新会话，已有空白=%s，列表刷新不打开旧聊天', async (withBlank) => {
-    setupSessions(withBlank);
+  it.each(['history', 'empty', 'last'])('删除当前只进入草稿页，不创建或复用会话：%s', async (remaining) => {
+    setupSessions([
+      { id: 10, title: '当前会话', messageCount: 2 },
+      ...(remaining === 'history' ? [{ id: 11, title: '上一条会话', messageCount: 2 }]
+        : remaining === 'empty' ? [{ id: 12, title: '已有空白', messageCount: 0 }] : [])
+    ]);
     const { queryClient } = renderAssistant();
     await screen.findByText('当前聊天内容');
     fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '删除当前会话时清空草稿' } });
     await confirmDeletion();
     await waitFor(() => expect(screen.getByLabelText('切换会话')).toHaveTextContent('新会话'));
     expect(apiDel).toHaveBeenCalledWith('/api/ai/sessions/10');
-    expect(apiPost).toHaveBeenCalledTimes(withBlank ? 0 : 1);
-    if (!withBlank) expect(apiPost.mock.invocationCallOrder[0]).toBeLessThan(apiDel.mock.invocationCallOrder[0]);
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(screen.getByText('开始一段新对话')).toBeVisible();
+    expect(screen.getByLabelText('会话更多操作')).toBeDisabled();
     expect(screen.queryByText('当前聊天内容')).toBeNull();
     expect(screen.queryByText('上一条聊天内容')).toBeNull();
     expect(screen.getByPlaceholderText(/提问/)).toHaveValue('');
     expect(screen.queryByRole('dialog', { name: '会话列表' })).toBeNull();
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ['ai-sessions'] }); });
     expect(screen.getByLabelText('切换会话')).toHaveTextContent('新会话');
-    expect(apiGet.mock.calls.some(([url]) => String(url).startsWith('/api/ai/sessions/11/history'))).toBe(false);
+    expect(apiGet.mock.calls.some(([url]) => /\/sessions\/(11|12|undefined)\/history/.test(String(url)))).toBe(false);
+    expect(queryClient.getQueryData<AiChatSession[]>(['ai-sessions'])).toHaveLength(remaining === 'last' ? 0 : 1);
   });
 
-  it.each(['create', 'delete'])('准备新会话或删除失败保留原聊天及草稿，重试复用空白：%s', async (failure) => {
+  it('删除失败保留原聊天及草稿，重试成功回到未保存的新会话页', async () => {
     setupSessions();
-    if (failure === 'create') apiPost.mockRejectedValueOnce(new Error('创建失败，请重试'));
-    else apiDel.mockRejectedValueOnce(new Error('删除失败，请重试'));
+    apiDel.mockRejectedValueOnce(new Error('删除失败，请重试'));
     renderAssistant();
     await screen.findByText('当前聊天内容');
     fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '失败时保留草稿' } });
     await confirmDeletion();
     const modal = await screen.findByRole('dialog', { name: '删除会话？' });
-    await within(modal).findByText(failure === 'create' ? '创建失败，请重试' : '删除失败，请重试');
+    await within(modal).findByText('删除失败，请重试');
     expect(screen.getByLabelText('切换会话')).toHaveTextContent('当前会话');
     expect(screen.getByText('当前聊天内容')).toBeTruthy();
     expect(screen.getByPlaceholderText(/提问/)).toHaveValue('失败时保留草稿');
-    if (failure === 'create') expect(apiDel).not.toHaveBeenCalled();
     fireEvent.click(within(modal).getByRole('button', { name: '删除会话' }));
     await waitFor(() => expect(screen.getByLabelText('切换会话')).toHaveTextContent('新会话'));
-    expect(apiPost).toHaveBeenCalledTimes(failure === 'create' ? 2 : 1);
+    expect(apiPost).not.toHaveBeenCalled();
   });
 
   it('删除非当前会话保留当前聊天及草稿，不额外新建会话', async () => {
@@ -158,6 +274,88 @@ describe('AiAssistant 删除后的会话落点', () => {
     expect(screen.getByText('当前聊天内容')).toBeTruthy();
     expect(screen.getByPlaceholderText(/提问/)).toHaveValue('保留当前草稿');
     expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('新建只进入草稿页，输入与重复点击均不落库、不复用已有空白，刷新后保留草稿', async () => {
+    setupSessions([{ id: 10, title: '当前会话', messageCount: 2 }, { id: 12, title: '已有空白', messageCount: 0 }]);
+    const { queryClient } = renderAssistant();
+    await screen.findByText('当前聊天内容');
+    fireEvent.click(screen.getByLabelText('新建会话'));
+    await screen.findByText('开始一段新对话');
+    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '还没发出的草稿' } });
+    fireEvent.click(screen.getByLabelText('新建会话'));
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['ai-sessions'] }); });
+    expect(screen.getByPlaceholderText(/提问/)).toHaveValue('还没发出的草稿');
+    expect(screen.getByLabelText('切换会话')).toHaveTextContent('新会话');
+    expect(screen.getByLabelText('会话更多操作')).toBeDisabled();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData<AiChatSession[]>(['ai-sessions'])).toHaveLength(2);
+    expect(apiGet.mock.calls.some(([url]) => String(url).startsWith('/api/ai/sessions/12/history'))).toBe(false);
+  });
+
+  it('空列表直接显示新会话页，空输入发送和反复新建都不创建会话', async () => {
+    setupSessions([]);
+    renderAssistant();
+    await screen.findByText('开始一段新对话');
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeEnabled());
+    fireEvent.click(screen.getByLabelText('发送'));
+    fireEvent.click(screen.getByLabelText('新建会话'));
+    fireEvent.click(screen.getByLabelText('新建会话'));
+    expect(screen.queryByText('加载会话消息…')).toBeNull();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(apiStream).not.toHaveBeenCalled();
+  });
+
+  it('首次发送才创建一次会话，连续回车不重复，快速返回的首轮回复正常显示', async () => {
+    setupSessions([]);
+    const create = apiPost.getMockImplementation()!;
+    let resolveCreate!: () => void;
+    apiPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = () => { void create().then(resolve); }; }));
+    renderAssistant();
+    await screen.findByText('开始一段新对话');
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeEnabled());
+    const input = screen.getByPlaceholderText(/提问/);
+    fireEvent.change(input, { target: { value: '真正发送的第一条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
+    expect(apiStream).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('新建会话')).toBeDisabled();
+    expect(screen.getByLabelText('切换会话')).toBeDisabled();
+    await act(async () => { resolveCreate(); });
+    await screen.findByText('首条回复');
+    expect(apiStream).toHaveBeenCalledTimes(1);
+    expect(apiStream.mock.calls[0][1]).toMatchObject({ sessionId: 12, input: { userText: '真正发送的第一条' } });
+    expect(apiPost).toHaveBeenCalledWith('/api/ai/sessions', { title: '新会话' });
+    expect(screen.getByLabelText('会话更多操作')).toBeEnabled();
+    fireEvent.change(input, { target: { value: '第二条' } });
+    fireEvent.click(screen.getByLabelText('发送'));
+    await waitFor(() => expect(apiStream).toHaveBeenCalledTimes(2));
+    expect(apiPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('首次创建失败保留输入与附件，重试成功再发送', async () => {
+    setupSessions([]);
+    apiPost.mockRejectedValueOnce(new Error('创建失败，请重试'));
+    renderAssistant();
+    await screen.findByText('开始一段新对话');
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeEnabled());
+    const input = screen.getByPlaceholderText(/提问/);
+    fireEvent.change(input, { target: { value: '我的首条草稿' } });
+    const file = new File(['png'], '测试附件.png', { type: 'image/png' });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await screen.findByLabelText('移除测试附件.png');
+    expect(apiPost).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('发送'));
+    await screen.findByText('创建失败，请重试');
+    expect(input).toHaveValue('我的首条草稿');
+    expect(screen.getByLabelText('移除测试附件.png')).toBeVisible();
+    expect(apiStream).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('发送'));
+    await screen.findByText('首条回复');
+    expect(apiPost).toHaveBeenCalledTimes(2);
+    expect(apiStream.mock.calls[0][1]).toMatchObject({ sessionId: 12, input: { userText: '我的首条草稿', attachments: [{ name: '测试附件.png' }] } });
+    expect(input).toHaveValue('');
   });
 });
 
@@ -210,7 +408,7 @@ describe('AiAssistant 历史分页', () => {
     const before = apiGet.mock.calls.length;
     fireEvent.scroll(document.querySelector('.ai-drawer-chat') as HTMLDivElement);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    expect(apiGet).toHaveBeenCalledTimes(before);
+    expect(apiGet.mock.calls.slice(before).filter(([url]) => String(url).includes('/history'))).toHaveLength(0);
   }, 20_000);
 
   it('读不出的历史只留占位，不再要求密码', async () => {

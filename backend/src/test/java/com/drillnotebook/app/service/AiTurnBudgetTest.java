@@ -7,6 +7,19 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AiTurnBudgetTest {
+    @Test void parallelReservationsCannotOverspendAndUnusedCapacityIsReleased() {
+        var settings=new AiRuntimeSettings(50,100,30,15,4096,1024,1024,0);
+        var budget=new AiTurnBudget(settings);
+        int allocated=java.util.stream.IntStream.range(0,32).parallel().map(i->budget.reserve(1024)).sum();
+        assertEquals(4096,allocated);
+        assertEquals(0,budget.allocation(1024,0));
+        budget.release(1024);
+        assertEquals(1024,budget.reserve(1024));
+        budget.consume(new AiUpstreamClient.Usage("provider",10,100,null,null),1024);
+        assertEquals(924,budget.allocation(1024,0));
+        assertEquals(50,java.util.stream.IntStream.range(0,100).parallel().filter(i->budget.tryStage()).count());
+        assertEquals(100,java.util.stream.IntStream.range(0,200).parallel().filter(i->budget.tryExecute()).count());
+    }
     @Test void actualUsageAllowsFiftyStagesAndSeparatesTheFinalReserve() {
         var budget = new AiTurnBudget(AiRuntimeSettings.DEFAULTS);
         for (int i = 0; i < 50; i++) {

@@ -38,6 +38,9 @@ public class AiController {
         return thread;
     });
     private final ObjectMapper mapper;
+    private com.drillnotebook.app.service.SessionDispatchService dispatch;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatch(com.drillnotebook.app.service.SessionDispatchService dispatch) { this.dispatch=dispatch; }
     private final java.util.concurrent.ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "ai-chat-heartbeat");
         thread.setDaemon(true);
@@ -98,12 +101,16 @@ public class AiController {
 
     @PostMapping("/chat")
     public Map<String, Object> chat(@RequestBody Map<String, Object> body) {
+        if(dispatch!=null && Integer.valueOf(2).equals(body.get("protocolVersion"))) {
+            var accepted=dispatch.submit(body); return dispatch.await((String)accepted.get("requestId"));
+        }
         return ai.chat(body);
     }
 
     /** 流式聊天（SSE）：event=metadata|tool_activity|text|reasoning|done|error，data 为 JSON。 */
     @PostMapping(value = "/chat/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter chatStream(@RequestBody Map<String, Object> body) {
+        if(dispatch!=null && Integer.valueOf(2).equals(body.get("protocolVersion"))) return managedStream(body);
         // 整轮期限由执行预算管理；心跳维持长思考连接并及时发现客户端离开。
         var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(0L);
         var closed = new java.util.concurrent.atomic.AtomicBoolean();
@@ -206,6 +213,36 @@ public class AiController {
         } catch (Exception error) {
             return "{}";
         }
+    }
+
+    private org.springframework.web.servlet.mvc.method.annotation.SseEmitter managedStream(Map<String,Object> body) {
+        var accepted=dispatch.submit(body);
+        var emitter=new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(0L);
+        var subscription=new java.util.concurrent.atomic.AtomicReference<AutoCloseable>();
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        var timer=new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.ScheduledFuture<?>>();
+        Runnable detach=()-> {
+            closed.set(true); var sub=subscription.get();
+            try { if(sub!=null) sub.close(); } catch(Exception ignored) { }
+            if(timer.get()!=null) timer.get().cancel(false);
+        };
+        emitter.onCompletion(detach); emitter.onTimeout(detach); emitter.onError(e->detach.run());
+        subscription.set(dispatch.subscribe((String)accepted.get("requestId"),(name,value)-> {
+            if(closed.get()) return;
+            try {
+                emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event().name(name).data(mapperValueToJson(value)));
+                if(name.equals("done") || name.equals("error")) emitter.complete();
+            } catch(Exception e) { detach.run(); }
+        }));
+        if(closed.get()) detach.run();
+        else {
+            timer.set(heartbeatExecutor.scheduleAtFixedRate(()-> {
+                try { emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event().comment("keep-alive")); }
+                catch(Exception e) { detach.run(); }
+            },10,10,java.util.concurrent.TimeUnit.SECONDS));
+            if(closed.get()) detach.run();
+        }
+        return emitter;
     }
 
     /** 一键拉取可用模型列表。body: purpose?。 */

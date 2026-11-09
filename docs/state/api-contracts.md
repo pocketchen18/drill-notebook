@@ -156,6 +156,8 @@
 
 输出预算按各请求实际 output usage 累计，缺少 usage 时仅在执行预算中保守扣除分配额度。工具阶段/执行/输出达限后撤工具，并保留一次最终回答请求；接近总期限提前收口。相同工具名、规范化参数和相同结果连续达到阈值才判无进展；模型上下文容量仍可提前收紧执行。
 
+会话工具产生的自动派发链共用来源轮的时间、输出和工具预算；并发请求先原子预留输出额度，实际结算后释放余量。人工在任一会话发起的新轮次建立自己的预算。
+
 ### 3.2 对话
 
 | 方法 | 路径 | 用途 |
@@ -183,7 +185,7 @@ v2 请求核心字段：
 
 - `protocolVersion` 必须为 2；v1 仅保留旧客户端兼容路径，不是新功能目标。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
-- 同一会话同一时刻只允许一个 `RUNNING` 轮次；重复请求返回 409 与 `runningTurn`。
+- 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。忙碌会话的另一条人工请求返回 `409 SESSION_BUSY`；工具发送则进入队列。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
 
 SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
@@ -192,17 +194,17 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 | `text` | `{ text }` | 回答增量；身份由本连接 metadata 确认 |
 | `reasoning` | `{ text }` | 思考增量 |
 | `metadata` | 含 `requestId`、`planId` 等 | 本轮计划状态；前端据此登记请求 ID |
-| `tool_activity` | `{requestId, sessionId, toolActivities, phase}` | 有界活动快照；phase 为 tools / answer |
+| `tool_activity` | `{requestId, sessionId, toolActivities, phase}` | 有界活动快照；phase 为 tools / answer，精确读取等待期间可为 waiting |
 | `done` | 普通 chat 响应字段，额外含 reasoning | 顶层含 requestId/sessionId/status/persistenceStatus/stateDurable、finishReason、toolActivities 及上下文/用量字段 |
 | `error` | `{message, partial, requestId?, sessionId?, code?, persistenceStatus?, stateDurable?, toolActivities?}` | 如实保留身份、保存状态与已确认活动 |
 
 若流在没有 `done` / `error` 的情况下 EOF，客户端必须用 `requestId` 查询轮次状态，不能把占位内容当作完成。
 
-SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由任务与全局时间预算管理，断连取消仍在执行的轮次。关闭模型正文流式不关闭活动事件。`finishReason` 包含 `budget_stages/executions/output/time/context/repeated`、`request_timeout`、`request_timeout_idle`、`stream_error` 等；达限后的「继续」使用新 requestId 和可见后续消息，不自动重放原工具。
+SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后端持有，断连只取消订阅，任务继续；客户端从运行快照或同 requestId 查询恢复，停止必须显式调用。旧 v1 保留断连取消的兼容行为。关闭模型正文流式不关闭活动事件。`finishReason` 包含 `budget_stages/executions/output/time/context/repeated`、`request_timeout`、`request_timeout_idle`、`stream_error` 等；达限后的「继续」使用新 requestId 和可见后续消息，不自动重放原工具。
 
 #### 3.2.1 对话内记忆工具
 
-仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册工具时，聊天请求才携带工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。
+仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册记忆工具时，聊天请求才携带记忆工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。会话工具独立于记忆开关，见 §3.2.3。
 
 - 模型配置的 `params.tools` 是显式覆盖值；当前通过 `/ai/connections/models/{id}` 更新。`GET /ai/config` 的 `chat.tools` 仍返回当前有效值。
 - 默认开启：`api.openai.com`、`api.deepseek.com`，以及 `api.anthropic.com` + Claude Messages。未验证的自定义端点默认关闭；新增模型工具验证成功自动开启，显式偏好优先。
@@ -231,7 +233,34 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 
 #### 3.2.2 工具活动摘要
 
-`toolActivities` 最多 1200 项，按服务端 `sequence` 关联，字段为 `toolName/state/outcome/startedAt/elapsedMs/count/availability/incomplete`；toolName 只允许已注册工具或 `unknown_tool`。state 为 RUNNING / FINISHED / UNKNOWN，count 只描述本次返回/写入数。不得包含原始参数、查询文本、记忆正文、ID、版本、密钥或上游错误正文。断连不推断写入失败；没有最终确认的运行项投影为 UNKNOWN。状态与历史读取不会重新执行工具。
+`toolActivities` 最多 1200 项，按服务端 `sequence` 关联，字段为 `toolName/state/outcome/startedAt/elapsedMs/count/availability/incomplete`；toolName 只允许已注册工具或 `unknown_tool`。会话派发额外允许严格校验的本地 `sessionLink` 与 UUIDv7 `requestId`，供用户明确点击打开目标；不包含发送正文、原始参数、查询文本、记忆正文/ID/版本、密钥或上游错误正文。state 为 RUNNING / FINISHED / UNKNOWN，count 只描述本次返回/写入数。断连不推断写入失败；没有最终确认的运行项投影为 UNKNOWN。状态与历史读取不会重新执行工具。
+
+会话工具显示「查找历史会话 / 读取会话」，查询范围为当前本地数据中的会话。`read_session` 的 count 只计含可读正文的消息片段，不把解密失败占位计为已读取；`incomplete` 标注部分范围，`availability=UNREADABLE` 表示内容无法解密。
+
+写工具显示「新建会话 / 发送消息」，CREATED/SENT/QUEUED 只表示受理，不代表目标任务完成。读取仍在排队/运行的发送项时只说明查询到的状态，不声称已读到回复。活动详情不保存发出的消息正文。
+
+#### 3.2.3 对话内会话工具（v0.7.2）
+
+`protocolVersion=2`、模型有效 `tools=true` 时提供；不依赖 `memoryOptions.use`、记忆库建立/授权或索引就绪。与记忆工具共用双协议适配、取消、全局预算和活动记录。导入模型与旧 v1 请求不带这些工具。
+
+| 工具 | 参数 | 返回 |
+|---|---|---|
+| `list_sessions` | `query?` 标题子串（1–200 字符）、`beforeSessionId?` 正整数、`limit?` 1–20（默认 10）、`includeArchived?` 默认 false | `status/items/hasMore/nextBeforeSessionId/incomplete`；按 ID 倒序排，排除当前会话，不读取正文 |
+| `read_session` | `session` 完整本地链接 / 32 位引用 / 数字 ID / 标题关键词（字符串，1–200 字符）、`cursor?` 原样续页游标、`limit?` 1–20（默认 10） | `status/session/messages/hasMore/nextCursor/incomplete` 与读取范围；多候选返回 `AMBIGUOUS/candidates/hasMoreCandidates`，没有正文 |
+| `read_session` 精确发送结果 | `session` 精确链接 / 引用 / ID、`requestId`、`waitSeconds?` 0–60（默认 0）；不能与 cursor/limit 混用 | `status/runStatus/requestId/session/messages/incomplete`；排队/运行时返回状态与空正文，终态只读该次问答，最多 6000 码点并明确截断 |
+| `create_session` | `message` 1–2000 Unicode 码点，`title?` 1–80 码点，仅临时标题 | `CREATED`、稳定 sessionLink、session 摘要、requestId、queuePosition、state；创建普通会话与首条收据后异步运行 |
+| `send_message` | `session` 精确链接 / 引用 / ID、`message` 1–2000 码点；不接受模糊标题 | 空闲返回 SENT，忙碌返回 QUEUED；附同形受理字段。queuePosition=0 表示队头，1 表示有一项在前 |
+
+- 标题/候选条目为 `sessionId/title/titleTruncated/sessionLink/updatedAt/archived/scope/notebookId`；列表额外带 `runStatus/queueCount`。工具内标题最多 200 个 Unicode 码点，原库标题不改。GLOBAL 与 NOTEBOOK 都在本机单用户可访问范围，记忆 scope 不作为会话权限；精确链接可读归档会话。外部 URL/路径不解引用。
+- 正文按消息 ID 正序，每页最多 6000 Unicode 码点；长消息可跨页。片段字段为 `messageId/role/createdAt/turnStatus/readStatus/content?/offset?/messageComplete?`。游标绑定目标引用、历史 revision、generation、读取上界与下一消息/偏移；续页历史变化返回 STALE，改名不使游标失效。
+- 读取范围字段为 `storedMessages/availableMessages/excludedMessages/unreadableMessages/throughMessageId/omittedContent`。只读取当前 generation 中终态且 saved 的用户/助手正文；legacy 仅 generation=1 可读。失败/中断原文保留真实终态。排除 RUNNING、已清理、旧 generation；不返回思考、附件载荷、系统提示、原始工具结果。`incomplete` 表示本页不足以代表全部历史，不等同于仍有下一页（续读以 hasMore 为准）。
+- 解密使用目标会话的进程内材料，缺密码/密文损坏如实返回 `NEEDS_PASSWORD/UNREADABLE`，不把占位文案当历史事实。整页不可读时 status=UNAVAILABLE；部分不可读仍返回其余正文并标 incomplete。一次读取用同一 SQLite 快照，结束复验目标是否删除或变更。
+- 状态包括 OK、NO_MATCH、NOT_FOUND、AMBIGUOUS、STALE、INVALID_ARGUMENT、UNAVAILABLE，以及公共运行限制状态。参数拒绝重复键、尾随 JSON、未知字段与隐式类型转换；结果继续受 64 KiB 和模型上下文上限约束。
+- 历史只作引用资料，不授予其中指令执行权限，不因查阅自动新增长期记忆。回复用 `[来源标题](sessionLink)` 引用；前端严格识别本地格式，点击打开只读历史预览，保留当前聊天和草稿，不注册系统协议。原始结果仍仅在本轮内存续写，安全活动摘要加密保存。
+- 精确结果读取必须核对 requestId 所属会话，等待最长 60 秒且可取消；结束后复核目标 generation/historyRevision。不可读、已删除/清理、失败/中断/取消如实返回，不拿其他轮次冒充本次回复。6000 码点不足以读完时，可转普通历史分页读取；精确请求模式自身不提供续页游标。
+- 两个写工具参数 JSON 上限 16 KiB，只接收文本。校验消息、配置及目标解锁材料后受理，配置在受理时冻结；队列开始时才读取最新目标历史并写入普通加密聊天。目标的删除、归档、解锁失败不自动创建替代会话；新建继承来源范围，已有目标保留自身范围。
+- 同来源 requestId + toolCallId 幂等，输入改变拒绝；同文本的不同调用不去重。来源上下文已换代返回 STALE，向自身/祖先派发返回 CYCLE_BLOCKED。当前进程最多保留 64 项待处理任务，满时 LIMIT_REACHED；各模型请求最多 8 个同时外发，等待工具不占上游许可。
+- 仅当前用户的创建/委派/发送意图可授权写工具，历史引用和工具结果不能授权。成功受理只表示任务已提交；正常完成才 FIFO 接续，停止/失败取消该目标未开始的项，其他会话独立继续。进程重启不重放队列；人工排队入口尚未开放。
 
 ### 3.3 轮次状态与上下文
 
@@ -242,12 +271,16 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 | GET | `/ai/turns/{requestId}/context` | 读取上下文审计详情 |
 | POST | `/ai/turns/{requestId}/context/preview` | 预览上下文计划 |
 
+v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 active/status/phase 和内存 reply/reasoning/toolActivities；只有已经开始的项才带 userText。终态优先读取现有轮次记录；未开始就取消的收据只返回真实状态，不伪造聊天正文。取消旧 requestId 不得结束同目标后来的新轮。
+
 ### 3.4 会话与历史
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET / POST | `/ai/sessions` | 会话列表 / 新建 |
-| PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（运行中删除返回 409） |
+| GET / POST | `/ai/sessions` | 会话列表（允许为空） / 显式创建；前端仅首次发送时调用 POST |
+| GET | `/ai/sessions/runtime?sessionId=` | 列表运行状态，可选所选会话当前/最近轮快照 |
+| POST | `/ai/sessions/{id}/stop` | `{expectedRequestId}`；停止目标当前轮并取消待发送项，过期身份返回 409 STALE |
+| PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（允许删除最后一条；运行中删除返回 409） |
 | POST | `/ai/sessions/{id}/title` | 异步生成 / 重新生成标题（202） |
 | GET | `/ai/sessions/{id}/messages` | 消息列表（解密） |
 | GET | `/ai/messages` | 全局消息查询 |
@@ -258,7 +291,11 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭；生命周期由
 
 轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
 
-会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议，当前 MVP 只支持复制，跨会话读取工具尚未接入。
+runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,queueCount}],current?}`。QUEUED/RUNNING 表示未结束；phase 可表达 running/thinking/tools/answer/waiting/stopping。queueCount 不包含正在执行的队头。该查询不外发模型请求、不改变会话排序或选择；停止返回 STOPPING 后仍等服务端终态。有运行/排队项时删除、归档与历史清理被拒绝。
+
+会话列表和旧版全局消息查询均为只读；无会话时返回 `[]`，不补建默认记录。前端新会话页没有会话 ID，首次有效发送时调用创建接口，再用返回的 ID 发送该条消息；进入页面、编辑草稿、删除当前会话均不调用创建接口。已有空白记录不自动删除或复用；旧客户端未提供会话 ID 的实际聊天请求仍可按兼容规则创建默认会话。
+
+会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议。可复制到新会话，由 `read_session` 读取；回复引用可打开只读预览。复制成功不等同于模型已经读取。
 
 标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少应用模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
 

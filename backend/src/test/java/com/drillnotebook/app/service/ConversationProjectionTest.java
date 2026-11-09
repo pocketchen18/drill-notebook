@@ -80,7 +80,7 @@ class ConversationProjectionTest {
         projection = new ConversationProjection(new ChatHistoryRepository(dataSource),
                 new SessionContextRepository(dataSource), wiring.metadata(), wiring.cipher(), wiring.memory(),
                 crypto, vault, policy, estimator, mapper);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         ChatMessageCipher.Encrypted user = wiring.cipher().encrypt(USER_TEXT, "");
         ChatMessageCipher.Encrypted reply = wiring.cipher().encrypt(REPLY_TEXT, "");
         userCipher = user.cipher();

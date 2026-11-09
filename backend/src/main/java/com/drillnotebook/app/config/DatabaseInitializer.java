@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 12;
+    private static final int SCHEMA_VERSION = 13;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -249,6 +249,11 @@ public class DatabaseInitializer {
     }
 
     private static void migrateAiChatSessions(Connection connection) throws SQLException {
+        // 只有旧消息确实缺少归属时才迁移；空数据库和删除后的空列表不补建会话。
+        try (Statement statement = connection.createStatement();
+             ResultSet orphan = statement.executeQuery("SELECT 1 FROM ai_chat_message WHERE session_id IS NULL LIMIT 1")) {
+            if (!orphan.next()) return;
+        }
         long defaultSessionId;
         try (Statement statement = connection.createStatement();
              ResultSet existing = statement.executeQuery("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1")) {

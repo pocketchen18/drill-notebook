@@ -33,8 +33,8 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.7.2-features.md](state/v0.7.2-features.md) | v0.7.2 功能需求清单：会话导航 MVP 待人工验收，跨会话工具后置 |
-| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 12）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
+| [state/v0.7.2-features.md](state/v0.7.2-features.md) | v0.7.2 功能需求清单：导航、四个会话工具及并行运行已实现；人工排队后置 |
+| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 13）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
 版本启动时先在 `docs/state/` 编写该版功能需求清单，开发期间在原文档维护范围与状态，不把本版需求提前并入全局清单。切片验收完成后更新该版清单，同步已落地的数据结构、接口等状态文档，再归档施工文档；涉及全局设计规范或专题说明时原位维护。
@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能验收完成、状态文档同步后，整个目录移入 `docs/archive/<version>/`，不留在活跃上下文。
 
-当前活跃施工入口为 [v0.7.2 会话列表与菜单 UI/UX](work/ai-session-navigation/ui-ux.md)，同目录包含草图、Spec / Plan；导航 MVP 已实现，待人工验收后提交 Git，再开展跨会话工具。需求范围见[版本清单](state/v0.7.2-features.md)，验证范围见[测试清单](test/QA_CHECKLIST.md)。v0.7.1 材料归档至 [archive/v0.7.1/](archive/v0.7.1/)；v0.8 的侧栏与设置讨论尚未进入施工。
+当前切片已完成并归档，没有留在活跃目录的 Spec / Plan。会话导航、四个会话工具及并行运行的设计、草图和施工材料见 [v0.7.2 归档](archive/v0.7.2/README.md)。人工输入框排队留待用户提交四个会话工具后另起切片。需求与推进状态见[版本清单](state/v0.7.2-features.md)，验证范围与未覆盖项见[测试清单](test/QA_CHECKLIST.md)。v0.7.1 材料归档至 [archive/v0.7.1/](archive/v0.7.1/)；v0.8 的侧栏与设置讨论尚未进入施工。
 
 ## 3. 测试文档
 

@@ -15,23 +15,28 @@ import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.sqlite.SQLiteDataSource;
 
 class AiChatSessionServiceTest {
-    @Test
-    void createsSessionsPersistsEncryptedChatAndExports() throws Exception {
+    private SQLiteDataSource dataSource;
+    private JdbcTemplate jdbc;
+    private AiService service;
+
+    @BeforeEach
+    void setup() throws Exception {
         var root = Files.createTempDirectory("ai-session-service-test");
-        SQLiteDataSource dataSource = new SQLiteDataSource();
+        dataSource = new SQLiteDataSource();
         dataSource.setUrl("jdbc:sqlite:" + root.resolve("study.db"));
         new DatabaseInitializer(dataSource).initialize();
-        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc = new JdbcTemplate(dataSource);
         ObjectMapper mapper = new ObjectMapper();
         AiConfigRepository configs = new AiConfigRepository(jdbc);
         ChatLegacyWiring.Wiring wiring = ChatLegacyWiring.wire(dataSource, jdbc);
         RetrievalService retrieval = new RetrievalService(
                 new RetrievalIndexRepository(jdbc), new NotebookRepository(jdbc, mapper));
-        AiService service = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), mapper, retrieval,
+        service = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), mapper, retrieval,
                 wiring.turnService(), wiring.cipher(), null);
 
         service.saveConfig(Map.of(
@@ -40,6 +45,40 @@ class AiChatSessionServiceTest {
                 "model", "local-demo",
                 "apiKey", "demo-key"
         ));
+    }
+
+    @Test
+    void emptyListsReadsAndRestartsNeverCreatePlaceholderSessions() throws Exception {
+        assertTrue(service.listSessions(false).isEmpty());
+        assertTrue(service.listSessions(true).isEmpty());
+        assertTrue(service.messages().isEmpty());
+        new DatabaseInitializer(dataSource).initialize();
+        assertTrue(service.listSessions(false).isEmpty());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_session", Integer.class));
+    }
+
+    @Test
+    void deletesLastSessionAndKeepsTheListEmptyAfterRestart() throws Exception {
+        long id = ((Number) service.createSession(Map.of()).get("id")).longValue();
+        service.deleteSession(id);
+        assertTrue(service.listSessions(false).isEmpty());
+        new DatabaseInitializer(dataSource).initialize();
+        assertTrue(service.listSessions(false).isEmpty());
+        assertTrue(service.messages().isEmpty());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_session", Integer.class));
+    }
+
+    @Test
+    void legacyClientCreatesDefaultSessionOnlyWhenSendingItsFirstMessage() {
+        assertTrue(service.listSessions(false).isEmpty());
+        var response = service.chat(Map.of("messages", List.of(Map.of("role", "user", "content", "第一次提问"))));
+        assertTrue(String.valueOf(response.get("reply")).contains("本地演示回复"));
+        assertEquals(1, service.listSessions(false).size());
+        assertEquals(2, service.messages().size());
+    }
+
+    @Test
+    void createsSessionsPersistsEncryptedChatAndExports() throws Exception {
 
         Map<String, Object> session = service.createSession(Map.of("title", "JVM 复习"));
         long sessionId = ((Number) session.get("id")).longValue();

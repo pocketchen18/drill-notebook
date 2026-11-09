@@ -176,7 +176,8 @@ public class ChatTurnRepository {
                         ChatSessionMetadataRepository.read(connection, draft.sessionId())
                                 .orElseThrow().historyRevision());
             }
-            if (findRunning(connection, draft.sessionId()).isPresent()) {
+            if (findRunning(connection, draft.sessionId()).isPresent()
+                    || SessionDispatchRepository.blocksStart(connection,draft.sessionId(),draft.requestId())) {
                 return StartResult.of(StartOutcome.RUNNING_EXISTS);
             }
 
@@ -377,7 +378,7 @@ public class ChatTurnRepository {
         return immediate.execute(connection -> {
             // 会话级前提先立（contracts §3「在<b>同会话</b>短锁/事务内复核集合、版本和无 RUNNING」Q1 取会话级）：
             // 还在流式的那一轮可能马上要往这一页里写正文，让它和"清理"抢同一批行是不一致的。
-            if (findRunning(connection, sessionId).isPresent()) {
+            if (findRunning(connection, sessionId).isPresent() || SessionDispatchRepository.busy(connection,sessionId)) {
                 throw new CleanupRefusalException("SESSION_RUNNING",
                         "该会话还有正在进行的轮次，先结束或取消再清理原文");
             }

@@ -428,7 +428,7 @@ class MemoryPolicyServiceTest {
     // ---- helpers ----
 
     private long session() {
-        return jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        return com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     private void seedChat(String endpoint, String model, String params) {

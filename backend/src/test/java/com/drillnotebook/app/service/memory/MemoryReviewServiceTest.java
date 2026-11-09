@@ -90,7 +90,7 @@ class MemoryReviewServiceTest {
                 metadata);
         reviews = new MemoryReviewService(crypto, memory, proposals, suppressions, operations, vault, policy, jobs,
                 immediate, mapper);
-        sessionId = jdbc.queryForObject("SELECT id FROM ai_chat_session ORDER BY id LIMIT 1", Long.class);
+        sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 
     @AfterEach

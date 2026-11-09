@@ -182,15 +182,16 @@
         const body = editing ? '<div class="dn-rename"><input aria-label="重命名会话" value="' + esc(renameDraft) + '">' + (renameError ? '<div class="dn-error" role="alert">' + renameError + '</div>' : '') + '</div>' :
           '<button type="button" class="dn-pick cursor-interaction" data-id="' + item.id + '"' + (selected ? ' aria-current="true"' : '') + '><span class="dn-check">' + (selected ? icon('check') : '') + '</span><span class="dn-title-wrap"><span class="dn-row-title" data-tooltip="' + esc(item.title) + '">' + esc(item.title) + '</span><span class="dn-meta">' + item.count + ' 条消息 · ' + item.time + '</span></span>' + state + '</button><button type="button" class="dn-icon dn-more cursor-interaction" data-row-menu="' + item.id + '" aria-label="更多操作：' + esc(item.title) + '" aria-haspopup="menu">' + icon('ellipsis') + '</button>';
         return '<div role="listitem" class="dn-row' + (selected ? ' is-current' : '') + (menuOpen && item.id === targetId ? ' is-target' : '') + '" data-session="' + item.id + '">' + body + '</div>';
-      }).join('');
+      }).join('') || '<div class="dn-empty">暂无会话</div>';
       q('.dn-count').textContent = sessions.length + ' 个会话';
       if (hadFocus && q('.dn-rename input')) { q('.dn-rename input').focus(); q('.dn-rename input').setSelectionRange(...selection); }
       icons();
     }
     function renderChat() {
       const active = get(activeId);
-      q('.dn-current span').textContent = active?.title || '选择会话';
-      q('.dn-current').setAttribute('data-tooltip', active?.title || '选择会话');
+      q('.dn-current span').textContent = active?.title || '新会话';
+      q('.dn-current').setAttribute('data-tooltip', active?.title || '新会话');
+      q('[data-action="current-menu"]').disabled = !active;
       q('.dn-chat').innerHTML = !active?.count ? '<div class="dn-empty">开始一次新的讨论</div>' : '<div class="dn-user">' + esc(active.question) + '</div><div class="dn-answer"><p>可以，我们从已有的学习记录开始整理。</p><p>先找出最容易混淆的部分，再把练习分散到几天里。每次复习后记录难点，下一次优先检查这些内容。</p></div>';
     }
     function updateMenu() {
@@ -200,8 +201,8 @@
       generate.querySelector('span').textContent = target?.status === 'generating' ? '正在生成标题…' : target?.status === 'ready' ? '重新生成标题' : '生成会话标题';
       generate.disabled = !target?.count || target?.status === 'generating';
       generate.setAttribute('data-tooltip', !target?.count ? '首轮回复完成后可生成' : '根据首轮问答概括标题');
-      q('[data-action="delete"]').disabled = sessions.length <= 1;
-      q('[data-action="delete"]').setAttribute('data-tooltip', sessions.length <= 1 ? '至少保留一个会话' : '删除此会话与消息');
+      q('[data-action="delete"]').disabled = !target;
+      q('[data-action="delete"]').setAttribute('data-tooltip', '删除此会话与消息');
       qa('[data-sub]').forEach(button => { button.classList.toggle('is-expanded', menuOpen && subKind === button.dataset.sub); button.setAttribute('aria-expanded', String(menuOpen && subKind === button.dataset.sub)); });
       q('.dn-sub-items').innerHTML = subKind === 'export' ? ['Markdown', 'HTML', 'JSON'].map(format => '<button type="button" role="menuitem" class="dn-command cursor-interaction" data-export="' + format + '">' + icon('file-down') + '<span>' + format + '</span></button>').join('') :
         '<button type="button" role="menuitem" class="dn-command cursor-interaction" data-copy="link">' + icon('link') + '<span>复制会话链接</span></button><button type="button" role="menuitem" class="dn-command cursor-interaction" data-copy="title">' + icon('copy') + '<span>复制会话标题</span></button>';
@@ -284,9 +285,8 @@
     }
     function closeDialog() { modal.hidden = true; modalKind = null; render(); (q('[data-row-menu="' + modalTarget + '"]') || q('[data-id="' + activeId + '"]') || q('.dn-current')).focus(); }
     function newSessionHome() {
-      let blank = sessions.find(row => !row.count);
-      if (!blank) { blank = { id: 'demo-new-' + ++newCounter, title: '新会话', suggestion: '新的学习讨论', count: 0, time: '刚刚', status: 'empty', manual: false, revision: 0, question: '' }; sessions.unshift(blank); }
-      activeId = blank.id; listOpen = false; closeMenus(); render(); q('.dn-composer textarea').value = ''; q('.dn-composer textarea').focus();
+      if (activeId !== null) q('.dn-composer textarea').value = '';
+      activeId = null; listOpen = false; closeMenus(); render(); q('.dn-composer textarea').focus();
     }
     function applyScenario() {
       if (options.titleState !== lastTitleState) {
@@ -319,7 +319,7 @@
         case 'cancel-dialog': closeDialog(); break;
         case 'confirm-dialog': {
           const chosen = get(modalTarget), kind = modalKind;
-          if (kind === 'delete' && chosen && sessions.length > 1) {
+          if (kind === 'delete' && chosen) {
             sessions = sessions.filter(row => row.id !== chosen.id);
             if (activeId === chosen.id) newSessionHome();
             closeDialog(); toast('会话已删除');
@@ -331,8 +331,13 @@
           newSessionHome(); persist(); break;
         }
         case 'send': {
-          const input = q('.dn-composer textarea'), text = input.value.trim(), current = get(activeId);
-          if (!text || !current) break;
+          const input = q('.dn-composer textarea'), text = input.value.trim();
+          if (!text) break;
+          let current = get(activeId);
+          if (!current) {
+            current = { id: 'demo-new-' + ++newCounter, title: '新会话', suggestion: '新的学习讨论', count: 0, time: '刚刚', status: 'empty', manual: false, revision: 0, question: '' };
+            sessions.unshift(current); activeId = current.id;
+          }
           const first = current.count === 0; current.question = text; current.count += 2; current.time = '刚刚';
           if (first && !current.manual) { current.title = text.slice(0, 28); current.suggestion = /复习/.test(text) ? '复习计划与学习方法' : text.replace(/^(请|帮我|能不能|可以|你能)/, '').slice(0, 18) || '学习问题与解答'; current.status = 'pending'; generateTitle(current); }
           input.value = ''; render(); break;

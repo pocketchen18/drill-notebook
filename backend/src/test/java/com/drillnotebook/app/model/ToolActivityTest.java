@@ -7,6 +7,19 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ToolActivityTest {
+    @Test void sessionActivitiesKeepCountsButNeverExposeHistoryOrSessionIdentifiers() throws Exception {
+        var read = ToolActivity.started(1, "read_session").finished("""
+                {"status":"OK","messages":[{"content":"PRIVATE","messageId":71}],
+                 "session":{"title":"PRIVATE","sessionLink":"PRIVATE"},"nextCursor":"PRIVATE","incomplete":true}
+                """, 10);
+        assertEquals("read_session", read.toolName());
+        assertEquals(1, read.count());
+        assertTrue(read.incomplete());
+        assertFalse(new ObjectMapper().writeValueAsString(read).contains("PRIVATE"));
+        assertEquals(0, ToolActivity.started(2, "read_session").finished(
+                "{\"status\":\"UNAVAILABLE\",\"messages\":[{\"readStatus\":\"NEEDS_PASSWORD\"}]}", 1).count());
+        assertEquals("list_sessions", ToolActivity.started(2, "list_sessions").toolName());
+    }
     @Test
     void projectsOnlySafeFieldsAndDistinguishesEmptyFromUnavailable() throws Exception {
         ToolActivity start = ToolActivity.started(1, "search_memories");
