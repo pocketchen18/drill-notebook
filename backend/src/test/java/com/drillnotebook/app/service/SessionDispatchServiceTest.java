@@ -36,7 +36,7 @@ class SessionDispatchServiceTest {
         jdbc=new JdbcTemplate(ds); wiring=ChatLegacyWiring.wire(ds,jdbc); stack=ChatContextWiring.wire(ds,jdbc,wiring);
         ai=spy(new AiService(new AiConfigRepository(jdbc),wiring.sessions(),new ApiKeyEncryptor(),json,null,
                 wiring.turnService(),wiring.cipher(),stack.contexts()));
-        ai.saveConfig(Map.of("provider","custom","endpoint","mock://local","apiKey","test-key","model","fixture"));
+        ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","mock://local","apiKey","test-key","model","fixture"));
         var beans=new DefaultListableBeanFactory(); beans.registerSingleton("ai",ai);
         receipts=new SessionDispatchRepository(jdbc,new ImmediateTransaction(ds));
         dispatch=new SessionDispatchService(beans.getBeanProvider(AiService.class),receipts,wiring.sessions(),wiring.turnService(),stack.vault(),wiring.cipher(),jdbc,json);
@@ -205,7 +205,7 @@ class SessionDispatchServiceTest {
             return invocation.callRealMethod();
         }).when(ai).runAccepted(anyMap(),any(),any(),any());
         var next=send("next",target(first),"after");
-        ai.saveConfig(Map.of("provider","custom","endpoint","mock://local","apiKey","test-key","model","changed"));
+        ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","mock://local","apiKey","test-key","model","changed"));
         release.countDown(); terminal(request(next));
         assertEquals(List.of("fixture"),seen);
     }
@@ -274,7 +274,7 @@ class SessionDispatchServiceTest {
             var lookup=new SessionLookupService(new SessionLookupRepository(jdbc.getDataSource()),wiring.cipher(),stack.vault());
             var read=new SessionReadTool(lookup); read.setDispatch(dispatch);
             ai.setChatTools(List.of(new SessionCreateTool(dispatch),new SessionSendTool(dispatch),read,new SessionListTool(lookup)));
-            ai.saveConfig(Map.of("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1",
+            ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1",
                     "apiFormat",format,"model","fixture","apiKey","test-key","tools",true,"streaming",stream));
             String id=UuidV7.generate(System.currentTimeMillis());
             dispatch.submit(Map.of("protocolVersion",2,"requestId",id,"sessionId",source,"input",Map.of("userText","DELEGATE")));

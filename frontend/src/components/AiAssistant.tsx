@@ -28,7 +28,7 @@ import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { SessionReferencePreview } from './ai-session/SessionReferencePreview';
 import { useUiStore } from '../stores/uiStore';
 import { ToolActivityGroup } from './ai-memory/ToolActivityGroup';
-import { mergeToolActivities, settleToolActivities } from '../lib/toolActivity';
+import { mergeToolActivities, readToolActivities, settleToolActivities } from '../lib/toolActivity';
 import type { ToolActivity } from '../lib/toolActivity';
 import { useChatQueue } from '../hooks/useChatQueue';
 import { ChatQueue } from './ai-session/ChatQueue';
@@ -301,6 +301,25 @@ export function AiAssistant(): JSX.Element {
     return () => window.cancelAnimationFrame(frame);
   }, [streaming]);
 
+  const refreshedMaterialCalls = useRef(new Set<string>());
+  function refreshCreatedMaterials(requestId: string, activities: unknown): void {
+    for (const row of readToolActivities(activities)) {
+      if (row.toolName !== 'create_material' || row.state !== 'FINISHED'
+        || !['CREATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome)) continue;
+      const key = `${requestId}:${row.sequence}`;
+      if (refreshedMaterialCalls.current.has(key)) continue;
+      const target = row.sourceLink ? materialLinkTarget(row.sourceLink) : null;
+      if (!target) continue;
+      refreshedMaterialCalls.current.add(key);
+      if (refreshedMaterialCalls.current.size > 2400) refreshedMaterialCalls.current.delete(refreshedMaterialCalls.current.values().next().value!);
+      const keys = target.type === 'notebook' || target.type === 'note' ? ['notebooks', 'note-pages', 'ai-drawer-pages']
+        : target.type === 'knowledge' ? ['knowledge-points']
+          : target.type === 'bank' ? ['banks'] : ['banks', 'questions', 'knowledge-questions', 'wrong'];
+      // Only invalidate directories; never overwrite an existing page's unsaved editor draft.
+      for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey: [queryKey] });
+    }
+  }
+
   const openMaterial = async (link: string): Promise<void> => {
     const target = materialLinkTarget(link);
     if (!target) return;
@@ -478,6 +497,9 @@ export function AiAssistant(): JSX.Element {
 
   /** 轮次事件的界面落点：done、查到的终态、失败都只写回本轮那一个气泡（§4.2 统一结果）。 */
   function onTurnEvent(event: TurnEvent): void {
+    if (event.type === 'activity') refreshCreatedMaterials(event.requestId, event.activities);
+    else if (event.type === 'snapshot' || event.type === 'status') refreshCreatedMaterials(event.requestId, event.status.toolActivities);
+    else if (event.type === 'result' || event.type === 'failure') refreshCreatedMaterials(event.requestId, event.view.toolActivities);
     if (event.type === 'snapshot') {
       const snapshot = event.status;
       if (snapshot.sessionId !== selectedSessionRef.current) return;
@@ -867,6 +889,7 @@ export function AiAssistant(): JSX.Element {
                         if (entry) selectSession(entry.id); else Message.error('目标会话不存在或已被删除');
                       });
                     }}
+                    onOpenMaterial={openMaterial}
                     onDisclosure={() => { stickyBottomRef.current = false; }} /> : null}
                   {isAssistant && item.supplements?.some((s) => s.state === 'RECEIVED')
                     ? splitReply(text, item.supplements).map((part) => part.role === 'user'

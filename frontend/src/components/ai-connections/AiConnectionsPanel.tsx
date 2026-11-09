@@ -149,7 +149,7 @@ export function AiConnectionsPanel({ registerGuard }: { registerGuard?: (guard: 
       </main>
     </div>
     {editor?.kind === 'provider' && !editor.providerId && <Modal visible title="添加供应商" footer={null} maskClosable={false} onCancel={() => guard(finishEditor)}><ProviderEditor onState={onEditorState} save={save} leave={() => guard(finishEditor)} done={() => { finishEditor(); const latest = client.getQueryData<Connections>(['ai-connections']); const added = latest?.providers.at(-1); setSelected(added?.id); setDiscover(added); }} busy={busy} />{error && <p role="alert" className="connection-error">{error}</p>}</Modal>}
-    {discover && <DiscoveryDialog provider={discover} close={() => setDiscover(undefined)} busy={busy} saveError={error} add={(ids, password) => { setVerification({ provider: discover, models: ids.map(modelId => ({ modelId })), password }); setDiscover(undefined); }} />}
+    {discover && <DiscoveryDialog provider={discover} close={() => setDiscover(undefined)} busy={busy} saveError={error} add={(models, password) => { setVerification({ provider: discover, models, password }); setDiscover(undefined); }} />}
     {verification && <VerificationDialog provider={verification.provider} models={verification.models} password={verification.password} onBusy={verificationBusy} refresh={() => { void query.refetch(); }} close={() => {
       const latest = client.getQueryData<Connections>(['ai-connections']);
       const saved = verification.fromEditor && latest?.providers.find(item => item.id === verification.provider.id)?.models.some(item => item.modelId === verification.models[0].modelId);

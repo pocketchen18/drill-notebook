@@ -334,7 +334,8 @@ final class MaintenanceHarness {
         } catch (Exception error) {
             throw new IllegalStateException("测试用 API Key 加密失败", error);
         }
-        new AiConfigRepository(jdbc).upsertChat("custom", CHAT_ENDPOINT, "stub-model", cipherText, keyMeta, "{}");
+        new AiConfigRepository(jdbc).upsertChat("custom", CHAT_ENDPOINT, "stub-model", cipherText, keyMeta,
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}");
         MemoryPolicyService.Target target = policy.targetOf(MemoryPolicyService.PURPOSE_MAINTENANCE);
         MemoryApiResult granted = policy.grantConsent(MemoryPolicyService.PURPOSE_MAINTENANCE, target.fingerprint(),
                 MemoryPolicyService.POLICY_VERSION);

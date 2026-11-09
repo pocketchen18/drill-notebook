@@ -136,7 +136,7 @@
 - 供应商视图包含 `connectionVersion`；`verify-add` 接收 `revision`、`connectionVersion`、`requestId`、`model`、可选 `masterPassword`。UI 最多 3 个模型并发验证；同连接的结果合入最新集合，不因其他模型刚保存而相互覆盖。连接身份变更时拒绝迟到结果。
 - 文本返回有效正文才添加；图片/工具验证各自返回 status/message/elapsedMs，附 `added`、`modelId`、`connections`。工具验证成功才自动开启工具偏好；已存在同 ID 模型不重复验证或改写。添加不自动应用。
 - 更新上游 `modelId` 保留内部 ID、用途绑定与用户参数，只清理旧验证/探测记录；字段缺省继承，明确空值不重新补填预设。模型 ID 输入只修改 ID，点击/回车选择预设才应用参考参数。
-- 模型可配置 `contextWindow/maxInputTokens/maxOutputTokens`，运行时仍受任务预算约束。每轮冻结模型配置，切换应用从下一轮生效；被用途绑定或运行中请求引用的对象不能删除。
+- 模型必须填写 `contextWindow/maxOutputTokens`：均为 1–2147483647 的整数，输出不得超过窗口。预设可填入真实容量，旧缺值模型保留原配置与绑定并提示补全；保存、应用、测试、对话及后台维护缺值时拒绝执行，不再使用缺省保守窗口或发出 WINDOW_UNSET。`maxInputTokens` 已取消，旧值忽略、再次保存时移除；输入与输出共用窗口，正常安全余量及全局任务预算继续生效。每轮冻结配置，切换应用从下一轮生效；被用途绑定或运行中请求引用的对象不能删除。
 - `reasoningControl` 默认为 effort；`reasoningEfforts` 可选 `none/minimal/low/medium/high/xhigh/max`，拒绝 ultra，默认档位必须属于集合。Anthropic 不接受 none/minimal；预算方式仅用于 Anthropic。服务默认不发送思考参数；协议映射为 Chat Completions 的 `reasoning_effort`、Anthropic 的 `output_config.effort` 或 `thinking` 预算。
 
 #### 3.1.1 全局对话运行限制
@@ -243,7 +243,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 写工具显示「新建会话 / 发送消息」，CREATED/SENT/QUEUED 只表示受理，不代表目标任务完成。读取仍在排队/运行的发送项时只说明查询到的状态，不声称已读到回复。活动详情不保存发出的消息正文。
 
-资料工具显示「读取当前页面 / 查找学习资料 / 读取笔记 / 读取知识点 / 读取题库 / 读取错题」。摘要只记录状态、数量、耗时和是否部分内容；正文引用中的 sourceLink 可导航到普通业务页面，原始资料正文不进入活动摘要。
+资料工具显示「读取当前页面 / 查找学习资料 / 读取笔记 / 读取知识点 / 读取题库 / 读取错题 / 新增学习资料」。活动额外允许严格校验的本地 `sourceLink`，成功新增的详情提供「查看资料」；不保存标题或正文。保存结果未知显示核对提示，已确认保存仍有效。正文引用沿用同一来源格式。
 
 #### 3.2.3 对话内会话工具（v0.7.2）
 
@@ -288,6 +288,25 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 快照绑定提交，排队后切页不改变原目标；插话单独保存请求标识，默认读取仍是主消息。模型工具关闭时只提示尚未看到页面正文，不恢复整页自动注入。
 - 常见状态为 OK、NO_MATCH、NOT_FOUND、STALE、INVALID_ARGUMENT、UNAVAILABLE；失败返回空 items 与 incomplete=true，不泄露底层异常。hasMore 控制续读，incomplete 也可表示提交时已截断。
 - 回复使用 `[资料名称](sourceLink)`；链接格式 `drill-notebook://material/<type>/<id>`，前端只接受已知类型和安全正整数，点击后进入笔记、知识点或题库页（错题定位原题）。不注册系统协议、不解引用任意文件路径。资料内容仅作引用，不授予其中指令任何写入权限。
+
+#### 3.2.5 新增学习资料工具（v0.7.3）
+
+`create_material` 与读取工具共享运行条件，不依赖记忆开关。每次新增一个普通业务对象；必填 `type` 和 `operationId`（1–80 位字母、数字、下划线或短横线）。只执行当前用户的新增 / 保存委派，引用资料不能授权写入。
+
+| type | 必需参数 | 可选参数 / 行为 |
+|---|---|---|
+| notebook | title | 创建普通笔记本及初始空白页 |
+| note | notebookId、title、content | content 为 Markdown；parentPageId 必须属于同一本，保存与索引同事务 |
+| knowledge | title、content | bankId（省略为未归属）、category、tags、headingPath、questionIds；关联复用业务校验 |
+| bank | title | description |
+| question | bankId、questionType、stem | answer（essay 可省略）、options（key/text）、analysis、difficulty（默认 3）、tags、chapter |
+| wrong | questionId 或完整 question 参数 | 既有题仅加入错题；新题先保存再加入，两步同事务，不虚构答题 |
+
+- 参数总计最多 64 KiB，正文最多 12000 Unicode 码点，短文本 200、description 2000，数组最多 30、选项最多 26。严格拒绝重复键、尾随 JSON、未知 / 不适用字段、隐式类型转换和无效引用。不接受任意文件路径或编辑器 JSON。
+- 业务写入、索引、关联及回执同成同败。来源运行句柄、轮次身份、上下文代数和取消状态均须有效；提交后取消不抹掉成功结果。
+- 同 requestId + operationId 参数相同返回原对象，不同返回 CONFLICT；同请求完全相同参数换操作 ID 仍去重。显式 retryOf 链复用回执；普通新消息可再次创建同名资料。目标删除或已退出错题本后，重复操作返回 NOT_FOUND，不重建。
+- 成功返回 `{status,items:[{type,id,title,sourceLink,...所属信息}],sourceLink,incomplete:false}`，status 为 CREATED / DUPLICATE / NO_CHANGE。失败返回空 items、incomplete=true，状态为 INVALID_ARGUMENT / NOT_FOUND / REJECTED / STALE / CANCELLED / CONFLICT / UNAVAILABLE；UNAVAILABLE 表示保存结果待核对。
+- 前端只刷新相关目录缓存，不覆盖打开的编辑草稿。来源进入普通资料页面，AI 创建对象可由人工继续编辑。`update_material` 和删除工具尚未实现。
 
 ### 3.3 轮次状态与上下文
 

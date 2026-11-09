@@ -693,3 +693,16 @@ CREATE TABLE IF NOT EXISTS ai_chat_queue_state (
     editing_id TEXT,
     resume_after_edit INTEGER NOT NULL DEFAULT 0
 );
+
+-- Idempotent material creation receipts contain references only, never tool arguments or content.
+CREATE TABLE IF NOT EXISTS ai_material_creation (
+    request_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    material_type TEXT NOT NULL,
+    material_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (request_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_material_creation_session ON ai_material_creation(session_id);

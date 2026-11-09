@@ -29,7 +29,7 @@ class ChatSteeringPathTest extends SessionDispatchServiceTest {
             exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         });server.start();
         try {
-            ai.saveConfig(Map.of("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",false,"apiFormat",format));
+            ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",false,"apiFormat",format));
             String id=UuidV7.generate(System.currentTimeMillis());
             dispatch.submitHuman(source,Map.of("protocolVersion",2,"requestId",id,"input",Map.of("userText","原问题")));
             assertTrue(entered.await(4,TimeUnit.SECONDS));
@@ -75,7 +75,7 @@ class ChatSteeringPathTest extends SessionDispatchServiceTest {
             exchange.sendResponseHeaders(round==1?200:503,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         });server.start();
         try {
-            ai.saveConfig(Map.of("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",false));
+            ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",false));
             String id=UuidV7.generate(System.currentTimeMillis()), sid=UuidV7.generate(System.currentTimeMillis());
             dispatch.submitHuman(source,Map.of("protocolVersion",2,"requestId",id,"input",Map.of("userText","先回答")));
             assertTrue(entered.await(4,TimeUnit.SECONDS));
@@ -111,7 +111,7 @@ class ChatSteeringPathTest extends SessionDispatchServiceTest {
             exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         });server.start();
         try {
-            ai.saveConfig(Map.of("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",true));
+            ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","streaming",false,"tools",true));
             String id=UuidV7.generate(System.currentTimeMillis());
             dispatch.submitHuman(source,Map.of("protocolVersion",2,"requestId",id,"input",Map.of("userText","查询")));
             assertTrue(toolEntered.await(5,TimeUnit.SECONDS));

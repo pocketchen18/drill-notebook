@@ -132,7 +132,7 @@ class SessionToolChatPathTest {
     }
 
     private void configure(String format, boolean stream) {
-        ai.saveConfig(Map.of("provider", "custom", "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+        ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
                 "apiFormat", format, "model", "stub", "apiKey", "fake-key", "tools", toolsEnabled, "streaming", stream));
     }
 

@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**14**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**15**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -15,7 +15,7 @@
 | 表 | 职责 | 关键约束 |
 |---|---|---|
 | `question_bank` | 题库 | — |
-| `question` | 题目 | `(bank_id, content_hash)` 唯一；题型、选项、答案、解析、标签、章节 |
+| `question` | 题目 | `(bank_id, content_hash)` 唯一；题型、选项、答案、解析、标签、章节；v15 增加 `wrong_manual_after` 人工加入错题的真实作答基线 |
 | `question_fts` | 题目全文检索 | FTS5，内容映射 `question` |
 | `knowledge_point` | 知识点 | `bank_id`、`category`、`heading_path`、`sort_index` |
 | `knowledge_point_question` | 知识点与题目关联 | `(knowledge_point_id, question_id)` 复合主键 |
@@ -42,7 +42,9 @@
 | `retrieval_embedding` | 分块向量 | `(chunk_id, embedding_space_id)` 唯一 |
 | `embedding_job` | 向量化任务队列 | 输入版本唯一；状态含 QUEUED / CLAIMED / RETRY / COMPLETED / SUPERSEDED / FAILED |
 
-## 4. AI 配置、会话、记忆与用量域（schema v9–v14）
+人工加入错题以该题最后一条真实 answer_record.id 为基线，从未作答为 0，旧题为 NULL。成员须未被人工移出，且曾答错或被人工加入；最近答错 / 人工加入两者较新的基线之后，连续答对未满两次。重复加入当前成员不重置进度，不生成答题记录；统计仍来自真实作答。
+
+## 4. AI 配置、会话、记忆与用量域（schema v9–v15）
 
 ### 4.1 配置与会话
 
@@ -58,6 +60,9 @@
 | `ai_chat_pending` | 人工待发与插话（v14） | `request_id` 引用派发收据，会话级联删除；加密请求体、版本、接收状态、关联运行及正文偏移；原始提交指纹不随编辑改变 |
 | `ai_chat_queue_state` | 会话队列暂停与编辑状态（v14） | `session_id` 主键且级联删除；保存暂停、编辑项及结束编辑后的恢复状态 |
 | `ai_chat_attachment` | 轮次附件 | `TEXT` / `IMAGE` 密文；`byte_length` 校验 |
+| `ai_material_creation` | 资料新增回执（v15） | `(request_id,operation_id)` 主键；session_id 级联删除；参数指纹、类型、已提交对象 ID，不保存标题或正文 |
+
+资料回执与业务写入、笔记检索条目在同一事务内提交。会话删除只清回执，已创建普通资料继续保留；不对资料 ID 设置级联外键，删除资料后仍保留回执以拒绝重复重建。旧配置中的 maxInputTokens 不再参与预算，模型窗口 / 最大输出须显式配置，缺值不通过迁移猜测补齐。
 
 v12 会话引用为随机 128 位标识的 32 位小写十六进制表示，改名和重启保持不变。标题来源为 temporary/manual/ai/legacy；状态为 pending/idle/generating/ready/failed。任务认领、结果提交和人工改名按标题 revision 条件更新，人工保存使更早的任务失效；不改变 history_revision。迁移保留已有标题和消息，已有历史的旧会话为 legacy/idle；重启把残留 generating 标为 failed，不重新外发。
 
@@ -75,7 +80,7 @@ v14 人工待发请求体包含文字、附件、页面快照、检索范围及�
 
 v0.7.2 的 `list_sessions/read_session` 直接只读查询现有会话/消息/轮次，不新增表或记忆索引。列表按 ID seek；正文游标绑定 `session_ref/history_revision/context_generation` 及消息上界与段内偏移，只返回当前代终态已保存正文，legacy 仅初始代可读。来源原文不复制落库；活动继续复用加密结果元数据，读取不推进历史版本、不创建记忆。
 
-v0.7.3 的六个资料读取工具不改变 schema 14。资料直接读取业务表，笔记正文关键词复用 `retrieval_chunk` 文本；没有第二份资料库或索引。`pageSnapshot` 在直接运行时留在本轮内存，人工排队 / 插话沿用 `ai_chat_pending` 加密请求体，编辑用户正文时保留原快照。明文请求元数据仅含 `pageSnapshotHash`，工具原始正文不进入活动历史；指纹参与请求幂等判断。
+v0.7.3 的六个资料读取工具本身不改变表结构。资料直接读取业务表，笔记正文关键词复用 `retrieval_chunk` 文本；没有第二份资料库或索引。`pageSnapshot` 在直接运行时留在本轮内存，人工排队 / 插话沿用 `ai_chat_pending` 加密请求体，编辑用户正文时保留原快照。明文请求元数据仅含 `pageSnapshotHash`，工具原始正文不进入活动历史；指纹参与请求幂等判断。
 
 `ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随主模型。两张单行设置表各自独立检查 revision。
 
@@ -116,7 +121,7 @@ v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memori
 
 ## 5. 版本与迁移
 
-- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
+- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`，v15 增加资料新增回执与人工错题基线。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
 - `AiConnectionsStore` 在首次管理读取时幂等迁移旧 chat/import，保留密文与参数；旧表保留为迁移源，已迁移的用途写入统一走连接接口。全局预算不由模型参数迁移，不创建重复的每模型副本。
 - 旧备份缺列时按兼容路径读取；恢复流程在换库前做 staged 校验，换库后执行安全事务（重置记忆启用/同意指纹、推进 vault epoch 与会话 generation、处理 RUNNING turn 与活动 job）。
 - 修改表结构时同步更新本文与 `schema.sql`，并补迁移测试；数据模型属于状态文档，不写未落地的计划字段。

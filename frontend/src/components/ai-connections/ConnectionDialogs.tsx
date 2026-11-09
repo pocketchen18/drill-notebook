@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Modal, Spin } from '@arco-design/web-react';
 import { apiRequest } from '../../lib/api';
-import { modelName, type ConnectionModel, type ConnectionProvider } from './types';
+import { modelName, validModelLimits, type ConnectionModel, type ConnectionProvider } from './types';
 import { effortLabel, matchPreset, useModelPresets } from './modelPresets';
 import { ModelIdInput } from './ModelIdInput';
 
 interface Props { provider: ConnectionProvider; close: () => void }
-export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props & { add: (ids: string[], password: string) => void; busy: boolean; saveError?: string }) {
+export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props & { add: (models: Record<string, unknown>[], password: string) => void; busy: boolean; saveError?: string }) {
   const presets = useModelPresets(provider);
   const [ids, setIds] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -15,6 +15,13 @@ export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [limits, setLimits] = useState<Record<string, { contextWindow?: string; maxOutputTokens?: string }>>({});
+  const capacity = (id: string, field: 'contextWindow' | 'maxOutputTokens') => limits[id]?.[field] ?? String(matchPreset(presets.data, id)?.[field] ?? '');
+  const addSelected = () => {
+    const models = selected.map(modelId => ({ modelId, contextWindow: Number(capacity(modelId, 'contextWindow')), maxOutputTokens: Number(capacity(modelId, 'maxOutputTokens')) }));
+    if (models.some(model => !validModelLimits(model))) { setError('请补全所选模型的上下文窗口和最大输出 Token，输出不能大于上下文窗口'); return; }
+    add(models, password);
+  };
   const request = useRef<AbortController>();
   const fetchModels = async () => {
     request.current?.abort();
@@ -34,7 +41,7 @@ export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props
   }, []);
   const filtered = ids?.filter(id => id.toLowerCase().includes(search.toLowerCase())) ?? [];
   return <Modal visible title={`获取模型 · ${provider.name}`} onCancel={() => { if (!busy) close(); }} maskClosable={false} footer={
-    <div className="connection-actions end"><Button disabled={busy} onClick={close}>稍后添加</Button><Button type="primary" loading={busy} disabled={!selected.length || selected.length > 20 || loading || (provider.needsPassword && !password)} onClick={() => add(selected, password)}>验证并添加（{selected.length}）</Button></div>
+    <div className="connection-actions end"><Button disabled={busy} onClick={close}>稍后添加</Button><Button type="primary" loading={busy} disabled={!selected.length || selected.length > 20 || loading || presets.isPending || (provider.needsPassword && !password)} onClick={addSelected}>验证并添加（{selected.length}）</Button></div>
   }>
     <p className="connection-hint">每个模型最多发送三次短请求，可能产生少量用量；仅使用测试文字、图片和工具。一次最多选择 20 个模型。</p>
     {provider.needsPassword && <div className="connection-field"><label htmlFor="discover-password">此连接主密码</label><Input.Password id="discover-password" value={password} onChange={setPassword} /><Button disabled={!password || loading} onClick={() => void fetchModels()}>获取模型</Button></div>}
@@ -48,6 +55,13 @@ export function DiscoveryDialog({ provider, close, add, busy, saveError }: Props
       </div></>}
     <div className="connection-field"><label htmlFor="discover-manual-id">手动模型 ID</label><div className="connection-actions"><ModelIdInput id="discover-manual-id" value={manual} presets={presets.data} loading={presets.isPending} disabled={busy} onChange={setManual} onSelect={setManual} /><Button disabled={!manual.trim() || busy || selected.length >= 20} onClick={() => { const id = manual.trim(); if (provider.models.some(model => model.modelId === id)) { setError('此模型已添加'); return; } setIds(current => [...new Set([...(current ?? []), id])]); setSelected(current => [...new Set([...current, id])]); setSearch(''); setManual(''); }}>加入待选</Button></div>{matchPreset(presets.data, manual) && <p className="connection-hint">已匹配预设 · {matchPreset(presets.data, manual)!.name}，添加时自动填充设置。</p>}</div>
     {selected.length > 20 && <p role="alert" className="connection-error">一次最多验证 20 个模型，请减少选择。</p>}
+    {!!selected.length && <section aria-label="所选模型容量"><h3>所选模型容量</h3><p className="connection-hint">匹配预设后自动填入；缺失时请按供应商提供的容量补全，再开始验证。</p>
+      {selected.map(id => <div className="connection-verification" key={id}><strong>{id}</strong>
+        {([['contextWindow', '上下文窗口'], ['maxOutputTokens', '最大输出 Token']] as const).map(([field, label]) => <div className="connection-field" key={field}>
+          <label>{label}<Input aria-label={`${id} ${label}`} aria-required required inputMode="numeric" value={capacity(id, field)} placeholder="必填" disabled={busy}
+            onChange={value => setLimits(current => ({ ...current, [id]: { ...current[id], [field]: value } }))} /></label>
+        </div>)}</div>)}
+    </section>}
   </Modal>;
 }
 

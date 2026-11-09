@@ -168,7 +168,7 @@ public class AiConnectionsService {
         }
         try (usage) {
             var reasoning = AiReasoningSettings.read(candidate.params(), provider.apiFormat());
-            int output = candidate.params().get("maxOutputTokens") instanceof Number n ? Math.min(n.intValue(), 4096) : 4096;
+            int output = Math.min(((Number) candidate.params().get("maxOutputTokens")).intValue(), 4096);
             var target = new AiUpstreamClient.Upstream(provider.endpoint(), decrypt(provider, body), candidate.modelId(), provider.apiFormat(), output, false).withReasoning(reasoning);
             var verification = new AiModelVerifier(upstream, mapper).verify(target, handle);
             synchronized (AiConnectionUsage.LOCK) {
@@ -217,7 +217,8 @@ public class AiConnectionsService {
         }
         params.put("streaming", bool(body, "streaming", !Boolean.FALSE.equals(params.get("streaming"))));
         params.put("tools", bool(body, "tools", params.get("tools") instanceof Boolean flag ? flag : ProviderCapabilities.of(provider.endpoint(), provider.apiFormat(), id).tools()));
-        for (String field : List.of("contextWindow", "maxInputTokens", "maxOutputTokens")) {
+        params.remove("maxInputTokens");
+        for (String field : List.of("contextWindow", "maxOutputTokens")) {
             if (!body.containsKey(field)) continue;
             Object value = body.get(field);
             if (value == null || "".equals(value)) params.remove(field);
@@ -227,11 +228,7 @@ public class AiConnectionsService {
                 params.put(field, ((Number) value).intValue());
             }
         }
-        if (params.get("contextWindow") instanceof Number window) {
-            for (String field : List.of("maxInputTokens", "maxOutputTokens")) {
-                if (params.get(field) instanceof Number max && max.intValue() > window.intValue()) invalid("输入/输出上限分别不得大于上下文窗口");
-            }
-        }
+        AiModelLimits.requireConfigured(params);
         for (String field : AiReasoningSettings.FIELDS) if (body.containsKey(field)) params.put(field, body.get(field));
         AiReasoningSettings reasoning = AiReasoningSettings.read(params, provider.apiFormat());
         reasoning.putInto(params);
@@ -406,7 +403,7 @@ public class AiConnectionsService {
             view.put("models", p.models().stream().map(m -> {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("id", m.id()); item.put("modelId", m.modelId()); item.put("name", m.name()); item.put("group", m.group());
-                for (String key : List.of("streaming", "tools", "contextWindow", "maxInputTokens", "maxOutputTokens")) item.put(key, m.params().get(key));
+                for (String key : List.of("streaming", "tools", "contextWindow", "maxOutputTokens")) item.put(key, m.params().get(key));
                 item.put("reasoningControl", m.params().getOrDefault("reasoningControl", "effort"));
                 item.put("reasoningEfforts", m.params().getOrDefault("reasoningEfforts", List.of()));
                 item.put("defaultReasoningEffort", m.params().get("defaultReasoningEffort"));
@@ -438,6 +435,7 @@ public class AiConnectionsService {
         if (blank(provider.endpoint()) || ("api_key".equals(provider.authMode()) && blank(provider.encryptedKey())) || (model != null && blank(model.modelId()))) {
             invalid("此配置待补全，请检查连接地址、密钥和模型 ID");
         }
+        if (model != null) AiModelLimits.requireConfigured(model.params());
     }
     private static String text(Map<String, Object> body, String key, int limit, boolean required) {
         String value = body.get(key) == null ? "" : String.valueOf(body.get(key)).trim();

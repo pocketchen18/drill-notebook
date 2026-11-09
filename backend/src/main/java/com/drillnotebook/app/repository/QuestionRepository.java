@@ -137,13 +137,13 @@ public class QuestionRepository {
 
     /**
      * 错题本成员规则（单一真相源）：
-     * 1) 累计答错过（wrongCount > 0）；
+     * 1) 累计答错过或被人工加入；
      * 2) 未被手动移出（wrong_excluded = 0）；
-     * 3) 最近一次答错之后尚未连续答对满 {@link #WRONG_MASTER_STREAK} 次。
+     * 3) 最近答错或人工加入（取较新基线）之后尚未连续答对满 {@link #WRONG_MASTER_STREAK} 次。
      * 排序：错误次数多者优先，其次最近答错时间。
      */
     static final String WRONG_MEMBERSHIP_SQL = """
-                JOIN (
+                LEFT JOIN (
                     SELECT question_id,
                            COUNT(*) AS attempt_count,
                            SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_count,
@@ -151,10 +151,11 @@ public class QuestionRepository {
                            MAX(CASE WHEN is_correct = 0 THEN answered_at END) AS last_wrong_at
                     FROM answer_record GROUP BY question_id
                 ) agg ON agg.question_id = q.id
-                WHERE agg.wrong_count > 0
+                WHERE (COALESCE(agg.wrong_count, 0) > 0 OR q.wrong_manual_after IS NOT NULL)
                   AND q.wrong_excluded = 0
                    AND (SELECT COUNT(*) FROM answer_record c
-                          WHERE c.question_id = q.id AND c.is_correct = 1 AND c.id > agg.last_wrong_id) < """ + WRONG_MASTER_STREAK + """
+                          WHERE c.question_id = q.id AND c.is_correct = 1
+                            AND c.id > MAX(COALESCE(agg.last_wrong_id, 0), COALESCE(q.wrong_manual_after, 0))) < """ + WRONG_MASTER_STREAK + """
                 """;
 
     public List<QuestionRecord> wrongQuestions() {
@@ -184,6 +185,21 @@ public class QuestionRepository {
     /** 手动移出/恢复错题本。答错会由 recordAnswer 自动重置为未移出。 */
     public void setWrongExcluded(long questionId, boolean excluded) {
         jdbc.update("UPDATE question SET wrong_excluded = ? WHERE id = ?", excluded ? 1 : 0, questionId);
+    }
+
+    public boolean inWrongBook(long questionId) {
+        return !jdbc.query("SELECT q.id FROM question q " + WRONG_MEMBERSHIP_SQL + " AND q.id = ?",
+                (row, index) -> row.getLong(1), questionId).isEmpty();
+    }
+
+    /** 不伪造答题记录；已在错题本时不重置进度。由调用方的写事务包住判定和标记。 */
+    public boolean addToWrongBook(long questionId) {
+        findById(questionId);
+        if (inWrongBook(questionId)) return false;
+        jdbc.update("UPDATE question SET wrong_excluded = 0, wrong_manual_after = "
+                + "(SELECT COALESCE(MAX(id), 0) FROM answer_record WHERE question_id = ?) WHERE id = ?",
+                questionId, questionId);
+        return true;
     }
 
     /**

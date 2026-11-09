@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 14;
+    private static final int SCHEMA_VERSION = 15;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -107,6 +107,8 @@ public class DatabaseInitializer {
             ensureColumn(connection, "note_page", "content_hash", "TEXT");
             // 错题本：手动「移出错题本」标记；答错时由 recordAnswer 重置为 0，使其重新计入错题本
             ensureColumn(connection, "question", "wrong_excluded", "INTEGER NOT NULL DEFAULT 0");
+            // 人工加入错题的真实作答基线；NULL 保持升级前的成员规则。
+            ensureColumn(connection, "question", "wrong_manual_after", "INTEGER");
             // v9 轮次映射：legacy 消息保持 turn_id IS NULL，不自动补造轮次
             ensureColumn(connection, "ai_chat_message", "turn_id", "INTEGER REFERENCES ai_chat_turn(id) ON DELETE SET NULL");
             ensureColumn(connection, "ai_chat_message", "turn_role", "TEXT");

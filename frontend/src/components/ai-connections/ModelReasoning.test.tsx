@@ -20,6 +20,23 @@ function editor(model?: ConnectionModel) {
 }
 describe('model presets and reasoning settings', () => {
   beforeEach(() => { vi.clearAllMocks(); read.mockResolvedValue([preset]); });
+  it('legacy limits stay empty and cannot test or save until both are explicitly filled', async () => {
+    const { save } = editor({ id: 'legacy', modelId: 'gpt-5.2', name: '', group: '', tools: false, streaming: true });
+    await screen.findByText(/参考预设：GPT-5.2/);
+    expect(screen.getByLabelText('上下文窗口')).toHaveValue('');
+    expect(screen.getByLabelText('最大输出 Token')).toHaveValue('');
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled();
+    expect(screen.queryByLabelText('最大输入 Token')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存模型设置' }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('请填写上下文窗口和最大输出 Token');
+    fireEvent.change(screen.getByLabelText('上下文窗口'), { target: { value: '128000' } });
+    fireEvent.change(screen.getByLabelText('最大输出 Token'), { target: { value: '32000' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存模型设置' }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0][2]).toMatchObject({ contextWindow: 128000, maxOutputTokens: 32000 });
+    expect(save.mock.calls[0][2]).not.toHaveProperty('maxInputTokens');
+  });
   it('new models only fill preset fields after explicit selection, not an exact ID match', async () => {
     const { save } = editor();
     expect(screen.getByLabelText('控制方式')).toHaveValue('effort');
@@ -51,7 +68,7 @@ describe('model presets and reasoning settings', () => {
   });
   it('search preserves selections, gaps are accurate, deleting default falls back and Escape only closes popup', async () => {
     const model: ConnectionModel = { id: 'm', modelId: 'custom', name: 'Model', group: '', streaming: true, tools: false,
-      reasoningControl: 'effort', reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+      contextWindow: 128000, maxOutputTokens: 32000, reasoningControl: 'effort', reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
     const { leave, save } = editor(model);
     fireEvent.click(screen.getByRole('button', { name: '思考等级 low → max' }));
     const dialog = screen.getByRole('dialog', { name: '配置思考等级' });
@@ -82,14 +99,18 @@ describe('model presets and reasoning settings', () => {
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: '自定义名称' } });
     if (state === 'failed') await screen.findByText(/预设资料加载失败/);
     fireEvent.click(screen.getByRole('button', { name: '验证并添加模型' }));
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('上下文窗口'), { target: { value: '128000' } });
+    fireEvent.change(screen.getByLabelText('最大输出 Token'), { target: { value: '32000' } });
+    fireEvent.click(screen.getByRole('button', { name: '验证并添加模型' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0][2]).toMatchObject({ modelId: 'gpt-5.2', name: '自定义名称' });
-    expect(save.mock.calls[0][2]).toMatchObject({ contextWindow: null, maxInputTokens: null, maxOutputTokens: null,
+    expect(save.mock.calls[0][2]).toMatchObject({ contextWindow: 128000, maxOutputTokens: 32000,
       reasoningEfforts: [], defaultReasoningEffort: '', thinkingBudgetTokens: null, reasoningControl: 'effort' });
   });
   it('an unsupported saved effort can be removed after a protocol change', async () => {
     const model: ConnectionModel = { id: 'm', modelId: 'custom', name: 'Model', group: '', streaming: true, tools: false,
-      reasoningControl: 'effort', reasoningEfforts: ['none', 'high'], defaultReasoningEffort: 'none' };
+      contextWindow: 128000, maxOutputTokens: 32000, reasoningControl: 'effort', reasoningEfforts: ['none', 'high'], defaultReasoningEffort: 'none' };
     const save = vi.fn().mockResolvedValue(false);
     wrap(<ModelEditor provider={{ ...provider, apiFormat: 'anthropic' }} model={model} save={save} onState={vi.fn()} leave={vi.fn()} done={vi.fn()} busy={false} />);
     fireEvent.click(screen.getByRole('button', { name: '思考等级 none, high' }));
@@ -106,7 +127,6 @@ describe('model presets and reasoning settings', () => {
     await screen.findByText(/参考预设：GPT-5.2/);
     expect(screen.getByLabelText('上下文窗口')).toHaveValue('20000');
     expect(screen.getByRole('button', { name: '思考等级 low' })).toBeInTheDocument();
-    fireEvent.click(screen.getByText('高级兼容设置'));
     fireEvent.click(screen.getByRole('button', { name: '恢复预设资料' }));
     expect(screen.getByLabelText('上下文窗口')).toHaveValue('400000');
     expect(screen.getByLabelText('模型名称')).toHaveValue('Custom');
@@ -121,12 +141,12 @@ describe('model presets and reasoning settings', () => {
     expect(await screen.findByText('未匹配预设，可手动配置')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /gpt-5.2 已匹配预设/ }));
     fireEvent.click(screen.getByRole('button', { name: '验证并添加（1）' }));
-    await waitFor(() => expect(add).toHaveBeenCalledWith(['gpt-5.2'], ''));
+    await waitFor(() => expect(add).toHaveBeenCalledWith([{ modelId: 'gpt-5.2', contextWindow: 400000, maxOutputTokens: 128000 }], ''));
   });
   it('saved IDs change independently of every saved field, and only explicit selection replaces preset fields', async () => {
     const check = { status: 'passed' as const, message: '', elapsedMs: 1 };
     const { save } = editor({ id: 'stable', modelId: 'old-model', name: 'Old', group: '常用', tools: true, streaming: false,
-      preset, contextWindow: 12000, maxInputTokens: 11000, maxOutputTokens: 1000, reasoningEfforts: ['high'], defaultReasoningEffort: 'high',
+      preset, contextWindow: 12000, maxOutputTokens: 1000, reasoningEfforts: ['high'], defaultReasoningEffort: 'high',
       verification: { text: check, image: check, tools: check, checkedAt: '2026-11-08T00:00:00Z' } });
     const input = screen.getByLabelText('模型 ID');
     expect(input).not.toHaveAttribute('readonly');
@@ -136,7 +156,7 @@ describe('model presets and reasoning settings', () => {
       expect(screen.getByLabelText('模型名称')).toHaveValue('Old');
       expect(screen.getByLabelText('分组名称')).toHaveValue('常用');
       expect(screen.getByLabelText('上下文窗口')).toHaveValue('12000');
-      expect(screen.getByLabelText('最大输入 Token')).toHaveValue('11000');
+      expect(screen.queryByLabelText('最大输入 Token')).not.toBeInTheDocument();
       expect(screen.getByLabelText('最大输出 Token')).toHaveValue('1000');
       expect(screen.getByRole('button', { name: '思考等级 high' })).toBeInTheDocument();
       expect(screen.getByText('默认：high')).toBeInTheDocument();
@@ -148,7 +168,7 @@ describe('model presets and reasoning settings', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存模型设置' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0][2]).toMatchObject({ modelId: 'unknown', name: 'Old', group: '常用', tools: true, streaming: false,
-      contextWindow: 12000, maxInputTokens: 11000, maxOutputTokens: 1000, reasoningEfforts: ['high'], defaultReasoningEffort: 'high' });
+      contextWindow: 12000, maxOutputTokens: 1000, reasoningEfforts: ['high'], defaultReasoningEffort: 'high' });
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'gpt-5' } });
     await screen.findByRole('listbox', { name: '预设模型' });
@@ -192,7 +212,7 @@ describe('model presets and reasoning settings', () => {
     expect(screen.getByText(/添加时自动填充设置/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '加入待选' }));
     fireEvent.click(screen.getByRole('button', { name: '验证并添加（1）' }));
-    expect(add).toHaveBeenCalledWith(['openai/gpt-5.2'], '');
+    expect(add).toHaveBeenCalledWith([{ modelId: 'openai/gpt-5.2', contextWindow: 400000, maxOutputTokens: 128000 }], '');
   });
   it.each(['click', 'Enter'])('%s selection survives custom IDs and other exact matches when adding a model', async selection => {
     const other: ModelPreset = { ...preset, id: 'other-model', name: 'Other', aliases: [], contextWindow: 200000, maxOutputTokens: 16000, reasoningEfforts: ['low'] };
@@ -231,7 +251,6 @@ describe('model presets and reasoning settings', () => {
     expect(screen.getByLabelText('最大输出 Token')).toHaveValue('128000');
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: '手工名称' } });
     fireEvent.change(screen.getByLabelText('上下文窗口'), { target: { value: '600000' } });
-    fireEvent.change(screen.getByLabelText('最大输入 Token'), { target: { value: '300000' } });
     fireEvent.click(screen.getByRole('button', { name: '思考等级 none, low → xhigh' }));
     fireEvent.change(screen.getByLabelText('默认等级'), { target: { value: 'high' } });
     fireEvent.keyDown(screen.getByLabelText('搜索思考等级'), { key: 'Escape' });
@@ -239,14 +258,14 @@ describe('model presets and reasoning settings', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存模型设置' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0]).toEqual(['/models/stable', 'PUT', expect.objectContaining({ modelId: 'custom-id', name: '手工名称', group: '常用', streaming: false,
-      contextWindow: 600000, maxInputTokens: 300000, maxOutputTokens: 128000, reasoningEfforts: preset.reasoningEfforts, defaultReasoningEffort: 'high', tools: true })]);
+      contextWindow: 600000, maxOutputTokens: 128000, reasoningEfforts: preset.reasoningEfforts, defaultReasoningEffort: 'high', tools: true })]);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'other-model' } });
     expect(screen.getByLabelText('模型名称')).toHaveValue('手工名称');
     fireEvent.click(within(await screen.findByRole('listbox', { name: '预设模型' })).getByText('other-model'));
     expect(screen.getByLabelText('模型名称')).toHaveValue('Other');
     expect(screen.getByLabelText('上下文窗口')).toHaveValue('200000');
-    expect(screen.getByLabelText('最大输入 Token')).toHaveValue('');
+    expect(screen.queryByLabelText('最大输入 Token')).not.toBeInTheDocument();
     expect(screen.getByLabelText('最大输出 Token')).toHaveValue('16000');
     expect(screen.getByRole('button', { name: '思考等级 low' })).toBeInTheDocument();
     expect(screen.getByText('默认：自动（服务默认）')).toBeInTheDocument();
@@ -289,14 +308,13 @@ describe('model presets and reasoning settings', () => {
   });
   it.each(['new', 'saved'])('all unsaved settings survive ID edits for a %s model without selecting any preset', async kind => {
     const model: ConnectionModel = { id: 'stable', modelId: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash', group: '常用', streaming: false, tools: false,
-      contextWindow: 100000, maxInputTokens: 80000, maxOutputTokens: 10000, reasoningControl: 'effort', reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' };
+      contextWindow: 100000, maxOutputTokens: 10000, reasoningControl: 'effort', reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' };
     const { save } = editor(kind === 'saved' ? model : undefined);
     const input = screen.getByLabelText('模型 ID');
     fireEvent.change(input, { target: { value: model.modelId } });
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: '未保存名称' } });
     fireEvent.change(screen.getByLabelText('分组名称'), { target: { value: '未保存分组' } });
     fireEvent.change(screen.getByLabelText('上下文窗口'), { target: { value: '500000' } });
-    fireEvent.change(screen.getByLabelText('最大输入 Token'), { target: { value: '' } });
     fireEvent.change(screen.getByLabelText('最大输出 Token'), { target: { value: '2000' } });
     fireEvent.click(screen.getByRole('switch', { name: '流式输出' }));
     if (kind === 'saved') fireEvent.click(screen.getByRole('switch', { name: '允许工具调用' }));
@@ -313,7 +331,7 @@ describe('model presets and reasoning settings', () => {
       fireEvent.change(input, { target: { value: '' } });
       fireEvent.change(input, { target: { value: id } });
       expect(screen.getByLabelText('模型名称')).toHaveValue('未保存名称');
-      expect(screen.getByLabelText('最大输入 Token')).toHaveValue('');
+      expect(screen.queryByLabelText('最大输入 Token')).not.toBeInTheDocument();
       expect(screen.getByText('默认：xhigh')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name }));
       await waitFor(() => expect(save).toHaveBeenCalledTimes(index + 2));
@@ -323,7 +341,7 @@ describe('model presets and reasoning settings', () => {
   it.each(['pending', 'failed'])('editing a saved ID with %s presets retains every saved value in the payload', async state => {
     read.mockImplementation(() => state === 'pending' ? new Promise(() => {}) : Promise.reject(new Error('offline')));
     const model: ConnectionModel = { id: 'stable', modelId: 'saved', name: 'Saved', group: '常用', tools: true, streaming: false,
-      contextWindow: 123000, maxInputTokens: 120000, maxOutputTokens: 3000, reasoningControl: 'effort', reasoningEfforts: ['high'], defaultReasoningEffort: 'high' };
+      contextWindow: 123000, maxOutputTokens: 3000, reasoningControl: 'effort', reasoningEfforts: ['high'], defaultReasoningEffort: 'high' };
     const { save } = editor(model);
     if (state === 'failed') await screen.findByText(/预设资料加载失败/);
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'gpt-5.2' } });

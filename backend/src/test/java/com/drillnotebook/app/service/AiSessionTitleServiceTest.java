@@ -78,7 +78,7 @@ class AiSessionTitleServiceTest {
             exchange.getResponseBody().write(response); exchange.close();
         });
         server.start();
-        ai.saveConfig(Map.of("provider", "custom", "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+        ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
                 "model", "fixture-model", "apiKey", "fixture-key"));
     }
 

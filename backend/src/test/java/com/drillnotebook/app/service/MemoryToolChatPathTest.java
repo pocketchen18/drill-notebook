@@ -86,7 +86,7 @@ class MemoryToolChatPathTest {
         server = new ToolFixtureServer();
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(),
                 new ObjectMapper(), null, wiring.turnService(), wiring.cipher(), stack.contexts());
-        ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
+        ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key", "tools", true));
         ai.setMemoryTools(List.of(stack.memorySearchTool(), stack.memoryListTool(),
                 stack.memoryCreateTool(), stack.memoryUpdateTool()));
@@ -126,7 +126,7 @@ class MemoryToolChatPathTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void streamChatExecutesTheToolWithoutLeakingToolContentToSse(boolean streaming) throws Exception {
-        ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
+        ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key", "tools", true, "streaming", streaming));
         List<String> deltas = new ArrayList<>();
         List<Map<String, Object>> events = new ArrayList<>();
@@ -165,7 +165,7 @@ class MemoryToolChatPathTest {
     void exhaustedToolBudgetStillProducesAnAnswer(int batchSize, boolean streaming) throws Exception {
         new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(2, 3, 30, 15, 128000, 16384, 8192, 0));
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(batchSize)) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true, "streaming", streaming));
             enableUseConsent();
             List<String> deltas = new ArrayList<>();
@@ -206,7 +206,7 @@ class MemoryToolChatPathTest {
             }
         }));
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(2)) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true, "streaming", streaming, "contextWindow", 200000));
             enableUseConsent();
             var request = body("完成多个查询后整理结果");
@@ -233,7 +233,7 @@ class MemoryToolChatPathTest {
         var repository = new AiRuntimeSettingsRepository(jdbc);
         repository.save(0, new AiRuntimeSettings(2, 4, 30, 15, 128000, 16384, 8192, 0));
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             var changed = new java.util.concurrent.atomic.AtomicBoolean();
             ai.chatStream(body("读取后总结"), (type, text) -> true, event -> {
@@ -249,7 +249,7 @@ class MemoryToolChatPathTest {
 
     @Test void repeatedNoProgressEndsWithAnAnswerAndExplicitReason() throws Exception {
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             var result = ai.chat(body("反复查找"));
             assertEquals("budget_repeated", result.get("finishReason"));
@@ -261,7 +261,7 @@ class MemoryToolChatPathTest {
     @Test void executionLimitStopsTheRemainderOfABatchWithoutLosingCallPairs() throws Exception {
         new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(50, 7, 30, 15, 128000, 16384, 8192, 0));
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(3)) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             var request = body("查询后回答");
             var result = ai.chat(request);
@@ -284,7 +284,7 @@ class MemoryToolChatPathTest {
         new AiRuntimeSettingsRepository(jdbc).save(0, new AiRuntimeSettings(50, 100, 30, 15, 4096, 1024, 1024, 0));
         try (ToolFixtureServer repeated = new ToolFixtureServer().repeatTools(1)) {
             repeated.outputTokens = 512;
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", repeated.baseUrl(), "model", "stub-model", "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             var result = ai.chat(body("查询后总结"));
             assertEquals("budget_output", result.get("finishReason"));
@@ -299,7 +299,7 @@ class MemoryToolChatPathTest {
     void confirmedWriteSurvivesDisconnectBeforeAnyAnswerAndIsRestoredFromHistory() throws Exception {
         try (ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
                 "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}")) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true, "streaming", false));
             enableUseConsent();
             var request = body("记住：我每周三晚上复习");
@@ -338,7 +338,7 @@ class MemoryToolChatPathTest {
     void exceptionAfterActualWriteMustNotClaimThatNothingWasSaved() throws Exception {
         try (ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
                 "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}")) {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             MemoryCreateTool uncertain = org.mockito.Mockito.spy(stack.memoryCreateTool());
@@ -362,7 +362,7 @@ class MemoryToolChatPathTest {
     void listMemoryToolPathReturnsOnlyTitles() throws Exception {
         ToolFixtureServer listServer = new ToolFixtureServer("list_memories", "{}");
         try {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             Map<String, Object> response = ai.chat(body("我记了哪些事"));
@@ -399,7 +399,7 @@ class MemoryToolChatPathTest {
         new AiRuntimeSettingsRepository(jdbc).save(0, executionSettings);
         try (var listServer = new ToolFixtureServer("list_memories", "{\"scope\":\"ALL\",\"limit\":20}")) {
             if (!changeSupplier) {
-                ai.saveConfig(Map.of("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
+                ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", listServer.baseUrl(), "model", "stub-model",
                         "apiKey", "stub-key", "tools", true));
                 enableUseConsent();
             }
@@ -426,7 +426,7 @@ class MemoryToolChatPathTest {
                 providerId = state.providers().get(state.providers().size() - 1).id();
             }
             connections.saveModels(providerId, null, Map.of("revision", state.revision(), "modelId", "new-model",
-                    "tools", true, "streaming", true));
+                    "tools", true, "streaming", true, "contextWindow", 128000, "maxOutputTokens", 32000));
             state = configs.connections().read();
             var models = state.provider(providerId).models();
             connections.bind(Map.of("revision", state.revision(), "purpose", "chat", "modelId", models.get(models.size() - 1).id()));
@@ -455,7 +455,7 @@ class MemoryToolChatPathTest {
         ToolFixtureServer createServer = new ToolFixtureServer("create_memory",
                 "{\"text\":\"我每周三晚上复习\",\"kind\":\"PREFERENCE\"}");
         try {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", createServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             Map<String, Object> response = ai.chat(body("记住：我每周三晚上复习"));
@@ -491,7 +491,7 @@ class MemoryToolChatPathTest {
         ToolFixtureServer updateServer = new ToolFixtureServer("update_memory",
                 "{\"currentText\":\"" + FACT + "\",\"text\":\"考试改到周五\"}");
         try {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", updateServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", updateServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true));
             enableUseConsent();
             Map<String, Object> response = ai.chat(body("考试安排改到周五"));
@@ -519,7 +519,7 @@ class MemoryToolChatPathTest {
     void unknownToolNameIsRejectedWithoutBreakingTheTurn() throws Exception {
         ToolFixtureServer unknownServer = new ToolFixtureServer("unknown_memory_tool", "{}");
         try {
-            ai.saveConfig(Map.of("provider", "custom", "endpoint", unknownServer.baseUrl(), "model", "stub-model",
+            ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", unknownServer.baseUrl(), "model", "stub-model",
                     "apiKey", "stub-key", "tools", true));
             Map<String, Object> response = ai.chat(body("我记了哪些事"));
             assertEquals("COMPLETED", response.get("status"));

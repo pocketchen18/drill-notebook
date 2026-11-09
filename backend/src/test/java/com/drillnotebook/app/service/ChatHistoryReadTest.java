@@ -51,7 +51,7 @@ class ChatHistoryReadTest {
         stack = ChatContextWiring.wire(dataSource, jdbc, wiring);
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(),
                 new ObjectMapper(), null, wiring.turnService(), wiring.cipher(), stack.contexts());
-        ai.saveConfig(MOCK_CONFIG);
+        ai.saveConfig(TestModelLimits.config(MOCK_CONFIG));
         sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
 

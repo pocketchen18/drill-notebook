@@ -96,6 +96,10 @@ describe('automatic model verification', () => {
     fireEvent.change(screen.getByLabelText('手动模型 ID'), { target: { value: 'private-model' } });
     fireEvent.click(screen.getByRole('button', { name: '加入待选' }));
     fireEvent.click(screen.getByRole('button', { name: '验证并添加（1）' }));
-    expect(add).toHaveBeenCalledWith(['private-model'], '');
+    expect(add).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('private-model 上下文窗口'), { target: { value: '128000' } });
+    fireEvent.change(screen.getByLabelText('private-model 最大输出 Token'), { target: { value: '32000' } });
+    fireEvent.click(screen.getByRole('button', { name: '验证并添加（1）' }));
+    expect(add).toHaveBeenCalledWith([{ modelId: 'private-model', contextWindow: 128000, maxOutputTokens: 32000 }], '');
   });
 });
