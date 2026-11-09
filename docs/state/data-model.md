@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**13**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**14**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -42,7 +42,7 @@
 | `retrieval_embedding` | 分块向量 | `(chunk_id, embedding_space_id)` 唯一 |
 | `embedding_job` | 向量化任务队列 | 输入版本唯一；状态含 QUEUED / CLAIMED / RETRY / COMPLETED / SUPERSEDED / FAILED |
 
-## 4. AI 配置、会话、记忆与用量域（schema v9–v13）
+## 4. AI 配置、会话、记忆与用量域（schema v9–v14）
 
 ### 4.1 配置与会话
 
@@ -55,6 +55,8 @@
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
 | `ai_session_dispatch` | 后台派发收据（v13） | `request_id` 唯一、`source_key` 唯一、递增 `sequence`；保存目标会话、输入指纹与状态/时间，不存消息正文、附件、模型配置或密钥 |
+| `ai_chat_pending` | 人工待发与插话（v14） | `request_id` 引用派发收据，会话级联删除；加密请求体、版本、接收状态、关联运行及正文偏移；原始提交指纹不随编辑改变 |
+| `ai_chat_queue_state` | 会话队列暂停与编辑状态（v14） | `session_id` 主键且级联删除；保存暂停、编辑项及结束编辑后的恢复状态 |
 | `ai_chat_attachment` | 轮次附件 | `TEXT` / `IMAGE` 密文；`byte_length` 校验 |
 
 v12 会话引用为随机 128 位标识的 32 位小写十六进制表示，改名和重启保持不变。标题来源为 temporary/manual/ai/legacy；状态为 pending/idle/generating/ready/failed。任务认领、结果提交和人工改名按标题 revision 条件更新，人工保存使更早的任务失效；不改变 history_revision。迁移保留已有标题和消息，已有历史的旧会话为 legacy/idle；重启把残留 generating 标为 failed，不重新外发。
@@ -63,9 +65,13 @@ v12 会话引用为随机 128 位标识的 32 位小写十六进制表示，改�
 
 会话表允许零行。未发送的新会话页只在前端存在，首次发送才创建数据库记录；启动、列表读取、删除最后一条均不补建默认会话。旧消息迁移仅在存在 `session_id IS NULL` 的历史消息时建立/使用归属会话，不删除已有空白会话。
 
-v13 派发队列仅在内存持有待发送内容及受理时配置；真正开始时复用 `ai_chat_turn` 与原加密历史/容量事务。工具新建的普通会话和首条收据在一个立即事务提交，新建继承来源 scope，向已有会话发送保留目标 scope。存在 QUEUED/RUNNING 收据时禁止删除、归档和清理历史。
+工具派发仅在内存持有待发送内容及受理时配置；真正开始时复用 `ai_chat_turn` 与原加密历史/容量事务。工具新建的普通会话和首条收据在一个立即事务提交，新建继承来源 scope，向已有会话发送保留目标 scope。存在 QUEUED/RUNNING 收据时禁止删除、归档和清理历史。人工待发内容由 v14 独立加密持久化。
 
-收据的 `source_key` 是来源 requestId 与 toolCallId 的摘要，同一调用重试返回原结果，指纹不符拒绝。`session_id` 刻意不设级联外键：删除目标后保留收据墓碑，防止重试重复创建或发送；它不是可恢复的消息副本。重启不重放队列，遗留 QUEUED → CANCELLED、RUNNING → INTERRUPTED；已有真实终态轮次则以该轮次为准。正常完成才继续同目标队列，停止或失败取消尚未执行的项。
+工具收据的 `source_key` 是来源 requestId 与 toolCallId 的摘要，同一调用重试返回原结果，指纹不符拒绝。`session_id` 刻意不设级联外键：删除目标后保留收据墓碑，防止重试重复创建或发送；它不是可恢复的消息副本。工具派发重启不重放，遗留 QUEUED → CANCELLED、RUNNING → INTERRUPTED；已有真实终态轮次则以该轮次为准。正常完成且队列未暂停才接续，停止或失败取消工具待发项、暂停保留人工待发项。
+
+v14 人工待发请求体包含文字、附件、页面快照、检索范围及模型配置引用，不保存主密码、明文 API Key 或原始工具负载。待发与已接收补充使用独立加密暂存额度，上限 64 MiB（历史配置更低时跟随更低值）。移除可在 8 秒内撤销，10 秒后清空密文；普通消息开始后释放暂存，已接收插话按关联运行保留并随历史清理。重启只恢复未执行人工项且置为暂停，已开始或交付未知项不自动重发；空队列不遗留暂停。
+
+插话以关联 requestId 和正文偏移区分用户补充与助手正文。只有已接收内容进入历史、后续上下文、跨会话读取及导出；无法解密时如实显示内容缺失，不用待发或未知状态冒充已发送记录。
 
 v0.7.2 的 `list_sessions/read_session` 直接只读查询现有会话/消息/轮次，不新增表或记忆索引。列表按 ID seek；正文游标绑定 `session_ref/history_revision/context_generation` 及消息上界与段内偏移，只返回当前代终态已保存正文，legacy 仅初始代可读。来源原文不复制落库；活动继续复用加密结果元数据，读取不推进历史版本、不创建记忆。
 
@@ -108,7 +114,7 @@ v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memori
 
 ## 5. 版本与迁移
 
-- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`。12 → 13 保留原会话、标题和消息；升级前 `DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建快照，失败则停止升级，未来版本的库拒绝降级打开。
+- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
 - `AiConnectionsStore` 在首次管理读取时幂等迁移旧 chat/import，保留密文与参数；旧表保留为迁移源，已迁移的用途写入统一走连接接口。全局预算不由模型参数迁移，不创建重复的每模型副本。
 - 旧备份缺列时按兼容路径读取；恢复流程在换库前做 staged 校验，换库后执行安全事务（重置记忆启用/同意指纹、推进 vault epoch 与会话 generation、处理 RUNNING turn 与活动 job）。
 - 修改表结构时同步更新本文与 `schema.sql`，并补迁移测试；数据模型属于状态文档，不写未落地的计划字段。

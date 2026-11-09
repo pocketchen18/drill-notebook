@@ -1,7 +1,7 @@
 # v0.7.2 会话列表与菜单 UI/UX
 
 > 状态：会话导航 MVP 与新会话草稿页修订已获人工确认并提交（173b7a4），于 2026-11-09 归档。跨会话工具随后独立实现。
-> 需求基线：[v0.7.2 功能需求清单](../../../state/v0.7.2-features.md)。视觉沿用 [全局设计规范](../../../DESIGN.md)。交互草图：同目录 `session-navigation-preview.html`。
+> 需求基线：[v0.7.2 功能需求清单](../features.md)。视觉沿用 [全局设计规范](../../../DESIGN.md)。交互草图：同目录 `session-navigation-preview.html`。
 
 ## 1. 本轮范围与设计取舍
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { normalizeShortcutConfig, readShortcutConfig, writeShortcutConfig, type ShortcutConfig } from '../lib/shortcuts';
-import { LS_SHOW_AI_FAB, readBoolPref, writeBoolPref } from '../lib/sessionPrefs';
+import { readBoolPref, writeBoolPref } from '../lib/sessionPrefs';
 
 type Theme = 'light' | 'dark';
 /** 主题偏好：system = 跟随系统深浅色，其余为显式指定。 */
@@ -31,8 +31,6 @@ interface UiState {
   toggleTheme: () => void;
   shortcutConfig: ShortcutConfig;
   setShortcutConfig: (config: ShortcutConfig) => void;
-  aiFabVisible: boolean;
-  setAiFabVisible: (visible: boolean) => void;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
   toggleAi: () => void;
@@ -121,11 +119,6 @@ export const useUiStore = create<UiState>((set) => ({
     const normalized = normalizeShortcutConfig(config);
     writeShortcutConfig(normalized);
     set({ shortcutConfig: normalized });
-  },
-  aiFabVisible: readBoolPref(LS_SHOW_AI_FAB, true),
-  setAiFabVisible: (visible) => {
-    writeBoolPref(LS_SHOW_AI_FAB, visible);
-    set({ aiFabVisible: visible });
   },
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),

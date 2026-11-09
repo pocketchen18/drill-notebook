@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
+import { LS_RETRIEVE_NOTES } from '../lib/sessionPrefs';
 import type { StreamCallbacks, StreamDonePayload } from '../lib/aiStream';
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
@@ -51,8 +52,7 @@ function wrapHtml(bodyInner: string, theme: 'light' | 'dark'): string {
 .arco-drawer-mask { display: none !important; }
 .arco-drawer-wrapper { position: static !important; display: block !important; }
 .arco-drawer { position: static !important; width: 100% !important; max-width: 540px; right: auto !important; }
-.arco-drawer-scroll { height: auto !important; overflow: visible !important; }
-.ai-fab { display: none !important; }</style>
+.arco-drawer-scroll { height: auto !important; overflow: visible !important; }</style>
 </head>
 <body>${bodyInner}</body>
 </html>`;
@@ -110,9 +110,8 @@ describeEvidence('AiAssistant evidence (DRILL_EVIDENCE_DIR)', () => {
       return Promise.resolve({});
     });
     setContext({ kind: 'note', title: '泰勒公式', markdown: '# 泰勒公式', notebookId: 7, notePageId: 5 });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    fireEvent.click(screen.getByLabelText('检索笔记'));
     await typeAndSend('讲解泰勒公式的重点');
     await screen.findByText('泰勒公式');
     await screen.findByText('中值定理');
@@ -140,9 +139,8 @@ describeEvidence('AiAssistant evidence (DRILL_EVIDENCE_DIR)', () => {
       return Promise.resolve({});
     });
     setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    fireEvent.click(screen.getByLabelText('检索笔记'));
     await typeAndSend('中值定理有哪些');
     await screen.findByText('笔记检索降级：本次只用了关键词召回结果');
     await screen.findByText('中值定理');

@@ -435,7 +435,7 @@ export function QuizPage(): JSX.Element {
   return <main className="page">
     {dayQueueMode ? <DayQueueSessionBar /> : null}
     <div className="page-heading">
-      <div><h1>刷题</h1><p>按筛选与编排顺序练习，提交后查看答案和解析。可用右下角 AI 助手讲解当前题。</p></div>
+      <div><h1>刷题</h1><p>按筛选与编排顺序练习，提交后查看答案和解析。可用右上角 AI 助手讲解当前题。</p></div>
       <Space>
         <CompletePlanButton
           planItemId={planItemId}

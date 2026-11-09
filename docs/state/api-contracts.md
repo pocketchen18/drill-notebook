@@ -185,7 +185,7 @@ v2 请求核心字段：
 
 - `protocolVersion` 必须为 2；v1 仅保留旧客户端兼容路径，不是新功能目标。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
-- 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。忙碌会话的另一条人工请求返回 `409 SESSION_BUSY`；工具发送则进入队列。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
+- 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。直接向聊天接口提交忙碌会话的另一条请求仍返回 `409 SESSION_BUSY`；前端人工排队改走 §3.4.1 队列接口，与工具派发按序接续。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
 
 SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
@@ -260,7 +260,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 精确结果读取必须核对 requestId 所属会话，等待最长 60 秒且可取消；结束后复核目标 generation/historyRevision。不可读、已删除/清理、失败/中断/取消如实返回，不拿其他轮次冒充本次回复。6000 码点不足以读完时，可转普通历史分页读取；精确请求模式自身不提供续页游标。
 - 两个写工具参数 JSON 上限 16 KiB，只接收文本。校验消息、配置及目标解锁材料后受理，配置在受理时冻结；队列开始时才读取最新目标历史并写入普通加密聊天。目标的删除、归档、解锁失败不自动创建替代会话；新建继承来源范围，已有目标保留自身范围。
 - 同来源 requestId + toolCallId 幂等，输入改变拒绝；同文本的不同调用不去重。来源上下文已换代返回 STALE，向自身/祖先派发返回 CYCLE_BLOCKED。当前进程最多保留 64 项待处理任务，满时 LIMIT_REACHED；各模型请求最多 8 个同时外发，等待工具不占上游许可。
-- 仅当前用户的创建/委派/发送意图可授权写工具，历史引用和工具结果不能授权。成功受理只表示任务已提交；正常完成才 FIFO 接续，停止/失败取消该目标未开始的项，其他会话独立继续。进程重启不重放队列；人工排队入口尚未开放。
+- 仅当前用户的创建/委派/发送意图可授权写工具，历史引用和工具结果不能授权。成功受理只表示任务已提交；正常完成且未暂停时 FIFO 接续，停止/失败取消该目标的工具待发项，其他会话独立继续。工具派发在进程重启后不重放；人工队列按 §3.4.1 暂停恢复。
 
 ### 3.3 轮次状态与上下文
 
@@ -279,7 +279,7 @@ v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 a
 |---|---|---|
 | GET / POST | `/ai/sessions` | 会话列表（允许为空） / 显式创建；前端仅首次发送时调用 POST |
 | GET | `/ai/sessions/runtime?sessionId=` | 列表运行状态，可选所选会话当前/最近轮快照 |
-| POST | `/ai/sessions/{id}/stop` | `{expectedRequestId}`；停止目标当前轮并取消待发送项，过期身份返回 409 STALE |
+| POST | `/ai/sessions/{id}/stop` | `{expectedRequestId}`；停止目标当前轮，取消工具待发、暂停保留人工待发，过期身份返回 409 STALE |
 | PUT / DELETE | `/ai/sessions/{id}` | 重命名 / 删除（允许删除最后一条；运行中删除返回 409） |
 | POST | `/ai/sessions/{id}/title` | 异步生成 / 重新生成标题（202） |
 | GET | `/ai/sessions/{id}/messages` | 消息列表（解密） |
@@ -291,7 +291,7 @@ v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 a
 
 轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
 
-runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,queueCount}],current?}`。QUEUED/RUNNING 表示未结束；phase 可表达 running/thinking/tools/answer/waiting/stopping。queueCount 不包含正在执行的队头。该查询不外发模型请求、不改变会话排序或选择；停止返回 STOPPING 后仍等服务端终态。有运行/排队项时删除、归档与历史清理被拒绝。
+runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCount}],current?}`。QUEUED/RUNNING 表示未结束，PAUSED 表示暂停保留；phase 可表达 running/thinking/tools/answer/waiting/stopping。queueCount 不包含正在执行的队头；人工待发与插话详情由队列接口读取。该查询不外发模型请求、不改变会话排序或选择；停止返回 STOPPING 后仍等服务端终态。有运行/排队项时删除、归档与历史清理被拒绝。
 
 会话列表和旧版全局消息查询均为只读；无会话时返回 `[]`，不补建默认记录。前端新会话页没有会话 ID，首次有效发送时调用创建接口，再用返回的 ID 发送该条消息；进入页面、编辑草稿、删除当前会话均不调用创建接口。已有空白记录不自动删除或复用；旧客户端未提供会话 ID 的实际聊天请求仍可按兼容规则创建默认会话。
 
@@ -300,6 +300,21 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,queueCount}],cu
 标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少应用模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
 
 新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用当前应用模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
+
+#### 3.4.1 人工排队与插话（v0.7.2）
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/ai/sessions/{id}/queue` | 返回 `{sessionId,paused,editingId,items,steering,storedBytes}`；待发按 sequence 排序，附件只含标识、名称和类型 |
+| POST | `/ai/sessions/{id}/queue` | 接收 v2 输入及 `mode=queue\|steer`，插话另带 `targetRequestId`；返回 requestId、sessionId 与真实受理状态 |
+| POST | `/ai/sessions/{id}/queue/pause` | `{paused:boolean}`，暂停或继续，返回队列快照 |
+| POST | `/ai/sessions/{id}/queue/{requestId}/action` | `action`、`revision`；动作含 beginEdit / save / cancelEdit / remove / undo / steer |
+
+- 普通队列消息每条独立成轮，与工具派发共用 FIFO。受理时冻结配置及页面/附件输入，开始时使用最新目标历史；保存成功才返回受理。原 requestId 和原输入可核对收据，输入不同返回冲突，不能换身份重发结果未知的提交。
+- 编辑先暂停接续；save 可修改 `userText` 并通过 `keepAttachments` 保留附件，结束编辑后恢复此前暂停状态。已开始项不能编辑或转插话；版本变化、已有其他编辑项、撤销过期分别返回 QUEUE_CHANGED / QUEUE_EDITING / UNDO_EXPIRED。移除允许短暂撤销，不删除已发送历史。
+- 队列项转插话也要带 `targetRequestId`。插话绑定点击时的运行，在下一次模型请求前接入，不取消当前上游或工具；受理、发送中、已接收、交付未知分别展示。未知交付不自动重发；最终响应后也处理已经受理的补充，沿用原轮次预算。
+- 停止或失败保留未开始的人工内容并暂停，取消工具待发。后台重启只恢复未执行人工项为暂停，配置失效或解密失败如实反馈；不自动重放已开始或交付未知内容。
+- 已接收补充按原运行及正文偏移参与历史、上下文、`read_session` 与 Markdown / HTML / JSON 导出。待发和交付未知项不冒充已发送历史，无法解密时标明内容缺失。
 
 ### 3.5 记忆
 
