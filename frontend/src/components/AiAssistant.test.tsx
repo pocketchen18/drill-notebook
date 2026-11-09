@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AiAssistant } from './AiAssistant';
 import { useUiStore, type AiPageContext } from '../stores/uiStore';
 import { isUuidV7 } from '../lib/uuidV7';
+import { LS_RETRIEVE_NOTES } from '../lib/sessionPrefs';
 import type { StreamCallbacks, StreamDonePayload } from '../lib/aiStream';
 
 const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
@@ -68,10 +69,6 @@ const typeAndSend = async (text: string): Promise<void> => {
   await waitFor(() => expect(apiPost.mock.calls.some((item) => item[0] === '/api/ai/chat')).toBe(true));
 };
 
-const toggleRetrieveNotes = (): void => {
-  fireEvent.click(screen.getByLabelText('检索笔记'));
-};
-
 describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,11 +104,10 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     expect(body.pageContext).toEqual({ kind: 'quiz', markdown: 'QUIZ MD' });
   });
 
-  it('note 页开启检索：默认 current + notebookId，且不再重复带上整页 markdown', async () => {
+  it('note 页沿用已开启的检索偏好：默认 current + notebookId，且不再重复带上整页 markdown', async () => {
     setContext({ kind: 'note', title: '页面', markdown: 'NOTE MD', notebookId: 7, notePageId: 5 });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    toggleRetrieveNotes();
     await typeAndSend('你好');
     const body = chatBody();
     expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'current', notebookId: 7 });
@@ -119,11 +115,10 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     expect(body.pageContext?.markdown).toBeUndefined();
   });
 
-  it('无 notebookId 的页面开启检索：默认 all，绝不发送缺 notebookId 的 current', async () => {
+  it('无 notebookId 的页面沿用已开启的检索偏好：默认 all，绝不发送缺 notebookId 的 current', async () => {
     setContext({ kind: 'quiz', title: '刷题', markdown: '' });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    toggleRetrieveNotes();
     await typeAndSend('你好');
     const body = chatBody();
     expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'all' });
@@ -244,9 +239,8 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
       return Promise.resolve({});
     });
     setContext({ kind: 'note', title: '页面', markdown: 'NOTE MD', notebookId: 7, notePageId: 5 });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    toggleRetrieveNotes();
     await typeAndSend('你好');
 
     const chip = await screen.findByText('第五页');
@@ -271,9 +265,8 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
       return Promise.resolve({});
     });
     setContext({ kind: 'note', title: '页面', markdown: 'NOTE MD', notebookId: 7, notePageId: 5 });
+    localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
-    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
-    toggleRetrieveNotes();
     await typeAndSend('你好');
 
     expect(await screen.findByText('ANSWER')).toBeInTheDocument();

@@ -11,7 +11,7 @@ import { ChatContextInspector } from './ai-memory/ChatContextInspector';
 import { MemoryUsageBadge } from './ai-memory/MemoryUsageBadge';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
-import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref, writeBoolPref, writeStringPref } from '../lib/sessionPrefs';
+import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref } from '../lib/sessionPrefs';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
 import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
 import { canContinueTurn, executionStopNotice, historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
@@ -23,7 +23,7 @@ import { ChatStorageMeter } from './ai-memory/ChatStorageMeter';
 import { ChatHistoryCleanup } from './ai-memory/ChatHistoryCleanup';
 import { attachmentLimitError } from '../lib/aiAttachmentLimits';
 import type { PendingAttachment } from '../lib/aiAttachmentLimits';
-import { describeAccelerator, describeAccelerators, matchesAny } from '../lib/shortcuts';
+import { describeAccelerators, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { SessionReferencePreview } from './ai-session/SessionReferencePreview';
 import { useUiStore } from '../stores/uiStore';
@@ -82,9 +82,7 @@ export function AiAssistant(): JSX.Element {
   const aiOpen = useUiStore((state) => state.aiOpen);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
   const pageContext = useUiStore((state) => state.pageContext);
-  const aiFabVisible = useUiStore((state) => state.aiFabVisible);
-  // 悬浮球提示与发送键跟随设置 → 常规 → 快捷键里的当前绑定
-  const aiAccelerator = useUiStore((state) => state.shortcutConfig.toggleAi[0]);
+  // 发送键跟随设置 → 常规 → 快捷键里的当前绑定
   const sendKeys = useUiStore((state) => state.shortcutConfig.aiSend);
   // 未被「发送」占用的 Enter 组合用于换行
   const newlineHint = !sendKeys.includes('Enter') ? 'Enter 换行' : !sendKeys.includes('Shift+Enter') ? 'Shift+Enter 换行' : '';
@@ -113,8 +111,8 @@ export function AiAssistant(): JSX.Element {
   const submittedQueueDrafts = useRef(new Map<number, { message: string; ids: Set<string> }>());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [usePageContext, setUsePageContext] = useState(true);
-  const [retrieveNotes, setRetrieveNotes] = useState(() => readBoolPref(LS_RETRIEVE_NOTES, false));
+  // 资料读取工具接入前，沿用已有检索偏好；顶部上下文卡片已移除。
+  const [retrieveNotes] = useState(() => readBoolPref(LS_RETRIEVE_NOTES, false));
   const [retrievalScope, setRetrievalScope] = useState<'current' | 'all'>(() => {
     const saved = readStringPref(LS_RETRIEVAL_SCOPE, '');
     if (saved === 'current' || saved === 'all') return saved;
@@ -314,31 +312,14 @@ export function AiAssistant(): JSX.Element {
   const suppressPageMarkdown = retrieveNotes && pageContext.kind === 'note';
 
   const contextMarkdown = useMemo(
-    () => (usePageContext && !suppressPageMarkdown && pageContext.markdown.trim() ? pageContext.markdown.trim() : ''),
-    [pageContext.markdown, suppressPageMarkdown, usePageContext]
+    () => (suppressPageMarkdown ? '' : pageContext.markdown.trim()),
+    [pageContext.markdown, suppressPageMarkdown]
   );
 
   // Task 14：进入无当前 notebook 的页面时，current 自动降级为 all，保证绝不发送缺 notebookId 的 current。
   useEffect(() => {
     if (pageContext.notebookId === undefined && retrievalScope === 'current') setRetrievalScope('all');
   }, [pageContext.notebookId, retrievalScope]);
-
-  const onToggleRetrieveNotes = (checked: boolean): void => {
-    setRetrieveNotes(checked);
-    writeBoolPref(LS_RETRIEVE_NOTES, checked);
-    if (checked) {
-      // 开启时若无显式持久化选择，按当前上下文推断默认范围：note 页→current，其他→all。
-      const saved = readStringPref(LS_RETRIEVAL_SCOPE, '');
-      if (saved !== 'current' && saved !== 'all') {
-        setRetrievalScope(pageContext.notebookId !== undefined ? 'current' : 'all');
-      }
-    }
-  };
-
-  const onChangeRetrievalScope = (value: 'current' | 'all'): void => {
-    setRetrievalScope(value);
-    writeStringPref(LS_RETRIEVAL_SCOPE, value);
-  };
 
   // Task 8/14：开启时发送 enabled/scope/notebookId；关闭时完全不携带该字段，保持旧请求契约。
   const retrievalOptions = useMemo<RetrievalOptions | undefined>(() => {
@@ -810,17 +791,6 @@ export function AiAssistant(): JSX.Element {
 
   return (
     <>
-      {aiFabVisible ? (
-        <button
-          type="button"
-          className={`ai-fab${aiOpen ? ' is-open' : ''}`}
-          onClick={() => setAiOpen(!aiOpen)}
-          title={aiAccelerator ? `AI 助手 (${describeAccelerator(aiAccelerator)})` : 'AI 助手'}
-          aria-label="打开 AI 助手"
-        >
-          <Sparkles size={22} />
-        </button>
-      ) : null}
       <Drawer
         width={drawerWidth}
         title={
@@ -857,41 +827,6 @@ export function AiAssistant(): JSX.Element {
             onSelect={selectSession}
             onRename={renameSession} onGenerate={generateSessionTitle}
             onDelete={async (id) => { await deleteSessionMutation.mutateAsync(id); }} onExport={exportSession} />
-
-          <div className={`ai-context-card${contextMarkdown ? ' has-context' : ''}`}>
-            <div className="ai-context-card-top">
-              <div>
-                <div className="ai-context-kicker">当前上下文</div>
-                <div className="ai-context-title">{pageContext.kind === 'none' ? '未绑定页面（可手动提问）' : pageContext.title}</div>
-              </div>
-              <Space size={8}>
-                <label className="ai-context-toggle" title="发送时检索相关笔记片段并返回引用">
-                  <input type="checkbox" checked={retrieveNotes} onChange={(event) => onToggleRetrieveNotes(event.target.checked)} />
-                  检索笔记
-                </label>
-                <label className="ai-context-toggle">
-                  <input type="checkbox" checked={usePageContext} onChange={(event) => setUsePageContext(event.target.checked)} />
-                  使用
-                </label>
-              </Space>
-            </div>
-            {retrieveNotes ? (
-              <div className="ai-retrieval-scope">
-                <Typography.Text type="secondary">检索范围</Typography.Text>
-                <Select
-                  size="small"
-                  value={retrievalScope}
-                  onChange={(value) => onChangeRetrievalScope(value as 'current' | 'all')}
-                  style={{ width: 150 }}
-                  aria-label="检索范围"
-                >
-                  <Select.Option value="current" disabled={pageContext.notebookId === undefined}>当前笔记本</Select.Option>
-                  <Select.Option value="all">全部笔记本</Select.Option>
-                </Select>
-              </div>
-            ) : null}
-            {contextMarkdown ? <pre className="ai-context-preview">{contextMarkdown.slice(0, 480)}{contextMarkdown.length > 480 ? '…' : ''}</pre> : <p className="muted">{suppressPageMarkdown ? '已启用笔记检索：不再整页注入，发送时自动检索相关片段并返回引用。' : '在刷题、错题或笔记页打开助手时，会自动带上当前内容。'}</p>}
-          </div>
 
           <div className="ai-quick-prompts">
             {quickPrompts.map((item) => (

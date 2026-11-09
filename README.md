@@ -1,6 +1,6 @@
 # Drill Notebook（面向开发者）
 
-当前发布准备：**v0.7.2（预发行）**，AI 会话标题、四个会话工具、多会话并行、人工消息排队与插话。**v1.0 之前的所有版本均为不保证稳定性的预发行版。** 范围、验证及升级说明见 [发布说明](docs/release/v0.7.2-release-notes.md)。
+当前开发规划：**v0.7.3**，资料读取、新增、修改，以及精简聊天上下文区域和重复入口，见 [功能清单](docs/state/v0.7.3-features.md)。v0.7.2 文档已在版本切换前[归档](docs/archive/v0.7.2/README.md)，发布范围、验证与升级说明仍见 [发布说明](docs/release/v0.7.2-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
 
 | 项 | 说明 |
 |---|---|
@@ -201,7 +201,7 @@
 
 ### 1.15 明确后置（未作为当前目标）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，已按 v0.7.2 发布准备同步实际能力。v0.8 侧栏整体改版及其他后续候选不属于本版交付范围。
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，实际能力同步至 v0.7.2。v0.7.3 以资料工具与入口精简为目标，v0.8 计划改为独立 AI 窗口；“工具”设置与删除能力只列全局待排期规划，均未提前计入已交付能力。
 
 ---
 
@@ -479,14 +479,14 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 ## 5. 文档索引
 
-各版本功能需求清单与架构、数据模型、接口契约放 `docs/state/`，当前施工文档放 `docs/work/`，测试文档放 `docs/test/`，专题与历史说明放 `docs/reference/`，发布说明放 `docs/release/`，施工归档放 `docs/archive/`。全局功能清单 `features.md`、设计规范 `DESIGN.md`、便携 JRE 说明 `jlink.md` 与文档入口 `README.md` 放在 `docs/` 根目录；版本发布前按最终验收结果更新全局功能清单。根 README / AGENTS / MEMORY 继续作为项目入口、代理规则与交接记忆，维护规则见 [docs/README.md](docs/README.md)。
+当前版本功能清单与长期架构、数据模型、接口契约放 `docs/state/`，本版施工文档放 `docs/work/`。单个功能完成时标记结果并同步状态，下一版本开始前再将上一版清单与施工材料统一移入 `docs/archive/<版本>/`。测试文档放 `docs/test/`，专题与历史说明放 `docs/reference/`，发布说明继续放 `docs/release/`。全局功能清单 `features.md`、设计规范 `DESIGN.md`、便携 JRE 说明 `jlink.md` 与文档入口 `README.md` 放在 `docs/` 根目录；版本发布前按最终验收结果更新全局功能清单。根 README / AGENTS / MEMORY 继续作为项目入口、代理规则与交接记忆，维护规则见 [docs/README.md](docs/README.md)。
 
 | 文档 | 内容 |
 |---|---|
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
 | [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
-| [docs/state/v0.7.2-features.md](docs/state/v0.7.2-features.md) | v0.7.2 功能需求清单：本版范围、功能切片与推进状态 |
-| [docs/state/data-model.md](docs/state/data-model.md) | 数据模型与关键约束；本版 schema 14 升级说明见发布文档 |
+| [docs/state/v0.7.3-features.md](docs/state/v0.7.3-features.md) | v0.7.3 功能需求清单：资料工具、上下文区域与入口精简，尚未实现 |
+| [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 14） |
 | [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 全局视觉、交互与编辑器契约 |
@@ -499,6 +499,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 | [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
 | [docs/release/v0.7.2-release-notes.md](docs/release/v0.7.2-release-notes.md) | v0.7.2 发布准备、验证、升级与预发行边界 |
+| [docs/archive/v0.7.2/](docs/archive/v0.7.2/) | v0.7.2 功能清单、会话工具、人工排队与插话施工归档 |
 | [docs/release/v0.7.1-release-notes.md](docs/release/v0.7.1-release-notes.md) | v0.7.1 验证、升级与已知边界 |
 | [docs/archive/v0.7.1/](docs/archive/v0.7.1/) | v0.7.1 连接设置与记忆工具施工归档；后续讨论不代表已交付 |
 | [docs/release/v0.7.0-release-notes.md](docs/release/v0.7.0-release-notes.md) | v0.7.0 发行记录与升级说明 |

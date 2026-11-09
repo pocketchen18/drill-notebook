@@ -92,8 +92,6 @@ export function SettingsPage(): JSX.Element {
   const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
   const setNotebookPanelsSwapped = useUiStore((state) => state.setNotebookPanelsSwapped);
   const setAiOpen = useUiStore((state) => state.setAiOpen);
-  const aiFabVisible = useUiStore((state) => state.aiFabVisible);
-  const setAiFabVisible = useUiStore((state) => state.setAiFabVisible);
   const shortcutConfig = useUiStore((state) => state.shortcutConfig);
   const setShortcutConfig = useUiStore((state) => state.setShortcutConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>(readTabFromUrl);
@@ -269,7 +267,7 @@ export function SettingsPage(): JSX.Element {
 
   return <main className="page">
     <div className="page-heading">
-      <div><h1>设置</h1><p>主题、快捷键、AI 连接、记忆、嵌入检索与学习复习偏好。日常对话请用右下角 AI 悬浮球{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
+      <div><h1>设置</h1><p>主题、快捷键、AI 连接、记忆、嵌入检索与学习复习偏好。日常对话请用右上角 AI 助手{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
     </div>
     <div className="settings-tab-bar" role="tablist" aria-label="设置分区" onKeyDown={onTabBarKeyDown}>
       {TABS.map((tab) => (
@@ -309,10 +307,6 @@ export function SettingsPage(): JSX.Element {
           <div className="settings-row">
             <div><Typography.Text bold>交换笔记本页面与大纲位置</Typography.Text><br /><Typography.Text type="secondary">预览模式下将页面选择移到右侧，大纲移到左侧。</Typography.Text></div>
             <Switch checked={notebookPanelsSwapped} onChange={setNotebookPanelsSwapped} aria-label="交换笔记本页面与大纲位置" />
-          </div>
-          <div className="settings-row">
-            <div><Typography.Text bold>显示 AI 悬浮球</Typography.Text><br /><Typography.Text type="secondary">隐藏后仍可用快捷键或下方按钮打开。</Typography.Text></div>
-            <Switch checked={aiFabVisible} onChange={setAiFabVisible} />
           </div>
           <div className="settings-row">
             <div><Typography.Text bold>记住上次停留位置与各页选择</Typography.Text><br /><Typography.Text type="secondary">重启后回到上次页面，并恢复各页勾选与切换。</Typography.Text></div>
