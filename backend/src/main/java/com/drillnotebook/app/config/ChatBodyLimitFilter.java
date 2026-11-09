@@ -44,7 +44,7 @@ public class ChatBodyLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !LIMITS.contains(request.getRequestURI()) || !"POST".equalsIgnoreCase(request.getMethod());
+        return !(LIMITS.contains(request.getRequestURI())||request.getRequestURI().matches("/api/ai/sessions/[0-9]+/queue(?:/.*)?")) || !"POST".equalsIgnoreCase(request.getMethod());
     }
 
     @Override

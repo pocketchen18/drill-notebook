@@ -184,7 +184,7 @@ public class ContextBudgeter {
             saved += turn.images().size() * TokenEstimator.IMAGE_UNKNOWN_ESTIMATED_TOKENS;
             audit.omit(ContextAudit.Omission.ATTACHMENT_POLICY, "IMAGE", turn.images().size());
             rebuilt.add(new Turn(turn.turnId(), turn.legacy(), turn.userMessageId(), turn.assistantMessageId(),
-                    turn.userText(), turn.assistantText(), List.of(), turn.estimatedTokens()));
+                    turn.userText(), turn.assistantText(), List.of(), turn.estimatedTokens(),turn.supplements()));
         }
         kept.turns.clear();
         kept.turns.addAll(rebuilt);
@@ -262,7 +262,7 @@ public class ContextBudgeter {
         for (ConversationProjection.Item item : projection.coveredCandidates()) {
             Turn turn = new Turn(item.turnId(), false, item.userMessageId(), item.assistantMessageId(),
                     item.userText(), item.assistantText(), List.of(),
-                    item.estimatedTokens() + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS);
+                    item.estimatedTokens() + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS,item.supplements());
             int position = 0;
             while (position < kept.turns.size()
                     && (kept.turns.get(position).turnId() == null
@@ -305,7 +305,8 @@ public class ContextBudgeter {
             userBlocks.add(textContent(turn.userText()));
             for (Image image : turn.images()) userBlocks.add(imageContent(image));
             messages.add(message("user", userBlocks));
-            messages.add(message("assistant", List.of(textContent(turn.assistantText()))));
+            for(var part:ChatSupplement.messages(turn.assistantText(),turn.supplements()))
+                messages.add(message((String)part.get("role"),List.of(textContent((String)part.get("content")))));
         }
         List<Object> current = new ArrayList<>();
         current.add(textContent(draft.userText()));

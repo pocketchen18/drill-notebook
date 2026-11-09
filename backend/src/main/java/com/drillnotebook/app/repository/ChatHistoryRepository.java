@@ -66,6 +66,13 @@ public class ChatHistoryRepository {
         this.dataSource = dataSource;
     }
 
+    public List<com.drillnotebook.app.service.ChatSupplement> supplements(String requestId,
+            com.drillnotebook.app.service.ChatMessageCipher cipher,String password) throws SQLException {
+        try(var connection=dataSource.getConnection()) {
+            return com.drillnotebook.app.service.ChatSupplement.read(connection,requestId,cipher,password);
+        }
+    }
+
     /** 倒序取 {@code beforeTurnId} 之前的一批轮次（含非终态与墓碑行，由投影按规则过滤）。 */
     public List<TurnHistory> turnBatch(long sessionId, long beforeTurnId, int limit) throws SQLException {
         String sql = TURN_COLUMNS + " WHERE t.session_id = ? AND t.id < ? ORDER BY t.id DESC LIMIT ?";

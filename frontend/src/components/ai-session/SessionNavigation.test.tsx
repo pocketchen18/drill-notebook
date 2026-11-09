@@ -30,7 +30,7 @@ describe('会话导航', () => {
     expect(screen.getByText('1 个进行中')).toBeVisible();
     expect(screen.getByLabelText('正在调用工具')).toBeVisible();
     expect(screen.getByRole('menuitem', { name: '删除会话' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('menuitem', { name: '停止并取消待发送消息' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '停止回复' }));
     await waitFor(() => expect(onStop).toHaveBeenCalledWith(2));
     expect(view.props.onSelect).not.toHaveBeenCalled();
   });

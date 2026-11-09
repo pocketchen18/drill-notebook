@@ -388,3 +388,29 @@
 - 便携检查：注册表 / 持久化环境变量静态审计扫描 608 个文件无命中；对原运行时审计的监控落点使用仅元数据脚本，模拟聊天正常完成，前后各 55 个文件、变化 0、缺失 0。未读取外部文件内容；这些结果仅覆盖指定监控落点，不能宣称全盘零写入。
 
 状态文档已同步，施工材料归档至 [ai-session-dispatch](../archive/v0.7.2/ai-session-dispatch/ui-ux.md)。人工输入框排队仍待用户提交四个工具后另起切片；本轮不自动提交 Git。未运行前后端业务全量、真实供应商矩阵、原生发行包、200% 缩放或读屏验收，发布前门禁仍须另行执行。
+
+## 模块十八：人工对话排队与插话（v0.7.2）
+
+| 编号 | 场景 | 预期 |
+|---|---|---|
+| TC-CHAT-QUEUE-01 | 人工连续发送与混合队列 | 回复中发送依次入队，每条独立成轮；与会话工具共用 FIFO，普通直接发送不误显示为工具消息 |
+| TC-CHAT-QUEUE-02 | 编辑、移除与撤销 | 编辑先暂停接续，保存或取消恢复原暂停状态；新草稿和附件不被覆盖；移除可短暂撤销，过期不可恢复 |
+| TC-CHAT-QUEUE-03 | 插话两个入口 | 输入区或队列项均可提交插话，不打断当前请求或工具；绑定点击时的运行，不能转投下一轮 |
+| TC-CHAT-QUEUE-04 | 真实接收与原回复 | 等待和已接收有区别；无后续工具时也接续处理；原回复保留，工具调用与结果配对，预算不重置 |
+| TC-CHAT-QUEUE-05 | 未知提交与未知交付 | 提交响应丢失时复用原身份核对；插话上游结果未知不自动重发，也不伪装成已发送历史 |
+| TC-CHAT-QUEUE-06 | 停止、失败与恢复 | 未开始人工内容暂停保留，工具待发取消；已开始内容不重放；重启只恢复暂停项，空队列不遗留永久暂停 |
+| TC-CHAT-QUEUE-07 | 历史与导出 | 已接收插话可从历史、下一轮上下文、跨会话查阅及 MD / HTML / JSON 导出读到，保留用户角色与顺序 |
+| TC-CHAT-QUEUE-08 | 窄屏、键盘与会话隔离 | 360px 菜单不裁切；Enter 排队、Ctrl+Enter 插话且尊重已有绑定与 IME；操作和新草稿不串会话 |
+
+本轮验证（2026-11-09）：
+
+- 后端首轮针对性回归 **223 项通过，0 失败／错误／跳过**，范围为 `ChatQueueServiceTest`、`ChatSteeringPathTest`、`ConversationProjectionTest`、`ChatHistoryReadTest`、`ChatHistoryCleanupTest`、`ChatContextBudgetTest`、`ChatContextPayloadGoldenTest`、`ChatContextServiceTest`、`SessionToolsTest`、`SessionToolChatPathTest`、`ChatTurnServiceLifecycleTest`、`ChatBodyLimitFilterTest`、两组 `DatabaseInitializerTest`、`MaintenanceSummaryDrafterTest`。队列和插话用例复用派发测试夹具，含继承的基线测试，不将其数量解释为新增用例数。
+- 后续按改动范围复验：恢复／停止与请求大小 **8 项**、插话三种格式导出／损坏提示／未知交付及原会话行为 **7 项**、直接发送来源标识与混合队列停止 **2 项**，全部通过。测试使用真实 SQLite、加解密和本机 HTTP 上游；插话最终回复接续覆盖 Chat Completions、Anthropic，工具配对覆盖 Chat Completions。
+- 后端命令使用工作区 `temp/chat-queue-build.ps1 -Goal test -Tests '<类名或用例过滤器>'`，wrapper 指向已授权的 `.m2/repository`，JVM 两个临时目录属性均指向工作区。最终 `-Goal package -SkipTests` 通过，仅生成开发 JAR。
+- 前端最终覆盖 **8 文件 / 99 项**：队列 hook／组件、`useAiChatTurn`、会话导航、AiAssistant 请求／流式／历史和 `aiStream`。合跑为 98 通过、1 个旧停止时序断言失败；更新为验证 850ms 内有限重试后，其所在 `useAiChatTurn` **20 / 20 复验通过**。之前扩展的上下文／分页回归另有 65 项通过、2 个原有证据输出用例跳过；不把重叠批次累加成独立覆盖数量。测试保留既有 React / Arco 开发告警。
+- 前端验证命令为 `npm run test --prefix frontend -- <上述测试文件> --reporter=json`；最终 `npm run build --prefix frontend`（TypeScript + Vite）通过，仍有既有大 chunk 提示。
+- 浏览器使用隔离 APP_ROOT `temp/session-dispatch-app`，前端 21884、后端 21882、模拟上游 21893，仅虚构数据。完成队列加入、编辑保留输入草稿、移除撤销、队列项插话、已接收补充只出现一次、暂停继续、停止保留以及后端完整重启恢复；暂停队列在会话列表仍有对应标识。首次停止曾出现 API 警告，随后补上失败提示及针对同一身份的早期 404 有限重试；最新页面快速停止确认中断并回到空闲。未将该次警告的根因说成已完全复现。
+- 360px 下更多菜单通过 portal 展示，无横向溢出；测试视口已恢复。本地证据 `docs/work/ai-chat-queue/queue-acceptance.png`、`queue-narrow.png` 已 gitignore。用户真实应用与数据未改动。
+- 便携检查：注册表／持久化环境变量静态扫描 **617 个文件无命中**；运行时使用只读元数据脚本，不打开外部文件。初次记录为 55 个文件，本轮收尾重复采集为 0，监控样本不一致，**不能据此判定前后无变化**。新增持久化只在现有 APP_ROOT 数据库中，未引入新的应用目录；此记录不等于全盘零写入证明。
+
+当前实现仍在 [施工目录](../work/ai-chat-queue/ui-ux.md)，等待人工体验确认；遵循用户暂不改共享状态文档的约束，未同步或归档、未提交 Git。普通队列使用既有完整上下文规划；插话追加已捕获的页面／附件和用户补充，不重新进行全库检索。未运行前后端业务全量、真实供应商矩阵、原生 Electron 发行包、200% 缩放或读屏验收，发布前门禁仍须另行执行。

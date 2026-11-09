@@ -126,6 +126,7 @@ public class SessionLookupService {
                 if (offset != 0) return error("UNAVAILABLE", "messages");
             } else {
                 String text = read.value() == null ? "" : read.value();
+                if("assistant".equals(row.role()))text=ChatSupplement.transcript(text,snapshot.supplements(row.id(),cipher,password));
                 int length = text.codePointCount(0, text.length());
                 if (offset > length) return error("INVALID_ARGUMENT", "messages");
                 int count = Math.min(remaining, length - offset);

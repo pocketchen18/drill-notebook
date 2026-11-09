@@ -671,3 +671,25 @@ CREATE TABLE IF NOT EXISTS ai_session_dispatch (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_session ON ai_session_dispatch(session_id, sequence);
+
+-- Human drafts are encrypted; delivered supplements remain associated with their original run.
+CREATE TABLE IF NOT EXISTS ai_chat_pending (
+    request_id TEXT PRIMARY KEY REFERENCES ai_session_dispatch(request_id),
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'PENDING',
+    parent_request_id TEXT,
+    reply_offset INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 1,
+    payload_cipher TEXT NOT NULL,
+    payload_meta TEXT NOT NULL,
+    payload_bytes INTEGER NOT NULL,
+    removed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chat_pending_parent ON ai_chat_pending(parent_request_id);
+CREATE TABLE IF NOT EXISTS ai_chat_queue_state (
+    session_id INTEGER PRIMARY KEY REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    paused INTEGER NOT NULL DEFAULT 0,
+    editing_id TEXT,
+    resume_after_edit INTEGER NOT NULL DEFAULT 0
+);

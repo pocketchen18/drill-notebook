@@ -69,6 +69,9 @@ class ChatBodyLimitFilterTest {
         assertTrue(filter.shouldNotFilter(get));
         assertFalse(filter.shouldNotFilter(chatRequest()));
         assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/api/ai/chat/stream")));
+        assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/api/ai/sessions/7/queue")));
+        assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/api/ai/sessions/7/queue/request/action")));
+        assertTrue(filter.shouldNotFilter(new MockHttpServletRequest("GET", "/api/ai/sessions/7/queue")));
     }
 
     @Test

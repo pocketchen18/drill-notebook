@@ -147,6 +147,14 @@ public class ChatTurnService {
         this.attachments = attachments;
     }
 
+    /** Validate queued attachments with the same decoder used when a turn starts; never persist here. */
+    List<ChatAttachmentService.Sourced> validatePending(BeginInput input) {
+        require(input.userText()!=null&&!input.userText().isBlank(),400,"INPUT_EMPTY","消息不能为空");
+        var key=attachments.newTurnKey();
+        try { return attachments.prepare(key,input.requestId(),input.attachments()).sourced(); }
+        finally { key.zero(); }
+    }
+
     /** 开始一轮：校验身份 → 幂等判定 → 登记句柄 → 预留容量并落库 RUNNING + 用户消息。 */
     public BeginResult begin(BeginInput input) {
         require(input.userText() != null && !input.userText().isBlank(), 400, "INPUT_EMPTY", "消息不能为空");
@@ -168,8 +176,9 @@ public class ChatTurnService {
         // 先查已有 ID 再登记句柄：抢在别的线程的句柄上登记会让它后来释放不掉（§7.2.1 伪代码同序）
         Optional<TurnRow> duplicate = findTurnQuietly(requestId);
         if (duplicate.isPresent()) return replay(duplicate.get(), input, fingerprint);
-        if (input.protocolVersion() == 2) {
-            // 查无记录的新 ID 必须落在时间窗口内，否则旧 ID 可以无限重放（§7.2.2）
+        if (input.protocolVersion() == 2 && (SessionExecution.CURRENT.get()==null
+                || !requestId.equals(SessionExecution.CURRENT.get().acceptedRequestId))) {
+            // 已受理的持久队列可在隔日恢复；外部新 ID 仍须通过时间窗口。
             UuidV7.Freshness freshness = UuidV7.freshness(requestId, System.currentTimeMillis());
             if (freshness != UuidV7.Freshness.ACCEPTABLE) {
                 throw switch (freshness) {

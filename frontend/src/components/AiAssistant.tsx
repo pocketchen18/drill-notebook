@@ -30,6 +30,9 @@ import { useUiStore } from '../stores/uiStore';
 import { ToolActivityGroup } from './ai-memory/ToolActivityGroup';
 import { mergeToolActivities, settleToolActivities } from '../lib/toolActivity';
 import type { ToolActivity } from '../lib/toolActivity';
+import { useChatQueue } from '../hooks/useChatQueue';
+import { ChatQueue } from './ai-session/ChatQueue';
+import { splitReply } from '../lib/chatQueue';
 
 const { TextArea } = Input;
 
@@ -105,6 +108,9 @@ export function AiAssistant(): JSX.Element {
 
   const [sessionId, setSessionId] = useState<number>();
   const [message, setMessage] = useState('');
+  const [queueSubmitting, setQueueSubmitting] = useState(false);
+  const queueSubmittingRef = useRef(false);
+  const submittedQueueDrafts = useRef(new Map<number, { message: string; ids: Set<string> }>());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [usePageContext, setUsePageContext] = useState(true);
@@ -161,6 +167,7 @@ export function AiAssistant(): JSX.Element {
   const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
   const streaming = turn.busy;
+  const queue = useChatQueue(sessionId, aiOpen);
   // 后台会话不会向当前聊天发送事件；按轮次/状态变化同步全局容量，避免每次轮询重读账本。
   const runtimeStorageSignature = turn.runtimes
     .map((item) => `${item.sessionId}:${item.requestId}:${item.status}`).sort().join('|');
@@ -191,6 +198,7 @@ export function AiAssistant(): JSX.Element {
         role: row.role,
         content: mirror?.streaming || !row.content ? mirror?.content ?? row.content : row.content,
         reasoning: mirror?.streaming ? mirror.reasoning : row.reasoning ?? mirror?.reasoning,
+        supplements: mirror?.streaming ? mirror.supplements : row.supplements ?? mirror?.supplements,
         streaming: mirror?.streaming,
         toolActivities: mirror?.streaming ? mirror.toolActivities
           : settleToolActivities(mergeToolActivities(mirror?.toolActivities, row.toolActivities)),
@@ -502,7 +510,7 @@ export function AiAssistant(): JSX.Element {
       const snapshot = event.status;
       if (snapshot.sessionId !== selectedSessionRef.current) return;
       // A waiting receipt is not yet a chat turn; its prompt enters history only when execution starts.
-      if (snapshot.status === 'QUEUED') return;
+      if (snapshot.status === 'QUEUED' || snapshot.status === 'PAUSED') return;
       if (snapshot.contentDeleted) {
         setMessages((current) => current.filter((item) => item.requestId !== event.requestId));
         return;
@@ -519,6 +527,7 @@ export function AiAssistant(): JSX.Element {
         if (!running && !previous && !snapshot.reply && !snapshot.reasoning && !snapshot.toolActivities?.length) return next;
         const item: ChatMessage = { ...previous, role: 'assistant', content: snapshot.reply ?? previous?.content ?? '',
           reasoning: snapshot.reasoning ?? previous?.reasoning, requestId: event.requestId, streaming: running,
+          supplements: snapshot.supplements ?? previous?.supplements,
           toolActivities: running ? mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)
             : settleToolActivities(mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)),
           toolPhase: snapshot.phase === 'tools' ? 'tools' : 'answer',
@@ -544,6 +553,9 @@ export function AiAssistant(): JSX.Element {
     }
     stampTurnIdentity(event.requestId);
     switch (event.type) {
+      case 'supplements':
+        patchAssistant(() => ({ supplements: event.supplements }));
+        return;
       case 'begun':
         return;
       case 'activity':
@@ -562,6 +574,7 @@ export function AiAssistant(): JSX.Element {
           // reply 为空时保留已流式累积的内容，避免 content 变成 undefined 触发渲染崩溃。
           content: event.reply || (typeof prev?.content === 'string' ? prev.content : ''),
           reasoning: event.reasoning || prev?.reasoning,
+          supplements: event.view.supplements ?? prev?.supplements,
           citations: (event.view.citations as ChatCitation[] | undefined) ?? prev?.citations,
           notice: notice ?? prev?.notice,
           // 本轮身份与统一结果快照：徽标和检查器只认 requestId，历史行现在也带它（§4.5）
@@ -595,9 +608,9 @@ export function AiAssistant(): JSX.Element {
     }
   }
 
-  /** 请求停止当前会话并取消待发送项；保持订阅，等待服务端确认终态。 */
+  /** 停止当前运行，人工待发内容由服务端暂停保留。 */
   const stopGeneration = (): void => {
-    turn.stop();
+    if (sessionId !== undefined) void turn.stopSession(sessionId).catch((error) => Message.error(friendlyMessage(error, '停止未确认，请重试')));
     // 只刷新会话列表计数，保持中断后的列表状态准确。
     // 不要在此 invalidate 该会话的消息——后端落库思考链是异步的，此刻 refetch 会抢在落库前返回空并被缓存。
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
@@ -606,9 +619,30 @@ export function AiAssistant(): JSX.Element {
     // 等待真实终态；停止按钮不提前撤销已经受理的提问或已生成内容。
   };
 
-  const submitMessage = async (continuation?: string): Promise<void> => {
-    // 流式进行中：发送键已变为中断键，由 onClick 侧处理。
-    if (streaming || firstSendPendingRef.current) return;
+  const clearSubmittedQueueDraft = (id: number): void => {
+    const submitted = submittedQueueDrafts.current.get(id);
+    if (!submitted) return;
+    if (selectedSessionRef.current === id) {
+      setMessage((current) => current === submitted.message ? '' : current);
+      setAttachments((current) => current.filter((item) => !submitted.ids.has(item.id)));
+    } else {
+      const cached = draftCache.current.get(id);
+      if (cached) draftCache.current.set(id, { ...cached,
+        message: cached.message === submitted.message ? '' : cached.message,
+        attachments: cached.attachments.filter((item) => !submitted.ids.has(item.id)) });
+    }
+    submittedQueueDrafts.current.delete(id);
+  };
+  const retryQueueSubmission = async (): Promise<void> => {
+    if (queueSubmittingRef.current || sessionId === undefined) return;
+    const target = sessionId;
+    queueSubmittingRef.current = true; setQueueSubmitting(true);
+    try { await queue.retrySubmission(); clearSubmittedQueueDraft(target); }
+    catch (error) { Message.error(friendlyMessage(error, '提交结果仍未确认，内容已保留')); }
+    finally { queueSubmittingRef.current = false; setQueueSubmitting(false); }
+  };
+  const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
+    if (firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed) return;
     if (!continuation && !message.trim() && !attachments.length) return;
     if (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')) {
       Message.warning('请先在设置中配置 API Key');
@@ -637,6 +671,17 @@ export function AiAssistant(): JSX.Element {
       }),
       ...(retrievalOptions ? { retrievalOptions } : {})
     };
+    if (sessionId !== undefined && (streaming || queue.data?.items?.length || queue.data?.paused || mode === 'steer')) {
+      const submittedSession = sessionId;
+      submittedQueueDrafts.current.set(submittedSession, { message, ids: new Set(attachments.map((item) => item.id)) });
+      queueSubmittingRef.current = true; setQueueSubmitting(true);
+      try {
+        await queue.submit({ ...inputSnapshot, sessionId }, mode, mode === 'steer' ? turn.requestId ?? undefined : undefined);
+        clearSubmittedQueueDraft(submittedSession);
+      } catch (error) { Message.error(friendlyMessage(error, '提交未确认，内容已保留，请重试核对')); }
+      finally { queueSubmittingRef.current = false; setQueueSubmitting(false); }
+      return;
+    }
     let targetSessionId = sessionId;
     const isFirstSend = targetSessionId === undefined;
     if (isFirstSend) {
@@ -904,7 +949,12 @@ export function AiAssistant(): JSX.Element {
                       });
                     }}
                     onDisclosure={() => { stickyBottomRef.current = false; }} /> : null}
-                  <MarkdownContent value={text} onSessionLink={setSessionReference} />
+                  {isAssistant && item.supplements?.some((s) => s.state === 'RECEIVED')
+                    ? splitReply(text, item.supplements).map((part) => part.role === 'user'
+                      ? <div className="chat-supplement" key={part.key}><small>插话 · 已接收</small><MarkdownContent value={part.text} onSessionLink={setSessionReference} />
+                        {!!part.attachments?.length && <small>{part.attachments.join(' · ')}</small>}</div>
+                      : <MarkdownContent key={part.key} value={part.text} onSessionLink={setSessionReference} />)
+                    : <MarkdownContent value={text} onSessionLink={setSessionReference} />}
                   {item.streaming && !item.toolActivities?.length ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
                   {item.notice ? (
                     <div className="ai-retrieval-notice">
@@ -1008,7 +1058,12 @@ export function AiAssistant(): JSX.Element {
             />
           </div>
 
-          <div className="chat-compose ai-drawer-compose">
+          {queue.unconfirmed && !queueSubmitting && <div className="chat-queue-uncertain" role="status">上次提交结果待确认
+            <Button type="text" size="mini" loading={queueSubmitting} onClick={() => void retryQueueSubmission()}>核对提交</Button>
+          </div>}
+          <ChatQueue sessionId={sessionId} view={queue.data} runningId={streaming ? turn.requestId : null}
+            loadingError={queue.isError} retry={() => void queue.refetch()} action={queue.action} pause={queue.pause} />
+          <div className={`chat-compose ai-drawer-compose${queue.data?.items?.length || queue.data?.steering?.length ? ' has-queue' : ''}`}>
             <TextArea
               autoSize={{ minRows: 2, maxRows: 6 }}
               disabled={createSessionMutation.isPending}
@@ -1020,6 +1075,9 @@ export function AiAssistant(): JSX.Element {
                 if (matchesAny(event, useUiStore.getState().shortcutConfig.aiSend)) {
                   event.preventDefault();
                   send();
+                } else if (streaming && event.key === 'Enter' && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+                  event.preventDefault();
+                  if (!queue.data?.editingId) void submitMessage(undefined, 'steer');
                 }
               }}
               placeholder={streaming ? '正在回复，可先输入下一条问题' : composePlaceholder}
@@ -1037,20 +1095,19 @@ export function AiAssistant(): JSX.Element {
               }}
             />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
+            {streaming && <>
+              <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
+                disabled={queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>
+              <Button type="secondary" icon={<Square size={14} />} aria-label="中断生成" title="停止回复" onClick={stopGeneration} />
+            </>}
             <Button
               type="primary"
-              icon={streaming ? <Square size={14} /> : <Send size={16} />}
-              loading={createSessionMutation.isPending}
-              disabled={!streaming && (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || createSessionMutation.isPending)}
-              onClick={() => {
-                if (streaming) {
-                  stopGeneration();
-                  return;
-                }
-                send();
-              }}
-              aria-label={streaming ? '中断生成' : '发送'}
-              title={streaming ? '中断生成' : '发送'}
+              icon={<Send size={16} />}
+              loading={createSessionMutation.isPending || queueSubmitting}
+              disabled={!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || (streaming && !message.trim() && !attachments.length)}
+              onClick={send}
+              aria-label={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
+              title={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
             />
           </div>
           {!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}

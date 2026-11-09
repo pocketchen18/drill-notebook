@@ -62,6 +62,7 @@ export function SessionNavigation(props: Props): JSX.Element {
       const label = runtime.status === 'FAILED' ? '上次运行失败' : '上次回复未完成';
       return <TriangleAlert size={14} aria-label={label}><title>{label}</title></TriangleAlert>;
     }
+    if (runtime?.status === 'PAUSED') return <Clock size={14} aria-label="待发已暂停"><title>待发已暂停 · {runtime.queueCount}</title></Clock>;
     return null;
   };
   const bar = useRef<HTMLDivElement>(null);
@@ -336,9 +337,9 @@ export function SessionNavigation(props: Props): JSX.Element {
           {busy(target.id) && props.onStop && <button role="menuitem" disabled={runtimeFor(target.id)?.phase === 'stopping'} onClick={() => {
             void props.onStop!(target.id).then(() => closeMenu()).catch((error) => Message.error(errorText(error)));
           }}><Square size={14} />{runtimeFor(target.id)?.phase === 'stopping' ? '正在停止…'
-            : runtimeFor(target.id)?.queueCount ? '停止并取消待发送消息' : '停止生成'}</button>}
+            : '停止回复'}</button>}
           <button role="menuitem" className="session-nav-danger" onMouseEnter={() => setSub(null)}
-            disabled={busy(target.id)} title={busy(target.id) ? '请先停止正在生成的回复和待发送消息' : undefined}
+            disabled={busy(target.id) || !!runtimeFor(target.id)?.queueCount} title={busy(target.id) || runtimeFor(target.id)?.queueCount ? '请先停止回复，并发送或移除待发消息' : undefined}
             onClick={() => { closeMenu(); setConfirm({ kind: 'delete', session: target }); setConfirmError(''); }}><Trash2 size={14} />删除会话</button>
         </>}
       </div>

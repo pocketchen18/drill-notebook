@@ -90,6 +90,8 @@ public class ChatHistoryService {
         item.put("readable", content.status() == ChatMessageCipher.ReadStatus.DECRYPTED
                 || content.status() == ChatMessageCipher.ReadStatus.EMPTY);
         if ("assistant".equals(row.role()) && !row.contentDeleted()) {
+            try {item.put("supplements",history.supplements(row.requestId(),cipher,password).stream().map(ChatSupplement::view).toList());}
+            catch(SQLException|ChatCryptoException error){item.put("supplementsUnavailable",true);}
             ChatMessageCipher.Read meta = cipher.read(row.resultMetaCipher(), row.resultMetaCrypto(), password);
             if (meta.status() == ChatMessageCipher.ReadStatus.DECRYPTED) {
                 item.put("toolActivities", ToolActivity.readMeta(meta.value(), false));

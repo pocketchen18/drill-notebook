@@ -1,0 +1,282 @@
+<div id="dn-chat-queue-preview" class="viz-carousel viz-dotted-background" aria-label="对话排队布局" data-previous-label="上一种布局" data-next-label="下一种布局">
+  <section data-variant="贴边队列" aria-label="贴边队列方案"><div class="cq-stage"><div class="cq-product" data-layout="attached" aria-label="贴边队列交互草图"></div></div></section>
+  <section data-variant="展开列表" aria-label="展开列表方案" hidden><div class="cq-stage"><div class="cq-product" data-layout="separate" aria-label="展开列表交互草图"></div></div></section>
+</div>
+<style>
+#dn-chat-queue-preview .cq-stage{padding:20px 16px 24px;min-height:720px;display:flex;align-items:flex-start;justify-content:center}
+#dn-chat-queue-preview .cq-product{--cq-bg:light-dark(#fff,#202126);--cq-soft:light-dark(#f6f7fa,#292b32);--cq-text:light-dark(#242a36,#eceef3);--cq-muted:light-dark(#6b7282,#afb4c1);--cq-line:light-dark(#e2e5ec,#3c3f49);--cq-blue:light-dark(#3156df,#9cadff);--cq-blue-bg:light-dark(#3156df,#8da2ff);--cq-on-blue:light-dark(#fff,#17234e);--cq-pause:light-dark(#7a5b22,#e0c58f);--cq-pause-bg:light-dark(#faf6ed,#37312a);--cq-danger:light-dark(#b73c48,#f2949c);--cq-shadow:light-dark(#151b3012,#00000038);font:14px/1.6 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei",sans-serif;color:var(--cq-text);background:var(--cq-bg);width:100%;max-width:540px;min-width:0;border:1px solid var(--cq-line);border-radius:14px;box-shadow:0 8px 26px var(--cq-shadow);position:relative}
+#dn-chat-queue-preview .cq-product *{box-sizing:border-box}
+#dn-chat-queue-preview .cq-product button,#dn-chat-queue-preview .cq-product textarea{font:inherit;color:inherit}
+#dn-chat-queue-preview .cq-product button{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;border-radius:6px;padding:5px 8px;min-height:30px}
+#dn-chat-queue-preview .cq-product button:hover{background:var(--cq-soft)}
+#dn-chat-queue-preview .cq-product button:disabled{opacity:.45;cursor:default}
+#dn-chat-queue-preview .cq-product svg{width:16px;height:16px;flex:none}
+#dn-chat-queue-preview .cq-head{padding:14px 18px;border-bottom:1px solid var(--cq-line);display:flex;align-items:center;gap:8px;font-weight:500}
+#dn-chat-queue-preview .cq-head span:last-child{margin-left:auto;font-size:12px;font-weight:400;color:var(--cq-muted)}
+#dn-chat-queue-preview .cq-session{display:flex;align-items:center;gap:7px;padding:10px 15px;color:var(--cq-muted);font-size:12px;border-bottom:1px solid var(--cq-line)}
+#dn-chat-queue-preview .cq-session strong{color:var(--cq-text);font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dn-chat-queue-preview .cq-session .cq-right{margin-left:auto;white-space:nowrap}
+#dn-chat-queue-preview .cq-chat{padding:20px 20px 10px;min-height:224px;overflow-wrap:anywhere}
+#dn-chat-queue-preview .cq-user{margin:0 0 16px 40px;padding:10px 13px;background:var(--cq-soft);border-radius:11px}
+#dn-chat-queue-preview .cq-answer{margin:0 0 9px}
+#dn-chat-queue-preview .cq-assistant-label{display:flex;gap:7px;align-items:center;font-size:12px;font-weight:500;margin-bottom:8px}
+#dn-chat-queue-preview .cq-run{display:flex;gap:7px;align-items:center;color:var(--cq-muted);font-size:12px;margin-top:11px}
+#dn-chat-queue-preview .cq-run svg{width:14px;height:14px}
+#dn-chat-queue-preview .cq-interjection{margin:14px 0 10px 40px;padding:9px 12px;background:var(--cq-soft);border-radius:10px}
+#dn-chat-queue-preview .cq-interjection-meta{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--cq-muted);margin-bottom:4px}
+#dn-chat-queue-preview .cq-interjection.is-received .cq-interjection-meta{color:var(--cq-blue)}
+#dn-chat-queue-preview .cq-interjection p{margin:0;white-space:pre-wrap;font-size:13px}
+#dn-chat-queue-preview .cq-followup{margin:10px 0 0}
+#dn-chat-queue-preview .cq-footer{padding:0 16px 14px}
+#dn-chat-queue-preview .cq-storage{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--cq-muted);margin:9px 2px 10px;gap:10px}
+#dn-chat-queue-preview .cq-storage span:last-child{color:var(--cq-blue)}
+#dn-chat-queue-preview .cq-queue{position:relative;background:var(--cq-soft);border:1px solid var(--cq-line);margin:0 8px -1px;border-radius:11px 11px 0 0;padding:7px 8px 6px}
+#dn-chat-queue-preview [data-layout="separate"] .cq-queue{margin:0 0 10px;border-radius:10px;background:var(--cq-bg)}
+#dn-chat-queue-preview .cq-qhead{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 3px 3px;flex-wrap:wrap}
+#dn-chat-queue-preview .cq-qheading{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;flex-wrap:wrap}
+#dn-chat-queue-preview .cq-hint{font-size:11px;font-weight:400;color:var(--cq-muted)}
+#dn-chat-queue-preview .cq-qhead button{font-size:12px;color:var(--cq-muted);padding:3px 6px;min-height:28px}
+#dn-chat-queue-preview .cq-queue.is-paused{background:var(--cq-pause-bg)}
+#dn-chat-queue-preview .cq-queue.is-paused .cq-qheading{color:var(--cq-pause)}
+#dn-chat-queue-preview .cq-queue.is-paused .cq-qhead button{color:var(--cq-blue)}
+#dn-chat-queue-preview .cq-row{position:relative;border-top:1px solid var(--cq-line)}
+#dn-chat-queue-preview .cq-row:first-child{border-top:0}
+#dn-chat-queue-preview .cq-row-main{display:flex;align-items:center;gap:3px;min-height:38px}
+#dn-chat-queue-preview .cq-index{color:var(--cq-muted);font-size:11px;width:15px;text-align:center;flex:none}
+#dn-chat-queue-preview .cq-preview-button{flex:1;min-width:0;text-align:left!important;justify-content:flex-start!important;padding:6px 3px!important}
+#dn-chat-queue-preview .cq-preview-button .cq-summary{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+#dn-chat-queue-preview [data-layout="separate"] .cq-summary{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#dn-chat-queue-preview .cq-more{width:30px;padding:4px!important;flex:none;color:var(--cq-muted)!important}
+#dn-chat-queue-preview .cq-steer{flex:none;font-size:12px!important;white-space:nowrap;color:var(--cq-blue)!important}
+#dn-chat-queue-preview .cq-expand{display:flex!important;width:100%;font-size:11px!important;color:var(--cq-muted)!important;min-height:28px!important}
+#dn-chat-queue-preview .cq-menu{position:absolute;right:2px;top:36px;z-index:6;width:160px;background:var(--cq-bg);border:1px solid var(--cq-line);border-radius:9px;box-shadow:0 6px 22px var(--cq-shadow);padding:5px}
+#dn-chat-queue-preview .cq-menu button{width:100%;justify-content:flex-start;font-size:13px;text-align:left;padding:7px 9px}
+#dn-chat-queue-preview .cq-menu .cq-remove{color:var(--cq-danger)}
+#dn-chat-queue-preview .cq-detail{padding:0 8px 10px 20px;font-size:12px;overflow-wrap:anywhere}
+#dn-chat-queue-preview .cq-detail p{margin:3px 0 7px;white-space:pre-wrap}
+#dn-chat-queue-preview .cq-origin{color:var(--cq-muted);font-size:11px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+#dn-chat-queue-preview .cq-editor{padding:8px 5px 10px}
+#dn-chat-queue-preview .cq-edit-hint{font-size:11px;color:var(--cq-pause);display:flex;gap:5px;align-items:center;margin:0 0 7px}
+#dn-chat-queue-preview .cq-editor textarea{border:1px solid var(--cq-line);border-radius:7px;background:var(--cq-bg);padding:8px;min-height:86px;max-height:200px;width:100%;resize:vertical;display:block}
+#dn-chat-queue-preview .cq-editor-actions{display:flex;justify-content:flex-end;gap:5px;margin-top:6px;flex-wrap:wrap}
+#dn-chat-queue-preview .cq-editor-actions button{font-size:12px}
+#dn-chat-queue-preview .cq-product .cq-primary{background:var(--cq-blue-bg);color:var(--cq-on-blue)}
+#dn-chat-queue-preview .cq-product .cq-primary:hover{filter:brightness(.97)}
+#dn-chat-queue-preview .cq-composer{position:relative;background:var(--cq-bg);border:1px solid var(--cq-line);border-radius:12px;padding:12px 12px 8px}
+#dn-chat-queue-preview .cq-compose-input{display:block;width:100%;min-height:64px;max-height:180px;resize:vertical;border:0;background:transparent;font-size:13px!important;padding:0}
+#dn-chat-queue-preview .cq-compose-input::placeholder{color:var(--cq-muted)}
+#dn-chat-queue-preview .cq-compose-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;flex-wrap:wrap}
+#dn-chat-queue-preview .cq-compose-left,#dn-chat-queue-preview .cq-actions{display:flex;align-items:center;gap:6px}
+#dn-chat-queue-preview .cq-actions{margin-left:auto;flex-wrap:wrap;justify-content:flex-end;gap:4px}
+#dn-chat-queue-preview .cq-keyhint{color:var(--cq-muted);font-size:11px}
+#dn-chat-queue-preview .cq-stop{border:1px solid var(--cq-line)!important;font-size:12px!important;white-space:nowrap}
+#dn-chat-queue-preview .cq-submit{font-size:12px!important;white-space:nowrap}
+#dn-chat-queue-preview .cq-attach{display:flex;gap:5px;align-items:center;font-size:11px;padding:4px 6px;margin:6px 0;border:1px solid var(--cq-line);border-radius:6px;width:fit-content;max-width:100%;overflow-wrap:anywhere}
+#dn-chat-queue-preview .cq-attach button{min-height:22px;padding:0 3px}
+#dn-chat-queue-preview .cq-attach svg{width:13px;height:13px}
+#dn-chat-queue-preview .cq-notice{font-size:12px;color:var(--cq-muted);min-height:26px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:7px 2px 0}
+#dn-chat-queue-preview .cq-notice button{font-size:12px;color:var(--cq-blue);padding:0 3px;min-height:24px}
+#dn-chat-queue-preview .cq-product [hidden]{display:none!important}
+@media(max-width:420px){#dn-chat-queue-preview .cq-stage{padding:12px 0;min-height:760px}#dn-chat-queue-preview .cq-head{padding:12px}#dn-chat-queue-preview .cq-chat{padding:16px 12px 10px}#dn-chat-queue-preview .cq-footer{padding:0 10px 10px}#dn-chat-queue-preview .cq-queue{margin-left:3px;margin-right:3px}#dn-chat-queue-preview .cq-keyhint{display:none}#dn-chat-queue-preview .cq-qhead{gap:2px}#dn-chat-queue-preview .cq-hint{flex-basis:100%;padding-left:21px}#dn-chat-queue-preview .cq-qheading{flex:1}#dn-chat-queue-preview .cq-preview-button .cq-summary{font-size:12px}#dn-chat-queue-preview .cq-head span:last-child{font-size:11px}}
+@media(pointer:coarse){#dn-chat-queue-preview .cq-product button{min-height:44px}#dn-chat-queue-preview .cq-more{width:44px}#dn-chat-queue-preview .cq-product textarea{font-size:16px!important}#dn-chat-queue-preview .cq-menu{top:44px}}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('dn-chat-queue-preview');
+  if (!root) return;
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+  const initialItems = () => [
+    {id:1,text:'再给一个不能对角化的例子，解释原因。',attachment:false,context:'笔记 · 矩阵对角化'},
+    {id:2,text:'根据这张练习题，给我一道类似的题，先不要告诉我答案。',attachment:true,context:'笔记 · 矩阵对角化'}
+  ];
+  const initial = layout => ({running:true,paused:false,queue:initialItems(),pending:[],received:[],followup:'',expanded:layout==='separate',draft:'',attachment:false,
+    edit:null,editText:'',editAttachment:false,wasPaused:false,menu:null,detail:null,notice:'',removed:null,next:3,
+    prompt:'帮我讲清楚矩阵对角化需要满足哪些条件。',answer:'判断能否对角化，关键是能否找到足够多的线性无关特征向量。我接着用一个例子说明。',failed:false});
+  const models = new Map();
+  let lastSavedQueues = '';
+  function restoreSaved(saved) {
+    const content = saved?.privateContent?.queues;
+    if (!content || typeof content !== 'object') return;
+    const signature = JSON.stringify(content);
+    if (signature === lastSavedQueues) return;
+    lastSavedQueues = signature;
+    for (const [layout,model] of models) {
+      const restored=content[layout];
+      if (!restored || !Array.isArray(restored.queue) || !restored.queue.every(x=>typeof x.text==='string'&&Number.isSafeInteger(x.id))) continue;
+      const validItems=items=>Array.isArray(items)&&items.every(x=>typeof x.text==='string'&&Number.isSafeInteger(x.id));
+      Object.assign(model.state,initial(layout),restored,{pending:validItems(restored.pending)?restored.pending:[],received:validItems(restored.received)?restored.received:[],menu:null,removed:null});
+      model.render();
+    }
+  }
+  function remember(layout) {
+    if (!window.openai?.setWidgetState) return;
+    const queues={};
+    for (const [key,model] of models) {
+      const s=model.state;
+      const trim=items=>items.slice(0,8).map(x=>({...x,text:x.text.slice(0,500)}));
+      queues[key]={...s,queue:trim(s.queue),pending:trim(s.pending),received:trim(s.received.slice(-4)),draft:s.draft.slice(0,1500),editText:s.editText.slice(0,1000),removed:null};
+    }
+    if(new TextEncoder().encode(JSON.stringify(queues)).length>14000){
+      for(const s of Object.values(queues)){
+        for(const key of ['queue','pending','received'])s[key]=s[key].slice(0,4).map(x=>({...x,text:x.text.slice(0,100)}));
+        for(const key of ['draft','editText','prompt','answer','followup'])s[key]=s[key].slice(0,300);
+      }
+    }
+    lastSavedQueues = JSON.stringify(queues);
+    const model=models.get(layout);
+    window.openai.setWidgetState({modelContent:{design:layout==='attached'?'贴边队列':'展开列表',state:model.state.running?'正在回复':'已停止',paused:model.state.paused,queued:model.state.queue.length,steeringPending:model.state.pending.length,steeringReceived:model.state.received.length},privateContent:{queues}}).catch(()=>{});
+  }
+  for (const pane of root.querySelectorAll('.cq-product')) {
+    const layout=pane.dataset.layout;
+    const state=initial(layout);
+    const config={scenario:'回复中',showAttachment:true};
+    let previousScenario=config.scenario;
+    const model={state,render}; models.set(layout,model);
+    function startNext() {
+      if (state.running || state.paused || state.edit!==null || !state.queue.length) return;
+      const item=state.queue.shift(); state.running=true; state.failed=false; state.prompt=item.text;
+      state.answer='正在结合上一轮的回复处理这条消息。'; state.notice='上一条已结束，下一条已开始';
+      state.detail=null; state.menu=null; state.received=[]; state.followup='';
+    }
+    function acceptSteering() {
+      if(!state.running||!state.pending.length)return false;
+      state.received.push(...state.pending);state.pending=[];
+      state.followup='收到补充，我会把它一起纳入接下来的说明。';
+      state.notice='插话已接收，当前任务继续';
+      return true;
+    }
+    function retainPending() {
+      const count=state.pending.length;
+      state.queue.push(...state.pending);state.queue.sort((a,b)=>a.id-b.id);state.pending=[];
+      return count;
+    }
+    function leaveEdit(save) {
+      const item=state.queue.find(x=>x.id===state.edit);
+      if (save && item) {
+        if (!state.editText.trim() && !state.editAttachment) { state.notice='请输入消息或保留附件'; render(); return; }
+        item.text=state.editText.trim(); item.attachment=state.editAttachment;
+      }
+      state.edit=null; state.paused=state.wasPaused; state.notice=save?'修改已保存，顺序未变':'已取消修改';
+      startNext(); render(); remember(layout);
+    }
+    function render() {
+      const busy=state.running;
+      const any=state.queue.length>0;
+      const blocked=state.paused || state.edit!==null;
+      const rows=(state.expanded?state.queue:state.queue.slice(0,1)).map((item,index)=>{
+        const editing=state.edit===item.id;
+        return `<div class="cq-row" data-item="${item.id}">
+          <div class="cq-row-main"><span class="cq-index">${index+1}</span><button type="button" class="cq-preview-button cursor-interaction" data-action="detail" data-id="${item.id}" aria-expanded="${state.detail===item.id}" aria-label="查看待发送消息 ${index+1}" data-tooltip="${escape(item.text||'图片附件')}"><span class="cq-summary">${escape(item.text||'图片附件')}</span>${item.attachment?icon('paperclip'):''}</button>${busy?`<button type="button" class="cq-steer cursor-interaction" data-action="steer-item" data-id="${item.id}" aria-label="插话：待发送消息 ${index+1}" data-tooltip="提交，但不中断模型运行" ${state.edit!==null?'disabled':''}>${icon('corner-down-right')}插话</button>`:''}<button type="button" class="cq-more cursor-interaction" data-action="menu" data-id="${item.id}" aria-label="待发送消息 ${index+1} 的更多操作" aria-expanded="${state.menu===item.id}" ${state.edit!==null?'disabled':''}>${icon('ellipsis')}</button></div>
+          ${state.menu===item.id?`<div class="cq-menu" role="group" aria-label="消息操作"><button type="button" class="cursor-interaction" data-action="edit" data-id="${item.id}">${icon('pencil')}编辑消息</button><button type="button" class="cq-remove cursor-interaction" data-action="remove" data-id="${item.id}">${icon('trash-2')}移除消息</button></div>`:''}
+          ${!editing && state.detail===item.id?`<div class="cq-detail"><p>${escape(item.text)}</p><div class="cq-origin">${icon('notebook-text')}${escape(item.context)}</div>${item.attachment?`<div class="cq-attach">${icon('image')}矩阵练习.png</div>`:''}</div>`:''}
+          ${editing?`<div class="cq-editor"><p class="cq-edit-hint">${icon('pause')}编辑期间暂停自动发送</p><textarea aria-label="编辑待发送消息" class="cq-edit-input">${escape(state.editText)}</textarea>${state.editAttachment?`<div class="cq-attach">${icon('image')}矩阵练习.png<button type="button" class="cursor-interaction" data-action="remove-edit-attachment" aria-label="移除待发附件">${icon('x')}</button></div>`:''}<div class="cq-editor-actions"><button type="button" class="cursor-interaction" data-action="cancel-edit">取消</button><button type="button" class="cq-primary cursor-interaction" data-action="save-edit">保存修改</button></div></div>`:''}
+        </div>`;
+      }).join('');
+      const interjections=(items,received)=>items.map(item=>`<div class="cq-interjection ${received?'is-received':''}"><div class="cq-interjection-meta">${icon(received?'check':'corner-down-right')}插话 · ${received?'已接收':'等待接收'}</div><p>${escape(item.text||'图片附件')}</p>${item.attachment?`<div class="cq-attach">${icon('image')}矩阵练习.png</div>`:''}</div>`).join('');
+      pane.innerHTML=`<div class="cq-head">${icon('sparkles')}AI 学习助手<span>Drill Notebook</span></div>
+        <div class="cq-session">${icon('messages-square')}<strong>矩阵对角化练习</strong><span class="cq-right">${busy?'正在回复':state.failed?'回复中断':blocked&&any?'队列已暂停':'已完成'}</span></div>
+        <div class="cq-chat"><div class="cq-user">${escape(state.prompt)}</div><div class="cq-assistant-label">${icon('sparkles')}AI</div><p class="cq-answer">${escape(state.answer)}</p>${interjections(state.received,true)}${state.followup?`<p class="cq-followup">${escape(state.followup)}</p>`:''}${interjections(state.pending,false)}<div class="cq-run">${icon(busy?'loader-circle':state.failed?'circle-alert':'check')}${busy?'正在继续生成…':state.failed?'本轮未完成，待发消息已保留':'已生成内容已保留'}</div></div>
+        <div class="cq-footer"><div class="cq-storage"><span>本地存储 41 KB / 256 MB</span><span>清理历史</span></div>
+        ${any?`<section class="cq-queue ${blocked?'is-paused':''}" aria-label="待发送消息"><div class="cq-qhead"><div class="cq-qheading">${icon(blocked?'pause':'list-end')}<span>${blocked?'已暂停 · ':''}待发送 ${state.queue.length}</span><span class="cq-hint">${state.edit!==null?'正在编辑消息':blocked?'手动继续后才发送':'本轮结束后依次发送'}</span></div><button type="button" class="cursor-interaction" data-action="pause" ${state.edit!==null?'disabled':''}>${icon(blocked?'play':'pause')}${blocked?'继续发送':'暂停接续'}</button></div><div class="cq-rows">${rows}</div>${state.queue.length>1?`<button type="button" class="cq-expand cursor-interaction" data-action="expand" aria-expanded="${state.expanded}">${icon(state.expanded?'chevron-up':'chevron-down')}${state.expanded?'收起列表':`展开其余 ${state.queue.length-1} 条`}</button>`:''}</section>`:''}
+        <div class="cq-composer"><textarea class="cq-compose-input" aria-label="消息输入框" placeholder="${busy?'正在回复，可先输入下一条问题':'输入下一条问题'}">${escape(state.draft)}</textarea>${state.attachment?`<div class="cq-attach">${icon('image')}矩阵练习.png<button type="button" class="cursor-interaction" data-action="remove-attachment" aria-label="移除输入附件">${icon('x')}</button></div>`:''}<div class="cq-compose-foot"><div class="cq-compose-left"><button type="button" class="cursor-interaction" data-action="attach" aria-label="添加示例附件" data-tooltip="草图中添加一张示例附件">${icon('plus')}</button><span class="cq-keyhint">${busy?'Enter 排队 · Ctrl+Enter 插话':`Enter ${any?'加入队列':'发送'} · ⇧ Enter 换行`}</span></div><div class="cq-actions">${busy?`<button type="button" class="cq-stop cursor-interaction" data-action="stop" aria-label="停止生成" data-tooltip="停止当前回复，人工待发送消息保留并暂停">${icon('square')}</button><button type="button" class="cq-steer cursor-interaction" data-action="steer-draft" data-tooltip="提交，但不中断模型运行" ${!state.draft.trim()&&!state.attachment?'hidden disabled':''}>${icon('corner-down-right')}插话</button>`:''}<button type="button" class="cq-submit cq-primary cursor-interaction" data-action="send" ${!state.draft.trim()&&!state.attachment?'disabled':''} ${busy&&!state.draft.trim()&&!state.attachment?'hidden':''}>${busy||any?'加入队列':'发送'}${icon('arrow-up')}</button></div></div></div>
+        <div class="cq-notice" role="status" aria-live="polite"><span>${escape(state.notice)}</span>${state.removed?'<button type="button" class="cursor-interaction" data-action="undo">撤销</button>':''}</div></div>`;
+      if (window.lucide?.createIcons) window.lucide.createIcons({attrs:{width:16,height:16}});
+    }
+    pane.addEventListener('input',event=>{
+      if (event.target.matches('.cq-compose-input')) {
+        state.draft=event.target.value;
+        const submit=pane.querySelector('[data-action="send"]');
+        submit.disabled=!state.draft.trim()&&!state.attachment;
+        submit.hidden=state.running&&!state.draft.trim()&&!state.attachment;
+        const steer=pane.querySelector('[data-action="steer-draft"]');
+        if(steer){steer.disabled=!state.draft.trim()&&!state.attachment;steer.hidden=steer.disabled;}
+      } else if (event.target.matches('.cq-edit-input')) state.editText=event.target.value;
+      remember(layout);
+    });
+    pane.addEventListener('click',event=>{
+      const button=event.target.closest('[data-action]');
+      if (!button || button.disabled) return;
+      const action=button.dataset.action, id=Number(button.dataset.id);
+      if (action==='send') {
+        if (!state.draft.trim()&&!state.attachment) return;
+        const item={id:state.next++,text:state.draft.trim(),attachment:state.attachment,context:'笔记 · 矩阵对角化'};
+        state.queue.push(item); state.draft=''; state.attachment=false; state.notice=`已加入队列 · 共 ${state.queue.length} 条待发送`; state.removed=null;
+        if (!state.running&&!state.paused) startNext();
+      } else if(action==='steer-item'||action==='steer-draft') {
+        if(!state.running){state.notice='本轮已结束，请发送或加入队列';render();return;}
+        let item;
+        if(action==='steer-item'){
+          if(state.edit!==null)return;
+          const index=state.queue.findIndex(x=>x.id===id);if(index<0)return;
+          item=state.queue.splice(index,1)[0];
+        }else{
+          if(!state.draft.trim()&&!state.attachment)return;
+          item={id:state.next++,text:state.draft.trim(),attachment:state.attachment,context:'笔记 · 矩阵对角化'};
+          state.draft='';state.attachment=false;
+        }
+        state.pending.push(item);state.menu=null;state.detail=null;state.removed=null;
+        state.notice='插话已提交，等待接收';
+      } else if(action==='stop') {
+        const retained=retainPending();
+        state.running=false; state.paused=state.queue.length>0; state.wasPaused=state.paused; state.failed=true;
+        state.notice=retained?'已停止，未接收的插话和待发送消息已保留':state.queue.length?'已停止，待发送消息已保留':'已停止生成';
+      } else if(action==='pause') {
+        state.paused=!state.paused; state.notice=state.paused?'已暂停接续，当前回复继续':'已恢复自动接续'; startNext();
+      } else if(action==='expand') state.expanded=!state.expanded;
+      else if(action==='detail') state.detail=state.detail===id?null:id;
+      else if(action==='menu') state.menu=state.menu===id?null:id;
+      else if(action==='edit') {
+        const item=state.queue.find(x=>x.id===id); if (!item) return;
+        state.wasPaused=state.paused; state.paused=true; state.edit=id; state.editText=item.text; state.editAttachment=item.attachment; state.menu=null; state.notice='';
+      } else if(action==='save-edit'||action==='cancel-edit') {leaveEdit(action==='save-edit');return;}
+      else if(action==='remove') {
+        const index=state.queue.findIndex(x=>x.id===id); if(index<0)return;
+        state.removed={item:state.queue.splice(index,1)[0],index}; state.menu=null; state.notice='已移除待发送消息';
+        if(!state.queue.length)state.paused=false;
+      } else if(action==='undo') {
+        if(state.removed){state.queue.splice(Math.min(state.removed.index,state.queue.length),0,state.removed.item);state.removed=null;state.notice='已恢复待发送消息';if(!state.running)state.paused=true;}
+      } else if(action==='attach') {state.attachment=true;state.notice='已添加示例附件';}
+      else if(action==='remove-attachment')state.attachment=false;
+      else if(action==='remove-edit-attachment')state.editAttachment=false;
+      render();remember(layout);
+      if(action==='edit')pane.querySelector('.cq-edit-input')?.focus();
+      if(action==='send'||action==='steer-draft')pane.querySelector('.cq-compose-input')?.focus();
+    });
+    pane.addEventListener('keydown',event=>{
+      if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.target.matches('.cq-compose-input')){
+        event.preventDefault();
+        if(event.ctrlKey){if(state.running)pane.querySelector('[data-action="steer-draft"]')?.click();}
+        else if(!event.metaKey&&!event.altKey)pane.querySelector('[data-action="send"]')?.click();
+      }
+      if(event.key==='Escape'){
+        if(state.menu!==null){const previous=state.menu;state.menu=null;render();pane.querySelector(`[data-action="menu"][data-id="${previous}"]`)?.focus();remember(layout);}
+        else if(state.edit!==null){leaveEdit(false);}
+        else if(state.detail!==null){state.detail=null;render();remember(layout);}
+      }
+    });
+    render();
+    if(typeof Tweak!=='undefined'){
+      const tweak=new Tweak({container:pane,onChange:()=>{
+        if(config.scenario!==previousScenario){
+          previousScenario=config.scenario;
+          if(config.scenario==='本轮结束'){
+            if(acceptSteering()){state.notice='正在继续处理插话';}
+            else{state.running=false;state.answer='只要存在 n 个线性无关的特征向量，就能构造可逆矩阵 P，使 P⁻¹AP 为对角矩阵。';state.notice='本轮已结束';startNext();}
+          }
+          else if(config.scenario==='模型接收插话'){if(!acceptSteering())state.notice='暂无等待接收的插话';}
+          else if(config.scenario==='回复失败'){retainPending();state.running=false;state.failed=true;state.paused=true;state.wasPaused=true;state.notice='本轮连接失败，未接收的插话和待发送消息已保留';}
+          else if(config.scenario==='重启恢复'){retainPending();state.running=false;state.failed=false;state.paused=true;state.edit=null;state.notice='待发送消息已恢复，请确认后继续';}
+          else if(config.scenario==='回复中'){Object.assign(state,initial(layout));}
+        }
+        const sample=state.queue.find(x=>x.id===2); if(sample)sample.attachment=config.showAttachment;
+        render();remember(layout);
+      }});
+      tweak.addSelect(config,'scenario',{label:'演示状态',options:['回复中','模型接收插话','本轮结束','回复失败','重启恢复']});
+      tweak.addToggle(config,'showAttachment',{label:'显示附件示例'});
+    }
+  }
+  restoreSaved(window.openai?.widgetState);
+  window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState)restoreSaved(event.detail.globals.widgetState);});
+})();
+</script>
