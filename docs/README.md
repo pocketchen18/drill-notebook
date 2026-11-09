@@ -33,7 +33,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.7.2-features.md](state/v0.7.2-features.md) | v0.7.2 功能需求清单：导航、四个会话工具及并行运行已实现；人工排队后置 |
+| [state/v0.7.2-features.md](state/v0.7.2-features.md) | v0.7.2 需求清单；发布准备的实际范围与验证见 [发布说明](release/v0.7.2-release-notes.md) |
 | [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 13）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能验收完成、状态文档同步后，整个目录移入 `docs/archive/<version>/`，不留在活跃上下文。
 
-当前切片已完成并归档，没有留在活跃目录的 Spec / Plan。会话导航、四个会话工具及并行运行的设计、草图和施工材料见 [v0.7.2 归档](archive/v0.7.2/README.md)。人工输入框排队留待用户提交四个会话工具后另起切片。需求与推进状态见[版本清单](state/v0.7.2-features.md)，验证范围与未覆盖项见[测试清单](test/QA_CHECKLIST.md)。v0.7.1 材料归档至 [archive/v0.7.1/](archive/v0.7.1/)；v0.8 的侧栏与设置讨论尚未进入施工。
+会话导航、四个会话工具及并行运行的设计、草图和施工材料见 [v0.7.2 归档](archive/v0.7.2/README.md)。人工排队与插话已实现并由用户提交，材料仍在 [work/ai-chat-queue/](work/ai-chat-queue/ui-ux.md)，待共享状态文档同步后归档；本轮发布准备不搬迁施工材料。已有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)，发布门禁状态见 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。v0.7.1 材料归档至 [archive/v0.7.1/](archive/v0.7.1/)；v0.8 的侧栏与设置讨论尚未进入施工。
 
 ## 3. 测试文档
 
@@ -89,7 +89,7 @@ docs/
 | [reference/knowledge-point-import.md](reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [reference/quiz-markdown-flow.md](reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
 
-`docs/release/v<版本>-release-notes.md` 保存各版发行记录，当前为 [v0.7.1 发布说明](release/v0.7.1-release-notes.md)。工作流按标签的完整基础版本选择正文；例如 `v0.7.1-rc.1` 选择 v0.7.1，缺失或空白即失败。
+`docs/release/v<版本>-release-notes.md` 保存各版发行记录，当前发布准备为 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.2-rc.1` 选择 v0.7.2，缺失或空白即失败。
 
 ## 5. 交接记忆
 

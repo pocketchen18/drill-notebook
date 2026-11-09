@@ -1,13 +1,13 @@
 # Drill Notebook（面向开发者）
 
-当前发布准备：**v0.7.1（预发行）**，AI 连接、多模型预设、对话工具活动与全局运行限制。范围、验证及升级说明见 [发布说明](docs/release/v0.7.1-release-notes.md)。
+当前发布准备：**v0.7.2（预发行）**，AI 会话标题、四个会话工具、多会话并行、人工消息排队与插话。**v1.0 之前的所有版本均为不保证稳定性的预发行版。** 范围、验证及升级说明见 [发布说明](docs/release/v0.7.2-release-notes.md)。
 
 | 项 | 说明 |
 |---|---|
 | 平台 | Windows 优先，**绿色便携**（数据默认不写系统目录） |
 | 架构 | Electron 壳 + React/TS 渲染进程 + 内嵌 Spring Boot（Java）+ SQLite |
 | 通信 | 后端仅监听 `127.0.0.1`，前端 HTTP 调用本地 API |
-| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话；`v0.5` AI 总结知识点 + 背知识点重构 + 笔记本混合检索（BM25 + 可选向量 RAG）；`v0.5.1` 会话内短周期记忆曲线（循环背诵全流程重构）+ 题库选题继承 + 会话↔日历联动（顽固项加练、评分最终态、日历实时今天）；`v0.5.2` 界面状态记忆（启动回到上次页面 + 各页选择/切换/筛选持久化）；`v0.5.3` 常规设置完善（主题跟随系统 + AI 悬浮球开关 + 自定义快捷键：全局 + 页面内）；`v0.6` 前端 UI 全面重塑；`v0.6.1` 错题本频率改版 + 会话结束返回初始界面；`v0.6.2` 笔记本编辑器现代化（斜杠命令、块手柄、表格 / 代码高亮 / 页内查找替换、Markdown 粘贴）+ 自动保存跨页串写修复；`v0.6.3` 编辑器稳定性修复；`v0.7.0`（预发行）AI 跨会话记忆、用量/缓存适配、删除与恢复安全；`v0.7.1`（发布准备）多供应商/模型、记忆工具活动与全局运行限制 |
+| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话；`v0.5` AI 总结知识点 + 背知识点重构 + 笔记本混合检索（BM25 + 可选向量 RAG）；`v0.5.1` 会话内短周期记忆曲线（循环背诵全流程重构）+ 题库选题继承 + 会话↔日历联动（顽固项加练、评分最终态、日历实时今天）；`v0.5.2` 界面状态记忆（启动回到上次页面 + 各页选择/切换/筛选持久化）；`v0.5.3` 常规设置完善（主题跟随系统 + AI 悬浮球开关 + 自定义快捷键：全局 + 页面内）；`v0.6` 前端 UI 全面重塑；`v0.6.1` 错题本频率改版 + 会话结束返回初始界面；`v0.6.2` 笔记本编辑器现代化（斜杠命令、块手柄、表格 / 代码高亮 / 页内查找替换、Markdown 粘贴）+ 自动保存跨页串写修复；`v0.6.3` 编辑器稳定性修复；`v0.7.0`（预发行）AI 跨会话记忆、用量/缓存适配、删除与恢复安全；`v0.7.1`（预发行）多供应商/模型、记忆工具活动与全局运行限制；`v0.7.2`（发布准备）会话标题、四工具、并行运行、人工排队与插话 |
 
 ---
 
@@ -189,9 +189,19 @@
 | **稳定性** | 流式生成时自由滚动；切换聊天模型复用同版本记忆索引；删除来源会话保留长期记忆，来源显示「来源已被删除」；模型 ID 编辑保留未保存参数 |
 | **发行与升级** | 延续预发行渠道，数据库升级至 schema 11；详细范围、验证与升级说明见 [v0.7.1 发布说明](docs/release/v0.7.1-release-notes.md) |
 
-### 1.14 明确后置（未作为当前目标）
+### 1.14 v0.7.2（会话协作与消息排队）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)。当前版本的范围与推进状态单独维护在 [v0.7.2 功能需求清单](docs/state/v0.7.2-features.md)，发布前再将实际交付能力同步到全局清单。
+| 项 | 说明 |
+|---|---|
+| **标题与导航** | 首个完整问答自动生成标题，人工改名优先；会话菜单支持复制链接、导出等操作；首条消息发送前只显示未保存的新会话页 |
+| **会话工具** | 列出、读取本地会话，以及按用户委派新建会话、发送消息；来源可预览，长历史可分段读取 |
+| **并行运行** | 各会话独立显示运行与待发状态、独立停止；切换不取消后台任务 |
+| **人工排队与插话** | 回复期间发送下一条消息进入队列，支持编辑、移除撤销、暂停继续；插话在下一次模型请求前接入，不打断当前请求；人工待发加密保存并在重启后暂停恢复 |
+| **发行与升级** | 不保证稳定性的预发行版，数据库升级至 schema 14；验证范围与未完成门禁见 [v0.7.2 发布说明](docs/release/v0.7.2-release-notes.md) |
+
+### 1.15 明确后置（未作为当前目标）
+
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，已按 v0.7.2 发布准备同步实际能力。v0.8 侧栏整体改版及其他后续候选不属于本版交付范围。
 
 ---
 
@@ -432,11 +442,11 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 发行包只在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/test/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证，本地不生成发行包或模拟 ZIP。
 
 1. 更新对应的 `docs/release/<版本>-release-notes.md`，完成测试并提交、推送准备发布的代码。
-2. 在该提交上创建并推送标签：`git tag v0.7.1`，随后 `git push origin v0.7.1`。
-3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.1-win-x64-portable.zip`。云端不重复执行前后端业务全量测试；后端使用 `-DskipTests package`，仍执行编译检查。
-4. 标签推送自动创建 **Pre-release**，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.7.1`，默认仅上传构建产物，勾选 `publish_release` 才发布。
+2. 在该提交上创建并推送标签：`git tag v0.7.2`，随后 `git push <remote> v0.7.2`（本工作区远程名为 `github`，按实际仓库替换 `<remote>`）。
+3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.2-win-x64-portable.zip`。云端不重复执行前后端业务全量测试；后端使用 `-DskipTests package`，仍执行编译检查。
+4. 标签推送自动创建 **Pre-release**，不标记为 Latest，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.7.2`，默认仅上传构建产物，勾选 `publish_release` 才发布。v1.0 之前全部为预发行版，不保证稳定性；正式发行渠道届时另行确认。
 
-工作流按完整基础版本选择发布说明，`v0.7.1-rc.1` 共用 `v0.7.1-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 11 的迁移与回退边界见 [发布说明](docs/release/v0.7.1-release-notes.md)。
+工作流按完整基础版本选择发布说明，`v0.7.2-rc.1` 共用 `v0.7.2-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 14 的迁移与回退边界见 [发布说明](docs/release/v0.7.2-release-notes.md)。
 
 云端 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地全量测试仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
 
@@ -476,7 +486,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
 | [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
 | [docs/state/v0.7.2-features.md](docs/state/v0.7.2-features.md) | v0.7.2 功能需求清单：本版范围、功能切片与推进状态 |
-| [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 11） |
+| [docs/state/data-model.md](docs/state/data-model.md) | 数据模型与关键约束；本版 schema 14 升级说明见发布文档 |
 | [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 全局视觉、交互与编辑器契约 |
@@ -488,7 +498,8 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 | [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 | [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
-| [docs/release/v0.7.1-release-notes.md](docs/release/v0.7.1-release-notes.md) | v0.7.1 发布准备、验证、升级与已知边界 |
+| [docs/release/v0.7.2-release-notes.md](docs/release/v0.7.2-release-notes.md) | v0.7.2 发布准备、验证、升级与预发行边界 |
+| [docs/release/v0.7.1-release-notes.md](docs/release/v0.7.1-release-notes.md) | v0.7.1 验证、升级与已知边界 |
 | [docs/archive/v0.7.1/](docs/archive/v0.7.1/) | v0.7.1 连接设置与记忆工具施工归档；后续讨论不代表已交付 |
 | [docs/release/v0.7.0-release-notes.md](docs/release/v0.7.0-release-notes.md) | v0.7.0 发行记录与升级说明 |
 | [docs/archive/v0.7.0/](docs/archive/v0.7.0/) | v0.7.0 施工文档与验收证据（只读归档） |

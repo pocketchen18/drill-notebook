@@ -20,9 +20,12 @@ const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.repl
 const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
-  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.1');
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.2');
   assert.equal(workflow.on.workflow_dispatch.inputs.publish_release.default, false);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.prerelease, true);
+  assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.make_latest, 'false');
+  const packageScript = readFileSync(join(root, 'scripts/package-portable.ps1'), 'utf8');
+  assert.equal(packageScript.match(/\[string\]\$Version = '([^']+)'/)?.[1], defaultVersion);
   assert.equal(job.defaults.run.shell, 'pwsh');
   assert.match(packageJson.scripts['package:portable'], /^pwsh .* -File scripts\/package-portable\.ps1$/);
 });
@@ -77,14 +80,14 @@ test('云端后端使用预装 Maven 跳过测试执行，保留 Java 17 编译�
   });
 });
 
-const cacheRoot = join(root, 'cache');
+const fixtureRoot = join(root, 'temp');
 function fixture(t, builderExit = 0) {
-  mkdirSync(cacheRoot, { recursive: true });
-  const dir = mkdtempSync(join(cacheRoot, 'release-config-test-'));
+  mkdirSync(fixtureRoot, { recursive: true });
+  const dir = mkdtempSync(join(fixtureRoot, 'release-config-test-'));
   t.after(() => {
     // 仅删除本测试刚创建的工作区内临时目录。
-    const pathInCache = relative(cacheRoot, dir);
-    assert.ok(pathInCache && !pathInCache.startsWith(`..${sep}`) && !pathInCache.includes(sep));
+    const fixturePath = relative(fixtureRoot, dir);
+    assert.ok(fixturePath && !fixturePath.startsWith(`..${sep}`) && !fixturePath.includes(sep));
     rmSync(dir, { recursive: true, force: true });
   });
   for (const file of ['jre/bin/java.exe', 'frontend/dist/index.html', 'electron-dist/main.js', 'backend/target/drill-notebook-backend-0.1.0.jar']) {
@@ -118,28 +121,28 @@ function runPackage(dir, args = []) {
 
 const windowsOnly = { skip: process.platform !== 'win32' };
 test('发布说明按完整版本选择，预发行复用同版正文，缺失或空白立即失败', windowsOnly, t => {
-  mkdirSync(cacheRoot, { recursive: true });
-  const dir = mkdtempSync(join(cacheRoot, 'release-notes-test-'));
+  mkdirSync(fixtureRoot, { recursive: true });
+  const dir = mkdtempSync(join(fixtureRoot, 'release-notes-test-'));
   t.after(() => {
-    const pathInCache = relative(cacheRoot, dir);
-    assert.ok(pathInCache && !pathInCache.startsWith(`..${sep}`) && !pathInCache.includes(sep));
+    const fixturePath = relative(fixtureRoot, dir);
+    assert.ok(fixturePath && !fixturePath.startsWith(`..${sep}`) && !fixturePath.includes(sep));
     rmSync(dir, { recursive: true, force: true });
   });
   mkdirSync(join(dir, 'docs/release'), { recursive: true });
-  for (const tag of ['v0.7.0', 'v0.7.1', 'v0.7.10']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.20']) {
     writeFileSync(join(dir, `docs/release/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
   }
-  writeFileSync(join(dir, 'docs/release/v0.7.2-release-notes.md'), ' \n');
+  writeFileSync(join(dir, 'docs/release/v0.7.3-release-notes.md'), ' \n');
   const script = join(dir, 'select-notes.ps1');
   const output = join(dir, 'notes-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'notes').run);
-  for (const tag of ['v0.7.0', 'v0.7.1', 'v0.7.1-rc.1', 'v0.7.10', 'v0.7.2', 'v0.7.3']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.2-rc.1', 'v0.7.20', 'v0.7.3', 'v0.7.4']) {
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RELEASE_TAG: tag, GITHUB_OUTPUT: output },
     });
     assert.ifError(result.error);
-    if (tag === 'v0.7.2' || tag === 'v0.7.3') {
+    if (tag === 'v0.7.3' || tag === 'v0.7.4') {
       assert.notEqual(result.status, 0, `不应发布缺少正文的版本：${tag}`);
       assert.equal(existsSync(output), false);
     } else {
