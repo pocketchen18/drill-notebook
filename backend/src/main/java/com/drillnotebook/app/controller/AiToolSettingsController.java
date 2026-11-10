@@ -39,10 +39,11 @@ public class AiToolSettingsController {
 
     private static Map<String, Object> view(AiToolSettingsRepository.Snapshot snapshot) {
         List<Map<String, Object>> tools = new ArrayList<>();
-        for (String name : AiToolSettings.DELETE_TOOLS) {
+        for (AiToolSettings.Tool tool : AiToolSettings.TOOLS) {
+            String name = tool.name();
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("name", name);
-            row.put("group", "delete");
+            row.put("group", tool.group());
             row.put("enabled", snapshot.values().enabled(name));
             row.put("defaultEnabled", AiToolSettings.defaultEnabled(name));
             tools.add(row);

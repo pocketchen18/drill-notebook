@@ -32,28 +32,37 @@ class AiToolSettingsRepositoryTest {
     @SuppressWarnings("unchecked") private static Map<String,Boolean> enabled(Map<String,Object> view) {
         var result = new java.util.LinkedHashMap<String,Boolean>();
         for (var row : (List<Map<String,Object>>) view.get("tools")) {
-            assertEquals("delete", row.get("group")); assertEquals(false, row.get("defaultEnabled"));
+            assertEquals(!row.get("group").equals("delete"), row.get("defaultEnabled"));
             result.put((String) row.get("name"), (Boolean) row.get("enabled"));
         }
         return result;
     }
 
-    @Test void everyDeleteToolStartsOffAndOtherToolsAreNotManaged() {
+    @Test void allTwentyToolsAreGroupedWithSixteenOnAndFourDeletionsOff() {
         var view = controller.get();
         assertEquals(0L, view.get("revision"));
-        assertEquals(AiToolSettings.DELETE_TOOLS, List.copyOf(enabled(view).keySet()));
-        assertFalse(enabled(view).containsValue(true));
-        assertTrue(AiToolSettings.DEFAULTS.enabled("update_material"), "未纳入开关的工具不受影响");
-        assertFalse(AiToolSettings.DEFAULTS.enabled("delete_memory"));
+        assertEquals(20, enabled(view).size());
+        assertEquals(16L, enabled(view).values().stream().filter(Boolean::booleanValue).count());
+        for (String name : AiToolSettings.DELETE_TOOLS) assertFalse(enabled(view).get(name), name);
+        assertTrue(AiToolSettings.managed("update_material"));
+        @SuppressWarnings("unchecked") var rows = (List<Map<String,Object>>) view.get("tools");
+        assertEquals(Map.of("material", 8L, "memory", 4L, "session", 4L, "delete", 4L), rows.stream()
+                .collect(java.util.stream.Collectors.groupingBy(row -> (String) row.get("group"), java.util.stream.Collectors.counting())));
     }
     @Test void partialUpdatesKeepOtherSwitchesAndStoreOnlyExplicitChoices() throws Exception {
-        var first = put("{\"revision\":0,\"enabled\":{\"delete_material\":true}}");
+        var first = put("{\"revision\":0,\"enabled\":{\"delete_material\":true,\"read_notebook\":false}}");
         assertEquals(1L, first.get("revision")); assertEquals(true, enabled(first).get("delete_material")); assertEquals(false, enabled(first).get("delete_session"));
-        var second = put("{\"revision\":1,\"enabled\":{\"delete_memory\":true}}");
+        var second = put("{\"revision\":1,\"enabled\":{\"delete_memory\":true,\"send_message\":false,\"create_memory\":false}}");
         assertEquals(true, enabled(second).get("delete_material")); assertEquals(true, enabled(second).get("delete_memory"));
+        assertEquals(false, enabled(second).get("read_notebook")); assertEquals(false, enabled(second).get("send_message"));
+        var reopened = new AiToolSettingsRepository(jdbc).read().values();
+        assertFalse(reopened.enabled("read_notebook")); assertFalse(reopened.enabled("create_memory")); assertTrue(reopened.enabled("delete_material"));
         assertFalse(jdbc.queryForObject("SELECT document FROM ai_tool_settings", String.class).contains("delete_session"));
-        var reset = put("{\"revision\":2,\"enabled\":{\"delete_memory\":false,\"delete_session\":false,\"delete_material\":false,\"remove_wrong_question\":false}}");
-        assertFalse(enabled(reset).containsValue(true));
+        var defaults = new java.util.LinkedHashMap<String,Boolean>();
+        @SuppressWarnings("unchecked") var rows = (List<Map<String,Object>>) second.get("tools");
+        for (var row : rows) defaults.put((String) row.get("name"), (Boolean) row.get("defaultEnabled"));
+        var reset = controller.put(json.valueToTree(Map.of("revision", 2, "enabled", defaults)));
+        assertEquals(defaults, enabled(reset));
         assertEquals("{\"enabled\":{}}", jdbc.queryForObject("SELECT document FROM ai_tool_settings", String.class));
     }
     @Test void staleRevisionsAndInvalidBodiesChangeNothing() throws Exception {
@@ -61,17 +70,28 @@ class AiToolSettingsRepositoryTest {
         assertEquals("AI_SETTINGS_CONFLICT", assertThrows(ChatTurnRejectException.class,
                 () -> put("{\"revision\":0,\"enabled\":{\"delete_session\":true}}")).code());
         for (String body : List.of("{\"enabled\":{\"delete_session\":true}}", "{\"revision\":1}", "{\"revision\":1,\"enabled\":{}}",
-                "{\"revision\":1,\"enabled\":{\"delete_session\":\"true\"}}", "{\"revision\":1,\"enabled\":{\"update_material\":false}}",
+                "{\"revision\":1,\"enabled\":{\"delete_session\":\"true\"}}", "{\"revision\":1,\"enabled\":{\"update_material\":null}}",
                 "{\"revision\":1,\"enabled\":{\"delete_everything\":true}}"))
             assertThrows(IllegalArgumentException.class, () -> put(body), body);
         assertEquals(Map.of("delete_material", true), repository.read().values().overrides());
     }
-    @Test void unreadableOrForeignDocumentsNeverSwitchDeletionOn() {
-        jdbc.update("INSERT INTO ai_tool_settings(id,revision,document) VALUES(1,3,'not-json')");
-        assertEquals(AiToolSettings.DEFAULTS, repository.read().values());
-        jdbc.update("UPDATE ai_tool_settings SET document=?", "{\"enabled\":{\"delete_everything\":true,\"delete_session\":\"yes\",\"remove_wrong_question\":true}}");
+    @Test void olderDeletionChoicesSurviveAndNewOrdinaryToolsUseDefaults() {
+        jdbc.update("INSERT INTO ai_tool_settings(id,revision,document) VALUES(1,3,?)",
+                "{\"enabled\":{\"delete_material\":true,\"delete_memory\":false,\"future_tool\":true}}");
         var values = repository.read().values();
-        assertEquals(Map.of("remove_wrong_question", true), values.overrides());
+        assertEquals(Map.of("delete_material", true), values.overrides());
+        assertTrue(values.enabled("read_notebook")); assertTrue(values.enabled("send_message"));
+        assertFalse(values.enabled("delete_memory"));
         assertEquals(3, repository.read().revision());
+    }
+
+    @Test void damagedDocumentsAreReportedInsteadOfReenablingOrdinaryTools() {
+        jdbc.update("INSERT INTO ai_tool_settings(id,revision,document) VALUES(1,3,'not-json')");
+        for (String invalid : List.of("not-json", "null", "{}", "{\"enabled\":[]}",
+                "{\"enabled\":{\"read_notebook\":\"false\"}}", "{\"enabled\":{\"delete_session\":null}}")) {
+            jdbc.update("UPDATE ai_tool_settings SET document=?", invalid);
+            assertThrows(IllegalStateException.class, controller::get, invalid);
+            assertEquals(invalid, jdbc.queryForObject("SELECT document FROM ai_tool_settings", String.class));
+        }
     }
 }

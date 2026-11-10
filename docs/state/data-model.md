@@ -53,7 +53,7 @@
 | `ai_config` | 旧配置迁移源与其他用途配置 | `purpose` 主键；chat/import 迁移后由集合绑定解析；memory/embedding 仍使用原表 |
 | `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，主模型与可空导入模型绑定不复制配置 |
 | `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；不存在时读取默认值，保存按 revision 检查冲突，不随模型切换 |
-| `ai_tool_settings` | 全局工具开关（v17） | 单行 `id=1`、revision、document JSON；只存显式启用项，四个删除工具缺省关闭，保存检查版本冲突 |
+| `ai_tool_settings` | 全局工具开关（v17） | 单行 `id=1`、revision、document JSON；管理全部 20 个内置工具，只存与默认值不同的选择（非删除默认开，四个删除默认关）；缺项取默认，保存检查版本冲突，坏配置报错 |
 | `ai_chat_session` | 会话 | 标题、归档、模型、标签；v12 增加唯一 `session_ref`、`title_source`、`title_status`、`title_revision`，标题更新不推进聊天活动时间 |
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |

@@ -1,7 +1,9 @@
 .ai-tool-settings { max-width: 1040px; }
 .ai-tool-settings-description { color: var(--muted); line-height: 1.7; }
-.ai-tool-settings h3 { margin-top: 24px; font-size: 14px; }
-.ai-tool-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+.ai-tool-settings-group { margin: 28px 0; }
+.ai-tool-settings h3 { margin: 0 0 4px; font-size: 14px; }
+.ai-tool-settings-group-description { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.ai-tool-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .ai-tool-setting-row label { font-weight: 600; }
 .ai-tool-setting-row p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .ai-tool-setting-row .arco-switch { flex-shrink: 0; }
