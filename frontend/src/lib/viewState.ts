@@ -27,7 +27,7 @@ export type PageKey = PagePath extends `/${infer P}` ? P : never;
 
 export type PracticeTab = 'quiz' | 'memorize';
 export type MemorizeTarget = 'questions' | 'knowledge';
-export type SettingsTab = 'general' | 'ai' | 'ai-behavior' | 'memory' | 'embedding' | 'study' | 'data';
+export type SettingsTab = 'general' | 'ai' | 'ai-behavior' | 'tools' | 'memory' | 'embedding' | 'study' | 'data';
 
 /** id 勾选集合：`all` 是「整库全选」哨兵，避免把上万个 id 写进 localStorage。 */
 export interface IdSet {
@@ -112,7 +112,7 @@ const PAGE_KEYS: PageKey[] = ['notebooks', 'banks', 'wrong', 'knowledge', 'pract
 const PAGE_PATHS: PagePath[] = PAGE_KEYS.map((key) => `/${key}` as PagePath);
 const PRACTICE_TABS = ['quiz', 'memorize'];
 const MEMORIZE_TARGETS = ['questions', 'knowledge'];
-const SETTINGS_TABS = ['general', 'ai', 'ai-behavior', 'memory', 'embedding', 'study', 'data'];
+const SETTINGS_TABS = ['general', 'ai', 'ai-behavior', 'tools', 'memory', 'embedding', 'study', 'data'];
 const ROUTE_ALIASES: Record<string, PagePath> = { '/quiz': '/practice', '/memorize': '/practice' };
 
 export const MAX_IDS = 500;

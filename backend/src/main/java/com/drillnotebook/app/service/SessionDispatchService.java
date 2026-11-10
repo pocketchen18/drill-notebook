@@ -321,7 +321,8 @@ public class SessionDispatchService {
             body.put("input",Map.of("role","user","userText",message)); body.put("masterPassword",password);
             body.put("memoryOptions",Map.of("use",true));
             ensureRestored(r.sessionId());
-            var run = new Run(r,body,config,new SessionExecution(current.budget,lineage));
+            var execution=new SessionExecution(current.budget,lineage); execution.delegated=true;
+            var run = new Run(r,body,config,execution);
             run.toolDispatched = true;
             enqueue(run);
             return accepted(r,selector==null);

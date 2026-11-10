@@ -32,6 +32,12 @@ public record ChatContextPlan(String planId, long sessionId, long contextGenerat
                 revision, policyRevision, messages, notices, citations, audit);
     }
 
+    /** 本轮自己删除记忆后：库纪元推进、旧摘要检查点失效，计划快照跟随到新状态，已外发的内容不变。 */
+    public ChatContextPlan withMemorySnapshot(Long summary, Long epoch, Long revision) {
+        return new ChatContextPlan(planId, sessionId, contextGeneration, historyRevision, summary, epoch,
+                revision, policyRevision, messages, notices, citations, audit);
+    }
+
     /** 只改发送状态，不动内容与账本：发送前 not_sent，发出后 sent，读流出错按 unknown。 */
     public ChatContextPlan withDispatchState(String dispatchState) {
         return new ChatContextPlan(planId, sessionId, contextGeneration, historyRevision, summaryRevision,

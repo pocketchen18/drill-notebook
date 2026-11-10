@@ -20,6 +20,28 @@ class ToolActivityTest {
                 "{\"status\":\"CREATED\",\"sourceLink\":\"file:///C:/private\"}", 1).sourceLink());
     }
 
+    @Test void deletionActivitiesKeepOutcomeAndValidatedSourceButNoTitlesOrDeadSessionLinks() throws Exception {
+        var deleted = ToolActivity.started(1, "delete_material").finished("""
+                {"status":"DELETED","sourceLink":"drill-notebook://material/note/17",
+                 "items":[{"title":"PRIVATE","deleted":{"pages":3}}]}
+                """, 5);
+        assertEquals("DELETED", deleted.outcome()); assertEquals(1, deleted.count());
+        assertEquals("drill-notebook://material/note/17", deleted.sourceLink());
+        var removed = ToolActivity.started(2, "remove_wrong_question").finished(
+                "{\"status\":\"REMOVED\",\"sourceLink\":\"drill-notebook://material/question/4\",\"items\":[{\"title\":\"PRIVATE\"}]}", 3);
+        assertEquals("REMOVED", removed.outcome()); assertEquals(1, removed.count());
+        var session = ToolActivity.started(3, "delete_session").finished("{\"status\":\"DELETED\",\"items\":[{\"title\":\"PRIVATE\"}]}", 2);
+        assertNull(session.sessionLink()); assertEquals(1, session.count());
+        var memory = ToolActivity.started(4, "delete_memory").finished("{\"status\":\"DELETED\",\"memoryId\":\"PRIVATE\",\"items\":[]}", 2);
+        assertEquals("delete_memory", memory.toolName()); assertEquals(1, memory.count());
+        var meta = new ObjectMapper().writeValueAsString(Map.of("toolActivities", List.of(deleted, removed, session, memory)));
+        assertFalse(meta.contains("PRIVATE"));
+        assertEquals(List.of(deleted, removed, session, memory), ToolActivity.readMeta(meta, false));
+        for (String status : List.of("NOT_EMPTY", "IN_USE", "DISABLED"))
+            assertEquals(status, ToolActivity.started(1, "delete_material").finished("{\"status\":\"" + status + "\",\"items\":[]}", 1).outcome());
+        assertEquals(0, ToolActivity.started(1, "delete_material").finished("{\"status\":\"NOT_EMPTY\",\"items\":[]}", 1).count());
+    }
+
     @Test void sessionActivitiesKeepCountsButNeverExposeHistoryOrSessionIdentifiers() throws Exception {
         var read = ToolActivity.started(1, "read_session").finished("""
                 {"status":"OK","messages":[{"content":"PRIVATE","messageId":71}],

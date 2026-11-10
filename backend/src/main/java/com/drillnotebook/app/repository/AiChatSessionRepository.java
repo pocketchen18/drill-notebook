@@ -181,9 +181,15 @@ public class AiChatSessionRepository {
      * 再按实测把历史与附件字节、以及仍未结算的回复预留一并扣回账本，最后删行（§2.3）。
      */
     public void delete(long id) {
+        delete(id, connection -> null);
+    }
+
+    /** 在同一写事务内执行调用方的身份校验，避免查找之后目标或来源轮次已变化。 */
+    public void delete(long id, org.springframework.jdbc.core.ConnectionCallback<Void> guard) {
         try {
             ledger.ensureRebuiltInProcess();
             immediate.execute(connection -> {
+                guard.doInConnection(connection);
                 if (SessionDispatchRepository.busy(connection,id)) throw new com.drillnotebook.app.service.ChatTurnRejectException(
                         409,"SESSION_BUSY","会话有运行或待发送消息，请先停止",Map.of());
                 memory.purgeEvidence(connection, id, List.of(), List.of());

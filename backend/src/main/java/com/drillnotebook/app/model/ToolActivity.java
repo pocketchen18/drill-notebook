@@ -23,11 +23,13 @@ public record ToolActivity(int sequence, String toolName, String state, String o
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> TOOLS = Set.of("search_memories", "list_memories", "create_memory", "update_memory",
             "list_sessions", "read_session", "create_session", "send_message",
-            "read_current_page", "search_materials", "read_notebook", "read_knowledge", "read_question_bank", "read_wrong_questions", "create_material", "update_material");
+            "read_current_page", "search_materials", "read_notebook", "read_knowledge", "read_question_bank", "read_wrong_questions", "create_material", "update_material",
+            "delete_memory", "delete_session", "delete_material", "remove_wrong_question");
     private static final Set<String> OUTCOMES = Set.of("OK", "NO_MATCH", "CREATED", "UPDATED", "DUPLICATE",
             "NO_CHANGE", "UNAVAILABLE", "STALE", "LIMIT_REACHED", "INVALID_ARGUMENT", "NOT_FOUND",
             "AMBIGUOUS", "SUPPRESSED", "REJECTED", "UNKNOWN", "RESULT_TOO_LARGE", "CONTEXT_LIMIT", "REPEATED_CALL", "TIME_LIMIT",
-            "SENT", "QUEUED", "RUNNING", "CANCELLED", "CYCLE_BLOCKED", "ARCHIVED", "LOCKED", "CONFLICT", "DRAFT_UNSAVED");
+            "SENT", "QUEUED", "RUNNING", "CANCELLED", "CYCLE_BLOCKED", "ARCHIVED", "LOCKED", "CONFLICT", "DRAFT_UNSAVED",
+            "DELETED", "REMOVED", "NOT_EMPTY", "IN_USE", "DISABLED");
     private static final Set<String> AVAILABILITIES = Set.of("READY", "BUILDING", "LOCKED", "UNREADABLE", "TIMEOUT", "NOT_REQUESTED", "DENIED");
 
     public ToolActivity {
@@ -63,7 +65,7 @@ public record ToolActivity(int sequence, String toolName, String state, String o
                 returned = 0;
                 for (JsonNode message : result.path("messages")) if (message.has("content")) returned++;
             }
-            if ("CREATED".equals(status) || "UPDATED".equals(status)) returned = 1;
+            if (Set.of("CREATED", "UPDATED", "DELETED", "REMOVED").contains(status)) returned = 1;
             return new ToolActivity(sequence, toolName, "FINISHED", status, startedAt, durationMs, returned,
                     result.path("availability").asText(null), result.path("incomplete").asBoolean(false),
                     result.path("sessionLink").asText(null),result.path("requestId").asText(null),result.path("sourceLink").asText(null));

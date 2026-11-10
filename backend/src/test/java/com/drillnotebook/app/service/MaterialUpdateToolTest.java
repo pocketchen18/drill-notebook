@@ -220,7 +220,7 @@ class MaterialUpdateToolTest {
         jdbc.update("INSERT INTO ai_material_creation(request_id,operation_id,session_id,fingerprint,material_type,material_id) VALUES('request','old',1,'hash','note',1)");
         jdbc.execute("DROP TABLE ai_material_update"); jdbc.update("UPDATE schema_version SET version=15");
         new DatabaseInitializer(jdbc.getDataSource(),Schema9Fixture.resolver(root)).initialize();
-        assertEquals(16,jdbc.queryForObject("SELECT version FROM schema_version",Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(),jdbc.queryForObject("SELECT version FROM schema_version",Integer.class));
         assertEquals(1,count("ai_material_creation")); assertEquals(0,count("ai_material_update")); assertEquals(1,count("note_page"));
         assertEquals("导数",materials.detail("note",1).get("title"));
     }

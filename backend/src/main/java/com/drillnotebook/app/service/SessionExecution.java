@@ -17,6 +17,8 @@ final class SessionExecution {
         void received(List<Supplement> batch);
     }
     Steering steering;
+    /** 由会话工具派发而来的任务：不提供删除工具，删除只能出自用户直接提出的消息。 */
+    boolean delegated;
     String acceptedRequestId;
     SessionExecution(AiTurnBudget budget, Set<Long> ancestors) { this.budget = budget; this.ancestors = Set.copyOf(ancestors); }
 }

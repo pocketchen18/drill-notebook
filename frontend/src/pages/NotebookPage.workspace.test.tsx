@@ -21,6 +21,7 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { Message } from '@arco-design/web-react';
 import type { NotePage, Notebook } from '../lib/types';
 import { useUiStore } from '../stores/uiStore';
+import { refreshToolMutation } from '../lib/toolMutationEffects';
 
 const { apiGet, apiPost, apiPut, apiDel, apiFlush } = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -174,6 +175,33 @@ function renderNotebookPage(initialEntries: string[] = ['/notebooks'], queryClie
 // =====================================================================
 
 describe('NotebookPage behavior — baseline regression (Task 1)', () => {
+  it.each(['note', 'notebook'] as const)('工具删除 %s 后退出被删页并丢弃未保存草稿', async type => {
+    primeNotebookApi();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderNotebookPage(['/notebooks?pageId=11'], client);
+    await waitFor(() => expect(screen.getByTestId('notebook-editor')).toHaveAttribute('data-page-id', '11'));
+    fireEvent.click(screen.getByText('type-A'));
+    const originalGet = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/api/notebooks' && type === 'notebook') return Promise.resolve([]);
+      if (path === '/api/notebooks/1/pages') return Promise.resolve(type === 'note' ? [page37, page104] : []);
+      if (path === '/api/note-pages/11') return Promise.reject(new Error('deleted'));
+      return originalGet(path);
+    });
+    act(() => refreshToolMutation(client, { sequence: 1, toolName: 'delete_material', state: 'FINISHED', outcome: 'DELETED',
+      count: 1, startedAt: null, elapsedMs: 1, availability: null, incomplete: false,
+      sourceLink: `drill-notebook://material/${type}/${type === 'note' ? 11 : 1}` }));
+    await waitFor(() => {
+      if (type === 'note') expect(screen.getByTestId('notebook-editor')).toHaveAttribute('data-page-id', '37');
+      else expect(screen.queryByTestId('notebook-editor')).not.toBeInTheDocument();
+    });
+    fireEvent(window, new Event('pagehide'));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 450)); });
+    expect(apiPut.mock.calls.filter(([path]) => path === '/api/note-pages/11')).toHaveLength(0);
+    expect(apiFlush.mock.calls.filter(([path]) => path === '/api/note-pages/11')).toHaveLength(0);
+    expect(useUiStore.getState().pageContext.markdown).not.toContain('原-11');
+  });
+
   it('工具更新刷新已保存正文；草稿待保存、保存中和失败时都不被刷新覆盖', async () => {
     primeNotebookApi();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
