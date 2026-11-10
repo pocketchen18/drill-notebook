@@ -30,6 +30,7 @@ import { useUiStore } from '../stores/uiStore';
 import { ToolActivityGroup } from './ai-memory/ToolActivityGroup';
 import { mergeToolActivities, readToolActivities, settleToolActivities } from '../lib/toolActivity';
 import type { ToolActivity } from '../lib/toolActivity';
+import { isConfirmedToolMutation, refreshToolMutation } from '../lib/toolMutationEffects';
 import { useChatQueue } from '../hooks/useChatQueue';
 import { ChatQueue } from './ai-session/ChatQueue';
 import { splitReply } from '../lib/chatQueue';
@@ -304,24 +305,12 @@ export function AiAssistant(): JSX.Element {
   const refreshedMaterialCalls = useRef(new Set<string>());
   function refreshCreatedMaterials(requestId: string, activities: unknown): void {
     for (const row of readToolActivities(activities)) {
-      if (!['create_material', 'update_material'].includes(row.toolName) || row.state !== 'FINISHED'
-        || !['CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome)) continue;
+      if (!isConfirmedToolMutation(row)) continue;
       const key = `${requestId}:${row.sequence}`;
       if (refreshedMaterialCalls.current.has(key)) continue;
-      const target = row.sourceLink ? materialLinkTarget(row.sourceLink) : null;
-      if (!target) continue;
       refreshedMaterialCalls.current.add(key);
       if (refreshedMaterialCalls.current.size > 2400) refreshedMaterialCalls.current.delete(refreshedMaterialCalls.current.values().next().value!);
-      const keys = target.type === 'notebook' || target.type === 'note' ? ['notebooks', 'note-pages', 'ai-drawer-pages']
-        : target.type === 'knowledge' ? ['knowledge-points']
-          : target.type === 'bank' ? ['banks'] : ['banks', 'questions', 'knowledge-questions', 'wrong'];
-      // Refresh directories; NotebookPage guards body updates while a local draft is unsaved.
-      for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey: [queryKey] });
-      // NotebookPage accepts fresh server content only while no local save is pending.
-      if (row.toolName === 'update_material' && target.type === 'note') {
-        void queryClient.invalidateQueries({ queryKey: ['note-page', target.id] });
-        void queryClient.invalidateQueries({ queryKey: ['note-page-deep-link', target.id] });
-      }
+      refreshToolMutation(queryClient, row);
     }
   }
 

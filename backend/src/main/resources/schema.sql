@@ -721,3 +721,24 @@ CREATE TABLE IF NOT EXISTS ai_material_update (
     PRIMARY KEY (request_id, operation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_material_update_session ON ai_material_update(session_id);
+
+-- Deletion receipts retain identities and outcomes only, never titles or material content.
+CREATE TABLE IF NOT EXISTS ai_material_deletion (
+    request_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    material_type TEXT NOT NULL,
+    material_id INTEGER NOT NULL,
+    outcome TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (request_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_material_deletion_session ON ai_material_deletion(session_id);
+
+-- Global tool switches keep explicit choices only; absent entries use the built-in default.
+CREATE TABLE IF NOT EXISTS ai_tool_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,
+    document TEXT NOT NULL
+);

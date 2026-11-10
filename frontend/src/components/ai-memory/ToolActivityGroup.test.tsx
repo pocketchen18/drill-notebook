@@ -9,6 +9,28 @@ const started: ToolActivity = { sequence: 1, toolName: 'search_memories', state:
 const ended: ToolActivity = { ...started, state: 'FINISHED', outcome: 'OK', count: 2, elapsedMs: 620 };
 
 describe('工具活动折叠和真实结果', () => {
+  it('删除结果不再提供死链接，移出错题本仍能打开原题', () => {
+    const open = vi.fn();
+    const link = 'drill-notebook://material/note/12';
+    const rows = readToolActivities([
+      { ...ended, toolName: 'read_notebook', sourceLink: link },
+      { ...ended, sequence: 2, toolName: 'delete_material', outcome: 'DELETED', sourceLink: link, arguments: '不应展示' }
+    ]);
+    const view = render(<ToolActivityGroup activities={rows} onOpenMaterial={open} active />);
+    fireEvent.click(screen.getByRole('button', { name: /删除学习资料 已删除/ }));
+    fireEvent.click(screen.getByRole('button', { name: /读取笔记 本次读取/ }));
+    expect(screen.queryByRole('button', { name: '查看资料 ↗' })).not.toBeInTheDocument();
+    expect(screen.queryByText('不应展示')).not.toBeInTheDocument();
+    const removed = readToolActivities([{ ...ended, sequence: 2, toolName: 'remove_wrong_question', outcome: 'REMOVED', sourceLink: 'drill-notebook://material/question/12' }]);
+    view.rerender(<ToolActivityGroup activities={removed} onOpenMaterial={open} active />);
+    fireEvent.click(screen.getByRole('button', { name: '查看原题 ↗' }));
+    expect(open).toHaveBeenCalledWith('drill-notebook://material/question/12');
+    expect(toolResultText({ ...removed[0], outcome: 'DISABLED' })).toContain('未执行');
+    expect(toolResultText({ ...removed[0], outcome: 'NO_CHANGE' })).toBe('已不在错题本中');
+    view.rerender(<ToolActivityGroup activities={[{ ...removed[0], state: 'UNKNOWN' }]} active />);
+    expect(screen.getByText('部分删除结果未确认，请到对应列表核对。')).toBeVisible();
+  });
+
   it('修改资料展示独立结果、版本冲突和未保存草稿，安全来源不包含修改正文', () => {
     const open = vi.fn();
     const saved = readToolActivities([{ ...ended, toolName: 'update_material', outcome: 'UPDATED',

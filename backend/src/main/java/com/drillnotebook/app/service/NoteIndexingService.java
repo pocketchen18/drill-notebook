@@ -249,6 +249,9 @@ public class NoteIndexingService {
     @Transactional
     public void deletePage(long pageId) {
         deletePageIndex(pageId);
+        // 子页面改挂到被删页面的上级，不留下指向已删除页面的层级引用。
+        jdbc.update("UPDATE note_page SET parent_id = (SELECT parent_id FROM note_page WHERE id = ?) WHERE parent_id = ?",
+                pageId, pageId);
         jdbc.update("DELETE FROM note_page WHERE id = ?", pageId);
     }
 

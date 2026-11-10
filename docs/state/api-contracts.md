@@ -329,6 +329,30 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 成功返回 `{status,items:[{type,id,title,sourceLink,changedFields,changedSinceOperation,...所属信息}],sourceLink,incomplete:false}`；status 为 UPDATED / NO_CHANGE / DUPLICATE。后续变化可附 notice。失败为空 items、incomplete=true；状态包括 INVALID_ARGUMENT / NOT_FOUND / REJECTED / STALE / CANCELLED / CONFLICT / DRAFT_UNSAVED / UNAVAILABLE，UNAVAILABLE 表示保存结果待核对。
 - 活动显示「修改学习资料」和真实结果，只保存安全状态与来源链接，不记录修改正文。成功后刷新相关资料；笔记正文仅在无待保存、保存中或保存失败的本地草稿时采纳。自动保存及后台 keepalive 完成后更新草稿状态，避免已保存内容一直被误标为草稿。资料中的指令不能授权写入。
 
+#### 3.2.7 删除工具与开关（v0.7.3）
+
+四个工具默认关闭；仅在 v2、模型 tools 开启、对应全局开关开启且本轮不是其他会话派发的任务时提供。delete_memory 另受记忆开关与当前可见作用域约束。参数最多 4096 字节，拒绝未知字段、重复键、尾随内容及类型转换。
+
+| 工具 | 参数 | 结果与保护 |
+|---|---|---|
+| `delete_memory` | currentText，或 memoryId + expectedVersion，二选一 | 删除一条可见记忆；DELETED / NOT_FOUND / AMBIGUOUS / STALE；复用遗忘抑制、纪元推进与摘要失效 |
+| `delete_session` | session：准确本地会话链接或 32 位小写十六进制引用 | DELETED；不接受标题 / 数字 ID；自身与上游 CYCLE_BLOCKED，运行 / 排队目标 IN_USE，重复删除 NOT_FOUND |
+| `delete_material` | type=notebook/note/knowledge/bank/question、id、operationId、expectedVersion、cascade? | DELETED / DUPLICATE；读取版本冲突 CONFLICT；非空笔记本 / 题库需 cascade=true，否则 NOT_EMPTY 并返回 contains 数量 |
+| `remove_wrong_question` | questionId、operationId、expectedVersion | REMOVED / NO_CHANGE / DUPLICATE；保留原题与作答记录，再次答错按既有规则重新计入 |
+
+资料版本使用读取结果的 updateVersion，不用分页 version；operationId 和 expectedVersion 格式同修改工具。资料删除复用普通业务级联；笔记页的子页改挂到原上级。笔记本删除与其范围记忆清理同事务，当前会话绑定该本时 IN_USE。执行身份、轮次、版本与取消在写事务内核对，失败整体回滚。回执仅存身份与结果，重试不会再次操作；记忆 / 会话不新增回执。
+
+资料成功返回 `{status,items:[{type,id,title?,sourceLink,notebookId?|bankId?,deleted?}],sourceLink,incomplete:false}`，deleted 给出级联数量。会话成功只返回 `{status:"DELETED",items:[{title}],incomplete:false}`；记忆返回 status、可选 memoryId / availability。失败空 items，另有 INVALID_ARGUMENT / REJECTED / CANCELLED / DISABLED / UNAVAILABLE；UNAVAILABLE 表示结果未确认。仅本轮自己的已确认删除可以刷新计划的记忆版本，额外并发变更仍触发上下文变化。
+
+删除记忆活动刷新记忆列表，删除会话刷新会话列表与容量，资料删除刷新目录与关联学习记录。活动新增 DELETED / REMOVED / NOT_EMPTY / IN_USE / DISABLED；原始参数与内容不进入活动。已删资料的 sourceLink 仅用于缓存更新，不提供打开按钮；移出错题保留「查看原题」。笔记删除会丢弃本地草稿，并忽略迟到的保存结果与编辑器回声。
+
+| 方法 | 路径 | 契约 |
+|---|---|---|
+| GET | `/ai/tool-settings` | `{revision,tools:[{name,group:"delete",enabled,defaultEnabled:false}]}`，四个工具顺序同上 |
+| PUT | `/ai/tool-settings` | `{revision,enabled:{<name>:boolean}}`，部分更新，返回同形快照；未知名称 / 非布尔值 400，版本冲突 409 AI_SETTINGS_CONFLICT |
+
+全局开关不跟随模型，设置面板即点即存；恢复默认将四项全部关闭。开启从下一轮生效，关闭在执行前再次复核，未执行的调用返回 DISABLED。无记录或读取失败时删除保持关闭；工具被禁用或本轮为派发任务时向模型说明原因，不允许用清空 / 修改冒充删除。其余工具与搜索配置尚未开放。
+
 ### 3.3 轮次状态与上下文
 
 | 方法 | 路径 | 用途 |

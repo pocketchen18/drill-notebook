@@ -12,6 +12,7 @@ export class NoteAutosave {
   private server = new Map<number, string>();
   private saving = new Map<number, Set<AutosavePayload>>();
   private failed = new Set<number>();
+  private discarded = new Set<number>();
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -22,6 +23,7 @@ export class NoteAutosave {
 
   /** 服务端快照到达：记录基线，用于识别编辑器 setContent 重置产生的回声。 */
   noteServer(pageId: number, content: Record<string, unknown>): void {
+    if (this.discarded.has(pageId)) return;
     this.server.set(pageId, JSON.stringify(content));
   }
 
@@ -31,6 +33,7 @@ export class NoteAutosave {
 
   /** 编辑器内容变化：绑定 pageId 记为待保存；与服务端基线完全相同则视为回声，取消该页待保存。 */
   change(pageId: number, content: Record<string, unknown>): void {
+    if (this.discarded.has(pageId)) return;
     const json = JSON.stringify(content);
     if (this.server.get(pageId) === json) {
       this.pending.delete(pageId);
@@ -61,9 +64,10 @@ export class NoteAutosave {
       try { request = Promise.resolve(send(payload)); }
       catch (error) { request = Promise.reject(error); }
       void request.then(() => {
+        if (this.discarded.has(payload.pageId)) return;
         this.server.set(payload.pageId, JSON.stringify(payload.content));
         this.failed.delete(payload.pageId);
-      }, () => { this.failed.add(payload.pageId); }).finally(() => {
+      }, () => { if (!this.discarded.has(payload.pageId)) this.failed.add(payload.pageId); }).finally(() => {
         saves.delete(payload);
         if (!saves.size) this.saving.delete(payload.pageId);
         this.onSettled();
@@ -73,8 +77,11 @@ export class NoteAutosave {
 
   /** 页面/笔记本删除后丢弃其待保存草稿，避免向已删除资源发 PUT。 */
   discard(pageId: number): void {
+    this.discarded.add(pageId);
     this.pending.delete(pageId);
     this.failed.delete(pageId);
+    this.server.delete(pageId);
+    this.saving.delete(pageId);
   }
 
   private schedule(): void {

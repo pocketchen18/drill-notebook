@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronRight, CircleMinus, LoaderCircle, TriangleAlert } from 'lucide-react';
-import { TOOL_NAMES, toolDuration, toolGroupTitle, toolResultText, toolStartedAt, toolTone } from '../../lib/toolActivity';
+import { TOOL_NAMES, isDeletionTool, toolDuration, toolGroupTitle, toolResultText, toolStartedAt, toolTone } from '../../lib/toolActivity';
 import type { ToolActivity, ToolPhase } from '../../lib/toolActivity';
 
 interface Props {
@@ -43,6 +43,9 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
   const unknownWrite = activities.some((row) => row.state === 'UNKNOWN' && ['create_memory', 'update_memory'].includes(row.toolName));
   const unknownDispatch = activities.some((row) => row.state === 'UNKNOWN' && ['create_session', 'send_message'].includes(row.toolName));
   const unknownMaterial = activities.some((row) => ['create_material', 'update_material'].includes(row.toolName) && (row.state === 'UNKNOWN' || row.outcome === 'UNAVAILABLE'));
+  const unknownDeletion = activities.some(row => isDeletionTool(row.toolName) && (row.state === 'UNKNOWN' || row.outcome === 'UNAVAILABLE'));
+  const deletedLinks = new Set(activities.filter(row => row.toolName === 'delete_material' && row.state === 'FINISHED'
+    && ['DELETED', 'DUPLICATE'].includes(row.outcome)).map(row => row.sourceLink));
   const tone = running ? 'running' : warning ? 'warning' : activities.some((row) => toolTone(row) === 'success') ? 'success' : 'neutral';
   const toggle = (button: HTMLButtonElement, change: () => void): void => {
     onDisclosure?.();
@@ -85,19 +88,20 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
           <dl id={`${id}-${row.sequence}`} className="ai-tool-details" hidden={!details.has(row.sequence)}>
             <dt>开始时间</dt><dd>{toolStartedAt(row.startedAt)}</dd>
             <dt>执行耗时</dt><dd>{duration(row)}</dd>
-            <dt>{['create_memory', 'update_memory', 'create_session', 'send_message', 'create_material', 'update_material'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
-            <dd>{['list_sessions', 'read_session', 'create_session', 'send_message'].includes(row.toolName) ? '当前本地数据中的会话'
-              : ['create_material', 'update_material', 'search_materials', 'read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName) ? '当前本地学习资料' : '当前有权访问的记忆'}</dd>
-            <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete && !['list_sessions', 'read_session'].includes(row.toolName) ? '（部分结果）' : ''}</dd>
+            <dt>{isDeletionTool(row.toolName) || ['create_memory', 'update_memory', 'create_session', 'send_message', 'create_material', 'update_material'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
+            <dd>{['list_sessions', 'read_session', 'create_session', 'send_message', 'delete_session'].includes(row.toolName) ? '当前本地数据中的会话'
+              : ['create_material', 'update_material', 'delete_material', 'remove_wrong_question', 'search_materials', 'read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName) ? '当前本地学习资料' : '当前有权访问的记忆'}</dd>
+            <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete && !isDeletionTool(row.toolName) && !['list_sessions', 'read_session'].includes(row.toolName) ? '（部分结果）' : ''}</dd>
             <dt>工具名称</dt><dd><code>{row.toolName}</code></dd>
-            {row.sessionLink && onOpenSession ? <><dt>目标会话</dt><dd><button type="button" onClick={() => onOpenSession(row.sessionLink!)}>打开会话 ↗</button></dd></> : null}
-            {row.sourceLink && onOpenMaterial ? <><dt>保存位置</dt><dd><button type="button" onClick={() => onOpenMaterial(row.sourceLink!)}>查看资料 ↗</button></dd></> : null}
+            {row.sessionLink && row.toolName !== 'delete_session' && onOpenSession ? <><dt>目标会话</dt><dd><button type="button" onClick={() => onOpenSession(row.sessionLink!)}>打开会话 ↗</button></dd></> : null}
+            {row.sourceLink && row.toolName !== 'delete_material' && !deletedLinks.has(row.sourceLink) && onOpenMaterial ? <><dt>{row.toolName === 'remove_wrong_question' ? '原题' : '保存位置'}</dt><dd><button type="button" onClick={() => onOpenMaterial(row.sourceLink!)}>{row.toolName === 'remove_wrong_question' ? '查看原题' : '查看资料'} ↗</button></dd></> : null}
           </dl>
         </li>)}
       </ol>
       {unknownWrite ? <p className="ai-tool-note">部分写入结果未确认，可到记忆库核对。{written ? '已确认的变更已保留。' : ''}</p> : null}
       {unknownDispatch ? <p className="ai-tool-note">部分消息是否已提交尚未确认，可到会话列表核对。</p> : null}
       {unknownMaterial ? <p className="ai-tool-note">部分资料是否已保存尚未确认，可从资料目录核对。已确认的保存仍然有效。</p> : null}
+      {unknownDeletion ? <p className="ai-tool-note">部分删除结果未确认，请到对应列表核对。</p> : null}
     </div>
     {active && phase === 'answer' && !running ? <div className="ai-tool-answer" role="status">正在生成回答…</div> : null}
   </section>;

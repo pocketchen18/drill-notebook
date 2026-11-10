@@ -68,6 +68,22 @@ describe('NoteAutosave', () => {
     expect(send).toHaveBeenCalledWith({ pageId: 37, content: doc('B') });
   });
 
+  it('删除后迟到的保存失败和编辑器回声不能恢复旧草稿', async () => {
+    let reject!: (reason: Error) => void;
+    const send = vi.fn(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const autosave = new NoteAutosave(send);
+    autosave.change(11, doc('已发出的内容'));
+    autosave.flush();
+    autosave.discard(11);
+    reject(new Error('page deleted'));
+    await vi.advanceTimersByTimeAsync(0);
+    autosave.change(11, doc('迟到的编辑器回声'));
+    autosave.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(autosave.hasPendingFor(11)).toBe(false);
+    expect(autosave.take()).toEqual([]);
+  });
+
   it('successful send refreshes the server baseline so later echoes stay silent', async () => {
     const send = vi.fn().mockResolvedValue({});
     const autosave = new NoteAutosave(send);

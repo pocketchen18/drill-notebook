@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**16**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**17**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -44,7 +44,7 @@
 
 人工加入错题以该题最后一条真实 answer_record.id 为基线，从未作答为 0，旧题为 NULL。成员须未被人工移出，且曾答错或被人工加入；最近答错 / 人工加入两者较新的基线之后，连续答对未满两次。重复加入当前成员不重置进度，不生成答题记录；统计仍来自真实作答。
 
-## 4. AI 配置、会话、记忆与用量域（schema v9–v16）
+## 4. AI 配置、会话、记忆与用量域（schema v9–v17）
 
 ### 4.1 配置与会话
 
@@ -53,6 +53,7 @@
 | `ai_config` | 旧配置迁移源与其他用途配置 | `purpose` 主键；chat/import 迁移后由集合绑定解析；memory/embedding 仍使用原表 |
 | `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，主模型与可空导入模型绑定不复制配置 |
 | `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；不存在时读取默认值，保存按 revision 检查冲突，不随模型切换 |
+| `ai_tool_settings` | 全局工具开关（v17） | 单行 `id=1`、revision、document JSON；只存显式启用项，四个删除工具缺省关闭，保存检查版本冲突 |
 | `ai_chat_session` | 会话 | 标题、归档、模型、标签；v12 增加唯一 `session_ref`、`title_source`、`title_status`、`title_revision`，标题更新不推进聊天活动时间 |
 | `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
@@ -62,6 +63,7 @@
 | `ai_chat_attachment` | 轮次附件 | `TEXT` / `IMAGE` 密文；`byte_length` 校验 |
 | `ai_material_creation` | 资料新增回执（v15） | `(request_id,operation_id)` 主键；session_id 级联删除；参数指纹、类型、已提交对象 ID，不保存标题或正文 |
 | `ai_material_update` | 资料修改回执（v16） | `(request_id,operation_id)` 主键；session_id 级联删除；输入指纹、目标类型 / ID、提交后版本和结果，不保存修改正文 |
+| `ai_material_deletion` | 资料删除 / 错题移出回执（v17） | `(request_id,operation_id)` 主键；session_id 级联删除；fingerprint、material_type、material_id、outcome、created_at；不保存标题或正文 |
 
 资料回执与业务写入、笔记检索条目在同一事务内提交。会话删除只清回执，普通资料继续保留；不对资料 ID 设置级联外键，删除资料后仍保留回执以拒绝重复重建。更新版本来自完整业务字段摘要，不单用更新时间；同请求及显式重试链只复用原结果，不重复追加或覆盖操作后的人工修改。旧配置中的 maxInputTokens 不再参与预算，模型窗口 / 最大输出须显式配置，缺值不通过迁移猜测补齐。
 
@@ -120,9 +122,11 @@ v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memori
 
 工具循环的每次上游请求按 `ai_usage_attempt` 单独结算，供应商缺少 usage 时按未知记账。工具结果发送给模型后已包含在上游输入用量内，不另重复计费；原始工具结果不写入会话历史。结果元数据原文上限 512 KiB，单轮回复容量预留 3 MiB，包含正文、思考与加密开销；检查点已用字节在最终结算时扣除，避免双计。
 
+删除回执与业务删除、关联清理及笔记本范围记忆清理同事务提交；失败整体回滚。重复调用或显式重试链只返回原操作已处理，不重复删除。记忆与会话删除不建新回执，重复调用按目标不存在返回。删除会话保留长期记忆原类型并断开来源；移出错题不删除原题与作答记录。
+
 ## 5. 版本与迁移
 
-- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`，v15 增加资料新增回执与人工错题基线，v16 增加资料修改回执。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
+- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`，v15 增加资料新增回执与人工错题基线，v16 增加资料修改回执，v17 增加删除回执与工具开关。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
 - `AiConnectionsStore` 在首次管理读取时幂等迁移旧 chat/import，保留密文与参数；旧表保留为迁移源，已迁移的用途写入统一走连接接口。全局预算不由模型参数迁移，不创建重复的每模型副本。
 - 旧备份缺列时按兼容路径读取；恢复流程在换库前做 staged 校验，换库后执行安全事务（重置记忆启用/同意指纹、推进 vault epoch 与会话 generation、处理 RUNNING turn 与活动 job）。
 - 修改表结构时同步更新本文与 `schema.sql`，并补迁移测试；数据模型属于状态文档，不写未落地的计划字段。

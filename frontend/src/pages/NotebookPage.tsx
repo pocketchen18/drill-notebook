@@ -21,6 +21,7 @@ import { useIdSwitchReset, usePersistSlice } from '../hooks/useViewState';
 import { readPageSlice } from '../lib/viewState';
 import { matchesAny } from '../lib/shortcuts';
 import { NoteAutosave } from '../lib/noteAutosave';
+import { onMaterialDeleted } from '../lib/materialEvents';
 
 /** 页面标题的两个改名入口：左侧列表行 vs 编辑区标题。任一时刻只有一个在编辑。 */
 type PageRenameSurface = 'list' | 'header';
@@ -55,6 +56,8 @@ export function NotebookPage(): JSX.Element {
   // 切页窗口期会把旧页内容 PUT 到新页，切后台 flush 时尤其明显）。
   const [draft, setDraft] = useState<{ pageId: number; content: Record<string, unknown> } | null>(null);
   const draftsRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const pageNotebooksRef = useRef(new Map<number, number>());
+  const deletedPagesRef = useRef(new Set<number>());
   const [saveRevision, setSaveRevision] = useState(0);
   const autosaveRef = useRef<NoteAutosave | null>(null);
   if (!autosaveRef.current) {
@@ -84,6 +87,26 @@ export function NotebookPage(): JSX.Element {
     queryFn: () => get<NotePage>(`/api/note-pages/${pageIdFromQuery}`),
     enabled: pageIdFromQuery !== undefined
   });
+  useEffect(() => onMaterialDeleted(event => {
+    const removed = new Set<number>();
+    if (event.type === 'note') removed.add(event.id);
+    else {
+      for (const [id, book] of pageNotebooksRef.current) if (book === event.id) removed.add(id);
+      for (const page of pagesQuery.data ?? []) if (page.notebookId === event.id) removed.add(page.id);
+    }
+    for (const id of removed) {
+      deletedPagesRef.current.add(id);
+      autosaveRef.current?.discard(id);
+      draftsRef.current.delete(id);
+      pageNotebooksRef.current.delete(id);
+    }
+    setDraft(value => value && removed.has(value.pageId) ? null : value);
+    setSelectedPageIds(ids => ids.filter(id => !removed.has(id)));
+    if (pageId !== undefined && removed.has(pageId)) { setPageId(undefined); cancelPageRename(); }
+    if (event.type === 'notebook' && notebookId === event.id) {
+      setPageId(undefined); setNotebookId(undefined); cancelNotebookRename();
+    }
+  }), [notebookId, pageId, pagesQuery.data]);
 
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['notebooks'] });
@@ -325,7 +348,8 @@ export function NotebookPage(): JSX.Element {
   // 服务端快照到达：记基线并采纳为草稿；本页还有未落库编辑时保留草稿（服务端快照旧于它）。
   useEffect(() => {
     const data = pageQuery.data;
-    if (!data) return;
+    if (!data || deletedPagesRef.current.has(data.id)) return;
+    pageNotebooksRef.current.set(data.id, data.notebookId);
     const autosave = autosaveRef.current;
     if (!autosave) return;
     if (autosave.hasPendingFor(data.id)) return;
@@ -335,7 +359,7 @@ export function NotebookPage(): JSX.Element {
   }, [pageQuery.data]);
   // 编辑器回传：草稿入 Map + 触发重渲染（AI 上下文/导出用），并交给协调器防抖落库。
   const handleEditorChange = (content: Record<string, unknown>): void => {
-    if (pageId === undefined) return;
+    if (pageId === undefined || deletedPagesRef.current.has(pageId)) return;
     draftsRef.current.set(pageId, content);
     setDraft({ pageId, content });
     autosaveRef.current?.change(pageId, content);

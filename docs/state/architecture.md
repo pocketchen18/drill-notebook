@@ -48,7 +48,7 @@ v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右�
 
 会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；会话列表每 1.5 秒刷新以发现后台新会话和标题变化，自动标题不进入聊天正文或工具活动，也不使用聊天运行圆环。
 
-跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行四个记忆工具、四个会话工具、六个资料读取工具及资料新增 / 修改两个工具，`MemoryTool` 子接口仍受记忆开关控制。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
+跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行五个记忆工具、五个会话工具、六个资料读取工具及资料新增 / 修改 / 删除 / 错题移出四个工具，`MemoryTool` 子接口仍受记忆开关控制。四个删除工具另由全局开关与派发来源过滤，默认关闭。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
 
 `useAiChatTurn` 按 sessionId 跟踪请求，每 900ms 查询运行快照；SSE 负责当前本地发送的增量，快照恢复切换、外部工具启动和断线后的正文。每个会话独立保存本次前端生命周期内的草稿、附件与阅读位置。忙碌时普通发送进入队列，`useChatQueue` 与 `ChatQueue` 管理贴边待发区、编辑、移除撤销、暂停继续和插话；输入草稿与待发项隔离。运行圆环、暂停、待发送数量和停止均按目标会话展示，临时失联显示重连状态。
 
@@ -90,7 +90,7 @@ v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右�
 | AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-当前 schema 16，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+当前 schema 17，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
 
 ### 3.1 AI 连接、轮次与工具（v0.7.1）
 
@@ -99,6 +99,7 @@ v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右�
 - 模型发现与验证使用后端代理；最多三个模型并发验证，各模型的文本、图片与工具请求分别记录。文本决定是否加入，工具验证成功才自动开启对应能力。配置版本用于避免旧验证覆盖后续编辑。
 - 对话工具循环按阶段、执行次数、输出额度、单请求/整轮期限和重复无进展共同约束；达限停止新工具并尽量总结。上游请求可取消，SSE 有心跳；正文与活动独立传递，「继续」建立新一轮。
 - 活动按 `requestId` 与轮内 `sequence` 关联，服务端只发白名单摘要，不暴露上游调用 ID；原始参数与工具结果不入 SSE、日志或历史。安全活动元数据随助手消息加密持久化，检查点不推进 `history_revision`，避免使本轮冻结计划失效。
+- `AiToolSettingsRepository` 持久化全局删除开关；`AiService` 在轮次开始过滤，在执行前重新读取防止已关闭项继续运行。工具派发通过 `SessionExecution.delegated` 禁用删除能力。`AiToolSettingsPanel` 提供「工具」Tab 的即存开关、失败回退与恢复默认，其他工具和搜索设置尚未开放。
 - 前端连接页使用供应商/模型列表与二级编辑页；`ToolActivityGroup` 展示、折叠活动，保留用户手动选择和滚动位置。失败轮次提示归属助手回复；正文流式更新不强制打断向上阅读。
 - 记忆词法索引以 vault、epoch、revision 判定是否可复用，同版本构建合并、解锁时异步预热；聊天模型不参与索引身份。实际记忆变更或重启后的预热仍可能需要时间，不承诺零延迟。
 - 删除来源会话/历史只清理来源证据，长期记忆及原 origin 保留；删除笔记本仍清理所属 NOTEBOOK scope。接口与安全边界见 [api-contracts.md](api-contracts.md)。
@@ -116,6 +117,8 @@ v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右�
 - `MaterialReadTools` 注册六个独立 `ChatTool`，由 `MaterialReadService` 处理严格参数、资料归属、分页与正文版本；`MaterialReadRepository` 对现有业务表作有界只读查询。笔记关键词复用 `retrieval_chunk` 文本进行 LIKE 匹配，不新增表、索引或语义检索。
 - `MaterialCreateTool` 由 `MaterialCreateService` 处理六种新增类型。复用普通仓储与 `NoteIndexingService`；预占回执取得 SQLite 写锁后校验来源轮次，业务写入、索引和回执同事务提交。重试复用结果，参数改变拒绝，取消或错误回滚；保存结果未知不假称失败。
 - `MaterialUpdateTool` → `MaterialUpdateService` 在写事务中核对 `MaterialVersion` 完整业务摘要，复用仓储更新及独立修改回执。部分字段更新不清空其余字段，题目只写提供的列；重复调用和显式重试不覆盖后续编辑。`MaterialNoteEdits` 原位精确替换文本或追加 Markdown，保留富文本和附件节点，不做整页转换；知识点保留原文 / 总结，错题修改原题但不动统计。
+- `MaterialDeleteService` 承接资料删除与错题移出，复用普通级联和同事务回执；非空容器需显式 cascade，当前会话绑定的笔记本不可删。`MemoryDeleteTool` 复用遗忘抑制与纪元推进，自己的已确认变更可更新计划，额外并发变更仍会阻止旧计划继续。`SessionDeleteTool` 在同一写事务内核对真实来源轮次与目标状态，保留长期记忆并清理来源证据。
+- `toolMutationEffects` 从本次运行的安全活动刷新目录，笔记删除先通过 `materialEvents` 同步通知 `NotebookPage` 丢弃草稿，再清除缓存。`NoteAutosave` 忽略已删页面的迟到结果和回声。历史活动不重放删除；已删对象不显示打开入口，错题移出仍可查看原题。
 - 人工错题仅记录真实作答基线，普通错题页与读取工具共享成员 SQL，不生成虚假答题。前端成功活动刷新相关资料、提供「查看资料」。笔记正文刷新由 `NoteAutosave` 的待保存、在途和失败状态保护，普通自动保存与后台 keepalive 都跟踪到结果，并及时刷新提交快照的 isDraft，避免已保存内容一直被误判为草稿。
 - `MaterialText` 将指定笔记页的 TipTap 数据转为可读正文，保留公式及嵌入题目 / 文件引用，不改变既有 `NoteNormalizer` 的索引规则。知识点当前、原文、总结分别读取；错题成员 SQL 与人工页面共用，统计来自真实答题记录。
 - `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
