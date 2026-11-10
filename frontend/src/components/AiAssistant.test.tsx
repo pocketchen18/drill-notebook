@@ -263,6 +263,26 @@ describe('AiAssistant v2 请求组装（按需读取页面）', () => {
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/notebooks?pageId=12'));
   });
 
+  it('资料修改活动只使目标笔记正文失效，保留其他笔记缓存并支持来源跳转', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['note-pages', 7], []);
+    client.setQueryData(['note-page', 12], { content: '目标旧正文' });
+    client.setQueryData(['note-page', 13], { content: '另一笔记正文' });
+    apiPost.mockImplementation((url: string) => Promise.resolve(url === '/api/ai/chat' ? {
+      reply: '已修改', sessionId: 10, toolActivities: [{ sequence: 1, toolName: 'update_material', state: 'FINISHED', outcome: 'UPDATED',
+        count: 1, sourceLink: 'drill-notebook://material/note/12', incomplete: false }]
+    } : {}));
+    renderAssistant(client);
+    await typeAndSend('追加到这页笔记');
+    fireEvent.click(await screen.findByRole('button', { name: /已更新学习资料/ }));
+    fireEvent.click(screen.getByRole('button', { name: /修改学习资料 已更新/ }));
+    await waitFor(() => expect(client.getQueryState(['note-page', 12])?.isInvalidated).toBe(true));
+    expect(client.getQueryState(['note-pages', 7])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(['note-page', 13])?.isInvalidated).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: '查看资料 ↗' }));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/notebooks?pageId=12'));
+  });
+
   it('citation 点击深链到 /notebooks?pageId=', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/ai/chat') {

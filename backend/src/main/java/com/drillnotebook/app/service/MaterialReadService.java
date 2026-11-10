@@ -64,6 +64,7 @@ public class MaterialReadService {
                     row.putAll(stats(matches.get(0))); type = "wrong";
                 }
                 String content;
+                String updateVersion = MaterialVersion.of(type, row);
                 if ("note".equals(type)) content = text.note(Objects.toString(row.remove("content"), ""));
                 else if ("knowledge".equals(type)) {
                     String variant = string(args, "variant", "current", 10);
@@ -72,12 +73,14 @@ public class MaterialReadService {
                     content = "current".equals(variant) ? current : materials.knowledgeVersion(detailId, variant);
                     if (content == null) return error("NOT_FOUND");
                     row.put("variant", variant);
+                    if (!"current".equals(variant)) updateVersion = null;
                 } else {
                     content = text.question(row);
                     row.put("title", clip(Objects.toString(row.get("stem"), ""), 200));
                     row.keySet().removeAll(Set.of("stem", "options", "answer", "analysis"));
                 }
                 row.put("type", type); row.put("sourceLink", link(type, detailId));
+                if (updateVersion != null) row.put("updateVersion", updateVersion);
                 return content(row, content, offset, maxChars, version, false);
             }
             if (args.has("maxChars") || args.has("version") || args.has("variant")) throw new IllegalArgumentException();
@@ -104,6 +107,17 @@ public class MaterialReadService {
             var result = new LinkedHashMap<String, Object>();
             result.put("status", items.isEmpty() ? "NO_MATCH" : "OK"); result.put("items", items);
             result.put("offset", offset); result.put("hasMore", more); result.put("incomplete", more);
+            if ("read_notebook".equals(name) && notebook != null || "read_question_bank".equals(name) && bank != null) {
+                String containerType = notebook != null ? "notebook" : "bank";
+                long containerId = notebook != null ? notebook : bank;
+                var container = materials.detail(containerType, containerId);
+                if (container == null) return error("NOT_FOUND");
+                container.put("updateVersion", MaterialVersion.of(containerType, container));
+                container.put("type", containerType); container.put("sourceLink", link(containerType, containerId));
+                container.put("truncated", container.values().stream().anyMatch(v -> v instanceof String s && s.codePointCount(0, s.length()) > 2000));
+                container.replaceAll((k,v) -> v instanceof String s ? clip(s, 2000) : v);
+                result.put("container", container);
+            }
             if (more) result.put("nextOffset", offset + items.size());
             return result;
         } catch (IllegalArgumentException error) { return error("INVALID_ARGUMENT"); }

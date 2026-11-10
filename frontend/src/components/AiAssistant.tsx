@@ -304,8 +304,8 @@ export function AiAssistant(): JSX.Element {
   const refreshedMaterialCalls = useRef(new Set<string>());
   function refreshCreatedMaterials(requestId: string, activities: unknown): void {
     for (const row of readToolActivities(activities)) {
-      if (row.toolName !== 'create_material' || row.state !== 'FINISHED'
-        || !['CREATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome)) continue;
+      if (!['create_material', 'update_material'].includes(row.toolName) || row.state !== 'FINISHED'
+        || !['CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome)) continue;
       const key = `${requestId}:${row.sequence}`;
       if (refreshedMaterialCalls.current.has(key)) continue;
       const target = row.sourceLink ? materialLinkTarget(row.sourceLink) : null;
@@ -315,8 +315,13 @@ export function AiAssistant(): JSX.Element {
       const keys = target.type === 'notebook' || target.type === 'note' ? ['notebooks', 'note-pages', 'ai-drawer-pages']
         : target.type === 'knowledge' ? ['knowledge-points']
           : target.type === 'bank' ? ['banks'] : ['banks', 'questions', 'knowledge-questions', 'wrong'];
-      // Only invalidate directories; never overwrite an existing page's unsaved editor draft.
+      // Refresh directories; NotebookPage guards body updates while a local draft is unsaved.
       for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey: [queryKey] });
+      // NotebookPage accepts fresh server content only while no local save is pending.
+      if (row.toolName === 'update_material' && target.type === 'note') {
+        void queryClient.invalidateQueries({ queryKey: ['note-page', target.id] });
+        void queryClient.invalidateQueries({ queryKey: ['note-page-deep-link', target.id] });
+      }
     }
   }
 

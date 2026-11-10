@@ -109,15 +109,12 @@ export function postForm<T>(path: string, form: FormData): Promise<T> {
  * 兜底冲刷：在 beforeunload / 页面隐藏时把未保存内容尽力送达。
  * keepalive 让请求脱离页面生命周期交给网络栈，窗口关闭后仍有机会完成（尽力而为，非可靠传输）。
  */
-export function flushRequest(path: string, body: unknown): void {
-  void baseUrl()
-    .then((base) => {
-      void fetch(`${base}${path}`, {
-        method: 'PUT',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        keepalive: true
-      }).catch(() => undefined);
-    })
-    .catch(() => undefined);
+export async function flushRequest(path: string, body: unknown): Promise<void> {
+  const response = await fetch(`${await baseUrl()}${path}`, {
+    method: 'PUT',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    keepalive: true
+  });
+  if (!response.ok) throw new ApiError('save_failed', '笔记保存失败，请稍后重试', response.status);
 }

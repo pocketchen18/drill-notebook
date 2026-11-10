@@ -83,7 +83,23 @@ public class QuestionRepository {
         String chapter = body.containsKey("chapter") ? text(body.get("chapter")) : current.chapter;
         String groupId = body.containsKey("groupId") ? text(body.get("groupId")) : current.groupId;
         Integer orderInGroup = body.containsKey("orderInGroup") ? integer(body.get("orderInGroup")) : current.orderInGroup;
-        jdbc.update("UPDATE question SET type = ?, stem = ?, options = ?, answer = ?, analysis = ?, difficulty = ?, tags = ?, chapter = ?, group_id = ?, order_in_group = ? WHERE id = ?", type, stem, options, answer, analysis, difficulty, tags, chapter, groupId, orderInGroup, id);
+        // Validate the merged question, but persist only supplied fields. In particular, an
+        // analysis-only edit must not normalize old answers or fill a previously unset difficulty.
+        Map<String,Object> changed = new LinkedHashMap<>();
+        if (body.get("type") != null) changed.put("type", type);
+        if (body.get("stem") != null) changed.put("stem", stem);
+        if (body.get("options") != null) changed.put("options", options);
+        if (body.get("answer") != null) changed.put("answer", answer);
+        if (body.get("analysis") != null) changed.put("analysis", analysis);
+        if (body.get("difficulty") != null) changed.put("difficulty", difficulty);
+        if (body.get("tags") != null) changed.put("tags", tags);
+        if (body.containsKey("chapter")) changed.put("chapter", chapter);
+        if (body.containsKey("groupId")) changed.put("group_id", groupId);
+        if (body.containsKey("orderInGroup")) changed.put("order_in_group", orderInGroup);
+        if (changed.isEmpty()) return;
+        List<Object> parameters = new ArrayList<>(changed.values()); parameters.add(id);
+        jdbc.update("UPDATE question SET " + changed.keySet().stream().map(column -> column + " = ?").collect(Collectors.joining(","))
+                + " WHERE id = ?", parameters.toArray());
         rebuildFts();
     }
 

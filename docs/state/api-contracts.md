@@ -283,6 +283,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 - 目录参数 `query?` 最多 200 码点、`offset?` 默认 0、`limit?` 默认 10 / 最大 20。返回 `{status,items,offset,hasMore,nextOffset?,incomplete}`；条目含 `type/id/title/parentId/parentTitle/parentPageId/snippet/sourceLink`，各字段可为空。笔记 `parentId` 是所属笔记本，`parentPageId` 是页面树父节点。错题额外返回 `attemptCount/wrongCount/errorRate`（0–1），沿用业务错题成员规则，不伪造统计。
 - 正文使用 `offset?`、`maxChars?`（默认 4000 / 最大 8000 Unicode 码点）、`version?`；不接受 query/limit。返回单条 items，含定位字段、`text/version/offset/endOffset/totalChars`，顶层含 `version/hasMore/nextOffset?/incomplete`。offset > 0 必须带上次 version；版本变化返回 STALE，重新从 0 读取。目录不接受 maxChars/version/variant。offset 范围为 0–10,000,000。
+- 已保存的笔记、知识点 current、题目 / 错题正文额外返回 `updateVersion`，用于 §3.2.6 更新校验，与分页 `version` 区分。知识点 original / summary 与页面快照不提供更新版本。指定 notebookId / bankId 的目录返回 `container:{type,id,title,description?,sourceLink,updateVersion,truncated}`，即使目录为空也可取得容器信息；容器文本最多 2000 码点。
 - 笔记正文关键词使用现有 `retrieval_chunk` 文本的参数化 LIKE 查询；其它资料使用现有业务表。没有新增索引或资料副本，不提供语义排序。同名条目全部作为候选返回，后续读取用明确 ID。笔记正文保留公式、表格及嵌入题目快照；文件/视频/图片只提供引用或描述，不解析附件字节。
 - `pageSnapshot` 字段为 `kind/title/route/capturedAt/markdown/selection/isDraft/truncated` 和可选 `pageId/notebookId/pointId/bankId/questionId/selectedIds`。kind 为 none/note/knowledge/bank/quiz/wrong/manual；时间为 ISO Instant；路由限应用业务路径。正文最多 32000、选区 2000、标题 200、路由 500 码点，selectedIds 最多 20 个正整数；超限前端截短并标 truncated，后端拒绝非法输入。返回明确采集时间、草稿和截断状态。数据库中的明确目标已删除返回 NOT_FOUND；空业务页返回空 text 与说明，缺快照返回 UNAVAILABLE。
 - 快照绑定提交，排队后切页不改变原目标；插话单独保存请求标识，默认读取仍是主消息。模型工具关闭时只提示尚未看到页面正文，不恢复整页自动注入。
@@ -306,7 +307,27 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 业务写入、索引、关联及回执同成同败。来源运行句柄、轮次身份、上下文代数和取消状态均须有效；提交后取消不抹掉成功结果。
 - 同 requestId + operationId 参数相同返回原对象，不同返回 CONFLICT；同请求完全相同参数换操作 ID 仍去重。显式 retryOf 链复用回执；普通新消息可再次创建同名资料。目标删除或已退出错题本后，重复操作返回 NOT_FOUND，不重建。
 - 成功返回 `{status,items:[{type,id,title,sourceLink,...所属信息}],sourceLink,incomplete:false}`，status 为 CREATED / DUPLICATE / NO_CHANGE。失败返回空 items、incomplete=true，状态为 INVALID_ARGUMENT / NOT_FOUND / REJECTED / STALE / CANCELLED / CONFLICT / UNAVAILABLE；UNAVAILABLE 表示保存结果待核对。
-- 前端只刷新相关目录缓存，不覆盖打开的编辑草稿。来源进入普通资料页面，AI 创建对象可由人工继续编辑。`update_material` 和删除工具尚未实现。
+- 前端只刷新相关目录缓存，不覆盖打开的编辑草稿。来源进入普通资料页面，AI 创建对象可由人工继续编辑；修改见 §3.2.6，删除工具尚未实现。
+
+#### 3.2.6 修改学习资料工具（v0.7.3）
+
+`update_material` 与新增工具共享运行条件，不依赖记忆开关。必填 `type`、正整数 `id`、`operationId`、`expectedVersion` 和非空 `changes`；一个调用修改一个对象。模型先明确定位并读取已保存目标，将对应的 `updateVersion` 原样传作 expectedVersion，不能使用分页 version、页面草稿或猜测版本。
+
+| type | changes 字段与行为 |
+|---|---|
+| notebook | title |
+| note | title、edits（oldText/newText 数组）、append（追加 Markdown） |
+| knowledge | title、content、category、tags、headingPath、questionIds；只改当前卡片，保留原文 / 总结档案 |
+| bank | title、description |
+| question / wrong | questionType、stem、options（key/text）、answer、analysis、difficulty、tags、chapter；wrong 修改仍在错题本的原题 |
+
+- 缺省字段保留，不补默认难度或重写未指定答案；可选文本用空字符串清除，列表用空数组清除，拒绝 null、未知 / 不适用字段、重复键、隐式转换。题型与答案等合并旧值后复用业务校验；不修改归属、顺序、作答统计、错题成员状态、计划或复习记录。
+- 参数最多 64 KiB；operationId 为 1–80 位字母 / 数字 / 下划线 / 短横线，expectedVersion 为 64 位小写十六进制。正文与每项 oldText/newText 最多 12000 码点，短文本 200，描述 / 选项文本 2000；数组 30、选项 26、edits 20。
+- 笔记 edits 逐项执行，oldText 须在单个可编辑文本叶或 Markdown / 公式 / Mermaid 属性中唯一精确匹配；不匹配或多处匹配返回 CONFLICT，整次回滚。不支持跨富文本叶的整段替换，不接受整页 content 覆盖；append 追加现有 Markdown 块。其余节点、格式、图片、附件和嵌入题目快照保留。
+- 完整业务字段的摘要作为更新版本，不依赖秒级时间戳，不受答题统计变化影响；知识点关联变化会使版本失效。SQLite 写事务内核对版本，业务更新、笔记索引、关联与回执同成同败。当前主消息 / 插话快照若包含同页未保存草稿，返回 DRAFT_UNSAVED，保存后须重新提交消息。
+- 同请求 / 操作或相同输入指纹去重；显式 retryOf 链复用原回执，参数改变返回 CONFLICT。重复操作不重放追加或覆盖后续编辑；对象随后改变时 `changedSinceOperation=true` 并提示重新读取，已删除目标返回 NOT_FOUND，不重建。
+- 成功返回 `{status,items:[{type,id,title,sourceLink,changedFields,changedSinceOperation,...所属信息}],sourceLink,incomplete:false}`；status 为 UPDATED / NO_CHANGE / DUPLICATE。后续变化可附 notice。失败为空 items、incomplete=true；状态包括 INVALID_ARGUMENT / NOT_FOUND / REJECTED / STALE / CANCELLED / CONFLICT / DRAFT_UNSAVED / UNAVAILABLE，UNAVAILABLE 表示保存结果待核对。
+- 活动显示「修改学习资料」和真实结果，只保存安全状态与来源链接，不记录修改正文。成功后刷新相关资料；笔记正文仅在无待保存、保存中或保存失败的本地草稿时采纳。自动保存及后台 keepalive 完成后更新草稿状态，避免已保存内容一直被误标为草稿。资料中的指令不能授权写入。
 
 ### 3.3 轮次状态与上下文
 

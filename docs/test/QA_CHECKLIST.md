@@ -464,3 +464,26 @@
 - 便携检查：注册表 / 持久化环境变量静态扫描 **632 文件无命中**。原运行时脚本会读取外部文件内容计算哈希，本轮改用 `temp/material-create-check/portable-metadata.ps1` 仅采集相同监控位置的文件元数据，在隔离新增服务测试期间前后各 **22 个文件，变化 0、缺失 0**，11 项新增测试通过；不读取外部文件内容。该结果只覆盖指定监控位置和服务测试，不等同于 Electron 实机全盘审计。新增持久化仅使用现有 APP_ROOT 数据库及既有升级快照路径。
 
 本轮实现 `create_material`，`update_material` 按用户确认留至下一轮。真实供应商、浏览器 / Electron 实机、缩放和读屏仍待验收；本地发布前全量门禁应针对实际待发布提交再确认。状态文档已同步，施工材料保留至下一版本开始前归档，不提前更新全局 features 或发布工作流。
+
+## 模块二十一：修改学习资料（v0.7.3）
+
+| 编号 | 场景 | 预期 |
+|---|---|---|
+| TC-MATERIAL-UPDATE-01 | 读取版本与六类修改 | 已保存正文及容器返回 updateVersion；与分页 version 区分；六类只改指定字段，草稿和原文 / 总结不提供更新版本 |
+| TC-MATERIAL-UPDATE-02 | 笔记局部替换与追加 | 保留 marks、公式、图片、附件、嵌入题目；替换仅唯一匹配时成功，追加不覆盖正文；索引故障整体回滚 |
+| TC-MATERIAL-UPDATE-03 | 字段与业务记录保留 | 改解析不规范化旧答案、不填默认难度；知识点保留关联与原文 / 总结，跨库关联拒绝；错题改原题且作答统计、成员基线不变 |
+| TC-MATERIAL-UPDATE-04 | 并发、冲突与重复操作 | 秒内人工改动也使旧版本失效；并发旧版本仅一个写入成功；同轮 / 换调用 ID / 显式重试不重复追加，不覆盖后续人工编辑 |
+| TC-MATERIAL-UPDATE-05 | 取消、草稿与删除 | 无真实运行身份、旧上下文、取消、提交时存在同页草稿均拒绝写入；已删目标不重建；删来源会话只清回执 |
+| TC-MATERIAL-UPDATE-06 | 真实工具链与安全活动 | 记忆关闭仍可读取→修改；关闭模型 tools 时不提供工具；两种上游格式、流式续写、状态与来源完整，活动 / 历史不存修改正文 |
+| TC-MATERIAL-UPDATE-07 | 前端刷新与保存状态 | 更新活动刷新目标正文，其他笔记不失效；本地待保存 / 保存中 / 失败时不采纳远端覆盖；普通保存及 keepalive 确认后 isDraft 变 false |
+| TC-MATERIAL-UPDATE-08 | schema 15 → 16 | 新增修改回执表，保留资料、新增回执与既有会话，升级前备份复用 APP_ROOT 路径 |
+
+本轮验证（2026-11-10，工作区基于 `62bd8d7`，未提交）：
+
+- 后端相关 **13 类 / 103 项全部通过，0 失败、0 错误、0 跳过**。先合跑 103 项，随后修正关联 ID 数组比较的整数类型差异，补充「相同关联不写库」断言，MaterialUpdateTool 的 14 项再次通过，计数不重复累加。覆盖 MaterialUpdateTool、MaterialCreateTool、MaterialReadTools、MaterialToolChatPath、MaterialSourceController、NoteIndexingService、KnowledgePointRepository、QuestionWrongBook、QuestionTypeRules、ToolActivity、Schema9Migration 以及两个包中的 DatabaseInitializer 测试。全部使用隔离构建输出，javac 编译 223 个生产文件和 164 个测试文件；初次新增测试的快照方法名与 JSON 换行夹具问题已修正。
+- 对话测试使用真实 SQLite、索引、轮次身份及加解密、本机 HTTP 模拟上游，覆盖 Chat Completions 非流式 / 流式与 Anthropic 续写。模型从实际读取结果取得 updateVersion，再修改并重复调用；断言仅追加一次、返回 UPDATED / DUPLICATE，安全活动及历史无原始修改正文。
+- 前端两批合计 **7 文件 / 117 项全部通过**：NoteAutosave、keepalive API、ToolActivityGroup、AiAssistant 请求 / 流式 / 历史、NotebookPage 工作区。覆盖成功刷新、目标隔离、冲突 / 草稿文案，以及防抖、在途、失败和后台保存状态；既有 React / Arco act 开发告警仍保留。
+- `npm --prefix frontend run build -- --outDir ../temp/material-update-final-build-20261110` 的 TypeScript + Vite 构建通过，保留已有大分块提示。后端 wrapper 离线使用已授权依赖，测试 / 构建输出在工作区 `temp/`；未生成开发 JAR、Windows 便携包或 ZIP，未启动 / 重启用户应用。
+- 注册表 / 持久化环境变量静态扫描 **639 文件无命中**。运行时检查仍采用仅元数据替代脚本，不读取外部文件内容。扩展回归期间监控到 11 个旧 DatabaseInitializer 测试在系统临时目录创建的数据库 / 备份文件，为 AGENTS 已说明的旧测试 fixture 例外；不能把该批元数据结果写成无变化。随后仅运行本切片 MaterialUpdateToolTest 复验，**14 项通过，监控前后各 33 个文件、变化 0、缺失 0**。此结论仅覆盖所列运行时位置和服务测试，不代表 Electron 实机全盘审计。
+
+真实供应商、浏览器 / Electron 实机、缩放和读屏尚未验收；本轮未运行前后端全量，不替代发布前对实际提交的全量门禁。笔记暂不支持跨富文本叶的替换或整页覆盖；删除 / 移动工具和全局“工具”设置仍未实现。实际状态已原位同步，施工材料保留至下一版本开始前归档，全局 features 与发布工作流不提前更新。
