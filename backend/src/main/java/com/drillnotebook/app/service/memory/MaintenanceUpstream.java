@@ -112,6 +112,9 @@ class MaintenanceUpstream {
         if (row == null || (!AiModelLimits.noKey(row) && (row.encryptedKey() == null || row.encryptedKey().isBlank()))) {
             throw new MaintenancePorts.AttemptFailure("TARGET_KEY_MISSING", "维护模型缺少 API Key", false);
         }
+        if (!AiModelLimits.configured(AiModelLimits.params(row))) {
+            throw new MaintenancePorts.AttemptFailure("MODEL_LIMITS_REQUIRED", "请补全维护模型的上下文窗口和最大输出 Token", false);
+        }
         String endpoint = EmbeddingSpaceContracts.normalizeEndpoint(row.endpoint());
         String apiFormat = AiService.apiFormatOf(row);
         if (!target.fingerprint().equals(policy.consentFingerprint(MemoryPolicyService.PURPOSE_MAINTENANCE, endpoint,

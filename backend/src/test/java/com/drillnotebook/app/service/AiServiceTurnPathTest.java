@@ -62,7 +62,7 @@ class AiServiceTurnPathTest {
         contexts = ChatContextWiring.wire(dataSource, jdbc, wiring);
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(),
                 new ObjectMapper(), null, wiring.turnService(), wiring.cipher(), contexts.contexts());
-        ai.saveConfig(MOCK_CONFIG);
+        ai.saveConfig(TestModelLimits.config(MOCK_CONFIG));
         sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
         jdbc.update("UPDATE ai_chat_session SET memory_learn_enabled = 1 WHERE id = ?", sessionId);
     }

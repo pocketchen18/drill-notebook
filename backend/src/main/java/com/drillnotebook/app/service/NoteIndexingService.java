@@ -190,8 +190,14 @@ public class NoteIndexingService {
     @Transactional
     public Map<String, Object> createAndIndexPage(
             long notebookId, String title, Object content) {
+        return createAndIndexPage(notebookId, title, content, null);
+    }
+
+    @Transactional
+    public Map<String, Object> createAndIndexPage(
+            long notebookId, String title, Object content, Long parentPageId) {
         // Insert the page
-        long pageId = notebooks.insertPage(notebookId, title, content);
+        long pageId = notebooks.insertPage(notebookId, title, content, parentPageId);
         // If content is provided, index it in the same transaction
         if (content != null) {
             return savePageAndIndex(pageId, null, content);

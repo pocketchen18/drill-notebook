@@ -28,6 +28,7 @@ class MaterialToolChatPathTest {
     private long session;
     private boolean tools = true;
     private boolean steering;
+    private boolean creating;
     private String supplementId;
     @BeforeEach void setup() throws Exception {
         root=TestWorkspace.scratchDirectory("material-chat-");
@@ -36,26 +37,33 @@ class MaterialToolChatPathTest {
         session=wiring.sessions().create("资料读取","stub");
         ai=new AiService(new AiConfigRepository(jdbc),wiring.sessions(),new ApiKeyEncryptor(),json,null,wiring.turnService(),wiring.cipher(),stack.contexts());
         var material=new MaterialReadService(new MaterialReadRepository(jdbc),json);
+        var notebooks = new NotebookRepository(jdbc, json);
+        var create = new MaterialCreateTool(new MaterialCreateService(jdbc,
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), notebooks,
+                new BankRepository(jdbc), new KnowledgePointRepository(jdbc, json), new QuestionRepository(jdbc, json),
+                new NoteIndexingService(notebooks, new RetrievalIndexRepository(jdbc), jdbc, json), wiring.handles(), json));
         ai.setChatTools(List.of(MaterialReadTools.tool("read_current_page",material),MaterialReadTools.tool("search_materials",material),
                 MaterialReadTools.tool("read_notebook",material),MaterialReadTools.tool("read_knowledge",material),
-                MaterialReadTools.tool("read_question_bank",material),MaterialReadTools.tool("read_wrong_questions",material),stack.memorySearchTool()));
+                MaterialReadTools.tool("read_question_bank",material),MaterialReadTools.tool("read_wrong_questions",material),create,stack.memorySearchTool()));
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{
             JsonNode request=json.readTree(exchange.getRequestBody()); requests.add(request);
             int round=requests.size();
-            boolean done=!tools || round>(steering ? 2 : 1);
+            boolean done=!tools || round>(steering || creating ? 2 : 1);
             boolean anthropic=exchange.getRequestURI().getPath().endsWith("/messages");
             boolean stream=request.path("stream").asBoolean();
-            var args=steering && round==2 ? Map.of("requestId",supplementId) : Map.of();
+            String toolName = creating ? "create_material" : "read_current_page";
+            var args=creating ? Map.of("type", "notebook", "operationId", "save-book", "title", "工具保存的普通笔记本")
+                    : steering && round==2 ? Map.of("requestId",supplementId) : Map.of();
             Map<String,Object> message=done ? Map.of("role","assistant","content","已按实际读取内容回答。")
-                    : Map.of("role","assistant","content","","tool_calls",List.of(Map.of("id","c"+round,"type","function","function",Map.of("name","read_current_page","arguments",json.writeValueAsString(args)))));
+                    : Map.of("role","assistant","content","","tool_calls",List.of(Map.of("id","c"+round,"type","function","function",Map.of("name",toolName,"arguments",json.writeValueAsString(args)))));
             String payload;
             if(anthropic) {
                 var block=done ? Map.of("type","text","text","已按实际读取内容回答。")
-                        : Map.of("type","tool_use","id","c"+round,"name","read_current_page","input",args);
+                        : Map.of("type","tool_use","id","c"+round,"name",toolName,"input",args);
                 payload=json.writeValueAsString(Map.of("type","message","role","assistant","content",List.of(block),"stop_reason",done?"end_turn":"tool_use","usage",Map.of("input_tokens",10,"output_tokens",5)));
             } else {
-                if(stream && !done) message=Map.of("tool_calls",List.of(Map.of("index",0,"id","c"+round,"type","function","function",Map.of("name","read_current_page","arguments",json.writeValueAsString(args)))));
+                if(stream && !done) message=Map.of("tool_calls",List.of(Map.of("index",0,"id","c"+round,"type","function","function",Map.of("name",toolName,"arguments",json.writeValueAsString(args)))));
                 payload=json.writeValueAsString(Map.of("choices",List.of(Map.of(stream?"delta":"message",message,"finish_reason",done?"stop":"tool_calls")),"usage",Map.of("prompt_tokens",10,"completion_tokens",5)));
                 if(stream) payload="data: "+payload+"\n\ndata: [DONE]\n\n";
             }
@@ -66,7 +74,7 @@ class MaterialToolChatPathTest {
     }
     @AfterEach void cleanup() throws Exception { SessionExecution.CURRENT.remove(); server.stop(0); stack.indexes().shutdown(); TestWorkspace.deleteRecursively(root); }
     private void config(String format,boolean stream) {
-        ai.saveConfig(Map.of("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","apiFormat",format,"tools",tools,"streaming",stream));
+        ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","apiFormat",format,"tools",tools,"streaming",stream));
     }
     private Map<String,Object> body(String text) {
         return Map.of("protocolVersion",2,"sessionId",session,"requestId",UuidV7.generate(System.currentTimeMillis()),
@@ -90,6 +98,27 @@ class MaterialToolChatPathTest {
         assertFalse(stack.history().page(session,null,null,20).toString().contains("草稿正文"));
         assertFalse(jdbc.queryForList("SELECT * FROM ai_chat_turn").toString().contains("草稿正文"));
     }
+    @ParameterizedTest @CsvSource({"chat_completions,false,false","chat_completions,true,true","anthropic,false,true"})
+    void creationWorksWithMemoryOffAndRetriesPreserveOneOrdinaryMaterial(String format, boolean upstreamStream, boolean uiStream) throws Exception {
+        creating=true; config(format, upstreamStream);
+        var body = new LinkedHashMap<>(body("页面正文"));
+        body.put("input", Map.of("userText", "新建一个笔记本"));
+        var events = new ArrayList<Map<String,Object>>();
+        if(uiStream) assertEquals("COMPLETED", ai.chatStream(body, (kind,text)->true, events::add).status());
+        else assertEquals("COMPLETED", ai.chat(body).get("status"));
+        assertEquals(3, requests.size());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notebook WHERE title='工具保存的普通笔记本'", Integer.class));
+        assertTrue(requests.get(1).toString().contains("CREATED"));
+        assertTrue(requests.get(2).toString().contains("DUPLICATE"));
+        var activities=wiring.turnService().toolActivities((String)body.get("requestId"), "");
+        assertEquals(List.of("CREATED", "DUPLICATE"), activities.stream().map(com.drillnotebook.app.model.ToolActivity::outcome).toList());
+        assertTrue(activities.get(0).sourceLink().startsWith("drill-notebook://material/notebook/"));
+        assertEquals(activities.get(0).sourceLink(), activities.get(1).sourceLink());
+        assertFalse(json.writeValueAsString(activities).contains("工具保存的普通笔记本"));
+        assertFalse(json.writeValueAsString(events).contains("工具保存的普通笔记本"));
+        assertFalse(requests.get(0).path("tools").toString().contains("search_memories"));
+    }
+
     @Test void disabledToolsNeverSilentlyRestoreWholePageInjection() {
         tools=false;config("chat_completions",false);
         assertEquals("COMPLETED",ai.chat(body("不可预注入正文")).get("status"));

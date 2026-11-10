@@ -29,7 +29,7 @@ class AiServiceStructuredCallTest {
                 "qwen3.6-27b",
                 "enc",
                 "{}",
-                "{}"
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}"
         );
         Map<String, Object> request = service.buildChatCompletionRequest(
                 config,
@@ -51,7 +51,7 @@ class AiServiceStructuredCallTest {
                 "gpt-4o-mini",
                 "enc",
                 "{}",
-                "{}"
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}"
         );
         Map<String, Object> request = service.buildChatCompletionRequest(
                 config,
@@ -75,7 +75,7 @@ class AiServiceStructuredCallTest {
         when(configs.find("memory")).thenReturn(null);
         AiService service = new AiService(configs, null, null, new ObjectMapper(), null, null, null, null);
 
-        service.saveConfig(Map.of("purpose", "chat", "provider", "custom", "endpoint", endpoint,
+        service.saveConfig(TestModelLimits.config("purpose", "chat", "provider", "custom", "endpoint", endpoint,
                 "model", model, "apiFormat", "anthropic", "streaming", true));
 
         ArgumentCaptor<String> params = ArgumentCaptor.forClass(String.class);
@@ -134,7 +134,7 @@ class AiServiceStructuredCallTest {
                 "mock-model",
                 "fake-encrypted-key",
                 "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
-                "{}"));
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}"));
         when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");
         when(encryptor.fingerprintMaterial()).thenReturn("fake-fingerprint");
 

@@ -9,6 +9,24 @@ const started: ToolActivity = { sequence: 1, toolName: 'search_memories', state:
 const ended: ToolActivity = { ...started, state: 'FINISHED', outcome: 'OK', count: 2, elapsedMs: 620 };
 
 describe('工具活动折叠和真实结果', () => {
+  it('资料保存结果保留安全来源，只有点击才导航，未知写入不能宣称失败', () => {
+    const link = 'drill-notebook://material/note/12';
+    const open = vi.fn();
+    const saved = readToolActivities([{ ...ended, toolName: 'create_material', outcome: 'CREATED', sourceLink: link, arguments: '不展示的正文' }]);
+    const view = render(<ToolActivityGroup activities={saved} onOpenMaterial={open} />);
+    fireEvent.click(screen.getByRole('button', { name: /已保存学习资料/ }));
+    fireEvent.click(screen.getByRole('button', { name: /新增学习资料 已保存/ }));
+    expect(screen.getByText('当前本地学习资料')).toBeVisible();
+    expect(screen.queryByText('不展示的正文')).not.toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '查看资料 ↗' }));
+    expect(open).toHaveBeenCalledWith(link);
+    expect(readToolActivities([{ ...saved[0], sourceLink: 'https://example.com/private' }])[0].sourceLink).toBeUndefined();
+    view.rerender(<ToolActivityGroup activities={[...saved, { ...started, sequence: 2, toolName: 'create_material', state: 'UNKNOWN' }]} onOpenMaterial={open} />);
+    expect(screen.getByText(/部分资料是否已保存尚未确认/)).toBeVisible();
+    expect(screen.getByRole('button', { name: '查看资料 ↗' })).toBeVisible();
+  });
+
   it('派发成功只表示受理，等待中的消息不冒充已读回复，点击才打开目标', () => {
     const link = `drill-notebook://session/${'a'.repeat(32)}`;
     const openSession = vi.fn();

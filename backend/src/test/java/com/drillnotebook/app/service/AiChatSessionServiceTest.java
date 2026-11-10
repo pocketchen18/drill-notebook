@@ -39,7 +39,7 @@ class AiChatSessionServiceTest {
         service = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), mapper, retrieval,
                 wiring.turnService(), wiring.cipher(), null);
 
-        service.saveConfig(Map.of(
+        service.saveConfig(TestModelLimits.config(
                 "provider", "mock",
                 "endpoint", "mock://local",
                 "model", "local-demo",

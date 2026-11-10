@@ -30,8 +30,7 @@ function LocationProbe(): JSX.Element {
   return <div data-testid="loc">{location.pathname}{location.search}</div>;
 }
 
-const renderAssistant = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const renderAssistant = (queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) => {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
@@ -243,6 +242,25 @@ describe('AiAssistant v2 请求组装（按需读取页面）', () => {
     fireEvent.click(await screen.findByRole('link', { name: '资料来源' }));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe(route));
     expect(useUiStore.getState().aiOpen).toBe(false);
+  });
+
+  it('资料保存活动刷新目录并提供导航，同时保留现有编辑草稿', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['note-pages', 7], []);
+    client.setQueryData(['note-page', 12], { content: '尚未保存的草稿' });
+    apiPost.mockImplementation((url: string) => Promise.resolve(url === '/api/ai/chat' ? {
+      reply: '已保存', sessionId: 10, toolActivities: [{ sequence: 1, toolName: 'create_material', state: 'FINISHED', outcome: 'CREATED',
+        count: 1, sourceLink: 'drill-notebook://material/note/12', incomplete: false }]
+    } : {}));
+    renderAssistant(client);
+    await typeAndSend('保存为一页新笔记');
+    fireEvent.click(await screen.findByRole('button', { name: /已保存学习资料/ }));
+    fireEvent.click(screen.getByRole('button', { name: /新增学习资料 已保存/ }));
+    await waitFor(() => expect(client.getQueryState(['note-pages', 7])?.isInvalidated).toBe(true));
+    expect(client.getQueryState(['note-page', 12])?.isInvalidated).toBe(false);
+    expect(client.getQueryData(['note-page', 12])).toEqual({ content: '尚未保存的草稿' });
+    fireEvent.click(screen.getByRole('button', { name: '查看资料 ↗' }));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/notebooks?pageId=12'));
   });
 
   it('citation 点击深链到 /notebooks?pageId=', async () => {

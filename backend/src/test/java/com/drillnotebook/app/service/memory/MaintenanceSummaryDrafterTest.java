@@ -3,6 +3,7 @@ package com.drillnotebook.app.service.memory;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.MemoryJobRepository.Kind;
@@ -55,6 +56,14 @@ class MaintenanceSummaryDrafterTest {
     @AfterEach
     void tearDown() throws Exception {
         harness.close();
+    }
+
+    @Test void missingModelLimitsFailBeforeSendingAndAreNotRetryable() throws Exception {
+        harness.jdbc.update("UPDATE ai_config SET params='{}' WHERE purpose='chat'");
+        var error = assertThrows(MaintenancePorts.AttemptFailure.class, () -> drafter.draft(batch(1, 40), null));
+        assertEquals("MODEL_LIMITS_REQUIRED", error.code());
+        assertFalse(error.retryable());
+        assertEquals(0, client.calls());
     }
 
     @Test

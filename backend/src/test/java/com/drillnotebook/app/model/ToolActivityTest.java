@@ -7,6 +7,19 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ToolActivityTest {
+    @Test void materialCreationKeepsOnlyValidatedLocalSourceAcrossHistoryRestore() throws Exception {
+        var created = ToolActivity.started(1, "create_material").finished("""
+                {"status":"CREATED","sourceLink":"drill-notebook://material/note/17",
+                 "items":[{"title":"PRIVATE","content":"PRIVATE"}]}
+                """, 5);
+        var meta = new ObjectMapper().writeValueAsString(Map.of("toolActivities", List.of(created)));
+        assertFalse(meta.contains("PRIVATE"));
+        assertEquals(created, ToolActivity.readMeta(meta, false).get(0));
+        assertEquals("drill-notebook://material/note/17", created.sourceLink());
+        assertNull(ToolActivity.started(1, "create_material").finished(
+                "{\"status\":\"CREATED\",\"sourceLink\":\"file:///C:/private\"}", 1).sourceLink());
+    }
+
     @Test void sessionActivitiesKeepCountsButNeverExposeHistoryOrSessionIdentifiers() throws Exception {
         var read = ToolActivity.started(1, "read_session").finished("""
                 {"status":"OK","messages":[{"content":"PRIVATE","messageId":71}],

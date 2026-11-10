@@ -53,7 +53,7 @@ public class MaterialReadRepository {
                 case "knowledge" -> { select="SELECT 'knowledge' AS type,p.id,substr(p.title,1,200) AS title,p.bank_id AS parentId,substr(b.name,1,200) AS parentTitle,substr(p.content,1,240) AS snippet,0 AS attemptCount,0 AS wrongCount FROM knowledge_point p LEFT JOIN question_bank b ON b.id=p.bank_id WHERE 1=1"; filter="p.title || ' ' || p.content || ' ' || coalesce(p.category,'') || ' ' || coalesce(p.tags,'')"; }
                 case "question", "wrong" -> {
                     select="SELECT '"+t+"' AS type,q.id,substr(q.stem,1,200) AS title,q.bank_id AS parentId,substr(b.name,1,200) AS parentTitle,substr(q.stem,1,240) AS snippet,"
-                            + ("wrong".equals(t) ? "agg.attempt_count AS attemptCount,agg.wrong_count AS wrongCount" : "0 AS attemptCount,0 AS wrongCount")
+                            + ("wrong".equals(t) ? "COALESCE(agg.attempt_count,0) AS attemptCount,COALESCE(agg.wrong_count,0) AS wrongCount" : "0 AS attemptCount,0 AS wrongCount")
                             + " FROM question q JOIN question_bank b ON b.id=q.bank_id "
                             + ("wrong".equals(t) ? QuestionRepository.WRONG_MEMBERSHIP_SQL : "WHERE 1=1");
                     filter="q.stem || ' ' || coalesce(q.chapter,'') || ' ' || coalesce(q.tags,'')";

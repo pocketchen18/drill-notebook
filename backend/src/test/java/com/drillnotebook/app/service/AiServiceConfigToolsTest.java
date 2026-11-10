@@ -2,6 +2,7 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.memory.TestWorkspace;
@@ -88,6 +89,18 @@ class AiServiceConfigToolsTest {
         assertEquals(false, chatSlot(service.redactedConfig()).get("tools"));
     }
 
+    @Test void missingLimitsCannotBeSavedOrUsedByLegacyProbeAndChat() {
+        var body = Map.<String, Object>of("provider", "custom", "endpoint", "mock://local", "model", "fixture");
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class, () -> service.saveConfig(body)).code());
+        new AiConfigRepository(jdbc).upsert("chat", "custom", "mock://local", "fixture", null, null, "{}");
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class, () -> service.chat(Map.of())).code());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_turn", Integer.class));
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class, () -> service.testModel(Map.of())).code());
+        var direct = Map.<String, Object>of("baseUrl", "mock://local", "model", "fixture", "apiKey", "fake", "apiFormat", "chat_completions");
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class, () -> service.testModel(direct)).code());
+        assertEquals(true, service.testModel(TestModelLimits.config(direct)).get("ok"));
+    }
+
     private void save(String endpoint, String model, String apiFormat, Boolean tools) {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("provider", "custom");
@@ -95,7 +108,7 @@ class AiServiceConfigToolsTest {
         body.put("model", model);
         if (apiFormat != null) body.put("apiFormat", apiFormat);
         if (tools != null) body.put("tools", tools);
-        service.saveConfig(body);
+        service.saveConfig(TestModelLimits.config(body));
     }
 
     @SuppressWarnings("unchecked")

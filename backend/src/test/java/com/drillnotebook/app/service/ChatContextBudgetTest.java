@@ -318,12 +318,10 @@ class ChatContextBudgetTest {
     }
 
     @Test
-    void unknownWindowUsesConservativeBudgetAndWarns() {
-        ChatContextPlan plan = fit(projection(List.of()), USER_TEXT, ContextMemorySource.Selection.EMPTY,
-                List.of(), Map.of(), List.of(), true, 0, false);
-
-        assertTrue(plan.notices().contains("WINDOW_UNSET"), "窗口没配置要提示，而不是宣称保证不超窗（T13）");
-        assertEquals(ChatContextPlan.INPUT_BUDGET_TOKENS, plan.audit().inputBudget(), "默认按保守窗口 32,000 计算");
+    void unknownWindowRequiresConfigurationInsteadOfGuessing() {
+        var error = assertThrows(ChatTurnRejectException.class, () -> fit(projection(List.of()), USER_TEXT,
+                ContextMemorySource.Selection.EMPTY, List.of(), Map.of(), List.of(), true, 0, false));
+        assertEquals("MODEL_LIMITS_REQUIRED", error.code());
     }
 
     @Test

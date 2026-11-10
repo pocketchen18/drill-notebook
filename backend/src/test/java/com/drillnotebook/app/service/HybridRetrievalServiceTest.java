@@ -528,7 +528,7 @@ class HybridRetrievalServiceTest {
                 wiring.turnService(),
                 wiring.cipher(),
                 null);
-        service.saveConfig(Map.of(
+        service.saveConfig(TestModelLimits.config(
                 "provider", "custom",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort(),
                 "model", "stub-model",

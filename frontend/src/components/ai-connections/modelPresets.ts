@@ -27,7 +27,7 @@ export function matchPreset(presets: ModelPreset[], id: string) {
 }
 export interface ModelDraft {
   modelId: string; name: string; group: string; streaming: boolean; tools: boolean;
-  contextWindow: string; maxInputTokens: string; maxOutputTokens: string;
+  contextWindow: string; maxOutputTokens: string;
   reasoningControl: ReasoningControl; reasoningEfforts: string[]; defaultReasoningEffort: string; thinkingBudgetTokens: string;
 }
 export function reasoningDraft(model?: ConnectionModel): Pick<ModelDraft, 'reasoningControl' | 'reasoningEfforts' | 'defaultReasoningEffort' | 'thinkingBudgetTokens'> {

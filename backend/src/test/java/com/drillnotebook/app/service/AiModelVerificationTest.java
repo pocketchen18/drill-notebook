@@ -173,12 +173,12 @@ class AiModelVerificationTest {
         beforeReply = ignored -> { entered.countDown(); try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } };
         List<Future<Map<String, Object>>> tasks = new ArrayList<>();
         for (String id : List.of("alpha", "beta", "gamma")) {
-            var request = new LinkedHashMap<>(snapshot); request.put("requestId", id); request.put("model", Map.of("modelId", id));
+            var request = new LinkedHashMap<>(snapshot); request.put("requestId", id); request.put("model", TestModelLimits.config("modelId", id));
             tasks.add(executor.submit(() -> service.verifyAndAdd(p, request)));
         }
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS), "all three text probes must overlap");
-            service.saveModels(p, null, body("modelId", "manual"));
+            service.saveModels(p, null, body("modelId", "manual", "contextWindow", 128000, "maxOutputTokens", 32000));
             String manual = models(p).get(0).id(); service.bind(body("purpose", "chat", "modelId", manual));
             service.saveProvider(p, body("name", "Renamed", "endpoint", configs.connections().read().provider(p).endpoint(), "apiFormat", "chat_completions", "authMode", "none"));
             release.countDown();
@@ -187,7 +187,7 @@ class AiModelVerificationTest {
             assertEquals(manual, configs.connections().read().chatModelId());
             assertEquals("Renamed", configs.connections().read().provider(p).name());
             // 排队请求即使持有旧全局 revision，只要实际连接没变也无需重复探测。
-            snapshot.put("requestId", "queued"); snapshot.put("model", Map.of("modelId", "delta"));
+            snapshot.put("requestId", "queued"); snapshot.put("model", TestModelLimits.config("modelId", "delta"));
             assertEquals(true, service.verifyAndAdd(p, snapshot).get("added"));
             assertEquals(Set.of("manual", "alpha", "beta", "gamma", "delta"), new HashSet<>(models(p).stream().map(AiConnectionsStore.Model::modelId).toList()));
             assertEquals(12, requests.size());

@@ -5,7 +5,7 @@ export const TOOL_NAMES = {
   create_session: '新建会话', send_message: '发送消息',
   read_current_page: '读取当前页面', search_materials: '查找学习资料', read_notebook: '读取笔记',
   read_knowledge: '读取知识点', read_question_bank: '读取题库', read_wrong_questions: '读取错题',
-  create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
+  create_material: '新增学习资料', create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
 } as const;
 export type ToolName = keyof typeof TOOL_NAMES;
 export interface ToolActivity {
@@ -20,10 +20,11 @@ export interface ToolActivity {
   incomplete: boolean;
   sessionLink?: string;
   requestId?: string;
+  sourceLink?: string;
 }
 export type ToolPhase = 'tools' | 'answer';
 const OUTCOMES = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE',
-  'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED',
+  'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED', 'CONFLICT',
   'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT', 'SENT', 'QUEUED', 'RUNNING', 'CANCELLED', 'CYCLE_BLOCKED', 'ARCHIVED', 'LOCKED']);
 export const MAX_TOOL_ACTIVITIES = 1200;
 const AVAILABILITIES = new Set(['READY', 'BUILDING', 'LOCKED', 'UNREADABLE', 'TIMEOUT', 'NOT_REQUESTED', 'DENIED']);
@@ -45,6 +46,7 @@ export function readToolActivities(value: unknown): ToolActivity[] {
       count: Number.isInteger(row.count) ? Math.max(0, Math.min(1000, row.count)) : 0,
       availability: AVAILABILITIES.has(row.availability) ? row.availability : null,
       incomplete: row.incomplete === true,
+      ...(typeof row.sourceLink === 'string' && /^drill-notebook:\/\/material\/(notebook|note|knowledge|bank|question|wrong)\/[1-9][0-9]{0,15}$/.test(row.sourceLink) ? { sourceLink: row.sourceLink } : {}),
       ...(typeof row.sessionLink === 'string' && /^drill-notebook:\/\/session\/[a-f0-9]{32}$/.test(row.sessionLink) ? { sessionLink: row.sessionLink } : {}),
       ...(typeof row.requestId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(row.requestId) ? { requestId: row.requestId } : {})
     });
@@ -78,6 +80,18 @@ export function toolTone(row: ToolActivity): 'running' | 'success' | 'neutral' |
 export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return '执行结果未确认';
+  if (row.toolName === 'create_material') {
+    switch (row.outcome) {
+      case 'CREATED': return '已保存';
+      case 'DUPLICATE': return '已存在，未重复添加';
+      case 'NO_CHANGE': return '已在错题本中，进度未改变';
+      case 'NOT_FOUND': return '资料或所属位置不存在，可能已被删除';
+      case 'STALE': return '会话状态已变化，本次未写入';
+      case 'CONFLICT': return '重复操作的内容不一致，未写入';
+      case 'CANCELLED': return '新增已取消';
+      case 'UNAVAILABLE': return '保存结果未确认，请核对资料';
+    }
+  }
   if (['read_current_page', 'search_materials', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName)) {
     switch (row.outcome) {
       case 'OK': return `本次${row.toolName === 'search_materials' ? '找到' : '读取'} ${row.count} 项${row.incomplete ? '（部分内容）' : ''}`;
@@ -147,6 +161,7 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
     ? '部分执行结果未确认' : warnings.length < rows.length ? '部分工具未完成'
       : warnings.every((row) => row.outcome === 'UNAVAILABLE') ? '工具暂不可用' : '工具未完成';
   const parts: string[] = [];
+  if (rows.some((row) => row.toolName === 'create_material' && ['CREATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome))) parts.push('已保存学习资料');
   if (rows.some((row) => row.toolName === 'search_materials')) parts.push('已查找学习资料');
   if (rows.some((row) => ['read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName))) parts.push('已读取学习资料');
   if (rows.some((row) => row.toolName === 'search_memories')) parts.push('已检索记忆');

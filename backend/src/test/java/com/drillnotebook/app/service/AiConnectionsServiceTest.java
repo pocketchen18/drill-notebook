@@ -46,13 +46,18 @@ class AiConnectionsServiceTest {
         return state().providers().get(state().providers().size() - 1).id();
     }
     private String model(String provider, String id, boolean tools) {
-        service.saveModels(provider, null, body("modelId", id, "streaming", !tools, "tools", tools));
+        service.saveModels(provider, null, body("modelId", id, "streaming", !tools, "tools", tools, "contextWindow", 128000, "maxOutputTokens", 32000));
         var models = state().provider(provider).models();
         return models.get(models.size() - 1).id();
     }
     @Test void presetAdditionFillsOnceAndUserValuesRemainIndependent() {
         String p = provider("Gateway", "https://example.invalid/v1");
-        service.saveModels(p, null, body("modelIds", List.of("gpt-5.2", "unknown-model")));
+        var before = state();
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class,
+                () -> service.saveModels(p, null, body("modelIds", List.of("gpt-5.2", "unknown-model")))).code());
+        assertEquals(before, state());
+        service.saveModels(p, null, body("modelIds", List.of("gpt-5.2")));
+        model(p, "unknown-model", false);
         var known = state().provider(p).models().get(0);
         assertEquals("GPT-5.2", known.name());
         assertEquals(400000, known.params().get("contextWindow"));
@@ -73,7 +78,7 @@ class AiConnectionsServiceTest {
         configs.upsert("chat", "custom", "https://example.invalid/v1", "gpt-5.2", null, null, "{}");
         service.view(); var original = state();
         assertNull(original.model(original.chatModelId()).params().get("contextWindow"));
-        assertThrows(IllegalArgumentException.class, () -> service.saveModels(null, original.chatModelId(), body("modelId", "gpt-5.2", "reasoningEfforts", List.of("ultra"))));
+        assertThrows(IllegalArgumentException.class, () -> service.saveModels(null, original.chatModelId(), body("modelId", "gpt-5.2", "contextWindow", 128000, "maxOutputTokens", 32000, "reasoningEfforts", List.of("ultra"))));
         assertEquals(original, state());
         var unknown = service.view();
         assertEquals("effort", mapper.valueToTree(unknown).path("providers").get(0).path("models").get(0).path("reasoningControl").asText());
@@ -99,7 +104,7 @@ class AiConnectionsServiceTest {
         assertEquals(true, state().model(original).params().get("tools"));
         assertEquals(20000, state().model(original).params().get("contextWindow"));
         assertEquals("high", state().model(original).params().get("defaultReasoningEffort"));
-        assertEquals(800, state().model(original).params().get("maxInputTokens"));
+        assertFalse(state().model(original).params().containsKey("maxInputTokens"));
     }
     @Test void selectedPresetAndCustomIdPersistIndependentlyWithExplicitDraftValues() {
         String p = provider("Gateway", "https://example.invalid/v1");
@@ -122,17 +127,18 @@ class AiConnectionsServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.saveModels(null, saved.id(), body("modelId", "custom", "presetId", "missing")));
         assertEquals(before, state());
     }
-    @Test void emptyDraftFieldsRemainEmptyEvenWhenTheTypedIdMatchesAPreset() {
+    @Test void clearingRequiredLimitsIsRejectedEvenWhenTheTypedIdMatchesAPreset() {
         String p = provider("Gateway", "https://example.invalid/v1");
-        service.saveModels(p, null, body("modelId", "gpt-5.2", "name", "", "group", "", "tools", false, "streaming", true,
-                "contextWindow", null, "maxInputTokens", null, "maxOutputTokens", null,
-                "reasoningControl", "effort", "reasoningEfforts", List.of(), "defaultReasoningEffort", "", "thinkingBudgetTokens", null));
-        var saved = state().provider(p).models().get(0);
-        assertEquals("", saved.name());
-        for (String field : List.of("contextWindow", "maxInputTokens", "maxOutputTokens", "thinkingBudgetTokens", "defaultReasoningEffort")) assertNull(saved.params().get(field), field);
-        assertEquals(List.of(), saved.params().get("reasoningEfforts"));
-        service.saveModels(null, saved.id(), body("modelId", "gpt-4.1"));
-        assertEquals(saved.params(), state().model(saved.id()).params());
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class,
+                () -> service.saveModels(p, null, body("modelId", "gpt-5.2", "contextWindow", null, "maxOutputTokens", null))).code());
+        assertTrue(state().provider(p).models().isEmpty());
+        String id = model(p, "custom", true);
+        var before = state();
+        for (String field : List.of("contextWindow", "maxOutputTokens")) {
+            assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class,
+                    () -> service.saveModels(null, id, body("modelId", "custom", field, null))).code());
+            assertEquals(before, state());
+        }
     }
     @Test void migrationPreservesCiphertextSeparateAccountsAndExplicitPreferences() throws Exception {
         configs.upsert("chat", "custom", "https://api.openai.com/v1", "same", "cipher-a", "meta-a", "{\"tools\":false,\"streaming\":false}");
@@ -152,12 +158,15 @@ class AiConnectionsServiceTest {
         assertFalse(response.contains("cipher-a")); assertFalse(response.contains("meta-a"));
         assertEquals("cipher-a", configs.findLegacy("chat").encryptedKey());
     }
-    @Test void incompleteImportDoesNotTurnIntoFollowAndDemoRemainsUsable() {
+    @Test void incompleteImportDoesNotTurnIntoFollowAndLegacyDemoNeedsExplicitLimits() {
         configs.upsert("chat", "demo", "mock://local", "demo", null, null, "{}");
         configs.upsert("import", "custom", "https://incomplete.example", "", null, null, "{}");
         service.view();
         assertNotNull(state().importModelId());
         assertTrue(AiModelLimits.noKey(configs.findChat()));
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class,
+                () -> service.test(state().chatModelId(), Map.of("prompt", "ping"))).code());
+        service.saveModels(null, state().chatModelId(), body("modelId", "demo", "contextWindow", 128000, "maxOutputTokens", 32000));
         assertEquals("pong（本地演示）", service.test(state().chatModelId(), Map.of("prompt", "ping")).get("reply"));
         assertThrows(IllegalArgumentException.class, () -> service.bind(body("purpose", "import", "modelId", state().importModelId())));
     }
@@ -327,7 +336,7 @@ class AiConnectionsServiceTest {
         model(p, "Case", false);
         for (Object value : List.of(0, -1, 1.5, "200")) assertThrows(IllegalArgumentException.class,
                 () -> service.saveModels(p, null, body("modelId", "bad", "maxOutputTokens", value)));
-        assertThrows(IllegalArgumentException.class, () -> service.saveModels(p, null, body("modelId", "bad", "contextWindow", 100, "maxOutputTokens", 101)));
+        assertEquals("MODEL_LIMITS_REQUIRED", assertThrows(ChatTurnRejectException.class, () -> service.saveModels(p, null, body("modelId", "bad", "contextWindow", 100, "maxOutputTokens", 101))).code());
         service.saveModels(p, null, body("modelId", "valid", "contextWindow", 1000, "maxInputTokens", 900, "maxOutputTokens", 900));
     }
     @Test void discoveryAndTestUseSavedNoAuthConnectionWithoutUserDataOrApplication() throws Exception {
@@ -351,7 +360,8 @@ class AiConnectionsServiceTest {
             String m = model(p, "manual", true);
             assertEquals(List.of("manual", "new"), service.discover(p, Map.of()));
             assertEquals(1, state().provider(p).models().size());
-            service.saveModels(p, null, body("modelIds", List.of("manual", "new")));
+            service.saveModels(p, null, body("modelIds", List.of("manual")));
+            model(p, "new", false);
             assertEquals(true, state().model(m).params().get("tools"));
             service.saveModels(null, m, body("modelId", "manual", "tools", true, "maxOutputTokens", 31));
             assertEquals("pong", service.test(m, Map.of("prompt", "hello")).get("reply"));
@@ -374,7 +384,7 @@ class AiConnectionsServiceTest {
                 "{\"maxInputTokens\":50,\"maxOutputTokens\":20,\"contextWindow\":100}");
         assertEquals(20, AiModelLimits.output(config, 4096));
         assertEquals(10, AiModelLimits.output(config, 10));
-        assertDoesNotThrow(() -> AiModelLimits.validate(config, List.of(Map.of("content", "hi")), List.of(), 20));
+        assertDoesNotThrow(() -> AiModelLimits.validate(config, List.of(Map.of("content", "长".repeat(45))), List.of(), 20), "废弃的独立输入限制不能影响配置窗口");
         assertThrows(ChatTurnRejectException.class, () -> AiModelLimits.validate(config, List.of(Map.of("content", "长".repeat(100))), List.of(), 20));
         assertThrows(ChatTurnRejectException.class, () -> AiModelLimits.validate(config, List.of(Map.of("type", "image_url", "image_url", "data:tiny")), List.of(), 20));
     }

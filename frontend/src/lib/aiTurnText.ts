@@ -50,7 +50,6 @@ const NOTICE_TEXT: Record<string, string> = {
   HISTORY_ATTACHMENT_OMITTED: '历史里的附件没有再次发送',
   CONTEXT_AUDIT_TRUNCATED: '上下文账本过长，只保留了前面部分',
   RETRIEVAL_UNAVAILABLE: '笔记检索暂时不可用，本次回答未使用笔记内容',
-  WINDOW_UNSET: '未设置模型窗口，本轮按保守长度组装上下文',
   IMAGE_COST_UNKNOWN: '图片开销未知，上下文长度按估算处理',
   ATTACHMENT_UNAVAILABLE: '有附件本轮不可用，未发送给模型'
 };

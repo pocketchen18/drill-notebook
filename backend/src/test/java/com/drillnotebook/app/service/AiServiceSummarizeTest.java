@@ -43,7 +43,7 @@ class AiServiceSummarizeTest {
                 "mock-model",
                 "fake-encrypted-key",
                 "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
-                "{}");
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}");
         when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(config);
         // encryptor.decrypt 返回任意非空 key 即可（4 参数：encrypted, salt, iv, material）
         when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");
@@ -67,7 +67,7 @@ class AiServiceSummarizeTest {
                 "mock-model",
                 "fake-encrypted-key",
                 "{\"mode\":\"fingerprint\",\"salt\":\"s\",\"iv\":\"i\"}",
-                "{}");
+                "{\"contextWindow\":128000,\"maxOutputTokens\":32000}");
         when(configs.find(AiConfigRepository.PURPOSE_IMPORT)).thenReturn(config);
         // encryptor.decrypt 返回任意非空 key 即可（4 参数：encrypted, salt, iv, material）
         when(encryptor.decrypt(anyString(), anyString(), anyString(), anyString())).thenReturn("fake-api-key");

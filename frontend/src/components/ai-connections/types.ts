@@ -6,7 +6,6 @@ export interface ConnectionModel {
   streaming: boolean;
   tools: boolean;
   contextWindow?: number | null;
-  maxInputTokens?: number | null;
   maxOutputTokens?: number | null;
   reasoningControl?: ReasoningControl;
   reasoningEfforts?: string[];
@@ -52,7 +51,11 @@ export type SaveConnection = (path: string, method: string, body: object) => Pro
 export const modelName = (model: ConnectionModel) => model.name || model.modelId || '待补全模型';
 export const formatName = (provider: ConnectionProvider) => provider.apiFormat === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions';
 export const incomplete = (provider: ConnectionProvider, model?: ConnectionModel) => !provider.endpoint ||
-  (provider.authMode === 'api_key' && !provider.hasKey) || (model !== undefined && !model.modelId);
+  (provider.authMode === 'api_key' && !provider.hasKey) || (model !== undefined && (!model.modelId || !validModelLimits(model)));
+export const validModelLimits = (model: { contextWindow?: number | null; maxOutputTokens?: number | null }) =>
+  Number.isInteger(model.contextWindow) && Number.isInteger(model.maxOutputTokens)
+  && Number(model.contextWindow) > 0 && Number(model.contextWindow) <= 2147483647
+  && Number(model.maxOutputTokens) > 0 && Number(model.maxOutputTokens) <= Number(model.contextWindow);
 export function defaultTools(provider: ConnectionProvider, id: string): boolean {
   try {
     const host = new URL(provider.endpoint).hostname;

@@ -83,10 +83,15 @@ public class NotebookRepository {
     }
 
     public long insertPage(long notebookId, String title, Object content) {
+        return insertPage(notebookId, title, content, null);
+    }
+
+    public long insertPage(long notebookId, String title, Object content, Long parentPageId) {
         KeyHolder holder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
-            PreparedStatement statement = connection.prepareStatement("INSERT INTO note_page(notebook_id, title, content) VALUES (?, ?, ?)", Statement.RETURN_GENERATED_KEYS);
-            statement.setLong(1, notebookId); statement.setString(2, title); statement.setString(3, content == null ? write(defaultDocument()) : write(content)); return statement;
+            PreparedStatement statement = connection.prepareStatement("INSERT INTO note_page(notebook_id, title, content, parent_id) VALUES (?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS);
+            statement.setLong(1, notebookId); statement.setString(2, title); statement.setString(3, content == null ? write(defaultDocument()) : write(content));
+            statement.setObject(4, parentPageId); return statement;
         }, holder);
         Number key = holder.getKey();
         return key == null ? jdbc.queryForObject("SELECT last_insert_rowid()", Long.class) : key.longValue();

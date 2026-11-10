@@ -86,7 +86,7 @@ class AiServiceStateDurableTest {
         server = new UpstreamFixtureServer();
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(),
                 new ObjectMapper(), null, turnService, wiring.cipher(), stack.contexts());
-        ai.saveConfig(Map.of("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
+        ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", server.baseUrl(), "model", "stub-model",
                 "apiKey", "stub-key"));
         sessionId = com.drillnotebook.app.repository.ChatLegacyWiring.ensureSession(jdbc);
     }
