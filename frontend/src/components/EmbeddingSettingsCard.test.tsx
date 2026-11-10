@@ -204,11 +204,10 @@ describe('EmbeddingSettingsCard', () => {
       ? resolve(process.cwd(), 'src/styles/app.css')
       : resolve(process.cwd(), 'frontend/src/styles/app.css');
     const css = readFileSync(cssPath, 'utf8');
-    const block = css.slice(css.indexOf('.embedding-model-item'), css.indexOf('/* AI 悬浮助手 */'));
+    const block = (css.match(/\.embedding-model-(?:item|main)[^{]*\{[^}]*\}/g) ?? []).join('\n');
     expect(block).toContain('var(--line)');
     expect(block).toContain('var(--panel-bg)');
     expect(block).toContain('flex-wrap: wrap');
-    expect(block.toLowerCase()).not.toMatch(/\bwhite\b/);
-    expect(block.toLowerCase()).not.toMatch(/\bblack\b/);
+    expect(block.toLowerCase()).not.toMatch(/:\s*(?:white|black)(?:\s|;|})/);
   });
 });

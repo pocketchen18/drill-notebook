@@ -7,7 +7,7 @@ import { BookOpenText, Braces, Edit3, FileUp, Plus, RefreshCw, Trash2 } from 'lu
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { Bank, Question } from '../lib/types';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MarkdownContent } from '../components/markdown/MarkdownRenderer';
 import { ExportActions } from '../components/ExportActions';
 import { PdfImportButton } from '../components/PdfImportButton';
@@ -18,6 +18,8 @@ import { usePersistSlice } from '../hooks/useViewState';
 import { captureIdSet, putScoped, readIdSet, readPageSlice } from '../lib/viewState';
 import { matchesAny } from '../lib/shortcuts';
 import { useUiStore } from '../stores/uiStore';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
+import { questionsToMarkdown } from '../lib/aiContext';
 
 const { Text } = Typography;
 
@@ -45,10 +47,13 @@ function PageHeading({ onCreate, onImportMarkdown, onImportJson, importingMarkdo
 export function BankPage(): JSX.Element {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedBankId = Number(searchParams.get('bankId')) || undefined;
+  const linkedQuestionId = Number(searchParams.get('questionId')) || undefined;
   const fileInput = useRef<HTMLInputElement>(null);
   const jsonFileInput = useRef<HTMLInputElement>(null);
   const cachedBanks = readPageSlice('banks');
-  const [selectedId, setSelectedId] = useState<number | undefined>(cachedBanks.selectedId);
+  const [selectedId, setSelectedId] = useState<number | undefined>(linkedBankId ?? cachedBanks.selectedId);
   const [createVisible, setCreateVisible] = useState(false);
   const [newName, setNewName] = useState('');
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<number[]>([]);
@@ -254,6 +259,21 @@ export function BankPage(): JSX.Element {
   const questions = questionsQuery.data ?? [];
   const selectedQuestions = questions.filter((question) => selectedQuestionIds.includes(question.id));
   const allSelected = questions.length > 0 && selectedQuestionIds.length === questions.length;
+  useEffect(() => { if (linkedBankId) setSelectedId(linkedBankId); }, [linkedBankId]);
+  useEffect(() => {
+    if (linkedQuestionId && selectedId === linkedBankId && questionsQuery.data?.some((q) => q.id === linkedQuestionId)) {
+      setSelectedQuestionIds([linkedQuestionId]);
+      document.getElementById(`question-${linkedQuestionId}`)?.scrollIntoView?.({ block: 'center' });
+    }
+  }, [linkedQuestionId, linkedBankId, selectedId, questionsQuery.data]);
+  const contextQuestions = selectedQuestions.length ? selectedQuestions : questions;
+  useRegisterPageContext({
+    kind: 'bank', title: selectedBank?.name ?? '题库', route: '/banks', bankId: selectedBank?.id,
+    selectedIds: selectedQuestionIds, truncated: contextQuestions.length > 20,
+    markdown: selectedBank ? contextQuestions.slice(0, 20).map((q) =>
+      `题目 #${q.id}\n${questionsToMarkdown([{ ...q, answer: undefined, analysis: undefined }])}`).join('\n\n')
+      : (banksQuery.data ?? []).slice(0, 20).map((b) => `题库 #${b.id}：${b.name}`).join('\n')
+  }, !questionEditorVisible);
 
   return (
     <main className="page route-workspace route-workspace--bank">
@@ -389,7 +409,7 @@ export function BankPage(): JSX.Element {
                   <Checkbox checked={allSelected} indeterminate={selectedQuestionIds.length > 0 && !allSelected} onChange={(checked) => setSelectedQuestionIds(checked ? questions.map((question) => question.id) : [])}>全选当前题库</Checkbox>
                 </div>
                 {questions.map((question) => (
-                  <div className={`dense-content-row question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
+                  <div id={`question-${question.id}`} className={`dense-content-row question-row ${selectedQuestionIds.includes(question.id) ? 'is-export-selected' : ''}`} key={question.id}>
                     <div className="question-row-top">
                       <div className="selection-line"><Checkbox aria-label={`选择题目：${question.stem}`} checked={selectedQuestionIds.includes(question.id)} onChange={(checked) => setSelectedQuestionIds((ids) => checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))}><span className="route-workspace__sr-only">{`选择题目：${question.stem}`}</span></Checkbox><MarkdownContent className="question-stem" value={question.stem} /></div>
                       <Space><Tag color={questionTypeColor(question.type)}>{questionTypeLabel(question.type)}</Tag><Button type="text" size="mini" icon={<Edit3 size={14} />} onClick={() => { setEditingQuestion(question); setQuestionEditorVisible(true); }} aria-label="编辑题目" /><Popconfirm title="删除这道题？" onOk={() => deleteQuestionMutation.mutate(question.id)}><Button type="text" status="danger" size="mini" icon={<Trash2 size={14} />} aria-label="删除题目" /></Popconfirm></Space>

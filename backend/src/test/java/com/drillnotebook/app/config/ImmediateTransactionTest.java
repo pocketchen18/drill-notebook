@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.drillnotebook.app.memory.Schema9Fixture;
 import com.drillnotebook.app.memory.TestWorkspace;
+import com.drillnotebook.app.repository.ChatLegacyWiring;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -134,26 +135,30 @@ class ImmediateTransactionTest {
 
     @Test
     void workSeesCommittedStateInOrder() throws Exception {
+        long sessionId = ChatLegacyWiring.ensureSession(jdbc);
         immediate.execute(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
                     "INSERT INTO ai_chat_turn(request_id, session_id, status, request_meta_cipher, request_meta_crypto,"
                             + " context_generation, source_scope_type, source_scope_id, source_timezone,"
-                            + " runtime_generation, started_at) VALUES ('tx-visible', 1, 'RUNNING', 'm', '{}', 1,"
+                            + " runtime_generation, started_at) VALUES ('tx-visible', ?, 'RUNNING', 'm', '{}', 1,"
                             + " 'GLOBAL', 0, 'Asia/Shanghai', 'gen-1', '2026-10-11T00:00:00.000Z')")) {
+                statement.setLong(1, sessionId);
                 statement.executeUpdate();
             }
             return null;
         });
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_turn WHERE request_id = 'tx-visible'",
                 Integer.class));
+        jdbc.update("UPDATE ai_chat_turn SET status='COMPLETED' WHERE request_id='tx-visible'");
 
         // 同一事务内可见自己未提交的写入；回滚后外部读不到
-        assertThrows(SQLException.class, () -> immediate.execute(connection -> {
+        SQLException rolledBack = assertThrows(SQLException.class, () -> immediate.execute(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
                     "INSERT INTO ai_chat_turn(request_id, session_id, status, request_meta_cipher, request_meta_crypto,"
                             + " context_generation, source_scope_type, source_scope_id, source_timezone,"
-                            + " runtime_generation, started_at) VALUES ('tx-rollback', 1, 'RUNNING', 'm', '{}', 1,"
+                            + " runtime_generation, started_at) VALUES ('tx-rollback', ?, 'RUNNING', 'm', '{}', 1,"
                             + " 'GLOBAL', 0, 'Asia/Shanghai', 'gen-1', '2026-10-11T00:00:00.000Z')")) {
+                statement.setLong(1, sessionId);
                 assertEquals(1, statement.executeUpdate());
             }
             try (PreparedStatement statement = connection.prepareStatement(
@@ -164,6 +169,7 @@ class ImmediateTransactionTest {
             }
             throw new SQLException("回滚");
         }));
+        assertEquals("回滚", rolledBack.getMessage());
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_turn WHERE request_id = 'tx-rollback'",
                 Integer.class));
     }

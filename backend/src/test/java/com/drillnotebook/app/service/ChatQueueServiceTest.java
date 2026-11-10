@@ -13,6 +13,31 @@ import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
 /** Reuses the real SQLite/cipher/scheduler fixture; no in-memory queue implementation in the tests. */
 class ChatQueueServiceTest extends SessionDispatchServiceTest {
+    @Test void queuedPageSnapshotSurvivesRestartAndEditingAndRemainsEncrypted() throws Exception {
+        dispatch.pauseQueue(source,true);
+        var body=new LinkedHashMap<>(human(source,"看这页"));
+        var snapshot=Map.of("kind","manual","title","原页面","capturedAt","2026-11-09T10:00:00Z","markdown","排队时的私有正文");
+        body.put("pageSnapshot",snapshot);
+        var queued=dispatch.submitHuman(source,body);
+        assertEquals("原页面",items(source).get(0).get("context"));
+        assertFalse(jdbc.queryForList("SELECT * FROM ai_chat_pending").toString().contains("私有正文"));
+        dispatch.close();
+        var beans=new DefaultListableBeanFactory();beans.registerSingleton("ai",ai);
+        dispatch=new SessionDispatchService(beans.getBeanProvider(AiService.class),receipts,wiring.sessions(),wiring.turnService(),stack.vault(),wiring.cipher(),jdbc,json);
+        dispatch.recover();
+        var row=items(source).get(0);act(source,row,"beginEdit");
+        dispatch.queueAction(source,request(queued),Map.of("action","save","revision",row.get("revision"),"userText","看这页的第二段"));
+        var restored=items(source).get(0);
+        assertEquals("看这页的第二段",restored.get("userText"));
+        assertEquals("原页面",restored.get("context"));
+        assertFalse(jdbc.queryForList("SELECT * FROM ai_chat_pending").toString().contains("私有正文"));
+        assertTrue((boolean)dispatch.queueView(source).get("paused"));
+        var persisted=jdbc.queryForMap("SELECT payload_cipher,payload_meta FROM ai_chat_pending WHERE request_id=?",request(queued));
+        var read=wiring.cipher().read((String)persisted.get("payload_cipher"),(String)persisted.get("payload_meta"),"");
+        var restoredBody=json.readTree(read.value()).path("body");
+        assertEquals(json.valueToTree(snapshot),restoredBody.path("pageSnapshot"));
+        assertEquals("看这页的第二段",restoredBody.path("input").path("userText").asText());
+    }
     Map<String,Object> human(long session,String text){return Map.of("protocolVersion",2,"requestId",UuidV7.generate(System.currentTimeMillis()),"input",Map.of("role","user","userText",text),"mode","queue");}
     @SuppressWarnings("unchecked") List<Map<String,Object>> items(long session){return (List<Map<String,Object>>)dispatch.queueView(session).get("items");}
     Map<String,Object> act(long session,Map<String,Object> item,String action){return dispatch.queueAction(session,(String)item.get("requestId"),Map.of("action",action,"revision",item.get("revision")));}

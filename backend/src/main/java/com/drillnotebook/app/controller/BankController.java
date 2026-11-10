@@ -74,6 +74,12 @@ public class BankController {
         } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("题目保存失败: " + error.getMessage()); }
     }
 
+    @GetMapping("/questions/{id}")
+    public Map<String, Object> getQuestion(@PathVariable long id) {
+        try { return questions.findById(id).toMap(true); }
+        catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); }
+    }
+
     @PutMapping("/questions/{id}")
     public Map<String, Object> updateQuestion(@PathVariable long id, @RequestBody Map<String, Object> body) {
         try { questions.update(id, body); return questions.findById(id).toMap(true); } catch (EmptyResultDataAccessException error) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "题目不存在"); } catch (IllegalArgumentException error) { throw error; } catch (Exception error) { throw new IllegalArgumentException("题目保存失败: " + error.getMessage()); }

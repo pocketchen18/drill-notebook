@@ -10,6 +10,8 @@ pnpm-debug.log*
 
 # Frontend, Electron, Java and packaging output
 frontend/dist/
+frontend/.vite/
+frontend/.vitest/
 electron-dist/
 backend/target/
 dist/

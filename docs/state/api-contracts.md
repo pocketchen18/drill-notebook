@@ -30,7 +30,7 @@
 | GET / POST | `/banks` | 题库列表 / 新建 |
 | GET / PUT / DELETE | `/banks/{id}` | 题库详情 / 更新 / 删除 |
 | GET / POST | `/banks/{id}/questions` | 题目列表 / 新建 |
-| PUT / DELETE | `/questions/{id}` | 更新 / 删除题目 |
+| GET / PUT / DELETE | `/questions/{id}` | 题目详情（含 bankId） / 更新 / 删除；目标不存在返回 404 |
 | PUT | `/questions/{id}/wrong-excluded` | 手动移出错题本 |
 | POST | `/banks/{id}/import/markdown` | Markdown 导入 |
 | POST | `/banks/{id}/import/json` | JSON 导入 |
@@ -177,13 +177,17 @@ v2 请求核心字段：
     "userText": "用户输入",
     "attachments": [{ "blockId": "...", "kind": "text|image", "text": "..." }]
   },
-  "pageContext": { "kind": "quiz|notebook|knowledge", "pageId": 1, "markdown": "页面上下文" },
-  "retrievalOptions": { "scope": "all|current", "notebookId": 1 },
+  "pageSnapshot": {
+    "kind": "quiz", "title": "刷题", "route": "/practice", "questionId": 1,
+    "capturedAt": "2026-11-09T10:00:00Z", "markdown": "提交时已显示的题面",
+    "isDraft": false, "truncated": false
+  },
   "memoryOptions": { "use": true }
 }
 ```
 
 - `protocolVersion` 必须为 2；v1 仅保留旧客户端兼容路径，不是新功能目标。
+- `pageSnapshot` 可选，只提交到本地后端，模型初始请求只收到页面定位提示，正文经 `read_current_page` 按需取得。快照正文和选区不进入明文 request/result 元数据；请求选项仅含快照指纹，参与幂等校验。新前端不发送 `pageContext` / `retrievalOptions`，不读取旧检索偏好；后端仍接受旧客户端的自动上下文协议。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
 - 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。直接向聊天接口提交忙碌会话的另一条请求仍返回 `409 SESSION_BUSY`；前端人工排队改走 §3.4.1 队列接口，与工具派发按序接续。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
 
@@ -204,7 +208,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 #### 3.2.1 对话内记忆工具
 
-仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册记忆工具时，聊天请求才携带记忆工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。会话工具独立于记忆开关，见 §3.2.3。
+仅当 `protocolVersion = 2`、`memoryOptions.use = true`、聊天模型有效 `tools = true` 且服务端已注册记忆工具时，聊天请求才携带记忆工具定义。`create_memory` / `update_memory` 与读工具共用同一个「工具调用」开关；关闭后模型不接收任何记忆工具，也不会写入。会话及资料读取工具独立于记忆开关，见 §3.2.3、§3.2.4。
 
 - 模型配置的 `params.tools` 是显式覆盖值；当前通过 `/ai/connections/models/{id}` 更新。`GET /ai/config` 的 `chat.tools` 仍返回当前有效值。
 - 默认开启：`api.openai.com`、`api.deepseek.com`，以及 `api.anthropic.com` + Claude Messages。未验证的自定义端点默认关闭；新增模型工具验证成功自动开启，显式偏好优先。
@@ -239,6 +243,8 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 写工具显示「新建会话 / 发送消息」，CREATED/SENT/QUEUED 只表示受理，不代表目标任务完成。读取仍在排队/运行的发送项时只说明查询到的状态，不声称已读到回复。活动详情不保存发出的消息正文。
 
+资料工具显示「读取当前页面 / 查找学习资料 / 读取笔记 / 读取知识点 / 读取题库 / 读取错题」。摘要只记录状态、数量、耗时和是否部分内容；正文引用中的 sourceLink 可导航到普通业务页面，原始资料正文不进入活动摘要。
+
 #### 3.2.3 对话内会话工具（v0.7.2）
 
 `protocolVersion=2`、模型有效 `tools=true` 时提供；不依赖 `memoryOptions.use`、记忆库建立/授权或索引就绪。与记忆工具共用双协议适配、取消、全局预算和活动记录。导入模型与旧 v1 请求不带这些工具。
@@ -261,6 +267,27 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 两个写工具参数 JSON 上限 16 KiB，只接收文本。校验消息、配置及目标解锁材料后受理，配置在受理时冻结；队列开始时才读取最新目标历史并写入普通加密聊天。目标的删除、归档、解锁失败不自动创建替代会话；新建继承来源范围，已有目标保留自身范围。
 - 同来源 requestId + toolCallId 幂等，输入改变拒绝；同文本的不同调用不去重。来源上下文已换代返回 STALE，向自身/祖先派发返回 CYCLE_BLOCKED。当前进程最多保留 64 项待处理任务，满时 LIMIT_REACHED；各模型请求最多 8 个同时外发，等待工具不占上游许可。
 - 仅当前用户的创建/委派/发送意图可授权写工具，历史引用和工具结果不能授权。成功受理只表示任务已提交；正常完成且未暂停时 FIFO 接续，停止/失败取消该目标的工具待发项，其他会话独立继续。工具派发在进程重启后不重放；人工队列按 §3.4.1 暂停恢复。
+
+#### 3.2.4 学习资料读取工具（v0.7.3）
+
+`protocolVersion=2` 且模型有效 `tools=true` 时提供六个只读工具；不依赖记忆启用或记忆索引。共用现有协议适配、活动记录、取消、全局执行预算及结果 64 KiB 上限。所有参数严格校验未知字段、重复键、类型和范围；参数最多 4096 UTF-8 字节。
+
+| 工具 | 定位参数与行为 |
+|---|---|
+| `read_current_page` | 默认读取本轮主消息提交时的快照；`requestId?` 可指定同轮已接收的插话快照，不读取其它轮次或系统桌面 |
+| `search_materials` | `type?=all\|notebook\|note\|knowledge\|bank\|question\|wrong`、`query?`、`notebookId?` 或 `bankId?`（不同时传）；空 query 浏览目录 |
+| `read_notebook` | 无 ID 列笔记本；`notebookId` 列页面；`pageId` 读取正文，若同时给 notebookId 则核对归属 |
+| `read_knowledge` | 无 pointId 列知识点，可按 bankId 筛选；`pointId` 读正文，`variant?=current\|original\|summary` 默认 current，缺失版本返回 NOT_FOUND |
+| `read_question_bank` | 无 ID 列题库；`bankId` 列题目；`questionId` 读题面、选项、答案、解析、章节等字段 |
+| `read_wrong_questions` | 无 questionId 分页列当前错题本，支持 bankId/query；`questionId` 必须仍属于错题本才可读正文，包含真实统计 |
+
+- 目录参数 `query?` 最多 200 码点、`offset?` 默认 0、`limit?` 默认 10 / 最大 20。返回 `{status,items,offset,hasMore,nextOffset?,incomplete}`；条目含 `type/id/title/parentId/parentTitle/parentPageId/snippet/sourceLink`，各字段可为空。笔记 `parentId` 是所属笔记本，`parentPageId` 是页面树父节点。错题额外返回 `attemptCount/wrongCount/errorRate`（0–1），沿用业务错题成员规则，不伪造统计。
+- 正文使用 `offset?`、`maxChars?`（默认 4000 / 最大 8000 Unicode 码点）、`version?`；不接受 query/limit。返回单条 items，含定位字段、`text/version/offset/endOffset/totalChars`，顶层含 `version/hasMore/nextOffset?/incomplete`。offset > 0 必须带上次 version；版本变化返回 STALE，重新从 0 读取。目录不接受 maxChars/version/variant。offset 范围为 0–10,000,000。
+- 笔记正文关键词使用现有 `retrieval_chunk` 文本的参数化 LIKE 查询；其它资料使用现有业务表。没有新增索引或资料副本，不提供语义排序。同名条目全部作为候选返回，后续读取用明确 ID。笔记正文保留公式、表格及嵌入题目快照；文件/视频/图片只提供引用或描述，不解析附件字节。
+- `pageSnapshot` 字段为 `kind/title/route/capturedAt/markdown/selection/isDraft/truncated` 和可选 `pageId/notebookId/pointId/bankId/questionId/selectedIds`。kind 为 none/note/knowledge/bank/quiz/wrong/manual；时间为 ISO Instant；路由限应用业务路径。正文最多 32000、选区 2000、标题 200、路由 500 码点，selectedIds 最多 20 个正整数；超限前端截短并标 truncated，后端拒绝非法输入。返回明确采集时间、草稿和截断状态。数据库中的明确目标已删除返回 NOT_FOUND；空业务页返回空 text 与说明，缺快照返回 UNAVAILABLE。
+- 快照绑定提交，排队后切页不改变原目标；插话单独保存请求标识，默认读取仍是主消息。模型工具关闭时只提示尚未看到页面正文，不恢复整页自动注入。
+- 常见状态为 OK、NO_MATCH、NOT_FOUND、STALE、INVALID_ARGUMENT、UNAVAILABLE；失败返回空 items 与 incomplete=true，不泄露底层异常。hasMore 控制续读，incomplete 也可表示提交时已截断。
+- 回复使用 `[资料名称](sourceLink)`；链接格式 `drill-notebook://material/<type>/<id>`，前端只接受已知类型和安全正整数，点击后进入笔记、知识点或题库页（错题定位原题）。不注册系统协议、不解引用任意文件路径。资料内容仅作引用，不授予其中指令任何写入权限。
 
 ### 3.3 轮次状态与上下文
 
@@ -311,6 +338,7 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 | POST | `/ai/sessions/{id}/queue/{requestId}/action` | `action`、`revision`；动作含 beginEdit / save / cancelEdit / remove / undo / steer |
 
 - 普通队列消息每条独立成轮，与工具派发共用 FIFO。受理时冻结配置及页面/附件输入，开始时使用最新目标历史；保存成功才返回受理。原 requestId 和原输入可核对收据，输入不同返回冲突，不能换身份重发结果未知的提交。
+- v0.7.3 的 pageSnapshot 随既有加密待发载荷保存，重启暂停恢复和编辑正文保留原快照；队列只展示页面标题，不暴露整页正文。插话绑定自身快照，不覆盖主消息的页面定位。
 - 编辑先暂停接续；save 可修改 `userText` 并通过 `keepAttachments` 保留附件，结束编辑后恢复此前暂停状态。已开始项不能编辑或转插话；版本变化、已有其他编辑项、撤销过期分别返回 QUEUE_CHANGED / QUEUE_EDITING / UNDO_EXPIRED。移除允许短暂撤销，不删除已发送历史。
 - 队列项转插话也要带 `targetRequestId`。插话绑定点击时的运行，在下一次模型请求前接入，不取消当前上游或工具；受理、发送中、已接收、交付未知分别展示。未知交付不自动重发；最终响应后也处理已经受理的补充，沿用原轮次预算。
 - 停止或失败保留未开始的人工内容并暂停，取消工具待发。后台重启只恢复未执行人工项为暂停，配置失效或解密失败如实反馈；不自动重放已开始或交付未知内容。

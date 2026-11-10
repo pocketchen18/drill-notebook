@@ -142,11 +142,10 @@ public class QuestionRepository {
      * 3) 最近一次答错之后尚未连续答对满 {@link #WRONG_MASTER_STREAK} 次。
      * 排序：错误次数多者优先，其次最近答错时间。
      */
-    public List<QuestionRecord> wrongQuestions() {
-        return jdbc.query("""
-                SELECT q.* FROM question q
+    static final String WRONG_MEMBERSHIP_SQL = """
                 JOIN (
                     SELECT question_id,
+                           COUNT(*) AS attempt_count,
                            SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_count,
                            MAX(CASE WHEN is_correct = 0 THEN id END) AS last_wrong_id,
                            MAX(CASE WHEN is_correct = 0 THEN answered_at END) AS last_wrong_at
@@ -156,8 +155,11 @@ public class QuestionRepository {
                   AND q.wrong_excluded = 0
                    AND (SELECT COUNT(*) FROM answer_record c
                           WHERE c.question_id = q.id AND c.is_correct = 1 AND c.id > agg.last_wrong_id) < """ + WRONG_MASTER_STREAK + """
-                 ORDER BY agg.wrong_count DESC, agg.last_wrong_at DESC
-                """, rowMapper);
+                """;
+
+    public List<QuestionRecord> wrongQuestions() {
+        return jdbc.query("SELECT q.* FROM question q " + WRONG_MEMBERSHIP_SQL
+                + " ORDER BY agg.wrong_count DESC, agg.last_wrong_at DESC", rowMapper);
     }
 
     /** 错题本视图：在成员规则基础上附带错误次数 / 作答次数 / 错误率，供前端展示与排序。 */

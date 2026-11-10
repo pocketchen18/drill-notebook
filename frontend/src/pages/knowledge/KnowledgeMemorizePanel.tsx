@@ -11,6 +11,7 @@ import { SessionCurveSettingsModal } from '../../components/SessionCurveSettings
 import { KnowledgeMemorizeSession } from './KnowledgeMemorizeSession';
 import { usePersistSlice } from '../../hooks/useViewState';
 import { captureKeySet, putScoped, readKeySet, readPageSlice } from '../../lib/viewState';
+import { useRegisterPageContext } from '../../hooks/useRegisterPageContext';
 
 interface TreeDatum {
   key: string;
@@ -35,7 +36,7 @@ function subtreeCount(node: KnowledgeTreeNode): number {
  * 背知识点面板（练习 → 背诵）：轻量知识树勾选背诵范围 + 记忆曲线设置 + 开始背诵。
  * 与「知识点」阅读页解耦：这里只保留背诵所需的选材与会话流程。
  */
-export function KnowledgeMemorizePanel(): JSX.Element {
+export function KnowledgeMemorizePanel({ contextActive = true }: { contextActive?: boolean } = {}): JSX.Element {
   const banksQuery = useQuery({ queryKey: ['banks'], queryFn: () => get<Bank[]>('/api/banks') });
   const cachedPractice = readPageSlice('practice');
   const [bankId, setBankId] = useState<number | undefined>(cachedPractice.knowledgeBankId);
@@ -78,6 +79,10 @@ export function KnowledgeMemorizePanel(): JSX.Element {
   const [curveSettingsVisible, setCurveSettingsVisible] = useState(false);
   const [curveSummary, setCurveSummary] = useState(() => readSessionCurveConfig());
   const [sessionIds, setSessionIds] = useState<number[]>();
+  useRegisterPageContext({ kind: 'knowledge', title: '背知识点（未开始）', route: '/practice',
+    bankId: resolvedBankId, selectedIds, truncated: points.length > 20,
+    markdown: points.slice(0, 20).map((p) => `知识点 #${p.id}：${p.title}`).join('\n')
+  }, contextActive && !sessionIds?.length);
 
   const handleBankChange = (id: number): void => {
     setBankId(id);
@@ -98,7 +103,7 @@ export function KnowledgeMemorizePanel(): JSX.Element {
         <div><h1>背知识点</h1><p>短周期记忆曲线：{describeSessionCurveConfig(curveSummary)}</p></div>
         <Button onClick={() => setSessionIds(undefined)}>结束背诵</Button>
       </div>
-      <KnowledgeMemorizeSession points={points} questions={questionsQuery.data ?? []} ids={sessionIds} onFinish={() => setSessionIds(undefined)} />
+      <KnowledgeMemorizeSession contextActive={contextActive} points={points} questions={questionsQuery.data ?? []} ids={sessionIds} onFinish={() => setSessionIds(undefined)} />
     </main>;
   }
 

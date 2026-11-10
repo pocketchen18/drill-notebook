@@ -6,12 +6,12 @@ import { SessionNavigation } from './ai-session/SessionNavigation';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
-import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, RetrievalOptions, TurnResult } from '../lib/types';
+import type { AiChatSession, AiConfig, ChatCitation, ChatContentPart, ChatMessage, NotePage, Notebook, Question, KnowledgePoint, TurnResult } from '../lib/types';
 import { ChatContextInspector } from './ai-memory/ChatContextInspector';
 import { MemoryUsageBadge } from './ai-memory/MemoryUsageBadge';
 import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
-import { LS_RETRIEVAL_SCOPE, LS_RETRIEVE_NOTES, readBoolPref, readStringPref } from '../lib/sessionPrefs';
+import { capturePageSnapshot, materialLinkTarget } from '../lib/pageSnapshot';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
 import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
 import { canContinueTurn, executionStopNotice, historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
@@ -111,13 +111,6 @@ export function AiAssistant(): JSX.Element {
   const submittedQueueDrafts = useRef(new Map<number, { message: string; ids: Set<string> }>());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  // 资料读取工具接入前，沿用已有检索偏好；顶部上下文卡片已移除。
-  const [retrieveNotes] = useState(() => readBoolPref(LS_RETRIEVE_NOTES, false));
-  const [retrievalScope, setRetrievalScope] = useState<'current' | 'all'>(() => {
-    const saved = readStringPref(LS_RETRIEVAL_SCOPE, '');
-    if (saved === 'current' || saved === 'all') return saved;
-    return useUiStore.getState().pageContext.notebookId !== undefined ? 'current' : 'all';
-  });
   const [targetNotebookId, setTargetNotebookId] = useState<number>();
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
@@ -308,27 +301,25 @@ export function AiAssistant(): JSX.Element {
     return () => window.cancelAnimationFrame(frame);
   }, [streaming]);
 
-  // 开启笔记检索且当前上下文本身就是笔记页时，不再重复注入整页 markdown（后端会按需检索）。
-  const suppressPageMarkdown = retrieveNotes && pageContext.kind === 'note';
-
-  const contextMarkdown = useMemo(
-    () => (suppressPageMarkdown ? '' : pageContext.markdown.trim()),
-    [pageContext.markdown, suppressPageMarkdown]
-  );
-
-  // Task 14：进入无当前 notebook 的页面时，current 自动降级为 all，保证绝不发送缺 notebookId 的 current。
-  useEffect(() => {
-    if (pageContext.notebookId === undefined && retrievalScope === 'current') setRetrievalScope('all');
-  }, [pageContext.notebookId, retrievalScope]);
-
-  // Task 8/14：开启时发送 enabled/scope/notebookId；关闭时完全不携带该字段，保持旧请求契约。
-  const retrievalOptions = useMemo<RetrievalOptions | undefined>(() => {
-    if (!retrieveNotes) return undefined;
-    if (retrievalScope === 'current' && pageContext.notebookId !== undefined) {
-      return { enabled: true, scope: 'current', notebookId: pageContext.notebookId };
-    }
-    return { enabled: true, scope: 'all' };
-  }, [pageContext.notebookId, retrievalScope, retrieveNotes]);
+  const openMaterial = async (link: string): Promise<void> => {
+    const target = materialLinkTarget(link);
+    if (!target) return;
+    try {
+      let route: string;
+      if (target.type === 'notebook') route = `/notebooks?notebookId=${target.id}`;
+      else if (target.type === 'note') route = `/notebooks?pageId=${target.id}`;
+      else if (target.type === 'bank') route = `/banks?bankId=${target.id}`;
+      else if (target.type === 'knowledge') {
+        const point = await get<KnowledgePoint>(`/api/knowledge-points/${target.id}`);
+        route = `/knowledge?pointId=${target.id}${point.bankId ? `&bankId=${point.bankId}` : ''}`;
+      } else {
+        const question = await get<Question>(`/api/questions/${target.id}`);
+        route = `/banks?bankId=${question.bankId}&questionId=${target.id}`;
+      }
+      useUiStore.getState().setAiOpen(false);
+      navigate(route);
+    } catch (error) { Message.error(friendlyMessage(error, '资料不存在或暂时无法打开')); }
+  };
 
   const createSessionMutation = useMutation({
     mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
@@ -643,14 +634,7 @@ export function AiAssistant(): JSX.Element {
     const inputSnapshot: Omit<TurnInput, 'sessionId'> = {
       userText: text,
       ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
-      ...(pageContext.kind === 'none' ? {} : {
-        pageContext: {
-          kind: pageContext.kind,
-          pageId: pageContext.notePageId,
-          ...(contextMarkdown ? { markdown: contextMarkdown } : {})
-        }
-      }),
-      ...(retrievalOptions ? { retrievalOptions } : {})
+      pageSnapshot: capturePageSnapshot(useUiStore.getState().pageContext)
     };
     if (sessionId !== undefined && (streaming || queue.data?.items?.length || queue.data?.paused || mode === 'steer')) {
       const submittedSession = sessionId;
@@ -886,10 +870,10 @@ export function AiAssistant(): JSX.Element {
                     onDisclosure={() => { stickyBottomRef.current = false; }} /> : null}
                   {isAssistant && item.supplements?.some((s) => s.state === 'RECEIVED')
                     ? splitReply(text, item.supplements).map((part) => part.role === 'user'
-                      ? <div className="chat-supplement" key={part.key}><small>插话 · 已接收</small><MarkdownContent value={part.text} onSessionLink={setSessionReference} />
+                      ? <div className="chat-supplement" key={part.key}><small>插话 · 已接收</small><MarkdownContent value={part.text} onSessionLink={setSessionReference} onMaterialLink={openMaterial} />
                         {!!part.attachments?.length && <small>{part.attachments.join(' · ')}</small>}</div>
-                      : <MarkdownContent key={part.key} value={part.text} onSessionLink={setSessionReference} />)
-                    : <MarkdownContent value={text} onSessionLink={setSessionReference} />}
+                      : <MarkdownContent key={part.key} value={part.text} onSessionLink={setSessionReference} onMaterialLink={openMaterial} />)
+                    : <MarkdownContent value={text} onSessionLink={setSessionReference} onMaterialLink={openMaterial} />}
                   {item.streaming && !item.toolActivities?.length ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
                   {item.notice ? (
                     <div className="ai-retrieval-notice">

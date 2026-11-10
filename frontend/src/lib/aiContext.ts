@@ -19,6 +19,10 @@ function inlineText(node: Record<string, unknown>): string {
     return href ? `[${text}](${href})` : text;
   }
   if (node.type === 'hardBreak') return '\n';
+  if (node.type === 'mathInline') {
+    const attrs = node.attrs as Record<string, unknown> | undefined;
+    return `$${String(attrs?.latex ?? '')}$`;
+  }
   return childNodes(node).map(inlineText).join('');
 }
 

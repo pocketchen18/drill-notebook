@@ -53,6 +53,7 @@ interface V2Body {
   messages?: unknown;
   input: { role: string; userText: string };
   pageContext?: { kind: string; pageId?: number; markdown?: string };
+  pageSnapshot?: { kind: string; pageId?: number; markdown?: string; notebookId?: number; capturedAt?: string };
   retrievalOptions?: { enabled: boolean; scope: string; notebookId?: number };
 }
 
@@ -69,7 +70,7 @@ const typeAndSend = async (text: string): Promise<void> => {
   await waitFor(() => expect(apiPost.mock.calls.some((item) => item[0] === '/api/ai/chat')).toBe(true));
 };
 
-describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
+describe('AiAssistant v2 请求组装（按需读取页面）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -91,7 +92,7 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     setContext({ kind: 'none', title: '无页面上下文', markdown: '' });
   });
 
-  it('关闭检索：不带 retrievalOptions，页面正文改走 pageContext，不再有 system 消息', async () => {
+  it('页面正文只放本地快照，不走自动注入字段', async () => {
     setContext({ kind: 'quiz', title: '刷题', markdown: 'QUIZ MD' });
     renderAssistant();
     await typeAndSend('你好');
@@ -101,30 +102,31 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     // v2 前端禁止再拼"你是学习助手"system，也不回传历史（contracts §4.1）
     expect(body.messages).toBeUndefined();
     expect(body.input).toEqual({ role: 'user', userText: '你好' });
-    expect(body.pageContext).toEqual({ kind: 'quiz', markdown: 'QUIZ MD' });
+    expect(body.pageContext).toBeUndefined();
+    expect(body.pageSnapshot).toMatchObject({ kind: 'quiz', markdown: 'QUIZ MD' });
+    expect(Number.isFinite(Date.parse(body.pageSnapshot!.capturedAt!))).toBe(true);
   });
 
-  it('note 页沿用已开启的检索偏好：默认 current + notebookId，且不再重复带上整页 markdown', async () => {
+  it('旧检索偏好不再注入资料，笔记快照保留正文和目标', async () => {
     setContext({ kind: 'note', title: '页面', markdown: 'NOTE MD', notebookId: 7, notePageId: 5 });
     localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
     await typeAndSend('你好');
     const body = chatBody();
-    expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'current', notebookId: 7 });
-    expect(body.pageContext).toEqual({ kind: 'note', pageId: 5 });
-    expect(body.pageContext?.markdown).toBeUndefined();
+    expect(body.retrievalOptions).toBeUndefined();
+    expect(body.pageContext).toBeUndefined();
+    expect(body.pageSnapshot).toMatchObject({ kind: 'note', pageId: 5, notebookId: 7, markdown: 'NOTE MD' });
   });
 
-  it('无 notebookId 的页面沿用已开启的检索偏好：默认 all，绝不发送缺 notebookId 的 current', async () => {
+  it('空页面不会自动检索全库或恢复旧注入字段', async () => {
     setContext({ kind: 'quiz', title: '刷题', markdown: '' });
     localStorage.setItem(LS_RETRIEVE_NOTES, 'true');
     renderAssistant();
     await typeAndSend('你好');
     const body = chatBody();
-    expect(body.retrievalOptions).toEqual({ enabled: true, scope: 'all' });
-    expect((body.retrievalOptions as { notebookId?: number }).notebookId).toBeUndefined();
-    // 没有页面正文时只留页面身份，不塞空 markdown
-    expect(body.pageContext).toEqual({ kind: 'quiz' });
+    expect(body.retrievalOptions).toBeUndefined();
+    expect(body.pageContext).toBeUndefined();
+    expect(body.pageSnapshot).toMatchObject({ kind: 'quiz', markdown: '' });
   });
 
   it('每个逻辑请求带一个 UUIDv7 身份，服务端据此做幂等', async () => {
@@ -221,6 +223,26 @@ describe('AiAssistant v2 请求组装（Task 14 检索口径）', () => {
     await screen.findByText('第一段.md');
     expect(screen.queryByText('第二段.md')).toBeNull();
     expect(await screen.findByText('文本附件合计不能超过 20 万字')).toBeTruthy();
+  });
+
+  it.each([
+    ['note', '/notebooks?pageId=12'],
+    ['notebook', '/notebooks?notebookId=12'],
+    ['bank', '/banks?bankId=12'],
+    ['knowledge', '/knowledge?pointId=12&bankId=7'],
+    ['question', '/banks?bankId=7&questionId=12'],
+    ['wrong', '/banks?bankId=7&questionId=12']
+  ])('工具返回的 %s 来源可打开普通资料页面', async (type, route) => {
+    const originalGet = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/questions/12' || url === '/api/knowledge-points/12'
+      ? Promise.resolve({ id: 12, bankId: 7 }) : originalGet(url));
+    apiPost.mockImplementation((url: string) => Promise.resolve(url === '/api/ai/chat'
+      ? { reply: `[资料来源](drill-notebook://material/${type}/12)`, sessionId: 10 } : {}));
+    renderAssistant();
+    await typeAndSend('打开资料');
+    fireEvent.click(await screen.findByRole('link', { name: '资料来源' }));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe(route));
+    expect(useUiStore.getState().aiOpen).toBe(false);
   });
 
   it('citation 点击深链到 /notebooks?pageId=', async () => {

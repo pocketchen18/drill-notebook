@@ -42,12 +42,13 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 
 ### 2.2 AI 页面上下文
 
-学习页通过 `useRegisterPageContext` 注册 `{ kind, title, markdown, ... }`。  
-仅内容变化时写入 store，防止 React #185 最大更新深度错误。
+学习页通过 `useRegisterPageContext` 注册业务内容、目标 ID、选区与草稿状态，仅内容变化时写入 store。离开页面清理旧内容，隐藏的练习标签停止注册；答题 / 背诵快照只含已显示内容。发送前由 `capturePageSnapshot` 克隆并限长，直接发送、队列与插话分别绑定提交时的页面，不因后续切页更换目标。
+
+v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右上角、快捷键和业务定向入口。不再发送自动注入用的 `pageContext` / `retrievalOptions` 或读取旧检索偏好。快照提交到本地后端后只向模型提供定位，正文由 `read_current_page` 按需读取；无工具能力时不恢复整页注入。后端保留旧客户端协议兼容。
 
 会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；会话列表每 1.5 秒刷新以发现后台新会话和标题变化，自动标题不进入聊天正文或工具活动，也不使用聊天运行圆环。
 
-跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行四个记忆工具与四个会话工具，`MemoryTool` 子接口仍受记忆开关控制。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿。
+跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行四个记忆工具、四个会话工具与六个资料读取工具，`MemoryTool` 子接口仍受记忆开关控制。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
 
 `useAiChatTurn` 按 sessionId 跟踪请求，每 900ms 查询运行快照；SSE 负责当前本地发送的增量，快照恢复切换、外部工具启动和断线后的正文。每个会话独立保存本次前端生命周期内的草稿、附件与阅读位置。忙碌时普通发送进入队列，`useChatQueue` 与 `ChatQueue` 管理贴边待发区、编辑、移除撤销、暂停继续和插话；输入草稿与待发项隔离。运行圆环、暂停、待发送数量和停止均按目标会话展示，临时失联显示重连状态。
 
@@ -89,7 +90,7 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 | AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-当前 schema 13，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+当前 schema 14，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
 
 ### 3.1 AI 连接、轮次与工具（v0.7.1）
 
@@ -108,6 +109,13 @@ Drawer/Modal 等 Portal 挂到 `#root` 或依赖 `html` 级变量 + `arco-theme`
 - 进程最多持有 64 项任务，执行线程与 8 个上游请求许可分开；`read_session` 的有界等待不持有上游许可。同一派发链共享时间、输出与工具预算，输出预留和阶段/执行计数原子更新，禁止向自身或祖先会话派发。
 - 工具派发在 SQLite 保存幂等收据，待发正文及配置只在内存；人工队列另以 `ChatPendingRepository` 加密保存请求体、配置引用及暂停状态。失败/停止取消工具待发，保留人工待发并暂停，其他会话独立继续。重启只恢复未执行人工内容为暂停状态，不重放已开始或交付未知的内容。
 - 插话经 `SessionExecution` 在下一次模型请求边界领取，不中止当前输出或工具，沿用本轮预算。最终响应结束时也检查已经受理的补充；送达未知不自动重试。接收后的独立用户补充由 `ChatSupplement` 参与历史、上下文、跨会话查阅和导出，按正文偏移保留原回复顺序。
+
+### 3.3 学习资料读取（v0.7.3）
+
+- `MaterialReadTools` 注册六个独立 `ChatTool`，由 `MaterialReadService` 处理严格参数、资料归属、分页与正文版本；`MaterialReadRepository` 对现有业务表作有界只读查询。笔记关键词复用 `retrieval_chunk` 文本进行 LIKE 匹配，不新增表、索引或语义检索。
+- `MaterialText` 将指定笔记页的 TipTap 数据转为可读正文，保留公式及嵌入题目 / 文件引用，不改变既有 `NoteNormalizer` 的索引规则。知识点当前、原文、总结分别读取；错题成员 SQL 与人工页面共用，统计来自真实答题记录。
+- `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
+- 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)。
 
 ## 4. 导入 / 导出
 

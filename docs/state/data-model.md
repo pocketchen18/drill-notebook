@@ -75,6 +75,8 @@ v14 人工待发请求体包含文字、附件、页面快照、检索范围及�
 
 v0.7.2 的 `list_sessions/read_session` 直接只读查询现有会话/消息/轮次，不新增表或记忆索引。列表按 ID seek；正文游标绑定 `session_ref/history_revision/context_generation` 及消息上界与段内偏移，只返回当前代终态已保存正文，legacy 仅初始代可读。来源原文不复制落库；活动继续复用加密结果元数据，读取不推进历史版本、不创建记忆。
 
+v0.7.3 的六个资料读取工具不改变 schema 14。资料直接读取业务表，笔记正文关键词复用 `retrieval_chunk` 文本；没有第二份资料库或索引。`pageSnapshot` 在直接运行时留在本轮内存，人工排队 / 插话沿用 `ai_chat_pending` 加密请求体，编辑用户正文时保留原快照。明文请求元数据仅含 `pageSnapshotHash`，工具原始正文不进入活动历史；指纹参与请求幂等判断。
+
 `ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随主模型。两张单行设置表各自独立检查 revision。
 
 工具活动复用 `ai_chat_turn.result_meta_cipher/result_meta_crypto` 加密保存，最多 1200 项白名单摘要。开始和完成时更新检查点，首条活动建立助手占位，最终回答复用同一消息；检查点不推进历史 revision。活动不保存工具原始参数/结果，历史查询只读取，不重放工具。终止原因保存在 `finish_reason` 及结果元数据。

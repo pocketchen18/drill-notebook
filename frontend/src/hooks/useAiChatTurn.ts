@@ -8,6 +8,7 @@ import type { RetrievalOptions } from '../lib/types';
 import { readToolActivities } from '../lib/toolActivity';
 import type { ToolActivity, ToolPhase } from '../lib/toolActivity';
 import type { ChatSupplement } from '../lib/chatQueue';
+import type { PageSnapshot } from '../lib/pageSnapshot';
 
 /**
  * 聊天轮次的唯一出口（执行方案 §12、contracts §4.1/§4.2/§4.5）。
@@ -37,6 +38,7 @@ export interface TurnInput {
   userText: string;
   attachments?: TurnAttachment[];
   pageContext?: TurnPageContext;
+  pageSnapshot?: PageSnapshot;
   retrievalOptions?: RetrievalOptions;
 }
 
@@ -119,6 +121,8 @@ export function buildTurnBody(requestId: string, input: TurnInput): Record<strin
     requestId,
     sessionId: input.sessionId,
     input: { role: 'user', userText: input.userText, ...(attachments.length ? { attachments } : {}) },
+    ...(input.pageSnapshot ? { pageSnapshot: { ...input.pageSnapshot,
+      ...(input.pageSnapshot.selectedIds ? { selectedIds: [...input.pageSnapshot.selectedIds] } : {}) } } : {}),
     ...(pageContext
       ? {
         pageContext: {

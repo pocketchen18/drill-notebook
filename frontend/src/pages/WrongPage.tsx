@@ -85,9 +85,12 @@ export function WrongPage(): JSX.Element {
   const pageContext = useMemo(() => ({
     kind: 'wrong' as const,
     title: `错题本（${rows.length} 道）`,
-    markdown: questionsToMarkdown(rows),
+    markdown: (selectedIds.length ? selectedRows : rows).slice(0, 20).map((row) =>
+      `题目 #${row.id} · 作答 ${row.attemptCount} 次，错误 ${row.wrongCount} 次\n${questionsToMarkdown([{ ...row, answer: undefined, analysis: undefined }])}`).join('\n\n'),
+    selectedIds: selectedRows.map((row) => row.id),
+    truncated: (selectedIds.length ? selectedRows : rows).length > 20,
     route: '/wrong'
-  }), [rows]);
+  }), [rows, selectedIds]);
 
   useRegisterPageContext(pageContext);
 

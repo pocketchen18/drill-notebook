@@ -12,7 +12,8 @@ import { DayQueueSessionBar } from '../components/DayQueueSessionBar';
 import { KnowledgeFullCardView } from './knowledge/KnowledgeFullCardView';
 import { KnowledgeMemorizeSession } from './knowledge/KnowledgeMemorizeSession';
 import { planScopeFromSearch } from '../lib/planProgress';
-import { buildKnowledgeTree } from '../lib/knowledgeTree';
+import { buildKnowledgeTree, buildFullMarkdown } from '../lib/knowledgeTree';
+import { useRegisterPageContext } from '../hooks/useRegisterPageContext';
 import { KnowledgeTreeNav } from './knowledge/KnowledgeTreeNav';
 import { KnowledgeCardWorkspace } from './knowledge/KnowledgeCardWorkspace';
 import { usePersistSlice } from '../hooks/useViewState';
@@ -21,6 +22,8 @@ import { markdownToPlainText } from '../lib/markdownText';
 
 export function KnowledgePointPage(): JSX.Element {
   const [searchParams] = useSearchParams();
+  const linkedPointId = Number(searchParams.get('pointId')) || undefined;
+  const linkedBankId = Number(searchParams.get('bankId')) || undefined;
   const { planItemId, planDate } = planScopeFromSearch(searchParams);
   const pointIdsFromQuery = useMemo(
     () => searchParams.get('pointIds')?.split(',').map(Number).filter(Boolean) ?? [],
@@ -34,11 +37,11 @@ export function KnowledgePointPage(): JSX.Element {
   // When deep-linking with pointIds, load all points (no bank filter) so the id is found across banks.
   const deepLinkActive = pointIdsFromQuery.length > 0;
   const cachedKnowledge = readPageSlice('knowledge');
-  const [bankId, setBankId] = useState<number | undefined>(cachedKnowledge.bankId);
+  const [bankId, setBankId] = useState<number | undefined>(linkedBankId ?? cachedKnowledge.bankId);
   const pointsQuery = useQuery({
-    queryKey: ['knowledge-points', deepLinkActive ? 'all' : bankId],
-    queryFn: () => get<KnowledgePoint[]>(`/api/knowledge-points${deepLinkActive || !bankId ? '' : `?bankId=${bankId}`}`),
-    enabled: deepLinkActive || bankId !== undefined
+    queryKey: ['knowledge-points', deepLinkActive || linkedPointId && !linkedBankId ? 'all' : bankId],
+    queryFn: () => get<KnowledgePoint[]>(`/api/knowledge-points${deepLinkActive || linkedPointId && !linkedBankId || !bankId ? '' : `?bankId=${bankId}`}`),
+    enabled: deepLinkActive || !!linkedPointId || bankId !== undefined
   });
   const questionsQuery = useQuery({ queryKey: ['knowledge-questions', bankId], queryFn: () => get<Question[]>(`/api/banks/${bankId}/questions`), enabled: bankId !== undefined });
   const [editorVisible, setEditorVisible] = useState(false);
@@ -92,6 +95,19 @@ export function KnowledgePointPage(): JSX.Element {
     ];
   }, [tree, currentBank, editing]);
   const currentNode = activeId != null ? tree.byId.get(activeId) : undefined;
+  const currentPoint = pointsQuery.data?.find((point) => point.id === activeId);
+  useEffect(() => { if (linkedBankId) setBankId(linkedBankId); }, [linkedBankId]);
+  useEffect(() => {
+    if (linkedPointId && pointsQuery.data?.some((point) => point.id === linkedPointId)) setActiveId(linkedPointId);
+  }, [linkedPointId, pointsQuery.data]);
+  useRegisterPageContext({
+    kind: 'knowledge', title: editorVisible ? title || '知识点草稿' : currentNode?.title ?? currentBank?.name ?? '知识点',
+    markdown: editorVisible ? content : currentNode ? buildFullMarkdown(currentNode)
+      : (pointsQuery.data ?? []).slice(0, 20).map((p) => `知识点 #${p.id}：${p.title}`).join('\n'),
+    route: '/knowledge', bankId: editorVisible ? editing ? editing.bankId : bankId : currentPoint ? currentPoint.bankId : bankId,
+    pointId: editorVisible ? editing?.id : currentNode && currentNode.id > 0 ? currentNode.id : undefined,
+    isDraft: editorVisible, truncated: !currentNode && (pointsQuery.data?.length ?? 0) > 20
+  }, !sessionIds);
 
   useEffect(() => { if (bankId === undefined && banksQuery.data?.length) setBankId(banksQuery.data[0].id); }, [bankId, banksQuery.data]);
   useEffect(() => {

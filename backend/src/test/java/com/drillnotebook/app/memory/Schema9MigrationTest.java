@@ -118,6 +118,8 @@ class Schema9MigrationTest {
     void v12UpgradeAddsDispatchReceiptsWithoutChangingSessionOrHistory() throws Exception {
         new DatabaseInitializer(dataSource,paths()).initialize();
         var jdbc=new JdbcTemplate(dataSource);
+        jdbc.execute("DROP TABLE ai_chat_pending");
+        jdbc.execute("DROP TABLE ai_chat_queue_state");
         jdbc.execute("DROP TABLE ai_session_dispatch");
         jdbc.update("UPDATE schema_version SET version=12");
         jdbc.update("INSERT INTO ai_chat_session(id,title,model,session_ref,title_source,title_status,title_revision) VALUES(71,'人工标题','fixture','0123456789abcdef0123456789abcdef','manual','idle',3)");
@@ -125,11 +127,13 @@ class Schema9MigrationTest {
         var session=jdbc.queryForMap("SELECT * FROM ai_chat_session WHERE id=71");
         var messages=jdbc.queryForList("SELECT * FROM ai_chat_message WHERE session_id=71");
         new DatabaseInitializer(dataSource,paths()).initialize();
-        assertEquals(13,version(jdbc));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(),version(jdbc));
         assertEquals(session,jdbc.queryForMap("SELECT * FROM ai_chat_session WHERE id=71"));
         assertEquals(messages,jdbc.queryForList("SELECT * FROM ai_chat_message WHERE session_id=71"));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM ai_session_dispatch",Integer.class));
         assertEquals(1,Schema9Fixture.objectCount(jdbc,"index","idx_dispatch_session"));
+        assertEquals(1,Schema9Fixture.objectCount(jdbc,"table","ai_chat_pending"));
+        assertEquals(1,Schema9Fixture.objectCount(jdbc,"table","ai_chat_queue_state"));
         assertTrue(existsSnapshot());
         new DatabaseInitializer(dataSource,paths()).initialize();
         assertEquals(session,jdbc.queryForMap("SELECT * FROM ai_chat_session WHERE id=71"));
