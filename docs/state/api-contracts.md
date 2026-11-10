@@ -307,7 +307,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 业务写入、索引、关联及回执同成同败。来源运行句柄、轮次身份、上下文代数和取消状态均须有效；提交后取消不抹掉成功结果。
 - 同 requestId + operationId 参数相同返回原对象，不同返回 CONFLICT；同请求完全相同参数换操作 ID 仍去重。显式 retryOf 链复用回执；普通新消息可再次创建同名资料。目标删除或已退出错题本后，重复操作返回 NOT_FOUND，不重建。
 - 成功返回 `{status,items:[{type,id,title,sourceLink,...所属信息}],sourceLink,incomplete:false}`，status 为 CREATED / DUPLICATE / NO_CHANGE。失败返回空 items、incomplete=true，状态为 INVALID_ARGUMENT / NOT_FOUND / REJECTED / STALE / CANCELLED / CONFLICT / UNAVAILABLE；UNAVAILABLE 表示保存结果待核对。
-- 前端只刷新相关目录缓存，不覆盖打开的编辑草稿。来源进入普通资料页面，AI 创建对象可由人工继续编辑；修改见 §3.2.6，删除工具尚未实现。
+- 前端只刷新相关目录缓存，不覆盖打开的编辑草稿。来源进入普通资料页面，AI 创建对象可由人工继续编辑；修改见 §3.2.6，删除见 §3.2.7。
 
 #### 3.2.6 修改学习资料工具（v0.7.3）
 
@@ -348,10 +348,21 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 | 方法 | 路径 | 契约 |
 |---|---|---|
-| GET | `/ai/tool-settings` | `{revision,tools:[{name,group:"delete",enabled,defaultEnabled:false}]}`，四个工具顺序同上 |
+| GET | `/ai/tool-settings` | `{revision,tools:[{name,group,enabled,defaultEnabled}]}`，全部 20 个内置工具，分组及顺序见下表 |
 | PUT | `/ai/tool-settings` | `{revision,enabled:{<name>:boolean}}`，部分更新，返回同形快照；未知名称 / 非布尔值 400，版本冲突 409 AI_SETTINGS_CONFLICT |
 
-全局开关不跟随模型，设置面板即点即存；恢复默认将四项全部关闭。开启从下一轮生效，关闭在执行前再次复核，未执行的调用返回 DISABLED。无记录或读取失败时删除保持关闭；工具被禁用或本轮为派发任务时向模型说明原因，不允许用清空 / 修改冒充删除。其余工具与搜索配置尚未开放。
+| group | 工具顺序 | defaultEnabled |
+|---|---|---|
+| `material` | read_current_page、search_materials、read_notebook、read_knowledge、read_question_bank、read_wrong_questions、create_material、update_material | true |
+| `memory` | search_memories、list_memories、create_memory、update_memory | true |
+| `session` | list_sessions、read_session、create_session、send_message | true |
+| `delete` | delete_memory、delete_session、delete_material、remove_wrong_question | false |
+
+全局开关不跟随模型，设置面板即点即存；恢复默认提交各项 defaultEnabled，即 16 开 / 4 关。无记录或旧配置缺项时使用该项默认值，保留原有删除选择；仅持久化与默认值不同的选择，部分更新不丢失其它组的偏好。沿用 schema 17，无额外迁移。
+
+开启从下一轮生效，关闭在执行前再次复核，未执行的调用返回 DISABLED，活动显示「工具已在设置中关闭，未执行」。全关仍可正常聊天。记忆工具仍受记忆启用 / 授权约束，全部工具仍受模型工具能力约束，不自动打开其它工具。读取设置异常或已知配置项损坏时接口报错、聊天暂时不提供工具，不能以默认开启值绕过用户选择；未知工具配置忽略。
+
+按本轮可用工具生成系统指引；全局关闭与派发任务的删除限制分别说明，不能用清空 / 修改冒充删除。联网搜索配置尚未开放。
 
 ### 3.3 轮次状态与上下文
 

@@ -83,6 +83,7 @@ export function toolTone(row: ToolActivity): 'running' | 'success' | 'neutral' |
 export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return isDeletionTool(row.toolName) ? '删除结果未确认，请核对' : '执行结果未确认';
+  if (row.outcome === 'DISABLED') return '工具已在设置中关闭，未执行';
   if (isDeletionTool(row.toolName)) {
     switch (row.outcome) {
       case 'DELETED': return row.toolName === 'delete_memory' ? '已删除 1 条' : row.toolName === 'delete_session' ? '会话已删除' : '已删除';
@@ -95,7 +96,6 @@ export function toolResultText(row: ToolActivity): string {
       case 'CONFLICT': return '资料已变化，请重新读取后核对';
       case 'AMBIGUOUS': return '需明确要删除的记忆';
       case 'NOT_FOUND': return row.toolName === 'delete_memory' ? '未找到待删除的记忆' : '目标不存在或已被删除';
-      case 'DISABLED': return '工具已在设置中关闭，未执行';
       case 'STALE': return '状态已变化，未删除';
       case 'CANCELLED': return '删除已取消';
       case 'UNAVAILABLE': return '删除结果未确认，请核对';

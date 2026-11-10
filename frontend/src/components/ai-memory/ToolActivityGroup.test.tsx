@@ -9,6 +9,15 @@ const started: ToolActivity = { sequence: 1, toolName: 'search_memories', state:
 const ended: ToolActivity = { ...started, state: 'FINISHED', outcome: 'OK', count: 2, elapsedMs: 620 };
 
 describe('工具活动折叠和真实结果', () => {
+  it('所有类别的工具被关闭后显示未执行，不冒充成功或未知结果', () => {
+    const rows = readToolActivities(['read_notebook', 'create_material', 'update_material', 'search_memories', 'send_message', 'delete_memory']
+      .map((toolName, i) => ({ ...ended, sequence: i + 1, toolName, outcome: 'DISABLED', count: 0 })));
+    render(<ToolActivityGroup activities={rows} active />);
+    for (const row of rows) expect(toolResultText(row)).toBe('工具已在设置中关闭，未执行');
+    expect(screen.getAllByRole('button', { name: /工具已在设置中关闭，未执行/ })).toHaveLength(6);
+    expect(screen.queryByText('执行结果未确认')).not.toBeInTheDocument();
+  });
+
   it('删除结果不再提供死链接，移出错题本仍能打开原题', () => {
     const open = vi.fn();
     const link = 'drill-notebook://material/note/12';

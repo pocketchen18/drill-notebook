@@ -48,7 +48,7 @@ v0.7.3 前端已移除顶部上下文卡片与右下角悬浮入口，保留右�
 
 会话导航由 `components/ai-session/SessionNavigation` 维护浮动列表、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；会话列表每 1.5 秒刷新以发现后台新会话和标题变化，自动标题不进入聊天正文或工具活动，也不使用聊天运行圆环。
 
-跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行五个记忆工具、五个会话工具、六个资料读取工具及资料新增 / 修改 / 删除 / 错题移出四个工具，`MemoryTool` 子接口仍受记忆开关控制。四个删除工具另由全局开关与派发来源过滤，默认关闭。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
+跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行五个记忆工具、五个会话工具、六个资料读取工具及资料新增 / 修改 / 删除 / 错题移出四个工具，`MemoryTool` 子接口仍受记忆开关控制。全部 20 个工具受独立全局开关管理，非删除默认开启，四个删除默认关闭且不提供给派发任务。每轮提供工具前读取配置，执行前复核；存储异常暂时关闭工具，不能重启被用户关闭的能力。设置页按学习资料 / 记忆 / 会话 / 删除分组，即点即存并可恢复默认。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
 
 `useAiChatTurn` 按 sessionId 跟踪请求，每 900ms 查询运行快照；SSE 负责当前本地发送的增量，快照恢复切换、外部工具启动和断线后的正文。每个会话独立保存本次前端生命周期内的草稿、附件与阅读位置。忙碌时普通发送进入队列，`useChatQueue` 与 `ChatQueue` 管理贴边待发区、编辑、移除撤销、暂停继续和插话；输入草稿与待发项隔离。运行圆环、暂停、待发送数量和停止均按目标会话展示，临时失联显示重连状态。
 

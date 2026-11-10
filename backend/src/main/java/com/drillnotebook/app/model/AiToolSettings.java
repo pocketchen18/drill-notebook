@@ -8,10 +8,27 @@ import java.util.TreeMap;
 
 /** 内置工具的全局启停偏好，独立于供应商和模型；只保存与默认值不同的显式选择。 */
 public record AiToolSettings(Map<String, Boolean> overrides) {
+    public record Tool(String name, String group) { }
+
+    /** 设置页的完整目录；模型能力与记忆授权仍在对话入口单独检查。 */
+    public static final List<Tool> TOOLS = List.of(
+            new Tool("read_current_page", "material"), new Tool("search_materials", "material"),
+            new Tool("read_notebook", "material"), new Tool("read_knowledge", "material"),
+            new Tool("read_question_bank", "material"), new Tool("read_wrong_questions", "material"),
+            new Tool("create_material", "material"), new Tool("update_material", "material"),
+            new Tool("search_memories", "memory"), new Tool("list_memories", "memory"),
+            new Tool("create_memory", "memory"), new Tool("update_memory", "memory"),
+            new Tool("list_sessions", "session"), new Tool("read_session", "session"),
+            new Tool("create_session", "session"), new Tool("send_message", "session"),
+            new Tool("delete_memory", "delete"), new Tool("delete_session", "delete"),
+            new Tool("delete_material", "delete"), new Tool("remove_wrong_question", "delete"));
     /** 删除类工具默认关闭；随版本新增的删除工具同样从关闭开始。 */
-    public static final List<String> DELETE_TOOLS = List.of("delete_memory", "delete_session", "delete_material",
-            "remove_wrong_question");
+    public static final List<String> DELETE_TOOLS = TOOLS.stream().filter(tool -> tool.group().equals("delete"))
+            .map(Tool::name).toList();
     public static final AiToolSettings DEFAULTS = new AiToolSettings(Map.of());
+    /** 读设置异常时不能使用默认开启值，以免绕过用户已经关闭的普通工具。 */
+    public static final AiToolSettings ALL_DISABLED = new AiToolSettings(TOOLS.stream()
+            .collect(java.util.stream.Collectors.toMap(Tool::name, tool -> false)));
 
     public AiToolSettings {
         Map<String, Boolean> copy = new TreeMap<>();
@@ -24,9 +41,9 @@ public record AiToolSettings(Map<String, Boolean> overrides) {
         overrides = Collections.unmodifiableMap(copy);
     }
 
-    /** 受开关管理的工具；其余工具只受模型的工具调用能力约束。 */
+    /** 全部内置工具都受全局开关管理。 */
     public static boolean managed(String tool) {
-        return tool != null && DELETE_TOOLS.contains(tool);
+        return tool != null && TOOLS.stream().anyMatch(entry -> entry.name().equals(tool));
     }
 
     /** 删除类工具另有「仅限用户直接提出」的约束。 */
@@ -43,8 +60,7 @@ public record AiToolSettings(Map<String, Boolean> overrides) {
     }
 
     public AiToolSettings with(Map<String, Boolean> changes) {
-        Map<String, Boolean> merged = new LinkedHashMap<>();
-        for (String tool : DELETE_TOOLS) merged.put(tool, enabled(tool));
+        Map<String, Boolean> merged = new LinkedHashMap<>(overrides);
         merged.putAll(changes);
         return new AiToolSettings(merged);
     }

@@ -1,6 +1,6 @@
-# 删除工具规格
+# 删除工具与全局工具设置规格
 
-> 按 [UI/UX](ui-ux.md) 实现四个删除工具与默认关闭的开关；不实现移动、批量删除、其余工具的独立启停或联网搜索分组。
+> 按 [UI/UX](ui-ux.md) 实现四个删除工具，并为全部 20 个现有内置工具提供独立全局开关；不实现移动、批量删除或联网搜索配置。
 
 ## 工具与参数
 
@@ -44,19 +44,30 @@
 
 ## 开关
 
-- `GET /api/ai/tool-settings` 返回 `{revision,tools:[{name,group:"delete",enabled,defaultEnabled:false}]}`，顺序为 delete_memory、delete_session、delete_material、remove_wrong_question。
+- `GET /api/ai/tool-settings` 返回 `{revision,tools:[{name,group,enabled,defaultEnabled}]}`，按下表顺序分组；非删除项 defaultEnabled=true，删除项 false。
+
+| group | 工具 |
+|---|---|
+| `material` | read_current_page、search_materials、read_notebook、read_knowledge、read_question_bank、read_wrong_questions、create_material、update_material |
+| `memory` | search_memories、list_memories、create_memory、update_memory |
+| `session` | list_sessions、read_session、create_session、send_message |
+| `delete` | delete_memory、delete_session、delete_material、remove_wrong_question |
+
 - `PUT /api/ai/tool-settings` 接收 `{revision,enabled:{<name>:boolean}}`，只更新给出的项，返回同形视图；未知工具名或非布尔值 400，版本不符 `409 AI_SETTINGS_CONFLICT`。
-- 无记录时全部按默认值；只保存用户显式设置的项，升级后新增的删除工具仍默认关闭。读取失败按全部关闭处理。
-- 每轮开始读取一次：关闭或派发任务中的删除工具不进入模型工具列表。执行前再读一次，已关闭返回 DISABLED。记忆工具另受本轮记忆开关约束。
-- 删除工具被关闭或本轮为派发任务时，附加一条系统说明：如实说明未开启与开启位置，不得用修改 / 清空代替删除。
+- 沿用 schema 17 的单行表，无需迁移；只保存与默认值不同的选择。无记录或旧配置没有某项时按该项默认值，已有删除选择不得被覆盖；局部更新不丢失其它组的选择。恢复默认提交接口返回的全部 defaultEnabled。
+- 存储读取失败或已知项损坏时，设置接口报错，不用默认值冒充已保存状态；聊天暂时关闭所有工具，防止重新开启用户已关闭的项。未知工具名忽略，兼容跨版本配置。
+- 每轮开始读取一次：所有关闭项，以及派发任务中的删除工具，不进入模型工具列表。执行前再读一次，已关闭返回 DISABLED。记忆工具另受本轮记忆开关约束，所有工具仍受模型工具能力约束，不自动启用依赖工具。
+- 系统指引仅适用于本轮可用工具；关闭项说明能力不可用及设置入口，派发任务的删除限制单独说明。删除能力不可用时不得用修改 / 清空替代。全部关闭仍有不可用说明并可正常聊天。
 
 ## 前端
 
 - `toolActivity.ts`：四个工具名称、五个新结果、文案（见 UI/UX 表）与分组标题；DELETED / REMOVED 为成功色。
 - `ToolActivityGroup`：操作范围；`delete_material` 不显示「查看资料」，`remove_wrong_question` 显示「查看原题」；删除结果未确认的提示。
 - `AiAssistant`：删除成功后刷新相关查询；笔记页 / 笔记本删除通过 `lib/materialEvents.ts` 通知 `NotebookPage` 丢弃对应草稿并移除页面缓存；记忆、会话删除刷新各自列表。
-- 设置：`lib/aiToolSettings.ts`、`AiToolSettingsPanel`、`SettingsPage` 新 Tab `tools`、`viewState` 的 `SettingsTab`。
+- 设置：`lib/aiToolSettings.ts` 定义分组与用途，名称复用活动名称；`AiToolSettingsPanel` 分组展示全部开关；沿用 `SettingsPage` 的 `tools` Tab 与 `viewState`。DISABLED 结果文案适用于全部工具。
 
 ## 验证
 
 真实 SQLite 覆盖五类资料删除与级联、子页面改挂、版本冲突、非空保护、绑定笔记本、错题移出与统计保留、重试 / 冲突 / 取消 / 过期轮次、迁移；会话删除的忙碌 / 自身 / 上游 / 证据保留；记忆删除的定位、作用域、抑制与计划刷新。本机模拟上游验证默认不提供、开启后读取→删除→回答、执行前关闭、派发任务不提供，以及删除带记忆的笔记本后本轮完成。前端测试文案、来源、刷新、草稿丢弃与设置面板，执行构建。结果记录在 QA。
+
+本轮补充：全部工具纳管与分组、16 开 4 关默认值、旧配置兼容、跨组局部保存与恢复默认、损坏配置不意外放开；普通工具关闭后不提供且不可执行、运行中关闭、重新开启下一轮生效、全部关闭正常聊天、记忆与派发限制仍有效。前端验证分组、持久化回显、恢复默认、失败 / 冲突与 DISABLED 文案。

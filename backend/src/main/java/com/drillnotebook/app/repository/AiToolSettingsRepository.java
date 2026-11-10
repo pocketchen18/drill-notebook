@@ -9,7 +9,7 @@ import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 工具开关保存在现有便携数据库；无法解析的文档使用默认值，未知名称和无效值不予采纳。 */
+/** 工具开关保存在现有便携数据库；仅无记录时使用默认值，损坏配置不能冒充默认开启。 */
 @Repository
 public class AiToolSettingsRepository {
     public record Snapshot(long revision, AiToolSettings values) { }
@@ -37,16 +37,18 @@ public class AiToolSettingsRepository {
         return new Snapshot(revision + 1, values);
     }
 
-    /** 只采纳当前目录认识的布尔项：损坏或来自其他版本的内容不能把删除工具意外打开。 */
+    /** 忽略其它版本的未知项；已知项损坏则报错，不能意外重新开启用户关闭的工具。 */
     private AiToolSettings parse(String document) {
         Map<String, Boolean> enabled = new LinkedHashMap<>();
         try {
             JsonNode node = mapper.readTree(document).path("enabled");
+            if (!node.isObject()) throw new IllegalArgumentException("工具开关须为对象");
             node.fields().forEachRemaining(entry -> {
-                if (AiToolSettings.managed(entry.getKey()) && entry.getValue().isBoolean())
-                    enabled.put(entry.getKey(), entry.getValue().booleanValue());
+                if (!AiToolSettings.managed(entry.getKey())) return;
+                if (!entry.getValue().isBoolean()) throw new IllegalArgumentException("工具开关须为布尔值");
+                enabled.put(entry.getKey(), entry.getValue().booleanValue());
             });
-        } catch (Exception ignored) { return AiToolSettings.DEFAULTS; }
+        } catch (Exception error) { throw new IllegalStateException("工具设置无法读取，请检查本地数据", error); }
         return new AiToolSettings(enabled);
     }
 }

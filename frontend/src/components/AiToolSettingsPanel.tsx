@@ -2,8 +2,9 @@ import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Switch } from '@arco-design/web-react';
 import { RotateCcw } from 'lucide-react';
-import { deletionTools, getToolSettings, saveToolSettings } from '../lib/aiToolSettings';
-import type { DeletionToolName } from '../lib/aiToolSettings';
+import { toolGroups, TOOL_DESCRIPTIONS, getToolSettings, saveToolSettings } from '../lib/aiToolSettings';
+import type { BuiltinToolName } from '../lib/aiToolSettings';
+import { TOOL_NAMES } from '../lib/toolActivity';
 import './ai-tool-settings.css';
 
 /** 即点即存；只有服务端确认后才显示新状态，冲突重新读取后由用户再次选择。 */
@@ -13,7 +14,7 @@ export function AiToolSettingsPanel(): JSX.Element {
   const saving = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const save = async (enabled: Partial<Record<DeletionToolName, boolean>>) => {
+  const save = async (enabled: Partial<Record<BuiltinToolName, boolean>>) => {
     if (!query.data || saving.current) return;
     saving.current = true; setBusy(true); setError('');
     try {
@@ -28,20 +29,23 @@ export function AiToolSettingsPanel(): JSX.Element {
   return <section className="panel ai-tool-settings" aria-label="工具设置">
     <div className="panel-header"><h2>工具</h2>
       <Button type="text" size="small" icon={<RotateCcw size={14} />} disabled={busy || allDefault}
-        onClick={() => void save(Object.fromEntries(deletionTools.map(tool => [tool.name, false])))}>恢复默认</Button>
+        onClick={() => void save(Object.fromEntries((query.data?.tools ?? []).map(tool => [tool.name, tool.defaultEnabled])))}>恢复默认</Button>
     </div>
     <div className="panel-body">
-      <p className="ai-tool-settings-description">删除工具默认关闭；开启后 AI 仅按你的明确要求删除，删除后无法恢复。</p>
+      <p className="ai-tool-settings-description">选择 AI 可以使用的内置工具，对所有模型和会话生效。模型需支持并开启工具调用。</p>
       {query.isPending ? <p role="status">正在读取工具设置…</p> : !query.data ? <p role="alert">读取失败。<Button onClick={() => void query.refetch()}>重试</Button></p> : <>
-        <h3>删除</h3>
-        {deletionTools.map(tool => {
-          const value = query.data?.tools.find(row => row.name === tool.name);
-          return <div className="ai-tool-setting-row" key={tool.name}>
-            <div><label id={`tool-${tool.name}`}>{tool.label}</label><p id={`tool-help-${tool.name}`}>{tool.description}</p></div>
-            <Switch aria-labelledby={`tool-${tool.name}`} aria-describedby={`tool-help-${tool.name}`}
-              checked={value?.enabled ?? false} disabled={busy || !value} onChange={enabled => void save({ [tool.name]: enabled })} />
-          </div>;
-        })}
+        {toolGroups.map(group => <section key={group.id} className="ai-tool-settings-group" aria-labelledby={`tool-group-${group.id}`}>
+          <h3 id={`tool-group-${group.id}`}>{group.label}</h3>
+          {group.description && <p className="ai-tool-settings-group-description">{group.description}</p>}
+          {group.tools.map(name => {
+            const value = query.data?.tools.find(row => row.name === name);
+            return <div className="ai-tool-setting-row" key={name}>
+              <div><label id={`tool-${name}`}>{TOOL_NAMES[name]}</label><p id={`tool-help-${name}`}>{TOOL_DESCRIPTIONS[name]}</p></div>
+              <Switch aria-labelledby={`tool-${name}`} aria-describedby={`tool-help-${name}`}
+                checked={value?.enabled ?? false} disabled={busy || !value} onChange={enabled => void save({ [name]: enabled })} />
+            </div>;
+          })}
+        </section>)}
         <p className="ai-tool-settings-description">开启从下一轮对话生效；关闭会阻止尚未执行的调用。</p>
       </>}
       {error && <p role="alert" className="ai-tool-settings-error">{error}</p>}
