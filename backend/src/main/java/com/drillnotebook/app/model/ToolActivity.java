@@ -23,11 +23,11 @@ public record ToolActivity(int sequence, String toolName, String state, String o
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> TOOLS = Set.of("search_memories", "list_memories", "create_memory", "update_memory",
             "list_sessions", "read_session", "create_session", "send_message",
-            "read_current_page", "search_materials", "read_notebook", "read_knowledge", "read_question_bank", "read_wrong_questions", "create_material");
+            "read_current_page", "search_materials", "read_notebook", "read_knowledge", "read_question_bank", "read_wrong_questions", "create_material", "update_material");
     private static final Set<String> OUTCOMES = Set.of("OK", "NO_MATCH", "CREATED", "UPDATED", "DUPLICATE",
             "NO_CHANGE", "UNAVAILABLE", "STALE", "LIMIT_REACHED", "INVALID_ARGUMENT", "NOT_FOUND",
             "AMBIGUOUS", "SUPPRESSED", "REJECTED", "UNKNOWN", "RESULT_TOO_LARGE", "CONTEXT_LIMIT", "REPEATED_CALL", "TIME_LIMIT",
-            "SENT", "QUEUED", "RUNNING", "CANCELLED", "CYCLE_BLOCKED", "ARCHIVED", "LOCKED", "CONFLICT");
+            "SENT", "QUEUED", "RUNNING", "CANCELLED", "CYCLE_BLOCKED", "ARCHIVED", "LOCKED", "CONFLICT", "DRAFT_UNSAVED");
     private static final Set<String> AVAILABILITIES = Set.of("READY", "BUILDING", "LOCKED", "UNREADABLE", "TIMEOUT", "NOT_REQUESTED", "DENIED");
 
     public ToolActivity {

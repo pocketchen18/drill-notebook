@@ -33,8 +33,8 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.7.3-features.md](state/v0.7.3-features.md) | 当前版本：界面清理、资料读取 / 新增与模型容量必填已实现；修改工具待设计 |
-| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 15）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
+| [state/v0.7.3-features.md](state/v0.7.3-features.md) | 当前版本：界面清理、资料读取 / 新增 / 修改与模型容量必填已实现；真实供应商与 Electron 实机待验收 |
+| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 16）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
 版本启动前先收尾并归档上一版材料，再在 `docs/state/` 编写新版功能需求清单。开发期间原位维护范围与状态，不把规划提前写成全局已交付能力。切片验收完成后更新该版清单，同步已落地的数据结构、接口等状态文档；施工材料继续保留在 `docs/work/`，标明完成状态，不因单个功能完成立即归档。涉及全局设计规范或专题说明时原位维护。
@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能完成后标记结果并同步状态，施工材料保留至本版收尾；**下一版本开始前**统一移入 `docs/archive/<version>/`。归档时保留真实未完成项和验收限制，不以归档代替验收。
 
-v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插话材料已在开始 v0.7.3 前整理至 [版本归档](archive/v0.7.2/README.md)。v0.7.3 当前施工材料包括[上下文卡片与入口清理](work/ai-chat-entry-cleanup/ui-ux.md)、[资料读取工具](work/material-read-tools/spec.md)、[新增资料工具](work/material-create-tool/spec.md)及[模型容量必填](work/model-required-limits/spec.md)，均保留至下一版开始前归档；推进状态见 [版本清单](state/v0.7.3-features.md)。既有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)和 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。v0.8 独立 AI 窗口及全局“工具”设置均未进入施工。
+v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插话材料已在开始 v0.7.3 前整理至 [版本归档](archive/v0.7.2/README.md)。v0.7.3 当前施工材料包括[上下文卡片与入口清理](work/ai-chat-entry-cleanup/ui-ux.md)、[资料读取工具](work/material-read-tools/spec.md)、[新增资料工具](work/material-create-tool/spec.md)、[修改资料工具](work/material-update-tool/spec.md)及[模型容量必填](work/model-required-limits/spec.md)，均保留至下一版开始前归档；推进状态见 [版本清单](state/v0.7.3-features.md)。既有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)和 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。v0.8 独立 AI 窗口及全局“工具”设置均未进入施工。
 
 ## 3. 测试文档
 

@@ -29,6 +29,8 @@ class MaterialToolChatPathTest {
     private boolean tools = true;
     private boolean steering;
     private boolean creating;
+    private boolean updating;
+    private String updateVersion;
     private String supplementId;
     @BeforeEach void setup() throws Exception {
         root=TestWorkspace.scratchDirectory("material-chat-");
@@ -42,19 +44,29 @@ class MaterialToolChatPathTest {
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), notebooks,
                 new BankRepository(jdbc), new KnowledgePointRepository(jdbc, json), new QuestionRepository(jdbc, json),
                 new NoteIndexingService(notebooks, new RetrievalIndexRepository(jdbc), jdbc, json), wiring.handles(), json));
+        var update = new MaterialUpdateTool(new MaterialUpdateService(jdbc,
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), new MaterialReadRepository(jdbc), notebooks,
+                new BankRepository(jdbc), new KnowledgePointRepository(jdbc, json), new QuestionRepository(jdbc, json),
+                new NoteIndexingService(notebooks, new RetrievalIndexRepository(jdbc), jdbc, json), wiring.handles(), json));
         ai.setChatTools(List.of(MaterialReadTools.tool("read_current_page",material),MaterialReadTools.tool("search_materials",material),
                 MaterialReadTools.tool("read_notebook",material),MaterialReadTools.tool("read_knowledge",material),
-                MaterialReadTools.tool("read_question_bank",material),MaterialReadTools.tool("read_wrong_questions",material),create,stack.memorySearchTool()));
+                MaterialReadTools.tool("read_question_bank",material),MaterialReadTools.tool("read_wrong_questions",material),create,update,stack.memorySearchTool()));
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{
             JsonNode request=json.readTree(exchange.getRequestBody()); requests.add(request);
             int round=requests.size();
-            boolean done=!tools || round>(steering || creating ? 2 : 1);
+            boolean done=!tools || round>(updating ? 3 : steering || creating ? 2 : 1);
             boolean anthropic=exchange.getRequestURI().getPath().endsWith("/messages");
             boolean stream=request.path("stream").asBoolean();
             String toolName = creating ? "create_material" : "read_current_page";
-            var args=creating ? Map.of("type", "notebook", "operationId", "save-book", "title", "工具保存的普通笔记本")
+            Map<String,Object> args=creating ? Map.of("type", "notebook", "operationId", "save-book", "title", "工具保存的普通笔记本")
                     : steering && round==2 ? Map.of("requestId",supplementId) : Map.of();
+            if (updating && !done) {
+                toolName = round == 1 ? "read_notebook" : "update_material";
+                if (round == 2) updateVersion = readResult(request, "c1").path("items").path(0).path("updateVersion").asText();
+                args = round == 1 ? Map.of("pageId", 1) : Map.of("type", "note", "id", 1, "operationId", "edit-note",
+                        "expectedVersion", updateVersion, "changes", Map.of("append", "修改工具保存的追加正文"));
+            }
             Map<String,Object> message=done ? Map.of("role","assistant","content","已按实际读取内容回答。")
                     : Map.of("role","assistant","content","","tool_calls",List.of(Map.of("id","c"+round,"type","function","function",Map.of("name",toolName,"arguments",json.writeValueAsString(args)))));
             String payload;
@@ -81,6 +93,15 @@ class MaterialToolChatPathTest {
                 "memoryOptions",Map.of("use",false),"input",Map.of("userText","讲解当前内容"),"pageSnapshot",snapshot(text));
     }
     private Map<String,Object> snapshot(String text) { return Map.of("kind","manual","title","业务页面","capturedAt","2026-11-09T10:00:00Z","markdown",text,"isDraft",true); }
+    private JsonNode readResult(JsonNode request, String callId) throws java.io.IOException {
+        for (var message : request.path("messages")) {
+            if (message.path("tool_call_id").asText().equals(callId)) return json.readTree(message.path("content").asText());
+            if (message.path("content").isArray()) for (var block : message.path("content"))
+                if (block.path("type").asText().equals("tool_result") && block.path("tool_use_id").asText().equals(callId))
+                    return json.readTree(block.path("content").asText());
+        }
+        return json.createObjectNode();
+    }
     @ParameterizedTest @CsvSource({"chat_completions,false,false","chat_completions,true,true","anthropic,false,true"})
     void snapshotIsOnDemandWithMemoryOffAndOnlySafeActivityIsPersisted(String format,boolean upstreamStream,boolean uiStream) throws Exception {
         config(format,upstreamStream); var body=body("仅工具应读到的草稿正文");
@@ -119,11 +140,39 @@ class MaterialToolChatPathTest {
         assertFalse(requests.get(0).path("tools").toString().contains("search_memories"));
     }
 
+    @ParameterizedTest @CsvSource({"chat_completions,false,false","chat_completions,true,true","anthropic,false,true"})
+    void readThenUpdateUsesReturnedVersionAndPublishesOnlySafeActivities(String format, boolean upstreamStream, boolean uiStream) throws Exception {
+        jdbc.update("INSERT INTO notebook(id,title) VALUES(1,'笔记本')");
+        jdbc.update("INSERT INTO note_page(id,notebook_id,title,content) VALUES(1,1,'待修改笔记',?)", "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"保留原文\"}]}]}");
+        updating = true; config(format, upstreamStream);
+        var body = new LinkedHashMap<>(body("页面正文")); body.put("input", Map.of("userText", "在这页笔记后追加结论"));
+        var events = new ArrayList<Map<String,Object>>();
+        if (uiStream) assertEquals("COMPLETED", ai.chatStream(body, (kind,text)->true, events::add).status());
+        else assertEquals("COMPLETED", ai.chat(body).get("status"));
+        assertEquals(4, requests.size()); assertEquals(64, updateVersion.length());
+        assertEquals("UPDATED", readResult(requests.get(2), "c2").path("status").asText());
+        assertEquals("DUPLICATE", readResult(requests.get(3), "c3").path("status").asText());
+        var doc = json.readTree(jdbc.queryForObject("SELECT content FROM note_page WHERE id=1", String.class));
+        assertTrue(doc.toString().contains("保留原文"));
+        assertEquals(1, doc.findValuesAsText("markdown").stream().filter("修改工具保存的追加正文"::equals).count());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_material_update", Integer.class));
+        var activities = wiring.turnService().toolActivities((String)body.get("requestId"), "");
+        assertEquals(List.of("OK", "UPDATED", "DUPLICATE"), activities.stream().map(com.drillnotebook.app.model.ToolActivity::outcome).toList());
+        assertEquals("drill-notebook://material/note/1", activities.get(1).sourceLink());
+        assertFalse(json.writeValueAsString(activities).contains("追加正文"));
+        assertFalse(json.writeValueAsString(events).contains("追加正文"));
+        assertFalse(stack.history().page(session,null,null,20).toString().contains("追加正文"));
+        assertTrue(requests.get(0).path("tools").toString().contains("update_material"));
+        assertFalse(requests.get(0).path("tools").toString().contains("search_memories"));
+    }
+
     @Test void disabledToolsNeverSilentlyRestoreWholePageInjection() {
         tools=false;config("chat_completions",false);
         assertEquals("COMPLETED",ai.chat(body("不可预注入正文")).get("status"));
         assertEquals(1,requests.size());assertFalse(requests.get(0).toString().contains("不可预注入正文"));
         assertTrue(requests.get(0).toString().contains("本轮无法调用页面读取工具"));
+        assertFalse(requests.get(0).path("tools").toString().contains("update_material"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ai_material_update", Integer.class));
     }
     @Test void steeringAddsItsOwnSnapshotWithoutChangingMainTarget() {
         steering=true;config("chat_completions",false); supplementId=UuidV7.generate(System.currentTimeMillis());

@@ -192,7 +192,7 @@ class MaterialCreateToolTest {
         jdbc.update("INSERT INTO answer_record(question_id,is_correct) VALUES(1,0)");
         jdbc.update("UPDATE schema_version SET version=14");
         new DatabaseInitializer(jdbc.getDataSource(), Schema9Fixture.resolver(root)).initialize();
-        assertEquals(15, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals(1, questions.wrongBook().size()); assertEquals(1, count("answer_record"));
         assertNull(jdbc.queryForObject("SELECT wrong_manual_after FROM question WHERE id=1", Long.class));
         assertEquals(0, count("ai_material_creation"));

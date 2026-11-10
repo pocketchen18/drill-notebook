@@ -21,8 +21,10 @@ public class MaterialReadRepository {
 
     public Map<String, Object> detail(String type, long id) {
         String sql = switch (type) {
+            case "notebook" -> "SELECT id,title FROM notebook WHERE id=?";
+            case "bank" -> "SELECT id,name AS title,description FROM question_bank WHERE id=?";
             case "note" -> "SELECT p.id,p.notebook_id AS notebookId,p.parent_id AS parentId,p.title,p.content,p.updated_at AS updatedAt,n.title AS parentTitle FROM note_page p JOIN notebook n ON n.id=p.notebook_id WHERE p.id=?";
-            case "knowledge" -> "SELECT p.id,p.bank_id AS bankId,p.title,p.content,p.category,p.tags,p.heading_path AS headingPath,p.updated_at AS updatedAt,b.name AS parentTitle FROM knowledge_point p LEFT JOIN question_bank b ON b.id=p.bank_id WHERE p.id=?";
+            case "knowledge" -> "SELECT p.id,p.bank_id AS bankId,p.title,p.content,p.category,p.tags,p.heading_path AS headingPath,p.updated_at AS updatedAt,b.name AS parentTitle,(SELECT json_group_array(question_id) FROM (SELECT question_id FROM knowledge_point_question WHERE knowledge_point_id=p.id ORDER BY question_id)) AS questionIds FROM knowledge_point p LEFT JOIN question_bank b ON b.id=p.bank_id WHERE p.id=?";
             case "question" -> "SELECT q.id,q.bank_id AS bankId,q.type AS questionType,q.stem,q.options,q.answer,q.analysis,q.chapter,q.tags,q.difficulty,b.name AS parentTitle FROM question q JOIN question_bank b ON b.id=q.bank_id WHERE q.id=?";
             default -> throw new IllegalArgumentException();
         };

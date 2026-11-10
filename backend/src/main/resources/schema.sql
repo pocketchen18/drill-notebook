@@ -706,3 +706,18 @@ CREATE TABLE IF NOT EXISTS ai_material_creation (
     PRIMARY KEY (request_id, operation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_material_creation_session ON ai_material_creation(session_id);
+
+-- Update receipts retain identities and versions only, never patches or material content.
+CREATE TABLE IF NOT EXISTS ai_material_update (
+    request_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES ai_chat_session(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    material_type TEXT NOT NULL,
+    material_id INTEGER NOT NULL,
+    result_version TEXT,
+    outcome TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (request_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_material_update_session ON ai_material_update(session_id);

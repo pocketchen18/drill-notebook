@@ -5,7 +5,7 @@ export const TOOL_NAMES = {
   create_session: '新建会话', send_message: '发送消息',
   read_current_page: '读取当前页面', search_materials: '查找学习资料', read_notebook: '读取笔记',
   read_knowledge: '读取知识点', read_question_bank: '读取题库', read_wrong_questions: '读取错题',
-  create_material: '新增学习资料', create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
+  create_material: '新增学习资料', update_material: '修改学习资料', create_memory: '新增记忆', update_memory: '更新记忆', unknown_tool: '未知工具'
 } as const;
 export type ToolName = keyof typeof TOOL_NAMES;
 export interface ToolActivity {
@@ -24,7 +24,7 @@ export interface ToolActivity {
 }
 export type ToolPhase = 'tools' | 'answer';
 const OUTCOMES = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE',
-  'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED', 'CONFLICT',
+  'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED', 'CONFLICT', 'DRAFT_UNSAVED',
   'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT', 'SENT', 'QUEUED', 'RUNNING', 'CANCELLED', 'CYCLE_BLOCKED', 'ARCHIVED', 'LOCKED']);
 export const MAX_TOOL_ACTIVITIES = 1200;
 const AVAILABILITIES = new Set(['READY', 'BUILDING', 'LOCKED', 'UNREADABLE', 'TIMEOUT', 'NOT_REQUESTED', 'DENIED']);
@@ -80,6 +80,19 @@ export function toolTone(row: ToolActivity): 'running' | 'success' | 'neutral' |
 export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return '执行结果未确认';
+  if (row.toolName === 'update_material') {
+    switch (row.outcome) {
+      case 'UPDATED': return '已更新';
+      case 'DUPLICATE': return '已处理，未重复修改';
+      case 'NO_CHANGE': return '内容未变化';
+      case 'CONFLICT': return '资料已变化或替换目标不唯一，请重新读取后核对';
+      case 'DRAFT_UNSAVED': return '请先保存当前笔记草稿，再重新提问';
+      case 'NOT_FOUND': return '资料不存在或已不在错题本中';
+      case 'STALE': return '会话状态已变化，本次未写入';
+      case 'CANCELLED': return '修改已取消';
+      case 'UNAVAILABLE': return '保存结果未确认，请核对资料';
+    }
+  }
   if (row.toolName === 'create_material') {
     switch (row.outcome) {
       case 'CREATED': return '已保存';
@@ -162,6 +175,8 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
       : warnings.every((row) => row.outcome === 'UNAVAILABLE') ? '工具暂不可用' : '工具未完成';
   const parts: string[] = [];
   if (rows.some((row) => row.toolName === 'create_material' && ['CREATED', 'DUPLICATE', 'NO_CHANGE'].includes(row.outcome))) parts.push('已保存学习资料');
+  if (rows.some((row) => row.toolName === 'update_material' && row.outcome === 'UPDATED')) parts.push('已更新学习资料');
+  else if (rows.some((row) => row.toolName === 'update_material' && ['DUPLICATE', 'NO_CHANGE'].includes(row.outcome))) parts.push('资料修改已核对');
   if (rows.some((row) => row.toolName === 'search_materials')) parts.push('已查找学习资料');
   if (rows.some((row) => ['read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName))) parts.push('已读取学习资料');
   if (rows.some((row) => row.toolName === 'search_memories')) parts.push('已检索记忆');
@@ -172,7 +187,7 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
   if (rows.some((row) => row.toolName === 'create_session' && row.outcome === 'CREATED')) parts.push('已新建会话');
   if (rows.some((row) => row.toolName === 'send_message' && ['SENT', 'QUEUED'].includes(row.outcome))) parts.push('已提交消息');
   const created = rows.filter((row) => row.toolName === 'create_memory' && row.outcome === 'CREATED').length;
-  const updated = rows.filter((row) => row.outcome === 'UPDATED').length;
+  const updated = rows.filter((row) => row.toolName === 'update_memory' && row.outcome === 'UPDATED').length;
   if (created) parts.push(`已新增 ${created} 条`);
   if (updated) parts.push(`已更新 ${updated} 条`);
   if (!created && !updated && rows.some((row) => ['create_memory', 'update_memory'].includes(row.toolName))) parts.push('未产生变更');

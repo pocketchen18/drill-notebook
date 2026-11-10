@@ -55,10 +55,12 @@ export function NotebookPage(): JSX.Element {
   // 切页窗口期会把旧页内容 PUT 到新页，切后台 flush 时尤其明显）。
   const [draft, setDraft] = useState<{ pageId: number; content: Record<string, unknown> } | null>(null);
   const draftsRef = useRef<Map<number, Record<string, unknown>>>(new Map());
+  const [saveRevision, setSaveRevision] = useState(0);
   const autosaveRef = useRef<NoteAutosave | null>(null);
   if (!autosaveRef.current) {
     autosaveRef.current = new NoteAutosave((payload) => put(`/api/note-pages/${payload.pageId}`, { content: payload.content })
-      .catch((error: unknown) => Message.error(friendlyMessage(error, '笔记保存失败，请稍后重试'))));
+      .catch((error: unknown) => { Message.error(friendlyMessage(error, '笔记保存失败，请稍后重试')); throw error; }),
+      400, () => setSaveRevision((revision) => revision + 1));
   }
   const [selectedPageIds, setSelectedPageIds] = useState<number[]>(() => cachedNotebooks.selectedPageIds ?? []);
   const [planVisible, setPlanVisible] = useState(false);
@@ -326,8 +328,8 @@ export function NotebookPage(): JSX.Element {
     if (!data) return;
     const autosave = autosaveRef.current;
     if (!autosave) return;
-    autosave.noteServer(data.id, data.content);
     if (autosave.hasPendingFor(data.id)) return;
+    autosave.noteServer(data.id, data.content);
     draftsRef.current.set(data.id, data.content);
     setDraft({ pageId: data.id, content: data.content });
   }, [pageQuery.data]);
@@ -341,9 +343,7 @@ export function NotebookPage(): JSX.Element {
   // 无感自动保存：切走页面不取消计时；退出/切后台前 keepalive 兜底冲刷。
   useEffect(() => {
     const flush = (): void => {
-      for (const payload of autosaveRef.current?.take() ?? []) {
-        flushRequest(`/api/note-pages/${payload.pageId}`, { content: payload.content });
-      }
+      autosaveRef.current?.flush((payload) => flushRequest(`/api/note-pages/${payload.pageId}`, { content: payload.content }));
     };
     const onVisibility = (): void => { if (document.visibilityState === 'hidden') flush(); };
     window.addEventListener('pagehide', flush);
@@ -405,9 +405,9 @@ export function NotebookPage(): JSX.Element {
       route: '/notebooks',
       notebookId: currentPage.notebookId,
       notePageId: currentPage.id,
-      isDraft: draft?.pageId === currentPage.id && JSON.stringify(draft.content) !== JSON.stringify(currentPage.content)
+      isDraft: autosaveRef.current?.hasPendingFor(currentPage.id) ?? false
     };
-  }, [currentPage, notebookId, pageId, draft]);
+  }, [currentPage, notebookId, pageId, draft, saveRevision]);
 
   useRegisterPageContext(pageContext);
 

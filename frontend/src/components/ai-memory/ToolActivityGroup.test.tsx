@@ -9,6 +9,27 @@ const started: ToolActivity = { sequence: 1, toolName: 'search_memories', state:
 const ended: ToolActivity = { ...started, state: 'FINISHED', outcome: 'OK', count: 2, elapsedMs: 620 };
 
 describe('工具活动折叠和真实结果', () => {
+  it('修改资料展示独立结果、版本冲突和未保存草稿，安全来源不包含修改正文', () => {
+    const open = vi.fn();
+    const saved = readToolActivities([{ ...ended, toolName: 'update_material', outcome: 'UPDATED',
+      sourceLink: 'drill-notebook://material/question/12', changes: { answer: '不展示答案' } }]);
+    const view = render(<ToolActivityGroup activities={saved} onOpenMaterial={open} />);
+    fireEvent.click(screen.getByRole('button', { name: /已更新学习资料/ }));
+    fireEvent.click(screen.getByRole('button', { name: /修改学习资料 已更新/ }));
+    expect(screen.getByText('当前本地学习资料')).toBeVisible();
+    expect(screen.queryByText('不展示答案')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看资料 ↗' }));
+    expect(open).toHaveBeenCalledWith('drill-notebook://material/question/12');
+    const blocked = readToolActivities([{ ...ended, toolName: 'update_material', outcome: 'DRAFT_UNSAVED', count: 0, incomplete: true }]);
+    view.rerender(<ToolActivityGroup activities={blocked} onOpenMaterial={open} />);
+    expect(screen.getByRole('button', { name: /修改学习资料 请先保存当前笔记草稿/ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '查看资料 ↗' })).not.toBeInTheDocument();
+    expect(toolResultText({ ...blocked[0], outcome: 'CONFLICT' })).toContain('重新读取');
+    expect(toolResultText({ ...blocked[0], outcome: 'DUPLICATE' })).toBe('已处理，未重复修改');
+    view.rerender(<ToolActivityGroup activities={[{ ...blocked[0], state: 'UNKNOWN', outcome: 'UNKNOWN' }]} />);
+    expect(screen.getByText(/部分资料是否已保存尚未确认/)).toBeVisible();
+  });
+
   it('资料保存结果保留安全来源，只有点击才导航，未知写入不能宣称失败', () => {
     const link = 'drill-notebook://material/note/12';
     const open = vi.fn();

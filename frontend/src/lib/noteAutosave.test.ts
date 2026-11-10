@@ -13,7 +13,7 @@ describe('NoteAutosave', () => {
     autosave.change(11, doc('a'));
     autosave.change(11, doc('ab'));
     expect(send).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(400);
+    await vi.advanceTimersByTimeAsync(400);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({ pageId: 11, content: doc('ab') });
   });
@@ -25,7 +25,7 @@ describe('NoteAutosave', () => {
     autosave.noteServer(37, doc('原-37'));
     autosave.change(11, doc('A'));
     autosave.change(37, doc('B'));
-    vi.advanceTimersByTime(400);
+    await vi.advanceTimersByTimeAsync(400);
     expect(send).toHaveBeenCalledTimes(2);
     const pages = send.mock.calls.map((call) => (call[0] as { pageId: number }).pageId).sort();
     expect(pages).toEqual([11, 37]);
@@ -63,7 +63,7 @@ describe('NoteAutosave', () => {
     autosave.change(11, doc('A'));
     autosave.change(37, doc('B'));
     autosave.discard(11);
-    vi.advanceTimersByTime(400);
+    await vi.advanceTimersByTimeAsync(400);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({ pageId: 37, content: doc('B') });
   });
@@ -72,11 +72,44 @@ describe('NoteAutosave', () => {
     const send = vi.fn().mockResolvedValue({});
     const autosave = new NoteAutosave(send);
     autosave.change(11, doc('A'));
-    vi.advanceTimersByTime(400);
+    await vi.advanceTimersByTimeAsync(400);
     await Promise.resolve();
     await Promise.resolve();
     autosave.change(11, doc('A'));
     vi.advanceTimersByTime(800);
     expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('protects drafts while saving, after failure, and until a later save succeeds', async () => {
+    let rejectSave!: (reason: Error) => void;
+    const send = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; })).mockResolvedValue({});
+    const autosave = new NoteAutosave(send);
+    autosave.change(11, doc('本地草稿'));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(autosave.hasPendingFor(11)).toBe(true);
+    rejectSave(new Error('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(autosave.hasPendingFor(11)).toBe(true);
+    autosave.change(11, doc('稍后重试'));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(autosave.hasPendingFor(11)).toBe(false);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('keepalive flush keeps the same protection while hidden, including failure', async () => {
+    let rejectSave!: (reason: Error) => void;
+    const regular = vi.fn().mockResolvedValue({});
+    const keepalive = vi.fn(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const autosave = new NoteAutosave(regular);
+    autosave.change(11, doc('后台草稿'));
+    autosave.flush(keepalive);
+    expect(autosave.hasPendingFor(11)).toBe(true);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(regular).not.toHaveBeenCalled();
+    expect(keepalive).toHaveBeenCalledTimes(1);
+    rejectSave(new Error('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(autosave.hasPendingFor(11)).toBe(true);
+    autosave.discard(11);
+    expect(autosave.hasPendingFor(11)).toBe(false);
   });
 });

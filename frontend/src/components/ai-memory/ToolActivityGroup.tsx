@@ -42,7 +42,7 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
   const written = activities.some((row) => row.state === 'FINISHED' && ['CREATED', 'UPDATED'].includes(row.outcome));
   const unknownWrite = activities.some((row) => row.state === 'UNKNOWN' && ['create_memory', 'update_memory'].includes(row.toolName));
   const unknownDispatch = activities.some((row) => row.state === 'UNKNOWN' && ['create_session', 'send_message'].includes(row.toolName));
-  const unknownMaterial = activities.some((row) => row.toolName === 'create_material' && (row.state === 'UNKNOWN' || row.outcome === 'UNAVAILABLE'));
+  const unknownMaterial = activities.some((row) => ['create_material', 'update_material'].includes(row.toolName) && (row.state === 'UNKNOWN' || row.outcome === 'UNAVAILABLE'));
   const tone = running ? 'running' : warning ? 'warning' : activities.some((row) => toolTone(row) === 'success') ? 'success' : 'neutral';
   const toggle = (button: HTMLButtonElement, change: () => void): void => {
     onDisclosure?.();
@@ -85,9 +85,9 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
           <dl id={`${id}-${row.sequence}`} className="ai-tool-details" hidden={!details.has(row.sequence)}>
             <dt>开始时间</dt><dd>{toolStartedAt(row.startedAt)}</dd>
             <dt>执行耗时</dt><dd>{duration(row)}</dd>
-            <dt>{['create_memory', 'update_memory', 'create_session', 'send_message', 'create_material'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
+            <dt>{['create_memory', 'update_memory', 'create_session', 'send_message', 'create_material', 'update_material'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
             <dd>{['list_sessions', 'read_session', 'create_session', 'send_message'].includes(row.toolName) ? '当前本地数据中的会话'
-              : ['create_material', 'search_materials', 'read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName) ? '当前本地学习资料' : '当前有权访问的记忆'}</dd>
+              : ['create_material', 'update_material', 'search_materials', 'read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName) ? '当前本地学习资料' : '当前有权访问的记忆'}</dd>
             <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete && !['list_sessions', 'read_session'].includes(row.toolName) ? '（部分结果）' : ''}</dd>
             <dt>工具名称</dt><dd><code>{row.toolName}</code></dd>
             {row.sessionLink && onOpenSession ? <><dt>目标会话</dt><dd><button type="button" onClick={() => onOpenSession(row.sessionLink!)}>打开会话 ↗</button></dd></> : null}
