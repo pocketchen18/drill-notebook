@@ -3,7 +3,7 @@
 param(
     [switch]$Rebuild,
     [ValidatePattern('^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?\z')]
-    [string]$Version = '0.7.2'
+    [string]$Version = '0.7.3'
 )
 
 $ErrorActionPreference = 'Stop'

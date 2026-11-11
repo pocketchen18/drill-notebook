@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能完成后标记结果并同步状态，施工材料保留至本版收尾；**下一版本开始前**统一移入 `docs/archive/<version>/`。归档时保留真实未完成项和验收限制，不以归档代替验收。
 
-v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插话材料已在开始 v0.7.3 前整理至 [版本归档](archive/v0.7.2/README.md)。v0.7.3 当前施工材料包括[上下文卡片与入口清理](work/ai-chat-entry-cleanup/ui-ux.md)、[资料读取工具](work/material-read-tools/spec.md)、[新增资料工具](work/material-create-tool/spec.md)、[修改资料工具](work/material-update-tool/spec.md)、[删除工具与全局工具设置](work/delete-tools/spec.md)及[模型容量必填](work/model-required-limits/spec.md)，均保留至下一版开始前归档；推进状态见 [版本清单](state/v0.7.3-features.md)。既有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)和 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。v0.8 独立 AI 窗口与联网搜索配置尚未进入施工。
+v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插话材料已在开始 v0.7.3 前整理至 [版本归档](archive/v0.7.2/README.md)。v0.7.3 当前施工材料包括[上下文卡片与入口清理](work/ai-chat-entry-cleanup/ui-ux.md)、[资料读取工具](work/material-read-tools/spec.md)、[新增资料工具](work/material-create-tool/spec.md)、[修改资料工具](work/material-update-tool/spec.md)、[删除工具与全局工具设置](work/delete-tools/spec.md)及[模型容量必填](work/model-required-limits/spec.md)，均保留至下一版开始前归档；推进状态见 [版本清单](state/v0.7.3-features.md)。既有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)和 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8 独立 AI 窗口与联网搜索配置尚未进入施工。
 
 ## 3. 测试文档
 
@@ -89,7 +89,7 @@ v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插�
 | [reference/knowledge-point-import.md](reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [reference/quiz-markdown-flow.md](reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
 
-`docs/release/v<版本>-release-notes.md` 保存各版发行记录，当前发布准备为 [v0.7.2 发布说明](release/v0.7.2-release-notes.md)。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.2-rc.1` 选择 v0.7.2，缺失或空白即失败。
+`docs/release/v<版本>-release-notes.md` 保存各版发行记录，当前发布准备为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
 
 ## 5. 交接记忆
 
