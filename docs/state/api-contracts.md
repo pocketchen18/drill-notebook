@@ -408,6 +408,8 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 - `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按会话当前所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
 
 - 会话置顶（v0.8）：`PUT /ai/sessions/{id}` 接受布尔 `pinned`，会话视图返回 `pinnedAt`（ISO 时刻或 null）。重复置顶保留最初的时刻，置顶不改变 `updatedAt`；列表接口的顺序不变，置顶分组与排序由前端按 `pinnedAt` 升序处理。
+- 上下文占用（v0.8）：`GET /ai/sessions/{id}/context-usage` 的 `latest` 增加 `cacheReadTokens` 与 `outputTokens`，均为供应商回报的数字或 null（未回报不补 0）。`inputTokens` 仍是这次请求送入的总长度（含命中的缓存），未命中部分由前端按 `inputTokens - cacheReadTokens` 得出。
+- 窗口固定（v0.8，Electron IPC）：`assistant:set-fixed` 接受布尔值开关助手窗口的 `alwaysOnTop`；助手窗口状态 `assistant:get-state` / `assistant:state` 增加 `fixed` 字段。
 
 #### 3.4.1 人工排队与插话（v0.7.2）
 

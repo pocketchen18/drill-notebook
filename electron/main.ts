@@ -62,7 +62,7 @@ function appIconPath(): string | undefined {
   return fs.existsSync(candidate) ? candidate : undefined;
 }
 
-interface AssistantWindowState { x?: number; y?: number; width: number; height: number; maximized: boolean }
+interface AssistantWindowState { x?: number; y?: number; width: number; height: number; maximized: boolean; fixed: boolean }
 const ASSISTANT_DEFAULT = { width: 980, height: 760 };
 const BUS_TYPES = new Set(['page-context', 'context-request', 'navigate', 'tool-mutation', 'invalidate', 'assistant-activity']);
 
@@ -70,9 +70,9 @@ function assistantStateFile(): string {
   return path.join(portablePaths.config, 'assistant-window.json');
 }
 
-/** 位置和尺寸保存在 APP_ROOT/config；内容损坏时回到默认值。 */
+/** 位置、尺寸与「固定」（窗口保持在其他窗口之上）保存在 APP_ROOT/config；内容损坏时回到默认值。 */
 function readAssistantState(): AssistantWindowState {
-  const fallback: AssistantWindowState = { ...ASSISTANT_DEFAULT, maximized: false };
+  const fallback: AssistantWindowState = { ...ASSISTANT_DEFAULT, maximized: false, fixed: false };
   try {
     if (!fs.existsSync(assistantStateFile())) return fallback;
     const raw = JSON.parse(fs.readFileSync(assistantStateFile(), 'utf8')) as Record<string, unknown>;
@@ -81,7 +81,7 @@ function readAssistantState(): AssistantWindowState {
     const point = (value: unknown): number | undefined =>
       typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : undefined;
     return { x: point(raw.x), y: point(raw.y), width: size(raw.width, 420, fallback.width), height: size(raw.height, 520, fallback.height),
-      maximized: raw.maximized === true };
+      maximized: raw.maximized === true, fixed: raw.fixed === true };
   } catch {
     return fallback;
   }
@@ -91,7 +91,7 @@ function saveAssistantState(): void {
   if (!assistantWindow || assistantWindow.isDestroyed()) return;
   try {
     const bounds = assistantWindow.getNormalBounds();
-    const state: AssistantWindowState = { ...bounds, maximized: assistantWindow.isMaximized() };
+    const state: AssistantWindowState = { ...bounds, maximized: assistantWindow.isMaximized(), fixed: assistantWindow.isAlwaysOnTop() };
     fs.writeFileSync(assistantStateFile(), JSON.stringify(state, null, 2) + '\n', 'utf8');
   } catch (error) {
     console.error('[assistant] window state not saved', error);
@@ -118,8 +118,9 @@ function assistantVisible(): boolean {
   return !!assistantWindow && !assistantWindow.isDestroyed() && assistantWindow.isVisible();
 }
 
-function assistantState(): { visible: boolean; running: number; pending: number } {
-  return { visible: assistantVisible(), running: assistantActivity.running, pending: assistantActivity.pending };
+function assistantState(): { visible: boolean; running: number; pending: number; fixed: boolean } {
+  return { visible: assistantVisible(), running: assistantActivity.running, pending: assistantActivity.pending,
+    fixed: !!assistantWindow && !assistantWindow.isDestroyed() && assistantWindow.isAlwaysOnTop() };
 }
 
 function broadcastAssistantState(): void {
@@ -137,6 +138,8 @@ function createAssistantWindow(): BrowserWindow {
     minHeight: 520,
     show: false,
     title: 'AI 助手',
+    // 「固定」：让助手浮在主窗口上方，方便一边看回答一边记笔记。
+    alwaysOnTop: state.fixed,
     backgroundColor: windowBackgroundColor(),
     icon: appIconPath(),
     webPreferences: {
@@ -193,7 +196,7 @@ function openAssistantWindow(): void {
 
 /**
  * 主窗口入口与快捷键的语义：助手在前台就收起，在后台（隐藏、最小化或被其他窗口盖住）就唤到前台。
- * 「在前台」= 可见且未最小化，并且持有焦点，或刚刚因为这次点击才失去焦点。
+ * 「在前台」= 可见且未最小化，并且持有焦点、已固定，或刚刚因为这次点击才失去焦点。
  */
 function toggleAssistantWindow(): void {
   const target = assistantWindow;
@@ -202,7 +205,7 @@ function toggleAssistantWindow(): void {
     return;
   }
   const front = target.isVisible() && !target.isMinimized()
-    && (target.isFocused() || Date.now() - assistantBlurAt < ASSISTANT_FRONT_GRACE_MS);
+    && (target.isFocused() || target.isAlwaysOnTop() || Date.now() - assistantBlurAt < ASSISTANT_FRONT_GRACE_MS);
   if (front) target.close();
   else openAssistantWindow();
 }
@@ -294,6 +297,12 @@ ipcMain.handle('assistant:hide', (event) => {
   if (trustedSender(event) && assistantVisible()) assistantWindow!.close();
 });
 ipcMain.handle('assistant:get-state', () => assistantState());
+ipcMain.handle('assistant:set-fixed', (event, fixed: unknown) => {
+  if (!trustedSender(event) || !assistantWindow || assistantWindow.isDestroyed()) return;
+  assistantWindow.setAlwaysOnTop(fixed === true);
+  saveAssistantState();
+  broadcastAssistantState();
+});
 // 回复结束而窗口不在前台时，只闪烁任务栏按钮，不抢焦点也不弹系统通知。
 ipcMain.handle('assistant:attention', (event) => {
   if (trustedSender(event) && assistantVisible() && !assistantWindow!.isFocused()) assistantWindow!.flashFrame(true);

@@ -571,7 +571,7 @@ public class AiService {
     }
 
     /**
-     * 记下这次请求实际送入模型的长度（含缓存命中的部分），只在供应商回报时记录。
+     * 记下这次请求实际送入模型的长度（含缓存命中的部分）、缓存命中数与输出长度，只在供应商回报时记录。
      * 同一轮有多次请求时覆盖为最近一次：上下文占用说的是一次请求的长度，不是累计用量。
      */
     private void recordTurnContext(TurnCall call, AiUpstreamClient.Usage usage) {
@@ -580,7 +580,9 @@ public class AiService {
             long tokens = usage.inputTokens();
             if (!usage.cacheReadIncludedInInput() && usage.cacheReadTokens() != null) tokens += usage.cacheReadTokens();
             if (!usage.cacheReadIncludedInInput() && usage.cacheWriteTokens() != null) tokens += usage.cacheWriteTokens();
-            sessions.recordTurnContext(call.lease().requestId(), (int) Math.min(Integer.MAX_VALUE, tokens), AiModelLimits.contextWindow(call.config()));
+            // 命中的缓存与输出长度照原样记录：界面按「输入（命中 / 未命中）+ 输出」展示同一份实测数据。
+            sessions.recordTurnContext(call.lease().requestId(), (int) Math.min(Integer.MAX_VALUE, tokens),
+                    AiModelLimits.contextWindow(call.config()), usage.cacheReadTokens(), usage.outputTokens());
         } catch (RuntimeException error) {
             log.warn("本轮上下文占用未记录: {}", error.getClass().getSimpleName());
         }

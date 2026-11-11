@@ -21,21 +21,24 @@ function mount(props: Partial<Parameters<typeof ContextMeter>[0]> = {}) {
 beforeEach(() => { vi.clearAllMocks(); readContext.mockResolvedValue(audit()); });
 
 describe('上下文占用', () => {
-  it('显示最近一次请求的实测占用与分项，累计用量不计入', async () => {
+  it('只显示输入（缓存命中 / 未命中）与输出，分项估算留给本轮上下文', async () => {
     apiGet.mockResolvedValue({ sessionId: 5, model: 'DeepSeek · deepseek-reasoner', contextWindow: 128000, outputReserve: 8192,
-      latest: { requestId: 'r1', inputTokens: 52400, contextWindow: 128000, model: 'DeepSeek · deepseek-reasoner' } });
+      latest: { requestId: 'r1', inputTokens: 52400, contextWindow: 128000, model: 'DeepSeek · deepseek-reasoner',
+        cacheReadTokens: 40000, outputTokens: 1250 } });
     const { onInspect } = mount();
     const trigger = await screen.findByRole('button', { name: '上下文占用 41%（实测）' });
     expect(apiGet).toHaveBeenCalledWith('/api/ai/sessions/5/context-usage');
     expect(readContext).not.toHaveBeenCalled();
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', { name: '上下文占用' });
-    expect(within(dialog).getByText('最近一次请求 · 实测 52.4k / 128k')).toBeInTheDocument();
-    expect(within(dialog).getByText(/另为输出预留 8.2k/)).toBeInTheDocument();
-    await waitFor(() => expect(within(dialog).getByText('历史对话与摘要')).toBeInTheDocument());
-    expect(within(dialog).getByText('31.0k')).toBeInTheDocument();
-    expect(within(dialog).getByText('工具定义、工具结果及估算误差')).toBeInTheDocument();
-    expect(within(dialog).getByText('19.2k')).toBeInTheDocument();
+    expect(dialog.querySelector('.context-meter-headline')?.textContent).toBe('输入 52.4k / 128k');
+    expect(within(dialog).getByText(/为输出预留 8.2k/)).toBeInTheDocument();
+    const rows = [...dialog.querySelectorAll('.context-meter-rows > div')].map((row) => row.textContent);
+    expect(rows).toEqual(['缓存命中40.0k · 占输入 76%', '缓存未命中12.4k', '输出1.3k']);
+    // 分项估算、工具误差这些细节不再出现在浮层里
+    await waitFor(() => expect(readContext).toHaveBeenCalled());
+    expect(within(dialog).queryByText('历史对话与摘要')).toBeNull();
+    expect(within(dialog).queryByText(/工具定义、工具结果/)).toBeNull();
     expect(within(dialog).getByText('不含多次工具往返的累计用量')).toBeInTheDocument();
     expect(within(dialog).queryByText(/接近模型窗口上限/)).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: '查看本轮上下文' }));
@@ -47,8 +50,27 @@ describe('上下文占用', () => {
     apiGet.mockResolvedValue({ sessionId: 5, model: 'm', contextWindow: 32000, outputReserve: 4096, latest: null });
     mount({ estimate: { tokens: 8000, requestId: 'r2' } });
     fireEvent.click(await screen.findByRole('button', { name: '上下文占用 25%（估算）' }));
-    expect(screen.getByText('最近一轮 · 估算 8.0k / 32.0k')).toBeInTheDocument();
+    expect(document.querySelector('.context-meter-headline')?.textContent).toBe('输入（估算） 8.0k / 32.0k');
     expect(screen.getByText(/供应商没有回报用量/)).toBeInTheDocument();
+    // 没有实测值时不编造命中与输出
+    expect([...document.querySelectorAll('.context-meter-rows dd')].map((node) => node.textContent)).toEqual(['未回报', '未回报', '未回报']);
+  });
+
+  it('供应商只回报输入时，缓存与输出标为未回报；命中量不会超过输入', async () => {
+    apiGet.mockResolvedValue({ sessionId: 5, model: 'm', contextWindow: 100000, outputReserve: null,
+      latest: { requestId: 'r1', inputTokens: 20000, contextWindow: 100000, model: 'm', cacheReadTokens: null, outputTokens: null } });
+    const view = mount();
+    fireEvent.click(await screen.findByRole('button', { name: '上下文占用 20%（实测）' }));
+    expect([...document.querySelectorAll('.context-meter-rows dd')].map((node) => node.textContent)).toEqual(['未回报', '未回报', '未回报']);
+    expect(view.onInspect).not.toHaveBeenCalled();
+  });
+
+  it('全部命中缓存时未命中为 0', async () => {
+    apiGet.mockResolvedValue({ sessionId: 5, model: 'm', contextWindow: 100000, outputReserve: null,
+      latest: { requestId: 'r1', inputTokens: 20000, contextWindow: 100000, model: 'm', cacheReadTokens: 26000, outputTokens: 0 } });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: '上下文占用 20%（实测）' }));
+    expect([...document.querySelectorAll('.context-meter-rows dd')].map((node) => node.textContent)).toEqual(['20.0k · 占输入 100%', '0', '0']);
   });
 
   it('没有数据时显示占位；接近上限、已摘要或被裁剪时如实提示；切换模型后按新窗口计算', async () => {

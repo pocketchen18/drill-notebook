@@ -41,5 +41,7 @@
 .session-nav-row:hover .session-nav-row-pin, .session-nav-row:focus-within .session-nav-row-pin, .session-nav-row.has-menu .session-nav-row-pin { opacity: 1; }
 .session-nav-row-pin:hover { background: var(--hover-bg); color: var(--text); }
 .session-nav-row-pin.is-pinned { color: var(--accent); }
+/* 会话置顶用倾斜钉子，与顶栏窗口「固定」的垂直钉子区分 */
+.session-nav-row-pin svg { transform: rotate(45deg); }
 .session-nav-row-pin:disabled { cursor: default; }
 @media (hover: none) { .session-nav-row-pin { opacity: 1; } }

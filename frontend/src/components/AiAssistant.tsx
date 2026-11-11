@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent 
 import { PanelResizer } from './ai-session/PanelResizer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Message, Select, Space, Typography } from '@arco-design/web-react';
-import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
+import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Pin, Send, Sparkles, Square, X } from 'lucide-react';
 import { SessionNavigation, type SessionNavigationHandle } from './ai-session/SessionNavigation';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
@@ -101,6 +101,11 @@ function isTextFile(file: File): boolean {
     || /\.(md|markdown|txt|json|csv|log|java|kt|ts|tsx|js|jsx|py|go|rs|sql|xml|yaml|yml|css|html)$/i.test(file.name);
 }
 
+/** 引用块：逐行加「> 」前缀，选中多行也保持可读。 */
+export function quoteBlock(text: string): string {
+  return text.split(/\r?\n/).map((line) => (line ? `> ${line}` : '>')).join('\n');
+}
+
 export function AiAssistant(): JSX.Element {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -138,6 +143,15 @@ export function AiAssistant(): JSX.Element {
 
   const [sessionId, setSessionId] = useState<number>();
   const [message, setMessage] = useState('');
+  // 选中文本后的「复制 / 引用」小浮层：坐标相对消息流容器，滚动、Esc 或选区消失就收起。
+  const [textSelection, setTextSelection] = useState<{ x: number; y: number; text: string; below: boolean } | null>(null);
+  const streamWrapRef = useRef<HTMLDivElement>(null);
+  // 双击标题就地改名：null 表示没在改名；单击延后一拍执行，避免和双击撞在一起。
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const titleRenameCancelled = useRef(false);
+  const titleClickTimer = useRef<number | undefined>(undefined);
+  // 窗口「固定」：让助手浮在其他窗口之上，便于一边看回答一边记笔记（与会话置顶无关）。
+  const [fixed, setFixed] = useState(false);
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const queueSubmittingRef = useRef(false);
   const submittedQueueDrafts = useRef(new Map<number, { message: string; ids: Set<string> }>());
@@ -269,7 +283,8 @@ export function AiAssistant(): JSX.Element {
       } else if (matchesAny(event, config.aiToggleSidebar)) { event.preventDefault(); setSide(!sideOpen); }
       else if (event.key === 'Escape' && !event.defaultPrevented) {
         // 依次关闭浮层、详情栏；都没有时不做任何事，不关闭窗口。
-        if (narrow && sideOverlay) setSideOverlay(false);
+        if (textSelection) setTextSelection(null);
+        else if (narrow && sideOverlay) setSideOverlay(false);
         else if (sessionReference) setSessionReference(undefined);
         else if (inspectorTarget) setInspectorTarget(null);
       }
@@ -361,9 +376,28 @@ export function AiAssistant(): JSX.Element {
     setSessionReference(undefined);
   }, [sessionId]);
 
+  // 助手窗口自身的「固定」状态由主进程保存；浏览器调试里没有这个接口，按钮也就不出现。
+  const fixedApi = typeof window === 'undefined' ? undefined : window.api?.assistant;
+  useEffect(() => {
+    if (!fixedApi) return;
+    let alive = true;
+    void fixedApi.getState().then((state) => { if (alive) setFixed(state.fixed); }).catch(() => undefined);
+    const off = fixedApi.onState((state) => setFixed(state.fixed));
+    return () => { alive = false; off(); };
+  }, [fixedApi]);
+  useEffect(() => () => window.clearTimeout(titleClickTimer.current), []);
+  // 选区被点掉或清空时浮层要跟着收起（点浮层自身时 mousedown 已被阻止，不会走到这里）。
+  useEffect(() => {
+    if (!textSelection) return;
+    const onSelectionChange = (): void => { if (!window.getSelection()?.toString().trim()) setTextSelection(null); };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, [textSelection]);
+
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
     const el = event.currentTarget;
+    setTextSelection(null);   // 浮层按屏幕坐标定位，滚动后不再对应选区
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
     // 即使只向上移动了几像素，也视为用户开始阅读旧消息；否则 80px 阈值内的上滑
     // 会继续被流式跟随拉回底部。向下滚回接近底部时再恢复自动跟随。
@@ -922,6 +956,59 @@ export function AiAssistant(): JSX.Element {
     try { await navigator.clipboard.writeText(value); Message.success('已复制回复'); }
     catch { Message.error('复制失败，请手动选择文本复制'); }
   };
+  /** 顶栏标题：单击展开会话栏，双击就地改名。展开时单击没有别的动作，不必等这一拍。 */
+  const onTitleClick = (): void => {
+    if (sideOpen) return;
+    window.clearTimeout(titleClickTimer.current);
+    titleClickTimer.current = window.setTimeout(() => setSide(true), 240);
+  };
+  const openTitleRename = (): void => {
+    window.clearTimeout(titleClickTimer.current);
+    if (!currentSession || createSessionMutation.isPending) return;
+    titleRenameCancelled.current = false;
+    setTitleDraft(currentSession.title);
+  };
+  /** Enter 或失焦保存，Escape 取消；内容没变或为空都不发请求。 */
+  const commitTitleRename = (): void => {
+    const target = currentSession;
+    const next = (titleDraft ?? '').trim();
+    const cancelled = titleRenameCancelled.current;
+    titleRenameCancelled.current = false;
+    setTitleDraft(null);
+    if (cancelled || !target || !next || next === target.title) return;
+    void renameSession(target.id, next).catch((error) => Message.error(friendlyMessage(error, '会话名未保存，请重试')));
+  };
+  const cancelTitleRename = (): void => { titleRenameCancelled.current = true; setTitleDraft(null); };
+  /** 浮层坐标相对消息流容器：选区上方优先，贴近顶部时放到选区下方。 */
+  const readTextSelection = (): void => {
+    const wrap = streamWrapRef.current;
+    const selection = typeof window === 'undefined' ? null : window.getSelection();
+    const text = selection?.toString().trim() ?? '';
+    if (!wrap || !selection || selection.isCollapsed || !text || selection.rangeCount === 0) { setTextSelection(null); return; }
+    const range = selection.getRangeAt(0);
+    if (!wrap.contains(range.commonAncestorContainer)) { setTextSelection(null); return; }
+    const rect = range.getBoundingClientRect();
+    const base = wrap.getBoundingClientRect();
+    const half = 72;   // 浮层大致半宽，避免贴边溢出
+    const x = Math.min(Math.max(half, rect.left - base.left + rect.width / 2), Math.max(half, base.width - half));
+    const below = rect.top - base.top < 44;
+    setTextSelection({ x, y: below ? rect.bottom - base.top + 8 : rect.top - base.top - 8, text, below });
+  };
+  const copySelected = async (): Promise<void> => {
+    const text = textSelection?.text ?? '';
+    setTextSelection(null);
+    try { await navigator.clipboard.writeText(text); Message.success('已复制'); }
+    catch { Message.error('复制失败，请手动选择文本复制'); }
+  };
+  /** 引用：把选中的文字作为引用块放进输入框，接着写自己的问题。 */
+  const quoteSelected = (): void => {
+    const text = textSelection?.text;
+    setTextSelection(null);
+    if (!text) return;
+    window.getSelection()?.removeAllRanges();
+    setMessage((current) => current.trim() ? `${current.replace(/\s+$/, '')}\n\n${quoteBlock(text)}\n` : `${quoteBlock(text)}\n`);
+    focusCompose();
+  };
   const lastAssistantKey = [...visibleMessages].reverse().find((item) => item.role === 'assistant')?._key;
   const closeDetail = (): void => { setInspectorTarget(null); setSessionReference(undefined); };
 
@@ -961,20 +1048,39 @@ export function AiAssistant(): JSX.Element {
         <header className="ai-window-head">
           <button type="button" className="ai-window-icon" aria-label={sideOpen ? '收起会话栏' : '展开会话栏'} aria-expanded={sideOpen}
             title={`会话栏 ${describeAccelerators(useUiStore.getState().shortcutConfig.aiToggleSidebar)}`} onClick={() => setSide(!sideOpen)}><PanelLeft size={17} /></button>
-          <button type="button" className="ai-window-title" aria-label="切换会话" disabled={createSessionMutation.isPending}
-            title={currentSession?.title} onClick={() => setSide(true)}>
-            <span>{currentSession?.title ?? (sessionsQuery.isLoading ? '正在加载会话…' : '新会话')}</span></button>
+          {fixedApi ? <>
+            <button type="button" className={`ai-window-icon${fixed ? ' is-on' : ''}`} aria-label="固定窗口" aria-pressed={fixed}
+              title={fixed ? '取消固定：不再浮在其他窗口之上' : '固定：让助手浮在其他窗口之上，便于一边看回答一边记笔记'}
+              onClick={() => { const next = !fixed; setFixed(next); void fixedApi.setFixed(next); }}><Pin size={16} /></button>
+            <span className="ai-window-divider" aria-hidden="true" />
+          </> : null}
+          {titleDraft === null ? (
+            <button type="button" className="ai-window-title" aria-label="切换会话" disabled={createSessionMutation.isPending}
+              title={currentSession ? `${currentSession.title}（双击改名）` : undefined} onClick={onTitleClick} onDoubleClick={openTitleRename}>
+              <span>{currentSession?.title ?? (sessionsQuery.isLoading ? '正在加载会话…' : '新会话')}</span></button>
+          ) : (
+            <input className="ai-window-title-input" aria-label="会话名称" value={titleDraft} autoFocus maxLength={120}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                if (event.key === 'Enter') { event.preventDefault(); commitTitleRename(); }
+                else if (event.key === 'Escape') { event.preventDefault(); cancelTitleRename(); }
+              }}
+              onBlur={commitTitleRename} />
+          )}
           {statusText ? <span className={`ai-window-status${streaming ? ' is-running' : ''}`} role="status">{statusText}</span> : null}
           <span className="ai-window-spacer" />
           <button type="button" className="ai-window-icon" aria-label="会话更多操作" title="会话更多操作" disabled={!currentSession || createSessionMutation.isPending}
             onClick={(event) => { if (currentSession) navigation.current?.openMenu(currentSession.id, event.currentTarget); }}><MoreHorizontal size={17} /></button>
         </header>
 
-          <div className="ai-window-stream-wrap">
+          <div className="ai-window-stream-wrap" ref={streamWrapRef}>
           <div
             className="ai-drawer-chat ai-window-stream"
             ref={chatContainerRef}
             onScroll={onChatScroll}
+            onMouseUp={readTextSelection}
           >
             <div className="ai-window-col">
             {history.isError ? (
@@ -1102,6 +1208,13 @@ export function AiAssistant(): JSX.Element {
             </>)}
             </div>
           </div>
+          {textSelection ? (
+            <div className={`ai-selection-pop${textSelection.below ? ' is-below' : ''}`} role="toolbar" aria-label="选中文本操作"
+              style={{ left: `${textSelection.x}px`, top: `${textSelection.y}px` }} onMouseDown={(event) => event.preventDefault()}>
+              <button type="button" onClick={() => void copySelected()}>复制</button>
+              <button type="button" onClick={quoteSelected}>引用</button>
+            </div>
+          ) : null}
           {away ? <button type="button" className="ai-window-latest" onClick={jumpToLatest} aria-label={unseen ? '回到最新，有新内容' : '回到最新'}>
             <ArrowDown size={14} />回到最新{unseen ? <span className="ai-window-latest-dot" aria-hidden="true" /> : null}</button> : null}
           </div>

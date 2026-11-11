@@ -138,6 +138,9 @@ public class DatabaseInitializer {
             // 最近一次模型请求实际送入的 token 数与当时的模型窗口；供应商未回报时保持 NULL，不写估算。
             ensureColumn(connection, "ai_chat_turn", "context_tokens", "INTEGER");
             ensureColumn(connection, "ai_chat_turn", "context_window", "INTEGER");
+            // 最近一次请求里缓存命中的部分与输出长度：界面按「输入（命中 / 未命中）+ 输出」展示。
+            ensureColumn(connection, "ai_chat_turn", "cache_read_tokens", "INTEGER");
+            ensureColumn(connection, "ai_chat_turn", "output_tokens", "INTEGER");
             // 提交时绑定的业务页面：只留标题与本地定位，正文仍只在本轮内存与加密队列里。
             ensureColumn(connection, "ai_chat_turn", "page_title", "TEXT");
             ensureColumn(connection, "ai_chat_turn", "page_link", "TEXT");

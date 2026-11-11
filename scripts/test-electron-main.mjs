@@ -49,6 +49,7 @@ function boot({ ownsLock = true } = {}) {
       this.destroyed = false;
       this.minimized = false;
       this.visible = true;
+      this.onTop = options?.alwaysOnTop === true;
       this.actions = [];
       this.sent = [];
       this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, send: (channel, value) => this.sent.push([channel, value]) });
@@ -67,6 +68,8 @@ function boot({ ownsLock = true } = {}) {
     maximize() { this.actions.push('maximize'); }
     isMaximized() { return false; }
     isFocused() { return this.focused === true; }
+    isAlwaysOnTop() { return this.onTop; }
+    setAlwaysOnTop(value) { this.actions.push(value ? 'fix' : 'unfix'); this.onTop = value; }
     blur() { this.focused = false; this.emit('blur'); }
     flashFrame(value) { if (value) this.actions.push('flash'); }
     getBounds() { return { x: 0, y: 0, width: 1440, height: 920 }; }
@@ -213,7 +216,7 @@ test('AI 助手是唯一的独立窗口：重复打开只唤回，关闭只是�
   const assistant = h.windows[1];
   assert.equal(assistant.options.title, 'AI 助手');
   assert.equal(assistant.options.show, false);
-  assert.equal('alwaysOnTop' in assistant.options, false, '助手窗口不保持在最前');
+  assert.equal(assistant.options.alwaysOnTop, false, '默认不固定');
   assert.deepEqual([assistant.options.minWidth, assistant.options.minHeight], [420, 520]);
   assert.equal(assistant.options.webPreferences.sandbox, true);
   assert.equal(assistant.options.webPreferences.backgroundThrottling, false);
@@ -242,7 +245,56 @@ test('窗口位置保存到便携配置目录', async () => {
   h.windows[1].close();
   const [file, content] = [...h.written.entries()][0];
   assert.ok(file.split(path.sep).join('/').endsWith('temp/mock-app/config/assistant-window.json'), file);
-  assert.deepEqual(JSON.parse(content), { x: 100, y: 80, width: 980, height: 760, maximized: false });
+  assert.deepEqual(JSON.parse(content), { x: 100, y: 80, width: 980, height: 760, maximized: false, fixed: false });
+});
+
+test('固定：助手浮在其他窗口之上，状态通知两个窗口并随窗口偏好记住', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  // 窗口还没创建时设置固定不做任何事
+  await h.invoke('assistant:set-fixed', main, true);
+  assert.equal(h.windows.length, 1);
+  await h.invoke('assistant:open', main);
+  const assistant = h.windows[1];
+  assistant.emit('ready-to-show');
+  assert.equal((await h.invoke('assistant:get-state', main)).fixed, false);
+
+  await h.invoke('assistant:set-fixed', assistant, true);
+  assert.equal(assistant.isAlwaysOnTop(), true);
+  assert.equal(JSON.stringify(main.sent.at(-1)), JSON.stringify(['assistant:state', { visible: true, running: 0, pending: 0, fixed: true }]));
+  assert.equal(assistant.sent.at(-1)[0], 'assistant:state');
+  const saved = () => JSON.parse([...h.written.values()][0]);
+  assert.equal(saved().fixed, true);
+
+  // 固定的窗口一直在最前：主窗口入口把它收起，而不是再聚焦一次
+  assistant.blur();
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await h.invoke('assistant:toggle', main);
+  assert.equal(assistant.visible, false, '固定时点击入口是收起');
+  await h.invoke('assistant:toggle', main);
+  assert.equal(assistant.visible, true);
+  assert.equal(assistant.isAlwaysOnTop(), true, '收起再打开仍保持固定');
+
+  // 只接受布尔值；取消后恢复普通层级
+  await h.invoke('assistant:set-fixed', assistant, 'yes');
+  assert.equal(assistant.isAlwaysOnTop(), false);
+  assert.equal(saved().fixed, false);
+  assert.equal((await h.invoke('assistant:get-state', main)).fixed, false);
+});
+
+test('上次固定的助手窗口重新创建时仍然固定；偏好文件缺字段或损坏按不固定处理', async () => {
+  const file = path.join(root, 'temp', 'mock-app', 'config', 'assistant-window.json');
+  for (const [content, expected] of [
+    [JSON.stringify({ x: 100, y: 80, width: 980, height: 760, maximized: false, fixed: true }), true],
+    [JSON.stringify({ x: 100, y: 80, width: 980, height: 760, maximized: false }), false],
+    [JSON.stringify({ x: 100, y: 80, width: 980, height: 760, fixed: 'true' }), false],
+    ['{ not json', false],
+  ]) {
+    const h = await launch();
+    h.written.set(file, content);
+    await h.invoke('assistant:open', h.windows[0]);
+    assert.equal(h.windows[1].options.alwaysOnTop, expected, content);
+  }
 });
 
 test('入口切换：助手在前台时收起，在后台、最小化或已收起时唤到前台', async () => {
@@ -306,7 +358,7 @@ test('仍有回复或待发时关闭主窗口先确认；确认后两个窗口�
   const assistant = h.windows[1];
   await h.invoke('bus:publish', assistant, { type: 'assistant-activity', running: 2, pending: 1 });
   // 状态对象来自沙箱上下文，按序列化后的值比较。
-  assert.equal(JSON.stringify(main.sent.at(-1)), JSON.stringify(['assistant:state', { visible: true, running: 2, pending: 1 }]));
+  assert.equal(JSON.stringify(main.sent.at(-1)), JSON.stringify(['assistant:state', { visible: true, running: 2, pending: 1, fixed: false }]));
 
   h.quitDialog.answer = 0;
   main.close();

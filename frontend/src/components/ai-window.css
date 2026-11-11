@@ -18,6 +18,17 @@
 .ai-window-status { flex: none; padding: 2px 9px; border-radius: var(--radius-pill); background: var(--hover-bg); color: var(--muted); font-size: 12px; white-space: nowrap; }
 .ai-window-status.is-running { background: var(--accent-soft); color: var(--accent); }
 .ai-window-spacer { flex: 1; }
+/* 窗口级控件（会话栏、固定）与「标题 + 状态」之间留一道细线，避免与会话级操作混淆 */
+.ai-window-divider { flex: none; width: 1px; height: 18px; margin: 0 2px; background: var(--line); }
+.ai-window-title-input { flex: 0 1 auto; min-width: 120px; max-width: 340px; height: 30px; padding: 0 8px; border: 1px solid var(--accent-border); border-radius: var(--radius-sm); background: var(--panel-bg); color: var(--text-strong); font: inherit; font-size: 14px; font-weight: 600; }
+.ai-window-title-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* 选中文本后的「复制 / 引用」浮层：按消息流容器定位，选区上方优先 */
+.ai-selection-pop { position: absolute; z-index: 6; display: inline-flex; align-items: center; transform: translate(-50%, -100%); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--panel-bg); box-shadow: var(--shadow-md); overflow: hidden; }
+.ai-selection-pop.is-below { transform: translate(-50%, 0); }
+.ai-selection-pop button { padding: 6px 14px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.ai-selection-pop button + button { border-left: 1px solid var(--line); }
+.ai-selection-pop button:hover { background: var(--hover-bg); color: var(--accent); }
+.ai-selection-pop button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ai-window-icon:focus-visible, .ai-window-title:focus-visible, .ai-window-page:focus-visible, .ai-window-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* 消息流：助手回复不加气泡，占满内容列 */

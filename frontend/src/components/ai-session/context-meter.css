@@ -14,6 +14,15 @@
 .context-meter-body strong { color: var(--text-strong); font-size: 13px; font-variant-numeric: tabular-nums; }
 .context-meter-body p { margin: 0; line-height: 1.6; }
 .context-meter-title { margin-top: 4px; color: var(--text); font-weight: 600; }
+/* 只讲输入（命中 / 未命中）、输出与占比；分项估算留给「查看本轮上下文」 */
+.context-meter-headline { display: block; }
+.context-meter-headline i { color: var(--muted); font-style: normal; font-weight: 500; }
+.context-meter-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.context-meter-bar span { display: block; height: 100%; border-radius: 3px; background: var(--accent-fill); }
+.context-meter-bar span.is-high { background: var(--warn); }
+.context-meter-rows { margin-top: 2px; }
+.context-meter-rows dd i { color: var(--muted); font-style: normal; }
+.context-meter-meta { color: var(--text); }
 .context-meter-body dl { margin: 0; display: grid; gap: 3px; font-variant-numeric: tabular-nums; }
 .context-meter-body dl > div { display: flex; justify-content: space-between; gap: 12px; }
 .context-meter-body dt { color: var(--text); }

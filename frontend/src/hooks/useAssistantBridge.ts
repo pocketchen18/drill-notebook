@@ -13,7 +13,7 @@ import { refreshToolMutation } from '../lib/toolMutationEffects';
 export function useAssistantBridge(): AssistantWindowStatus {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<AssistantWindowStatus>({ visible: false, running: 0, pending: 0 });
+  const [status, setStatus] = useState<AssistantWindowStatus>({ visible: false, running: 0, pending: 0, fixed: false });
 
   useEffect(() => {
     setAssistantLauncher((request, current) => {

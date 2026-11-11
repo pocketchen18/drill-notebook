@@ -33,23 +33,31 @@ export function PanelResizer({ label, edge, value, min, max, maxRatio, defaultVa
     const start = handle.parentElement?.getBoundingClientRect().width || value;
     const startX = event.clientX;
     let latest = clamp(handle, start);
-    try { handle.setPointerCapture(event.pointerId); } catch { /* 没有捕获也能靠元素自身的事件完成短距离拖动 */ }
     handle.classList.add('is-dragging');
     const move = (next: PointerEvent): void => {
       const delta = next.clientX - startX;
       latest = clamp(handle, edge === 'right' ? start + delta : start - delta);
       onChange(latest);
     };
-    const finish = (): void => {
-      handle.removeEventListener('pointermove', move);
-      handle.removeEventListener('pointerup', finish);
-      handle.removeEventListener('pointercancel', finish);
+    const settle = (next: PointerEvent, usePosition: boolean): void => {
+      // 快速拖动时最后一次 pointermove 可能被合并掉：抬手的位置才算最终宽度，界面也要跟上。
+      if (usePosition) {
+        const delta = next.clientX - startX;
+        latest = clamp(handle, edge === 'right' ? start + delta : start - delta);
+        onChange(latest);
+      }
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
       handle.classList.remove('is-dragging');
       onCommit(latest);
     };
-    handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', finish);
-    handle.addEventListener('pointercancel', finish);
+    const up = (next: PointerEvent): void => settle(next, true);
+    const cancel = (next: PointerEvent): void => settle(next, false);
+    // 挂在 window 上：指针离开这条 6px 宽的分隔条（拖动过程中必然会离开）也能继续跟手。
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {

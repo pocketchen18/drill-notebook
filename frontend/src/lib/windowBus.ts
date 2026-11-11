@@ -12,7 +12,7 @@ export type BusMessage =
   | { type: 'invalidate'; keys: unknown[][] }
   | { type: 'assistant-activity'; running: number; pending: number };
 
-export interface AssistantWindowStatus { visible: boolean; running: number; pending: number }
+export interface AssistantWindowStatus { visible: boolean; running: number; pending: number; fixed: boolean }
 
 const ASSISTANT_HASH = '#/assistant';
 const CHANNEL = 'drill-notebook-window-bus';

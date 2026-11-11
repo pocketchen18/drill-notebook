@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { AiAssistant } from './AiAssistant';
+import { AiAssistant, quoteBlock } from './AiAssistant';
 import { SessionNavigation, sessionGroup } from './ai-session/SessionNavigation';
 import { useUiStore } from '../stores/uiStore';
 import { defaultShortcutConfig } from '../lib/shortcuts';
@@ -44,6 +44,8 @@ beforeEach(() => {
     if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm', streaming: false } });
     if (url === '/api/ai/sessions') return Promise.resolve(sessions);
     if (url.startsWith('/api/ai/sessions/10/history')) return Promise.resolve(history);
+    // 其它会话没有消息：给一页空历史，避免切换后读到不完整的响应
+    if (/^\/api\/ai\/sessions\/\d+\/history/.test(url)) return Promise.resolve({ sessionId: 0, historyRevision: 1, hasMore: false, limit: 50, messages: [] });
     if (url === '/api/ai/sessions/10/context-usage') return Promise.resolve({ sessionId: 10, model: 'm', contextWindow: 128000, outputReserve: 8192, latest: null });
     if (url === '/api/ai/sessions/runtime?sessionId=10' || url === '/api/ai/sessions/runtime') return Promise.resolve({ sessions: [] });
     if (url === '/api/ai/connections') return Promise.resolve({ revision: 1, chatModelId: 'm1', importModelId: null, providers: [{ id: 'p', name: 'DeepSeek',
@@ -197,13 +199,14 @@ describe('助手窗口框架', () => {
 });
 
 describe('面板宽度', () => {
-  it('会话栏与详情栏可用分隔条调整并各自记住，顶栏不再有固定或置顶按钮', async () => {
+  it('会话栏与详情栏可用分隔条调整并各自记住；浏览器调试里没有固定按钮', async () => {
     localStorage.setItem('ai.window.sideWidth', '300');
     mount();
     await screen.findByText('可导一定连续。');
     const root = document.querySelector<HTMLElement>('.ai-window')!;
     expect(root.style.getPropertyValue('--ai-side-width')).toBe('300px');
     const head = document.querySelector('.ai-window-head')!;
+    // 顶栏不放会话置顶；「固定」只在桌面应用里出现（见下方用例）
     expect(within(head as HTMLElement).queryByRole('button', { name: /置顶|固定/ })).toBeNull();
     const side = screen.getByRole('separator', { name: '调整会话栏宽度' });
     expect(side).toHaveAttribute('aria-valuenow', '300');
@@ -229,6 +232,32 @@ describe('面板宽度', () => {
     expect(localStorage.getItem('ai.window.sideWidth')).toBe('264');
   });
 
+  it('拖动分隔条时指针离开分隔条也跟手，按抬手位置定宽度', async () => {
+    mount();
+    await screen.findByText('可导一定连续。');
+    const root = document.querySelector<HTMLElement>('.ai-window')!;
+    const side = screen.getByRole('separator', { name: '调整会话栏宽度' });
+    fireEvent.pointerDown(side, { button: 0, clientX: 300 });
+    expect(side).toHaveClass('is-dragging');
+    // 拖动过程中的中间位置照常生效
+    fireEvent.pointerMove(window, { clientX: 340 });
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('304px');
+    // 最后一次移动丢了也不怕：抬手的位置才是最终宽度
+    fireEvent.pointerUp(window, { clientX: 370 });
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('334px');
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('334');
+    expect(side).not.toHaveClass('is-dragging');
+    // 拖动结束后不再跟手
+    fireEvent.pointerMove(window, { clientX: 500 });
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('334px');
+    // 取消（如指针被系统拿走）保留最后一次移动的位置，不用取消时的坐标
+    fireEvent.pointerDown(side, { button: 0, clientX: 300 });
+    fireEvent.pointerMove(window, { clientX: 320 });
+    fireEvent.pointerCancel(window, { clientX: 900 });
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('354px');
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('354');
+  });
+
   it('记住的宽度无效时回到默认；窄窗口下不提供分隔条', async () => {
     localStorage.setItem('ai.window.sideWidth', '9999');
     localStorage.setItem('ai.window.detailWidth', 'abc');
@@ -240,5 +269,119 @@ describe('面板宽度', () => {
     expect(root.style.getPropertyValue('--ai-detail-width')).toBe('320px');
     fireEvent.click(screen.getByRole('button', { name: '展开会话栏' }));
     expect(screen.queryByRole('separator')).toBeNull();
+  });
+});
+
+describe('固定、改名与引用', () => {
+  it('固定是窗口级开关：读取并跟随主进程状态，点击后交给主进程，不影响会话置顶', async () => {
+    let listener: ((state: { visible: boolean; running: number; pending: number; fixed: boolean }) => void) | undefined;
+    const setFixed = vi.fn().mockResolvedValue(undefined);
+    const api = { assistant: { getState: vi.fn().mockResolvedValue({ visible: true, running: 0, pending: 0, fixed: true }), setFixed,
+      attention: vi.fn().mockResolvedValue(undefined), onActivated: vi.fn(() => () => undefined),
+      onState: vi.fn((next: typeof listener) => { listener = next; return () => { listener = undefined; }; }) } };
+    Object.defineProperty(window, 'api', { value: api, configurable: true });
+    try {
+      mount();
+      await screen.findByText('可导一定连续。');
+      const head = within(document.querySelector<HTMLElement>('.ai-window-head')!);
+      const button = head.getByRole('button', { name: '固定窗口' });
+      await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'true'));
+      expect(button).toHaveClass('is-on');
+      fireEvent.click(button);
+      expect(setFixed).toHaveBeenCalledWith(false);
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+      // 主进程回报的状态为准
+      act(() => listener?.({ visible: true, running: 0, pending: 0, fixed: true }));
+      expect(button).toHaveAttribute('aria-pressed', 'true');
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(head.queryByRole('button', { name: /置顶/ })).toBeNull();
+    } finally { Reflect.deleteProperty(window, 'api'); }
+  });
+
+  it('双击标题就地改名：Enter 或失焦保存，Esc 取消，没改动或为空不提交', async () => {
+    apiPut.mockImplementation(async (_url: string, body: { title: string }) => ({ ...sessions[0], title: body.title }));
+    mount();
+    await screen.findByText('可导一定连续。');
+    const title = (): HTMLElement => screen.getByRole('button', { name: '切换会话' });
+    fireEvent.doubleClick(title());
+    const input = screen.getByRole('textbox', { name: '会话名称' }) as HTMLInputElement;
+    expect(input).toHaveValue('导数与连续性');
+    expect(input).toHaveFocus();
+    // 进入改名时整段选中，直接输入即可替换
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, '导数与连续性'.length]);
+    fireEvent.change(input, { target: { value: '  极限与导数  ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/sessions/10', { title: '极限与导数' }));
+    expect(screen.queryByRole('textbox', { name: '会话名称' })).toBeNull();
+    apiPut.mockClear();
+    // Esc 取消
+    fireEvent.doubleClick(title());
+    fireEvent.change(screen.getByRole('textbox', { name: '会话名称' }), { target: { value: '不要这个' } });
+    fireEvent.keyDown(screen.getByRole('textbox', { name: '会话名称' }), { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: '会话名称' })).toBeNull();
+    // 清空后失焦、内容没变都不提交
+    fireEvent.doubleClick(title());
+    fireEvent.change(screen.getByRole('textbox', { name: '会话名称' }), { target: { value: '   ' } });
+    fireEvent.blur(screen.getByRole('textbox', { name: '会话名称' }));
+    fireEvent.doubleClick(title());
+    fireEvent.blur(screen.getByRole('textbox', { name: '会话名称' }));
+    expect(apiPut).not.toHaveBeenCalled();
+    // 失焦保存
+    fireEvent.doubleClick(title());
+    fireEvent.change(screen.getByRole('textbox', { name: '会话名称' }), { target: { value: '失焦保存' } });
+    fireEvent.blur(screen.getByRole('textbox', { name: '会话名称' }));
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/sessions/10', { title: '失焦保存' }));
+  });
+
+  it('新会话页没有可改的名字，双击不进入改名', async () => {
+    mount();
+    await screen.findByText('可导一定连续。');
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    fireEvent.doubleClick(screen.getByRole('button', { name: '切换会话' }));
+    expect(screen.queryByRole('textbox', { name: '会话名称' })).toBeNull();
+  });
+
+  it('选中回答里的文字后出现复制与引用；引用以引用块写入输入框并保留已有草稿', async () => {
+    expect(quoteBlock('第一行\n\n第三行')).toBe('> 第一行\n>\n> 第三行');
+    mount();
+    const reply = await screen.findByText('可导一定连续。');
+    const stream = document.querySelector<HTMLElement>('.ai-window-stream')!;
+    const select = (node: Node, start: number, end: number): void => {
+      const range = document.createRange();
+      range.setStart(node.firstChild!, start); range.setEnd(node.firstChild!, end);
+      // jsdom 不做排版：给选区一个固定位置
+      range.getBoundingClientRect = () => ({ left: 200, top: 300, right: 260, bottom: 318, width: 60, height: 18, x: 200, y: 300, toJSON: () => ({}) });
+      const selection = window.getSelection()!;
+      selection.removeAllRanges(); selection.addRange(range);
+    };
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    select(reply, 0, 4);
+    fireEvent.mouseUp(stream);
+    const bar = screen.getByRole('toolbar', { name: '选中文本操作' });
+    fireEvent.click(within(bar).getByRole('button', { name: '复制' }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('可导一定');
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+
+    const input = screen.getByPlaceholderText(/提问…/) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '已有草稿' } });
+    select(reply, 0, 4);
+    fireEvent.mouseUp(stream);
+    fireEvent.click(within(screen.getByRole('toolbar', { name: '选中文本操作' })).getByRole('button', { name: '引用' }));
+    expect(input).toHaveValue('已有草稿\n\n> 可导一定\n');
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    expect(input).toHaveFocus();
+
+    // 没有选中内容、Esc、滚动都会收起浮层
+    select(reply, 0, 4);
+    fireEvent.mouseUp(stream);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    select(reply, 0, 4);
+    fireEvent.mouseUp(stream);
+    fireEvent.scroll(stream);
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    window.getSelection()!.removeAllRanges();
+    fireEvent.mouseUp(stream);
+    expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
   });
 });

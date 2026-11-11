@@ -157,15 +157,20 @@ public class AiChatSessionRepository {
         jdbc.update("UPDATE ai_chat_turn SET page_title = ?, page_link = ? WHERE request_id = ?", title, link, requestId);
     }
 
-    /** 一次模型请求实际送入的长度；同一轮多次请求时保留最近一次，不累加。 */
-    public void recordTurnContext(String requestId, int contextTokens, int contextWindow) {
-        jdbc.update("UPDATE ai_chat_turn SET context_tokens = ?, context_window = ? WHERE request_id = ?", contextTokens, contextWindow, requestId);
+    /**
+     * 一次模型请求实际送入的长度，以及供应商回报的缓存命中部分与输出长度；
+     * 同一轮多次请求时保留最近一次，不累加。
+     */
+    public void recordTurnContext(String requestId, int contextTokens, int contextWindow, Integer cacheReadTokens, Integer outputTokens) {
+        jdbc.update("UPDATE ai_chat_turn SET context_tokens = ?, context_window = ?, cache_read_tokens = ?, output_tokens = ? WHERE request_id = ?",
+                contextTokens, contextWindow, cacheReadTokens, outputTokens, requestId);
     }
 
     /** 当前上下文代数里最近一次有实测输入的轮次；没有则返回 null。 */
     public Map<String, Object> latestContext(long sessionId) {
         return jdbc.query("""
-                SELECT t.request_id, t.context_tokens, t.context_window, t.model_label FROM ai_chat_turn t
+                SELECT t.request_id, t.context_tokens, t.context_window, t.model_label,
+                       t.cache_read_tokens, t.output_tokens FROM ai_chat_turn t
                 JOIN ai_chat_session s ON s.id = t.session_id
                 WHERE t.session_id = ? AND t.context_tokens IS NOT NULL AND t.content_deleted_at IS NULL
                   AND t.context_generation = s.context_generation
@@ -176,8 +181,16 @@ public class AiChatSessionRepository {
             item.put("inputTokens", row.getInt(2));
             item.put("contextWindow", row.getInt(3));
             item.put("model", row.getString(4));
+            item.put("cacheReadTokens", integerOrNull(row, 5));
+            item.put("outputTokens", integerOrNull(row, 6));
             return item;
         }, sessionId).stream().findFirst().orElse(null);
+    }
+
+    /** 供应商没回报的字段保持 NULL，界面按「未回报」显示而不是 0。 */
+    private static Integer integerOrNull(ResultSet row, int index) throws SQLException {
+        int value = row.getInt(index);
+        return row.wasNull() ? null : value;
     }
 
     private static void titleMetadata(ResultSet row, Map<String, Object> item) throws SQLException {

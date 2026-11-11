@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-interface AssistantState { visible: boolean; running: number; pending: number }
+interface AssistantState { visible: boolean; running: number; pending: number; fixed: boolean }
 
 /** 只暴露固定频道的订阅；返回的函数用于取消订阅。 */
 function subscribe<T>(channel: string, listener: (value: T) => void): () => void {
@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
     toggle: (): Promise<void> => ipcRenderer.invoke('assistant:toggle'),
     hide: (): Promise<void> => ipcRenderer.invoke('assistant:hide'),
     getState: (): Promise<AssistantState> => ipcRenderer.invoke('assistant:get-state'),
+    setFixed: (fixed: boolean): Promise<void> => ipcRenderer.invoke('assistant:set-fixed', fixed),
     attention: (): Promise<void> => ipcRenderer.invoke('assistant:attention'),
     focusMain: (): Promise<void> => ipcRenderer.invoke('window:focus-main'),
     onState: (listener: (state: AssistantState) => void): (() => void) => subscribe('assistant:state', listener),

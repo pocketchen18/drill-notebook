@@ -29,6 +29,21 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
   });
 }
 
+// jsdom 不提供 PointerEvent；React 在没有它的环境里根本不注册 pointerdown/move/up 监听，
+// 于是拖动类交互（面板分隔条）无法用真实事件验证。补一个基于 MouseEvent 的最小实现。
+if (typeof window !== 'undefined' && !('PointerEvent' in window)) {
+  class PointerEventPolyfill extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType = 'mouse';
+    readonly isPrimary = true;
+    constructor(type: string, init: MouseEventInit & { pointerId?: number } = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+    }
+  }
+  Object.defineProperty(window, 'PointerEvent', { value: PointerEventPolyfill, configurable: true });
+}
+
 // Arco 的 Message 挂在 body 上的独立 React 根里，RTL 的 cleanup 碰不到它：
 // 它自己的过渡定时器会在 jsdom 拆完之后才回调，报 "window is not defined"。
 // 用例本身仍然是绿的，但每轮验证都被这类脏错误污染，所以收尾时显式清空并等过渡走完。

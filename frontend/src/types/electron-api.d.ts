@@ -1,4 +1,4 @@
-interface AssistantWindowState { visible: boolean; running: number; pending: number }
+interface AssistantWindowState { visible: boolean; running: number; pending: number; fixed: boolean }
 
 interface ElectronApi {
   backend: {
@@ -32,6 +32,8 @@ interface ElectronApi {
     toggle: () => Promise<void>;
     hide: () => Promise<void>;
     getState: () => Promise<AssistantWindowState>;
+    /** 「固定」：让助手窗口保持在其他窗口之上，便于一边看回答一边记笔记。 */
+    setFixed: (fixed: boolean) => Promise<void>;
     attention: () => Promise<void>;
     focusMain: () => Promise<void>;
     onState: (listener: (state: AssistantWindowState) => void) => () => void;

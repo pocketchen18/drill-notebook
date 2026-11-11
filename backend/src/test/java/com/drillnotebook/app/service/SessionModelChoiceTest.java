@@ -30,6 +30,8 @@ class SessionModelChoiceTest {
     private HttpServer server;
     private long session;
     private String secondModel;
+    /** 模拟供应商回报的用量；个别用例改成带缓存命中的形态。 */
+    private volatile Map<String,Object> upstreamUsage = Map.of("prompt_tokens", 10, "completion_tokens", 3);
 
     @BeforeEach void setup() throws Exception {
         root = TestWorkspace.scratchDirectory("session-model-");
@@ -41,7 +43,7 @@ class SessionModelChoiceTest {
         server.createContext("/", exchange -> {
             requests.add(json.readTree(exchange.getRequestBody()));
             byte[] bytes = json.writeValueAsBytes(Map.of("choices", List.of(Map.of("message", Map.of("role", "assistant", "content", "好的。"),
-                    "finish_reason", "stop")), "usage", Map.of("prompt_tokens", 10, "completion_tokens", 3)));
+                    "finish_reason", "stop")), "usage", upstreamUsage));
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
         });
@@ -122,6 +124,25 @@ class SessionModelChoiceTest {
         assertNull(ai.sessionContextUsage(session).get("latest"), "上下文换代后旧请求不再代表当前占用");
     }
 
+    @Test void contextUsageSplitsInputIntoCacheHitAndKeepsTheOutputOfTheLatestRequest() {
+        send(session, "第一问");
+        @SuppressWarnings("unchecked") var plain = (Map<String,Object>) ai.sessionContextUsage(session).get("latest");
+        assertEquals(10, plain.get("inputTokens")); assertEquals(3, plain.get("outputTokens"));
+        assertTrue(plain.containsKey("cacheReadTokens")); assertNull(plain.get("cacheReadTokens"), "供应商没回报缓存时不写 0");
+
+        upstreamUsage = Map.of("prompt_tokens", 900, "completion_tokens", 40, "prompt_tokens_details", Map.of("cached_tokens", 640));
+        send(session, "第二问");
+        @SuppressWarnings("unchecked") var cached = (Map<String,Object>) ai.sessionContextUsage(session).get("latest");
+        assertEquals(900, cached.get("inputTokens"), "OpenAI 口径的输入已含缓存命中，不重复相加");
+        assertEquals(640, cached.get("cacheReadTokens")); assertEquals(40, cached.get("outputTokens"));
+
+        upstreamUsage = Map.of("prompt_tokens", 500, "completion_tokens", 7, "prompt_cache_hit_tokens", 320, "prompt_cache_miss_tokens", 180);
+        send(session, "第三问");
+        @SuppressWarnings("unchecked") var topLevel = (Map<String,Object>) ai.sessionContextUsage(session).get("latest");
+        assertEquals(500, topLevel.get("inputTokens")); assertEquals(320, topLevel.get("cacheReadTokens"), "usage 顶层的命中数同样识别");
+        assertEquals(7, topLevel.get("outputTokens"));
+    }
+
     @Test void theBoundPageIsShownUnderTheQuestionAndOnlyWhenThereIsOne() throws Exception {
         var withPage = new LinkedHashMap<>(body(session, "讲解当前这页"));
         withPage.put("pageSnapshot", Map.of("kind", "note", "title", "导数的定义", "capturedAt", "2026-11-11T08:00:00Z",
@@ -189,11 +210,15 @@ class SessionModelChoiceTest {
     @Test void upgradeFrom17KeepsSessionsFollowingTheMainModel() throws Exception {
         jdbc.execute("ALTER TABLE ai_chat_session DROP COLUMN model_config_id");
         jdbc.execute("ALTER TABLE ai_chat_session DROP COLUMN reasoning_effort");
+        // 旧库没有「命中 / 输出」两列：升级时补上，已有轮次保持未回报。
+        jdbc.execute("ALTER TABLE ai_chat_turn DROP COLUMN cache_read_tokens");
+        jdbc.execute("ALTER TABLE ai_chat_turn DROP COLUMN output_tokens");
         jdbc.update("UPDATE schema_version SET version=17");
         new DatabaseInitializer(jdbc.getDataSource(), Schema9Fixture.resolver(root)).initialize();
         assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         var view = wiring.sessions().find(session);
         assertEquals("会话甲", view.get("title")); assertNull(view.get("modelConfigId")); assertNull(view.get("reasoningEffort"));
         assertEquals("main-model", send(session, "升级后").path("model").asText());
+        assertEquals(3, ((Map<?,?>) ai.sessionContextUsage(session).get("latest")).get("outputTokens"), "升级后新请求照常记录输出");
     }
 }
