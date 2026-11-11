@@ -111,11 +111,12 @@ button.chat-bound-page { cursor: pointer; }
 button.chat-bound-page:hover { color: var(--accent); }
 button.chat-bound-page:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 操作行在悬停或键盘聚焦到该回复时出现，最后一条回复始终显示；触控设备始终显示。 */
-.ai-window .chat-message.assistant .chat-message-actions { align-items: center; flex-wrap: wrap; min-height: 28px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.ai-window .chat-message.assistant .chat-message-actions { align-items: center; flex-wrap: wrap; gap: 4px; min-height: 28px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 .ai-window .chat-message.assistant:hover .chat-message-actions, .ai-window .chat-message.assistant:focus-within .chat-message-actions,
 .ai-window .chat-message.assistant.is-latest .chat-message-actions { opacity: 1; }
-.ai-window .chat-message-actions .chat-message-regenerate { width: 26px; height: 26px; padding: 0; color: var(--muted); }
-.ai-window .chat-message-actions .chat-message-regenerate:hover:not(:disabled) { color: var(--text); background: var(--hover-bg); }
-.ai-window .chat-message-actions .chat-message-regenerate:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ai-window .chat-message-actions .chat-message-action { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 26px; width: 26px; height: 26px; padding: 0; border-radius: var(--radius-sm); color: var(--muted); }
+.ai-window .chat-message-actions .chat-message-action:hover:not(:disabled):not(.arco-btn-loading) { color: var(--text); background: var(--hover-bg); }
+.ai-window .chat-message-actions .chat-message-action:disabled:not(.arco-btn-loading) { opacity: .4; cursor: not-allowed; }
+.ai-window .chat-message-actions .chat-message-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: none) { .ai-window .chat-message.assistant .chat-message-actions { opacity: 1; } }
 .ai-window.is-narrow .ai-window-latest { right: 16px; }

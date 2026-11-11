@@ -1219,10 +1219,16 @@ export function AiAssistant(): JSX.Element {
                         />
                       ) : null}
                       <div className="chat-message-actions">
-                        {text ? <Button type="text" size="mini" icon={<Copy size={14} />} onClick={() => { void copyReply(text); }}>复制</Button> : null}
-                        {text ? <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button> : null}
+                        {text ? (
+                          <Button type="text" size="mini" className="chat-message-action" icon={<Copy size={14} />}
+                            aria-label="复制" title="复制" onClick={() => { void copyReply(text); }} />
+                        ) : null}
+                        {text ? (
+                          <Button type="text" size="mini" className="chat-message-action" icon={<FilePlus2 size={14} />}
+                            aria-label="插入笔记" title="插入笔记" onClick={() => setPendingInsert(text)} />
+                        ) : null}
                         {turnId && !item.streaming ? (
-                          <Button type="text" size="mini" className="chat-message-regenerate" icon={<RotateCw size={14} />}
+                          <Button type="text" size="mini" className="chat-message-action" icon={<RotateCw size={14} />}
                             disabled={!!regenerateBlocked} loading={regenerating === turnId} aria-label="重新生成"
                             title={regenerateBlocked || '重新生成'} onClick={() => void regenerate(turnId)} />
                         ) : null}
