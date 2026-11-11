@@ -400,7 +400,7 @@ export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(func
             <Sparkles size={14} />{target.titleStatus === 'generating' ? '正在生成标题…' : ['ai', 'manual'].includes(target.titleSource ?? '') ? '重新生成标题' : '生成会话标题'}</button>
           <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => void beginRename(target)}><Pencil size={14} />重命名 <kbd>F2</kbd></button>
           {props.onPin ? <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => { closeMenu(); togglePin(target); }}>
-            <Pin size={14} />{target.pinnedAt ? '取消置顶' : '置顶'}</button> : null}
+            <Pin size={14} className="session-nav-pin-icon" />{target.pinnedAt ? '取消置顶' : '置顶'}</button> : null}
           <div role="separator" />
           <button role="menuitem" data-child="copy" aria-haspopup="menu" aria-expanded={sub === 'copy'} onMouseEnter={() => { if (!stacked) setSub('copy'); }} onClick={() => openChild('copy')}><Copy size={14} />复制 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <button role="menuitem" data-child="export" aria-haspopup="menu" aria-expanded={sub === 'export'} onMouseEnter={() => { if (!stacked) setSub('export'); }} onClick={() => openChild('export')}><Download size={14} />导出 <ChevronRight size={13} className="session-nav-chevron" /></button>

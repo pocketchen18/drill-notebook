@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '../../lib/api';
-import { useTurnContextAudit } from '../../hooks/useTurnContext';
 import './context-meter.css';
 
 export interface SessionContextUsage {
@@ -27,7 +26,8 @@ export const formatTokens = (value: number): string => value >= 1000 ? `${(value
 
 /**
  * 当前会话送入模型的上下文占用。只讲三件事：输入（缓存命中 / 未命中）、输出、窗口占比；
- * 分项估算、摘要缺口与省略原因都属于「查看本轮上下文」的细节，不在这里重复。
+ * 窗口大小已经在第一行和进度条里，输出预留、分项估算、摘要与省略原因都不在这里重复，
+ * 需要时去「查看本轮上下文」看。
  */
 export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Props): JSX.Element | null {
   const [open, setOpen] = useState(false);
@@ -39,7 +39,6 @@ export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Pro
   const tokens = measured?.inputTokens ?? estimate?.tokens ?? null;
   const window = data?.contextWindow ?? measured?.contextWindow ?? null;
   const requestId = measured?.requestId ?? estimate?.requestId;
-  const audit = useTurnContextAudit(sessionId, requestId, open && !!requestId);
 
   useEffect(() => {
     if (!open) return;
@@ -64,8 +63,6 @@ export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Pro
   const miss = hit === null || tokens === null ? null : Math.max(0, tokens - hit);
   const output = measured?.outputTokens ?? null;
   const hitShare = hit === null || !tokens ? null : Math.round((hit / tokens) * 100);
-  const summary = audit.data?.audit?.summary;
-  const trimmed = (audit.data?.audit?.omissions ?? []).some((item) => item.reason === 'BUDGET');
   const label = percent === null ? '上下文占用：尚无数据' : `上下文占用 ${percent}%（${source}）`;
 
   return <div className="context-meter" ref={root}>
@@ -86,12 +83,10 @@ export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Pro
             <div><dt>输出</dt><dd>{output === null ? '未回报' : formatTokens(output)}</dd></div>
           </dl>
         </>}
-        <p className="context-meter-meta">{data?.model ?? '当前模型'} · 窗口 {formatTokens(window)}{data?.outputReserve ? ` · 为输出预留 ${formatTokens(data.outputReserve)}` : ''}</p>
+        {data?.model ? <p className="context-meter-meta">{data.model}</p> : null}
         {tokens === null ? <p>发送第一条消息后，这里显示供应商回报的实际长度。</p> : null}
         {measured && measured.contextWindow !== window ? <p>该请求发出时使用的模型窗口为 {formatTokens(measured.contextWindow)}，现按当前模型的窗口计算。</p> : null}
         {!measured && tokens !== null ? <p>供应商没有回报用量，这是发送前的本地估算，不含工具定义与工具结果。</p> : null}
-        {summary ? <p>较早的对话已用摘要代替{summary.hasGaps ? '，其中有未覆盖的部分' : ''}。</p> : null}
-        {trimmed ? <p>部分内容因容量限制没有送入模型。</p> : null}
         {high ? <p className="context-meter-warn">已接近模型窗口上限，较早的对话可能被摘要或省略。</p> : null}
       </div>
       <div className="context-meter-foot"><span>不含多次工具往返的累计用量</span>

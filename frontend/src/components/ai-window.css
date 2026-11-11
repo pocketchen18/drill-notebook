@@ -114,5 +114,8 @@ button.chat-bound-page:focus-visible { outline: 2px solid var(--accent); outline
 .ai-window .chat-message.assistant .chat-message-actions { align-items: center; flex-wrap: wrap; min-height: 28px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 .ai-window .chat-message.assistant:hover .chat-message-actions, .ai-window .chat-message.assistant:focus-within .chat-message-actions,
 .ai-window .chat-message.assistant.is-latest .chat-message-actions { opacity: 1; }
+.ai-window .chat-message-actions .chat-message-regenerate { width: 26px; height: 26px; padding: 0; color: var(--muted); }
+.ai-window .chat-message-actions .chat-message-regenerate:hover:not(:disabled) { color: var(--text); background: var(--hover-bg); }
+.ai-window .chat-message-actions .chat-message-regenerate:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: none) { .ai-window .chat-message.assistant .chat-message-actions { opacity: 1; } }
 .ai-window.is-narrow .ai-window-latest { right: 16px; }

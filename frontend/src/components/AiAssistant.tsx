@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent 
 import { PanelResizer } from './ai-session/PanelResizer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Message, Select, Space, Typography } from '@arco-design/web-react';
-import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Pin, Send, Sparkles, Square, X } from 'lucide-react';
+import { ArrowDown, Copy, Download, FilePlus2, FileText, MoreHorizontal, PanelLeft, Paperclip, Pin, RotateCw, Send, Sparkles, Square, X } from 'lucide-react';
 import { SessionNavigation, type SessionNavigationHandle } from './ai-session/SessionNavigation';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
@@ -19,7 +19,7 @@ import { appendMarkdownBlock } from '../lib/aiContext';
 import { safeFileName } from '../lib/export';
 import { capturePageSnapshot, materialLinkTarget } from '../lib/pageSnapshot';
 import { useAiChatTurn } from '../hooks/useAiChatTurn';
-import type { TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
+import type { OriginalTurnInput, TurnAttachment, TurnEvent, TurnInput } from '../hooks/useAiChatTurn';
 import { canContinueTurn, executionStopNotice, historyNotice, outcomeNotice, statusNotice } from '../lib/aiTurnText';
 import type { TurnNotice } from '../lib/aiTurnText';
 import { historyQueryKey, useChatHistoryPages } from '../hooks/useChatHistoryPages';
@@ -161,6 +161,9 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
+  const [regenerating, setRegenerating] = useState<string | null>(null);
+  const regenerationRef = useRef<{ requestId: string; sessionId: number } | null>(null);
+  useEffect(() => () => { regenerationRef.current = null; }, []);
   const [sessionReference, setSessionReferenceState] = useState<string>();
   const setSessionReference = (link: string | undefined): void => { setReferenceTitle(''); setSessionReferenceState(link); };
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
@@ -223,6 +226,8 @@ export function AiAssistant(): JSX.Element {
   function selectSession(next: number | undefined): void {
     setSideOverlay(false);
     if (firstSendPendingRef.current || next === sessionId) return;
+    regenerationRef.current = null;
+    setRegenerating(null);
     draftCache.current.set(sessionId ?? 'new', { message, attachments, messages, target: turnTargetRef.current,
       sticky: stickyBottomRef.current, scroll: chatContainerRef.current?.scrollTop ?? 0 });
     const draft = draftCache.current.get(next ?? 'new');
@@ -763,8 +768,22 @@ export function AiAssistant(): JSX.Element {
     catch (error) { Message.error(friendlyMessage(error, '提交结果仍未确认，内容已保留')); }
     finally { queueSubmittingRef.current = false; setQueueSubmitting(false); }
   };
+  const beginReply = (input: TurnInput, content: ChatMessage['content'], displayText: string, isFirstSend = false): void => {
+    const userKey = nextMessageKey();
+    const assistantKey = nextMessageKey();
+    // 发送时就标出将使用的模型；服务端历史行到达后以它记录的实际值为准。
+    const usedModel = activeModel ? { model: `${activeModel.provider.name} · ${activeModel.model.modelId}`,
+      ...(activeEffort ? { reasoningEffort: activeEffort } : {}) } : {};
+    turnTargetRef.current = { userKey, assistantKey };
+    const snapshot = input.pageSnapshot;
+    const boundPage = snapshot && snapshot.kind !== 'none' && snapshot.title ? { page: { title: snapshot.title } } : {};
+    setMessages((current) => [...current, { role: 'user', content, displayContent: displayText, _key: userKey, ...boundPage },
+      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey, ...usedModel }]);
+    if (isFirstSend) pendingFirstTurnRef.current = input;
+    else turn.send(input);
+  };
   const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
-    if (firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed) return;
+    if (firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
     if (!continuation && !message.trim() && !attachments.length) return;
     if (!configured) {
       Message.warning('请先在设置中配置 API Key');
@@ -811,22 +830,44 @@ export function AiAssistant(): JSX.Element {
       }
     }
     const input: TurnInput = { ...inputSnapshot, sessionId: targetSessionId! };
-    const userKey = nextMessageKey();
-    const assistantKey = nextMessageKey();
-    // 发送时就标出将使用的模型；服务端历史行到达后以它记录的实际值为准。
-    const usedModel = activeModel ? { model: `${activeModel.provider.name} · ${activeModel.model.modelId}`,
-      ...(activeEffort ? { reasoningEffort: activeEffort } : {}) } : {};
-    turnTargetRef.current = { userKey, assistantKey };
-    const snapshot = inputSnapshot.pageSnapshot;
-    const boundPage = snapshot && snapshot.kind !== 'none' && snapshot.title ? { page: { title: snapshot.title } } : {};
-    setMessages((current) => [...current, { role: 'user', content, displayContent: displayText, _key: userKey, ...boundPage },
-      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey, ...usedModel }]);
+    beginReply(input, content, displayText, isFirstSend);
     setMessage('');
     setAttachments([]);
-    if (isFirstSend) pendingFirstTurnRef.current = input;
-    else turn.send(input);
   };
   const send = (): void => { void submitMessage(); };
+  const regenerationUnavailable = streaming ? '正在回复，结束后可重新生成'
+    : queueSubmitting || queue.unconfirmed || queue.data?.items?.length || queue.data?.paused || queue.data?.editingId ? '有待发消息时不能重新生成'
+      : !configured ? '请先配置模型' : '';
+  const regenerationAllowedRef = useRef(false);
+  regenerationAllowedRef.current = !regenerationUnavailable;
+  const regenerateBlocked = regenerating ? '正在准备重新生成' : regenerationUnavailable;
+  /** 原输入按需读取，retryOf 沿用工具回执；新回答追加，输入草稿保持原样。 */
+  const regenerate = async (requestId: string): Promise<void> => {
+    if (regenerationRef.current || regenerationUnavailable || sessionId === undefined) return;
+    const target = { requestId, sessionId };
+    regenerationRef.current = target;
+    setRegenerating(requestId);
+    try {
+      const original = await get<OriginalTurnInput>(`/api/ai/turns/${requestId}/input`);
+      if (regenerationRef.current !== target || selectedSessionRef.current !== target.sessionId) return;
+      if (!regenerationAllowedRef.current) { Message.warning('会话状态已变化，请稍后重新生成'); return; }
+      if (original.requestId !== requestId || original.sessionId !== target.sessionId || !original.input?.userText?.trim()) {
+        throw new Error('原提问无法读取，无法重新生成');
+      }
+      const input: TurnInput = { ...original.input, sessionId: target.sessionId, retryOf: requestId,
+        pageSnapshot: capturePageSnapshot(useUiStore.getState().pageContext) };
+      const images = input.attachments?.filter((item) => item.kind === 'image') ?? [];
+      const content: ChatMessage['content'] = images.length ? [{ type: 'text', text: input.userText },
+        ...images.map((item) => ({ type: 'image_url' as const, image_url: { url: `data:${item.mimeType};base64,${item.dataBase64}` } }))] : input.userText;
+      const displayText = [input.userText, ...(input.attachments ?? []).map((item) => `[附件：${item.name}]`)].join('\n\n');
+      stickyBottomRef.current = true;
+      beginReply(input, content, displayText);
+    } catch (error) {
+      if (regenerationRef.current === target) Message.error(friendlyMessage(error, '重新生成失败，请重试'));
+    } finally {
+      if (regenerationRef.current === target) { regenerationRef.current = null; setRegenerating(null); }
+    }
+  };
 
   useEffect(() => {
     const input = pendingFirstTurnRef.current;
@@ -1180,10 +1221,10 @@ export function AiAssistant(): JSX.Element {
                       <div className="chat-message-actions">
                         {text ? <Button type="text" size="mini" icon={<Copy size={14} />} onClick={() => { void copyReply(text); }}>复制</Button> : null}
                         {text ? <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button> : null}
-                        {turnId ? (
-                          <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnId, snapshot: turnSnapshot ?? undefined })}>
-                            本轮上下文
-                          </Button>
+                        {turnId && !item.streaming ? (
+                          <Button type="text" size="mini" className="chat-message-regenerate" icon={<RotateCw size={14} />}
+                            disabled={!!regenerateBlocked} loading={regenerating === turnId} aria-label="重新生成"
+                            title={regenerateBlocked || '重新生成'} onClick={() => void regenerate(turnId)} />
                         ) : null}
                         {item.usage ? <span className="chat-turn-usage" title={item.usage.requests > 1 ? `本轮 ${item.usage.requests} 次模型请求的累计实测用量` : '本轮实测用量'}>
                           输入 {formatTokens(item.usage.inputTokens)} · 输出 {formatTokens(item.usage.outputTokens)}</span> : null}
@@ -1290,7 +1331,7 @@ export function AiAssistant(): JSX.Element {
               <FileText size={13} /><span>{pageTarget ? pageContext.title : '无当前页面'}</span></button>
             <ContextMeter sessionId={sessionId} estimate={contextEstimate} refreshKey={`${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}`}
               onInspect={(requestId) => { setSessionReference(undefined); setInspectorTarget({ requestId }); }} />
-            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming} disabled={createSessionMutation.isPending}
+            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             {streaming && <>
@@ -1302,7 +1343,7 @@ export function AiAssistant(): JSX.Element {
               type="primary"
               icon={<Send size={16} />}
               loading={createSessionMutation.isPending || queueSubmitting}
-              disabled={!configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || (streaming && !message.trim() && !attachments.length)}
+              disabled={!configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || !!regenerating || (streaming && !message.trim() && !attachments.length)}
               onClick={send}
               aria-label={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
               title={streaming || queue.data?.items?.length ? '加入队列' : '发送'}

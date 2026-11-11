@@ -7,10 +7,12 @@ import { SessionNavigation, sessionGroup } from './ai-session/SessionNavigation'
 import { useUiStore } from '../stores/uiStore';
 import { defaultShortcutConfig } from '../lib/shortcuts';
 import type { AiChatSession } from '../lib/types';
+import { ApiError } from '../lib/api';
+import type { OriginalTurnInput } from '../hooks/useAiChatTurn';
 
 /** v0.8 助手窗口框架：会话栏、绑定页面、实际模型与用量、回到最新、窗口快捷键与详情栏。 */
-const { apiGet, apiPost, apiPut } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: vi.fn() }));
-vi.mock('../lib/aiStream', () => ({ streamChat: vi.fn() }));
+const { apiGet, apiPost, apiPut, streamChatMock } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: vi.fn(), streamChatMock: vi.fn() }));
+vi.mock('../lib/aiStream', () => ({ streamChat: (...args: unknown[]) => streamChatMock(...args) }));
 vi.mock('../lib/api', async (original) => ({ ...await original<typeof import('../lib/api')>(),
   get: (...args: unknown[]) => apiGet(...args), post: (...args: unknown[]) => apiPost(...args), put: (...args: unknown[]) => apiPut(...args) }));
 
@@ -36,6 +38,7 @@ function mount() {
 }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear();
+  streamChatMock.mockResolvedValue(() => undefined);
   Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
   useUiStore.setState({ aiOpen: true, shortcutConfig: defaultShortcutConfig(),
@@ -46,7 +49,8 @@ beforeEach(() => {
     if (url.startsWith('/api/ai/sessions/10/history')) return Promise.resolve(history);
     // 其它会话没有消息：给一页空历史，避免切换后读到不完整的响应
     if (/^\/api\/ai\/sessions\/\d+\/history/.test(url)) return Promise.resolve({ sessionId: 0, historyRevision: 1, hasMore: false, limit: 50, messages: [] });
-    if (url === '/api/ai/sessions/10/context-usage') return Promise.resolve({ sessionId: 10, model: 'm', contextWindow: 128000, outputReserve: 8192, latest: null });
+    if (url === '/api/ai/sessions/10/context-usage') return Promise.resolve({ sessionId: 10, model: 'm', contextWindow: 128000, outputReserve: 8192,
+      latest: { requestId: 'r2', inputTokens: 1200, contextWindow: 128000, model: 'm' } });
     if (url === '/api/ai/sessions/runtime?sessionId=10' || url === '/api/ai/sessions/runtime') return Promise.resolve({ sessions: [] });
     if (url === '/api/ai/connections') return Promise.resolve({ revision: 1, chatModelId: 'm1', importModelId: null, providers: [{ id: 'p', name: 'DeepSeek',
       apiFormat: 'chat_completions', endpoint: 'x', authMode: 'api_key', hasKey: true, needsPassword: false, models: [
@@ -106,7 +110,8 @@ describe('助手窗口框架', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     expect(side).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText('查找会话')).toHaveFocus());
-    fireEvent.click(screen.getAllByRole('button', { name: '本轮上下文' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
+    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
     expect(screen.getByRole('complementary', { name: '本轮上下文' })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('complementary')).toBeNull();
@@ -177,7 +182,10 @@ describe('助手窗口框架', () => {
     expect(props.onSelect).not.toHaveBeenCalled();
     // 右键菜单提供同一个动作，文字随当前状态变化
     fireEvent.contextMenu(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }), { clientX: 120, clientY: 160 });
-    fireEvent.click(await screen.findByRole('menuitem', { name: '取消置顶' }));
+    const menuPin = await screen.findByRole('menuitem', { name: '取消置顶' });
+    // 菜单里的图标与行内图钉同一套（倾斜），不与顶栏的「固定」混淆
+    expect(menuPin.querySelector('svg')).toHaveClass('session-nav-pin-icon');
+    fireEvent.click(menuPin);
     await waitFor(() => expect(props.onPin).toHaveBeenLastCalledWith(11, false));
     // 查找时置顶分组只在有命中时出现
     fireEvent.change(screen.getByLabelText('查找会话'), { target: { value: '导数' } });
@@ -195,6 +203,103 @@ describe('助手窗口框架', () => {
     fireEvent.click(screen.getByRole('button', { name: '置顶：积分换元法' }));
     expect(await screen.findByText('置顶未保存')).toBeInTheDocument();
     expect(screen.getAllByRole('presentation').map((node) => node.textContent)).toEqual(['今天', '近 7 天', '更早']);
+  });
+});
+
+describe('重新生成回答', () => {
+  const original: OriginalTurnInput = { requestId: 'r1', sessionId: 10, input: { userText: '讲解当前这页', attachments: [
+    { clientId: 'c0', kind: 'text', name: '原笔记.md', mimeType: 'text/markdown', text: '原附件正文' },
+    { clientId: 'c1', kind: 'image', name: '原截图.png', mimeType: 'image/png', dataBase64: 'AAAA' }
+  ] } };
+
+  it('圆形箭头重发原提问与附件，沿用轮次回执，保留原回答和输入草稿', async () => {
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input' ? Promise.resolve(original) : base(url));
+    mount();
+    await screen.findByText('可导一定连续。');
+    const button = screen.getAllByRole('button', { name: '重新生成' })[0];
+    expect(button).toHaveAttribute('title', '重新生成');
+    expect(button.textContent).toBe('');
+    expect(button.querySelector('svg')).toHaveClass('lucide-rotate-cw');
+    expect(screen.queryByRole('button', { name: '本轮上下文' })).toBeNull();
+    const input = screen.getByPlaceholderText(/提问…/);
+    fireEvent.change(input, { target: { value: '接着问的草稿' } });
+    const draft = new File(['草稿附件正文'], '草稿附件.txt', { type: 'text/plain' });
+    Object.defineProperty(draft, 'text', { value: async () => '草稿附件正文' });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [draft] } });
+    await screen.findByText('草稿附件.txt');
+    fireEvent.click(button);
+    await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(1));
+    const body = streamChatMock.mock.calls[0][1];
+    expect(body).toMatchObject({ protocolVersion: 2, sessionId: 10, retryOf: 'r1', input: original.input,
+      pageSnapshot: { title: '笔记 · 极限' } });
+    expect(body.requestId).not.toBe('r1');
+    expect(input).toHaveValue('接着问的草稿');
+    expect(screen.getByText('草稿附件.txt')).toBeInTheDocument();
+    expect(screen.getByText('可导一定连续。')).toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(3);
+  });
+
+  it('连续点击只读取和发送一次，准备与生成期间不能另开一轮', async () => {
+    let resolveOriginal!: (value: OriginalTurnInput) => void;
+    const pending = new Promise<OriginalTurnInput>((resolve) => { resolveOriginal = resolve; });
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input' ? pending : base(url));
+    mount();
+    await screen.findByText('可导一定连续。');
+    const button = screen.getAllByRole('button', { name: '重新生成' })[0];
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(apiGet.mock.calls.filter(([url]) => url === '/api/ai/turns/r1/input')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+    await act(async () => resolveOriginal(original));
+    await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(1));
+    for (const action of screen.getAllByRole('button', { name: '重新生成' })) expect(action).toBeDisabled();
+    fireEvent.click(button);
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('准备期间切换会话，迟到的原输入不会发送到任何会话', async () => {
+    let resolveOriginal!: (value: OriginalTurnInput) => void;
+    const pending = new Promise<OriginalTurnInput>((resolve) => { resolveOriginal = resolve; });
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input' ? pending : base(url));
+    mount();
+    await screen.findByText('可导一定连续。');
+    fireEvent.click(screen.getAllByRole('button', { name: '重新生成' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法'));
+    await act(async () => resolveOriginal(original));
+    expect(streamChatMock).not.toHaveBeenCalled();
+    expect(screen.queryByText('可导一定连续。')).toBeNull();
+    expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+  });
+
+  it('原附件无法读取时显示原因，保留历史且不发送缺附件的问题', async () => {
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input'
+      ? Promise.reject(new ApiError('RETRY_INPUT_UNAVAILABLE', '原提问或附件无法完整读取，无法重新生成', 409)) : base(url));
+    mount();
+    await screen.findByText('可导一定连续。');
+    fireEvent.click(screen.getAllByRole('button', { name: '重新生成' })[0]);
+    await screen.findByText('原提问或附件无法完整读取，无法重新生成');
+    expect(streamChatMock).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(2);
+    expect(screen.getByText('可导一定连续。')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '重新生成' })[0]).toBeEnabled();
+  });
+
+  it('当前会话正在后台回复时，旧回答上的重新生成禁用', async () => {
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url.startsWith('/api/ai/sessions/runtime')
+      ? Promise.resolve({ sessions: [{ sessionId: 10, requestId: 'running', status: 'RUNNING', queueCount: 0 }] }) : base(url));
+    mount();
+    await screen.findByText('可导一定连续。');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '重新生成' })[0]).toBeDisabled());
+    fireEvent.click(screen.getAllByRole('button', { name: '重新生成' })[0]);
+    expect(apiGet.mock.calls.some(([url]) => String(url).endsWith('/input'))).toBe(false);
+    expect(streamChatMock).not.toHaveBeenCalled();
   });
 });
 
@@ -223,7 +328,8 @@ describe('面板宽度', () => {
     expect(localStorage.getItem('ai.window.sideWidth')).toBe('264');
 
     expect(screen.queryByRole('separator', { name: '调整详情栏宽度' })).toBeNull();
-    fireEvent.click(screen.getAllByRole('button', { name: '本轮上下文' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
+    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
     const detail = screen.getByRole('separator', { name: '调整详情栏宽度' });
     // 详情栏的分隔条在左侧：向左是变宽
     fireEvent.keyDown(detail, { key: 'ArrowLeft' });

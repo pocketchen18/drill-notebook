@@ -599,8 +599,7 @@ public class AiService {
         result.put("latest", sessions.latestContext(sessionId));
         try {
             AiConfigRepository.ConfigRow config = chatConfigFor(sessionId);
-            String provider = config.provider() == null || config.provider().isBlank() ? "" : config.provider() + " · ";
-            result.put("model", provider + config.model());
+            result.put("model", config.model());
             result.put("contextWindow", AiModelLimits.contextWindow(config));
             result.put("outputReserve", AiModelLimits.output(config, runtimeSettings().requestOutputTokens()));
         } catch (RuntimeException error) {

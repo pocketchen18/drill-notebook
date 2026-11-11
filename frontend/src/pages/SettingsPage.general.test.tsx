@@ -98,10 +98,9 @@ describe('SettingsPage 常规分区', () => {
     expect(useUiStore.getState().theme).toBe('dark');
   });
 
-  it('SET-3: opens the AI assistant from settings', () => {
+  it('SET-3: 常规设置不再提供「打开 AI 助手」入口（顶栏入口已够用）', () => {
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
-    expect(useUiStore.getState().aiOpen).toBe(true);
+    expect(screen.queryByRole('button', { name: '打开 AI 助手' })).toBeNull();
   });
 
   it('focus outline side and preview panel swap persist independently', () => {

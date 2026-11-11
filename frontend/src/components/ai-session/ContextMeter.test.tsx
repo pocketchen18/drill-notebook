@@ -22,7 +22,7 @@ beforeEach(() => { vi.clearAllMocks(); readContext.mockResolvedValue(audit()); }
 
 describe('上下文占用', () => {
   it('只显示输入（缓存命中 / 未命中）与输出，分项估算留给本轮上下文', async () => {
-    apiGet.mockResolvedValue({ sessionId: 5, model: 'DeepSeek · deepseek-reasoner', contextWindow: 128000, outputReserve: 8192,
+    apiGet.mockResolvedValue({ sessionId: 5, model: 'deepseek-reasoner', contextWindow: 128000, outputReserve: 8192,
       latest: { requestId: 'r1', inputTokens: 52400, contextWindow: 128000, model: 'DeepSeek · deepseek-reasoner',
         cacheReadTokens: 40000, outputTokens: 1250 } });
     const { onInspect } = mount();
@@ -32,11 +32,13 @@ describe('上下文占用', () => {
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', { name: '上下文占用' });
     expect(dialog.querySelector('.context-meter-headline')?.textContent).toBe('输入 52.4k / 128k');
-    expect(within(dialog).getByText(/为输出预留 8.2k/)).toBeInTheDocument();
+    // 模型名只出现一次；窗口已在第一行，输出预留不再显示
+    expect(dialog.querySelector('.context-meter-meta')?.textContent).toBe('deepseek-reasoner');
+    expect(within(dialog).queryByText(/预留|窗口/)).toBeNull();
     const rows = [...dialog.querySelectorAll('.context-meter-rows > div')].map((row) => row.textContent);
     expect(rows).toEqual(['缓存命中40.0k · 占输入 76%', '缓存未命中12.4k', '输出1.3k']);
-    // 分项估算、工具误差这些细节不再出现在浮层里
-    await waitFor(() => expect(readContext).toHaveBeenCalled());
+    // 分项估算、工具误差这些细节不再出现在浮层里，也不为它们多发一次请求
+    expect(readContext).not.toHaveBeenCalled();
     expect(within(dialog).queryByText('历史对话与摘要')).toBeNull();
     expect(within(dialog).queryByText(/工具定义、工具结果/)).toBeNull();
     expect(within(dialog).getByText('不含多次工具往返的累计用量')).toBeInTheDocument();
@@ -81,7 +83,7 @@ describe('上下文占用', () => {
     expect(screen.queryByRole('button', { name: '查看本轮上下文' })).toBeNull();
   });
 
-  it('高占用、摘要与裁剪都有说明，并按当前模型窗口换算', async () => {
+  it('高占用有提示并按当前模型窗口换算；摘要与裁剪的说明留给本轮上下文', async () => {
     readContext.mockResolvedValue(audit({ summary: { revision: 2, throughTurnId: 9, hasGaps: true, coverageRanges: [] },
       omissions: [{ reason: 'BUDGET', kind: 'RECENT_TURNS', count: 3 }] }));
     apiGet.mockResolvedValue({ sessionId: 5, model: '小窗口模型', contextWindow: 60000, outputReserve: 4096,
@@ -90,8 +92,9 @@ describe('上下文占用', () => {
     fireEvent.click(await screen.findByRole('button', { name: '上下文占用 87%（实测）' }));
     expect(screen.getByText(/该请求发出时使用的模型窗口为 128k/)).toBeInTheDocument();
     expect(screen.getByText(/接近模型窗口上限/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('较早的对话已用摘要代替，其中有未覆盖的部分。')).toBeInTheDocument());
-    expect(screen.getByText('部分内容因容量限制没有送入模型。')).toBeInTheDocument();
+    expect(screen.queryByText(/已用摘要代替/)).toBeNull();
+    expect(screen.queryByText(/没有送入模型/)).toBeNull();
+    expect(readContext).not.toHaveBeenCalled();
   });
 
   it('新会话页或模型不可用时不显示；数字格式紧凑', async () => {

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.drillnotebook.app.config.DatabaseInitializer;
 import com.drillnotebook.app.memory.Schema9Fixture;
@@ -16,6 +18,8 @@ import com.drillnotebook.app.repository.ChatTurnRepository;
 import com.drillnotebook.app.repository.ChatTurnRepository.AttachmentRow;
 import com.drillnotebook.app.service.ChatTurnService.BeginInput;
 import com.drillnotebook.app.service.ChatTurnService.BeginResult;
+import com.drillnotebook.app.service.ChatTurnService.UpstreamReply;
+import com.drillnotebook.app.service.memory.MemoryVaultService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +28,7 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,6 +131,65 @@ class ChatTurnAttachmentTest {
         assertEquals(image.length, parsed.get("byteLength"));
         assertArrayEqualsEquivalent(image, (String) parsed.get("data"));
         key.zero();
+    }
+
+    @Test
+    void regenerationReadsOriginalQuestionAndAllAttachmentsAfterAnInterruptedTurnWithoutWriting() throws Exception {
+        String image = base64(png(8, 8));
+        BeginResult begun = service.begin(input("重新解释这张图", List.of(
+                item("image", "image", "截图.png", "image/png", image, null),
+                item("text", "text", "原笔记.md", "text/markdown", null, "原附件正文"))));
+        service.cancel(begun.lease().requestId());
+        service.finalizeTurn(begun.lease(), UpstreamReply.of("半句回答", null, "aborted"), null);
+        var before = ledger.read();
+        long revision = jdbc.queryForObject("SELECT history_revision FROM ai_chat_session WHERE id = ?", Long.class, sessionId);
+
+        var result = inputReader("").input(begun.lease().requestId());
+        assertEquals(begun.lease().requestId(), result.get("requestId"));
+        assertEquals(sessionId, result.get("sessionId"));
+        var original = (Map<?, ?>) result.get("input");
+        assertEquals("重新解释这张图", original.get("userText"));
+        assertEquals(List.of(
+                Map.of("clientId", "c0", "kind", "image", "name", "截图.png", "mimeType", "image/png", "dataBase64", image),
+                Map.of("clientId", "c1", "kind", "text", "name", "原笔记.md", "mimeType", "text/markdown", "text", "原附件正文")),
+                original.get("attachments"));
+        assertEquals(before, ledger.read(), "读原输入不改变历史或附件的容量账本");
+        assertEquals(revision, jdbc.queryForObject("SELECT history_revision FROM ai_chat_session WHERE id = ?", Long.class, sessionId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_turn", Integer.class));
+    }
+
+    @Test
+    void regenerationRefusesAMissingAttachmentAndAnActiveOrCleanedTurn() throws Exception {
+        BeginResult begun = service.begin(input("附件不可丢", List.of(
+                item("c1", "text", "笔记.txt", "text/plain", null, "完整附件"))));
+        String request = begun.lease().requestId();
+        assertEquals("RETRY_TARGET_ACTIVE", assertThrows(ChatTurnRejectException.class,
+                () -> inputReader("").input(request)).code());
+        service.finalizeTurn(begun.lease(), UpstreamReply.of("回答", null, "stop"), null);
+        jdbc.update("DELETE FROM ai_chat_attachment WHERE turn_id = ?", begun.lease().turnId());
+        assertEquals("RETRY_INPUT_UNAVAILABLE", assertThrows(ChatTurnRejectException.class,
+                () -> inputReader("").input(request)).code(), "不能悄悄改成没有附件的问题");
+        jdbc.update("UPDATE ai_chat_turn SET content_deleted_at = ? WHERE request_id = ?", "2026-11-11T10:00:00Z", request);
+        assertEquals("TURN_CONTENT_DELETED", assertThrows(ChatTurnRejectException.class,
+                () -> inputReader("").input(request)).code());
+    }
+
+    @Test
+    void regenerationRequiresTheSessionUnlockAndReadsPlainQuestionsWithoutInventingAttachments() throws Exception {
+        BeginResult begun = service.begin(new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId,
+                "受保护的提问", "测试主密码", List.of(), Map.of()));
+        service.finalizeTurn(begun.lease(), UpstreamReply.of("回答", null, "stop"), null);
+        assertEquals("CHAT_PASSWORD_REQUIRED", assertThrows(ChatTurnRejectException.class,
+                () -> inputReader("").input(begun.lease().requestId())).code());
+        var result = inputReader("测试主密码").input(begun.lease().requestId());
+        assertEquals(Map.of("role", "user", "userText", "受保护的提问"), result.get("input"));
+    }
+
+    private ChatTurnInputService inputReader(String password) {
+        MemoryVaultService vault = mock(MemoryVaultService.class);
+        when(vault.sessionPassword(sessionId)).thenReturn(password.isBlank() ? Optional.empty() : Optional.of(password));
+        return new ChatTurnInputService(turns, wiring.cipher(),
+                new ChatAttachmentReader(turns, wiring.cipher(), wiring.attachmentCipher(), mapper), vault, mapper);
     }
 
     @Test

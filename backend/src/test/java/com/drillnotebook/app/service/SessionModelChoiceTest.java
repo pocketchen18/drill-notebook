@@ -111,7 +111,7 @@ class SessionModelChoiceTest {
         var switched = ai.sessionContextUsage(session);
         assertEquals(64000, switched.get("contextWindow"), "改选后按新模型的窗口解释");
         assertEquals(128000, ((Map<?,?>) switched.get("latest")).get("contextWindow"), "已发生的请求保留当时的窗口");
-        assertTrue(String.valueOf(switched.get("model")).endsWith("deep-model"));
+        assertEquals("deep-model", switched.get("model"), "只给模型名，不带供应商");
         assertTrue(((Number) switched.get("outputReserve")).intValue() > 0);
 
         @SuppressWarnings("unchecked") var usage = (Map<String,Object>) assistantRows(session).get(0).get("usage");
