@@ -154,4 +154,91 @@ describe('助手窗口框架', () => {
     expect(await screen.findByRole('button', { name: '模型：deepseek-reasoner' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '思考档位：模型默认' })).toBeInTheDocument();
   });
+
+  it('置顶的会话归入最前的置顶分组，先置顶的在上；图钉与菜单都能置顶和取消', async () => {
+    const props = { visible: true, currentId: 10, loading: false, error: false, creating: false, exporting: false, onRetry: vi.fn(),
+      onCreate: vi.fn(), onSelect: vi.fn(), onRename: vi.fn(), onGenerate: vi.fn(), onDelete: vi.fn(), onExport: vi.fn(),
+      onPin: vi.fn().mockResolvedValue(undefined) };
+    const pinned = [sessions[0], { ...sessions[1], pinnedAt: '2026-11-11T09:00:00Z' }, { ...sessions[2], pinnedAt: '2026-11-11T08:00:00Z' }];
+    const view = render(<SessionNavigation {...props} sessions={pinned} docked />);
+    expect(screen.getAllByRole('presentation').map((node) => node.textContent)).toEqual(['置顶', '今天']);
+    const order = [...view.container.querySelectorAll('.session-nav-name')].map((node) => node.textContent);
+    expect(order).toEqual(['英语长难句', '积分换元法', '导数与连续性']);
+    const unpin = screen.getByRole('button', { name: '取消置顶：英语长难句' });
+    expect(unpin).toHaveAttribute('aria-pressed', 'true');
+    expect(unpin).toHaveClass('is-pinned');
+    fireEvent.click(unpin);
+    await waitFor(() => expect(props.onPin).toHaveBeenCalledWith(12, false));
+    await waitFor(() => expect(unpin).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: '置顶：导数与连续性' }));
+    await waitFor(() => expect(props.onPin).toHaveBeenLastCalledWith(10, true));
+    expect(props.onSelect).not.toHaveBeenCalled();
+    // 右键菜单提供同一个动作，文字随当前状态变化
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }), { clientX: 120, clientY: 160 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: '取消置顶' }));
+    await waitFor(() => expect(props.onPin).toHaveBeenLastCalledWith(11, false));
+    // 查找时置顶分组只在有命中时出现
+    fireEvent.change(screen.getByLabelText('查找会话'), { target: { value: '导数' } });
+    expect(screen.getAllByRole('presentation').map((node) => node.textContent)).toEqual(['今天']);
+  });
+
+  it('不提供置顶能力时不显示图钉；置顶失败有提示且不改变列表', async () => {
+    const base = { visible: true, sessions, currentId: 10, loading: false, error: false, creating: false, exporting: false, onRetry: vi.fn(),
+      onCreate: vi.fn(), onSelect: vi.fn(), onRename: vi.fn(), onGenerate: vi.fn(), onDelete: vi.fn(), onExport: vi.fn() };
+    const view = render(<SessionNavigation {...base} docked />);
+    expect(screen.queryByRole('button', { name: /^置顶：/ })).toBeNull();
+    view.unmount();
+    const onPin = vi.fn().mockRejectedValue(new Error('置顶未保存'));
+    render(<SessionNavigation {...base} docked onPin={onPin} />);
+    fireEvent.click(screen.getByRole('button', { name: '置顶：积分换元法' }));
+    expect(await screen.findByText('置顶未保存')).toBeInTheDocument();
+    expect(screen.getAllByRole('presentation').map((node) => node.textContent)).toEqual(['今天', '近 7 天', '更早']);
+  });
+});
+
+describe('面板宽度', () => {
+  it('会话栏与详情栏可用分隔条调整并各自记住，顶栏不再有固定或置顶按钮', async () => {
+    localStorage.setItem('ai.window.sideWidth', '300');
+    mount();
+    await screen.findByText('可导一定连续。');
+    const root = document.querySelector<HTMLElement>('.ai-window')!;
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('300px');
+    const head = document.querySelector('.ai-window-head')!;
+    expect(within(head as HTMLElement).queryByRole('button', { name: /置顶|固定/ })).toBeNull();
+    const side = screen.getByRole('separator', { name: '调整会话栏宽度' });
+    expect(side).toHaveAttribute('aria-valuenow', '300');
+    fireEvent.keyDown(side, { key: 'ArrowRight' });
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('316px');
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('316');
+    fireEvent.keyDown(side, { key: 'ArrowLeft' });
+    fireEvent.keyDown(side, { key: 'ArrowLeft' });
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('284');
+    for (let index = 0; index < 20; index += 1) fireEvent.keyDown(side, { key: 'ArrowLeft' });
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('200');
+    fireEvent.doubleClick(side);
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('264px');
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('264');
+
+    expect(screen.queryByRole('separator', { name: '调整详情栏宽度' })).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: '本轮上下文' })[0]);
+    const detail = screen.getByRole('separator', { name: '调整详情栏宽度' });
+    // 详情栏的分隔条在左侧：向左是变宽
+    fireEvent.keyDown(detail, { key: 'ArrowLeft' });
+    expect(root.style.getPropertyValue('--ai-detail-width')).toBe('336px');
+    expect(localStorage.getItem('ai.window.detailWidth')).toBe('336');
+    expect(localStorage.getItem('ai.window.sideWidth')).toBe('264');
+  });
+
+  it('记住的宽度无效时回到默认；窄窗口下不提供分隔条', async () => {
+    localStorage.setItem('ai.window.sideWidth', '9999');
+    localStorage.setItem('ai.window.detailWidth', 'abc');
+    Object.defineProperty(window, 'innerWidth', { value: 480, configurable: true });
+    mount();
+    await screen.findByText('可导一定连续。');
+    const root = document.querySelector<HTMLElement>('.ai-window')!;
+    expect(root.style.getPropertyValue('--ai-side-width')).toBe('264px');
+    expect(root.style.getPropertyValue('--ai-detail-width')).toBe('320px');
+    fireEvent.click(screen.getByRole('button', { name: '展开会话栏' }));
+    expect(screen.queryByRole('separator')).toBeNull();
+  });
 });

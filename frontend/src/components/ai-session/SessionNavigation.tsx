@@ -132,11 +132,13 @@ export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(func
   const target = sessions.find((s) => s.id === menu?.id);
   const menuWidth = Math.min(196, viewport.width - 16);
   const menuX = clamp(menu?.x ?? 8, viewport.width - menuWidth - 8);
-  const menuY = clamp(menu?.y ?? 8, viewport.height - 258 - 8);
+  // 提供置顶时菜单多一项，高度与子菜单的起点随之下移。
+  const pinRow = props.onPin ? 34 : 0;
+  const menuY = clamp(menu?.y ?? 8, viewport.height - 258 - pinRow - 8);
   const stacked = viewport.width < menuWidth * 2 + 24
     || (menuX - 8 < menuWidth && viewport.width - menuX - menuWidth - 8 < menuWidth);
   const childX = menuX + menuWidth * 2 + 8 <= viewport.width ? menuX + menuWidth : menuX - menuWidth;
-  const childY = clamp(menuY + (sub === 'copy' ? 82 : 116), viewport.height - (sub === 'copy' ? 84 : 118) - 8);
+  const childY = clamp(menuY + pinRow + (sub === 'copy' ? 82 : 116), viewport.height - (sub === 'copy' ? 84 : 118) - 8);
 
   const setEdit = (value: Edit | null): void => { editRef.current = value; setEditState(value); };
   const closeMenu = (restore = false): void => {
@@ -397,6 +399,8 @@ export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(func
             title={!target.canGenerateTitle ? '首轮完整回复保存后可用' : undefined}>
             <Sparkles size={14} />{target.titleStatus === 'generating' ? '正在生成标题…' : ['ai', 'manual'].includes(target.titleSource ?? '') ? '重新生成标题' : '生成会话标题'}</button>
           <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => void beginRename(target)}><Pencil size={14} />重命名 <kbd>F2</kbd></button>
+          {props.onPin ? <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => { closeMenu(); togglePin(target); }}>
+            <Pin size={14} />{target.pinnedAt ? '取消置顶' : '置顶'}</button> : null}
           <div role="separator" />
           <button role="menuitem" data-child="copy" aria-haspopup="menu" aria-expanded={sub === 'copy'} onMouseEnter={() => { if (!stacked) setSub('copy'); }} onClick={() => openChild('copy')}><Copy size={14} />复制 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <button role="menuitem" data-child="export" aria-haspopup="menu" aria-expanded={sub === 'export'} onMouseEnter={() => { if (!stacked) setSub('export'); }} onClick={() => openChild('export')}><Download size={14} />导出 <ChevronRight size={13} className="session-nav-chevron" /></button>

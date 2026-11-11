@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent 
 import { PanelResizer } from './ai-session/PanelResizer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Message, Select, Space, Typography } from '@arco-design/web-react';
-import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Pin, Send, Sparkles, Square, X } from 'lucide-react';
+import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
 import { SessionNavigation, type SessionNavigationHandle } from './ai-session/SessionNavigation';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
@@ -502,7 +502,7 @@ export function AiAssistant(): JSX.Element {
       updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${sessionId}`, next));
     } catch (error) { Message.error(friendlyMessage(error, '模型选择未保存，请重试')); }
   };
-  /** 置顶属于会话：每个会话各自记录，置顶的排在会话列表最前，先置顶的在上。 */
+  /** 置顶属于会话：每个会话各自记录，置顶的归入会话栏最前的「置顶」分组，先置顶的在上。 */
   const pinSession = async (id: number, pinned: boolean): Promise<void> => {
     updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { pinned }));
   };
@@ -966,11 +966,6 @@ export function AiAssistant(): JSX.Element {
             <span>{currentSession?.title ?? (sessionsQuery.isLoading ? '正在加载会话…' : '新会话')}</span></button>
           {statusText ? <span className={`ai-window-status${streaming ? ' is-running' : ''}`} role="status">{statusText}</span> : null}
           <span className="ai-window-spacer" />
-          <button type="button" className={`ai-window-icon${currentSession?.pinnedAt ? ' is-on' : ''}`} aria-pressed={!!currentSession?.pinnedAt}
-            aria-label={currentSession?.pinnedAt ? '取消置顶当前会话' : '置顶当前会话'} title={currentSession?.pinnedAt ? '取消置顶' : '置顶：排到会话列表最前'}
-            disabled={!currentSession || createSessionMutation.isPending}
-            onClick={() => { if (currentSession) void pinSession(currentSession.id, !currentSession.pinnedAt).catch((error) => Message.error(friendlyMessage(error, '置顶未保存，请重试'))); }}>
-            <Pin size={16} fill={currentSession?.pinnedAt ? 'currentColor' : 'none'} /></button>
           <button type="button" className="ai-window-icon" aria-label="会话更多操作" title="会话更多操作" disabled={!currentSession || createSessionMutation.isPending}
             onClick={(event) => { if (currentSession) navigation.current?.openMenu(currentSession.id, event.currentTarget); }}><MoreHorizontal size={17} /></button>
         </header>

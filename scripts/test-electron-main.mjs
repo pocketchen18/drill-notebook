@@ -68,7 +68,7 @@ function boot({ ownsLock = true } = {}) {
     isMaximized() { return false; }
     isFocused() { return this.focused === true; }
     blur() { this.focused = false; this.emit('blur'); }
-    flashFrame(value) { this.actions.push(value ? 'flash' : 'unflash'); }
+    flashFrame(value) { if (value) this.actions.push('flash'); }
     getBounds() { return { x: 0, y: 0, width: 1440, height: 920 }; }
     getNormalBounds() { return { x: 100, y: 80, width: 980, height: 760 }; }
     close() {
