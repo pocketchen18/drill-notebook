@@ -71,7 +71,8 @@ describe('SettingsPage 常规分区', () => {
     expect(screen.getByText('浅色')).toBeInTheDocument();
     expect(screen.getByText('深色')).toBeInTheDocument();
     expect(screen.getByText('跟随系统')).toBeInTheDocument();
-    expect(document.querySelectorAll('[data-scope]')).toHaveLength(7);
+    expect(document.querySelectorAll('[data-scope]')).toHaveLength(8);
+    expect(screen.getByText('AI 助手窗口 · 仅在助手窗口内生效。')).toBeInTheDocument();
     expect(screen.getByText('全局 · 任意页面生效。')).toBeInTheDocument();
     expect(screen.getByText('知识卡片全屏 · 知识点全屏阅读时生效。')).toBeInTheDocument();
     expect(screen.getByText('笔记本 · 笔记页列表项选中时生效。')).toBeInTheDocument();

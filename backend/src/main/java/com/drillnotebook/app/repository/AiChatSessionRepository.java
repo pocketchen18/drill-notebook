@@ -63,6 +63,9 @@ public class AiChatSessionRepository {
             item.put("createdAt", result.getString("created_at"));
             item.put("updatedAt", result.getString("updated_at"));
             item.put("messageCount", result.getLong("message_count"));
+            item.put("modelConfigId", result.getString("model_config_id"));
+            item.put("reasoningEffort", result.getString("reasoning_effort"));
+            item.put("pinnedAt", result.getString("pinned_at"));
             titleMetadata(result, item);
             return item;
         });
@@ -79,6 +82,9 @@ public class AiChatSessionRepository {
             item.put("createdAt", result.getString("created_at"));
             item.put("updatedAt", result.getString("updated_at"));
             item.put("messageCount", result.getLong("message_count"));
+            item.put("modelConfigId", result.getString("model_config_id"));
+            item.put("reasoningEffort", result.getString("reasoning_effort"));
+            item.put("pinnedAt", result.getString("pinned_at"));
             titleMetadata(result, item);
             return item;
         }, id);
@@ -121,6 +127,57 @@ public class AiChatSessionRepository {
                 WHERE id = ?
                 """, title == null ? null : title.trim(), archived == null ? null : (archived ? 1 : 0), model,
                 title, title, title, id);
+    }
+
+    /** 会话自己的模型与思考档位；两者为 null 分别表示跟随主模型、使用模型默认档位。 */
+    public record ModelChoice(String modelConfigId, String effort) { }
+
+    public ModelChoice modelChoice(long id) {
+        return jdbc.query("SELECT model_config_id, reasoning_effort FROM ai_chat_session WHERE id = ?",
+                (row, index) -> new ModelChoice(row.getString(1), row.getString(2)), id)
+                .stream().findFirst().orElse(new ModelChoice(null, null));
+    }
+
+    public void setModelChoice(long id, String modelConfigId, String effort) {
+        jdbc.update("UPDATE ai_chat_session SET model_config_id = ?, reasoning_effort = ? WHERE id = ?", modelConfigId, effort, id);
+    }
+
+    /** 置顶只记录时刻，不改最近活动时间；重复置顶保留最初的时刻，顺序不变。 */
+    public void setPinned(long id, boolean pinned) {
+        jdbc.update("UPDATE ai_chat_session SET pinned_at = CASE WHEN ? THEN COALESCE(pinned_at, ?) ELSE NULL END WHERE id = ?",
+                pinned ? 1 : 0, java.time.Instant.now().toString(), id);
+    }
+
+    /** 这一轮实际使用的模型与档位：历史里的显示不随之后的改选变化。 */
+    public void recordTurnModel(String requestId, String modelLabel, String effort) {
+        jdbc.update("UPDATE ai_chat_turn SET model_label = ?, reasoning_effort = ? WHERE request_id = ?", modelLabel, effort, requestId);
+    }
+
+    public void recordTurnPage(String requestId, String title, String link) {
+        jdbc.update("UPDATE ai_chat_turn SET page_title = ?, page_link = ? WHERE request_id = ?", title, link, requestId);
+    }
+
+    /** 一次模型请求实际送入的长度；同一轮多次请求时保留最近一次，不累加。 */
+    public void recordTurnContext(String requestId, int contextTokens, int contextWindow) {
+        jdbc.update("UPDATE ai_chat_turn SET context_tokens = ?, context_window = ? WHERE request_id = ?", contextTokens, contextWindow, requestId);
+    }
+
+    /** 当前上下文代数里最近一次有实测输入的轮次；没有则返回 null。 */
+    public Map<String, Object> latestContext(long sessionId) {
+        return jdbc.query("""
+                SELECT t.request_id, t.context_tokens, t.context_window, t.model_label FROM ai_chat_turn t
+                JOIN ai_chat_session s ON s.id = t.session_id
+                WHERE t.session_id = ? AND t.context_tokens IS NOT NULL AND t.content_deleted_at IS NULL
+                  AND t.context_generation = s.context_generation
+                ORDER BY t.id DESC LIMIT 1
+                """, (row, index) -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("requestId", row.getString(1));
+            item.put("inputTokens", row.getInt(2));
+            item.put("contextWindow", row.getInt(3));
+            item.put("model", row.getString(4));
+            return item;
+        }, sessionId).stream().findFirst().orElse(null);
     }
 
     private static void titleMetadata(ResultSet row, Map<String, Object> item) throws SQLException {

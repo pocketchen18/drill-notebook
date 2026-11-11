@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, screen, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +9,13 @@ let portablePaths: PortablePaths;
 let backend: BackendHandle | undefined;
 let mainWindow: BrowserWindow | undefined;
 let pendingActivation = false;
+/** AI 助手窗口：整个应用只有一个，关闭只是收起，随主窗口一起退出。 */
+let assistantWindow: BrowserWindow | undefined;
+let quitting = false;
+let assistantActivity = { running: 0, pending: 0 };
+/** 助手窗口最近一次失去焦点的时刻：点击主窗口入口会先把焦点抢走，靠它判断点击前助手是否在前台。 */
+let assistantBlurAt = 0;
+const ASSISTANT_FRONT_GRACE_MS = 700;
 
 // This must run before ready so Electron never initializes a system profile first.
 portablePaths = setupPortablePaths();
@@ -55,6 +62,168 @@ function appIconPath(): string | undefined {
   return fs.existsSync(candidate) ? candidate : undefined;
 }
 
+interface AssistantWindowState { x?: number; y?: number; width: number; height: number; maximized: boolean }
+const ASSISTANT_DEFAULT = { width: 980, height: 760 };
+const BUS_TYPES = new Set(['page-context', 'context-request', 'navigate', 'tool-mutation', 'invalidate', 'assistant-activity']);
+
+function assistantStateFile(): string {
+  return path.join(portablePaths.config, 'assistant-window.json');
+}
+
+/** 位置和尺寸保存在 APP_ROOT/config；内容损坏时回到默认值。 */
+function readAssistantState(): AssistantWindowState {
+  const fallback: AssistantWindowState = { ...ASSISTANT_DEFAULT, maximized: false };
+  try {
+    if (!fs.existsSync(assistantStateFile())) return fallback;
+    const raw = JSON.parse(fs.readFileSync(assistantStateFile(), 'utf8')) as Record<string, unknown>;
+    const size = (value: unknown, min: number, base: number): number =>
+      typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(8000, Math.round(value))) : base;
+    const point = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : undefined;
+    return { x: point(raw.x), y: point(raw.y), width: size(raw.width, 420, fallback.width), height: size(raw.height, 520, fallback.height),
+      maximized: raw.maximized === true };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveAssistantState(): void {
+  if (!assistantWindow || assistantWindow.isDestroyed()) return;
+  try {
+    const bounds = assistantWindow.getNormalBounds();
+    const state: AssistantWindowState = { ...bounds, maximized: assistantWindow.isMaximized() };
+    fs.writeFileSync(assistantStateFile(), JSON.stringify(state, null, 2) + '\n', 'utf8');
+  } catch (error) {
+    console.error('[assistant] window state not saved', error);
+  }
+}
+
+/** 记住的位置必须仍落在某块显示器上；否则放到主窗口所在显示器的右侧。 */
+function assistantBounds(state: AssistantWindowState): { x: number; y: number; width: number; height: number } {
+  const { x, y } = state;
+  if (x !== undefined && y !== undefined && screen.getAllDisplays().some(({ workArea }) =>
+    x + state.width > workArea.x + 120 && x < workArea.x + workArea.width - 120
+    && y >= workArea.y - 8 && y < workArea.y + workArea.height - 80)) {
+    return { x, y, width: state.width, height: state.height };
+  }
+  const display = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay();
+  const area = display.workArea;
+  const width = Math.min(state.width, area.width);
+  const height = Math.min(state.height, area.height);
+  return { x: area.x + Math.max(0, area.width - width - 24), y: area.y + Math.max(0, Math.round((area.height - height) / 2)), width, height };
+}
+
+function assistantVisible(): boolean {
+  return !!assistantWindow && !assistantWindow.isDestroyed() && assistantWindow.isVisible();
+}
+
+function assistantState(): { visible: boolean; running: number; pending: number } {
+  return { visible: assistantVisible(), running: assistantActivity.running, pending: assistantActivity.pending };
+}
+
+function broadcastAssistantState(): void {
+  const state = assistantState();
+  for (const target of [mainWindow, assistantWindow]) {
+    if (target && !target.isDestroyed()) target.webContents.send('assistant:state', state);
+  }
+}
+
+function createAssistantWindow(): BrowserWindow {
+  const state = readAssistantState();
+  const created = new BrowserWindow({
+    ...assistantBounds(state),
+    minWidth: 420,
+    minHeight: 520,
+    show: false,
+    title: 'AI 助手',
+    backgroundColor: windowBackgroundColor(),
+    icon: appIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      // 收起后仍要接收运行状态，后台回复不能因为窗口不可见而停止更新。
+      backgroundThrottling: false
+    }
+  });
+  assistantWindow = created;
+  created.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  created.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+  created.once('ready-to-show', () => {
+    if (state.maximized) created.maximize();
+    created.show();
+    created.focus();
+  });
+  // 关闭只是收起：渲染进程保留会话、草稿与阅读位置，后台任务继续。
+  created.on('close', (event) => {
+    saveAssistantState();
+    if (quitting) return;
+    event.preventDefault();
+    created.hide();
+  });
+  created.on('show', broadcastAssistantState);
+  created.on('hide', broadcastAssistantState);
+  created.on('focus', () => created.flashFrame(false));
+  created.on('blur', () => { assistantBlurAt = Date.now(); });
+  created.on('closed', () => {
+    if (assistantWindow === created) assistantWindow = undefined;
+    assistantActivity = { running: 0, pending: 0 };
+  });
+  const entry = rendererEntry();
+  if (/^https?:\/\//.test(entry)) void created.loadURL(`${entry.replace(/#.*$/, '')}#/assistant`);
+  else void created.loadFile(entry, { hash: '/assistant' });
+  return created;
+}
+
+function openAssistantWindow(): void {
+  if (!assistantWindow || assistantWindow.isDestroyed()) {
+    createAssistantWindow();
+    return;
+  }
+  if (assistantWindow.isMinimized()) assistantWindow.restore();
+  if (!assistantWindow.isVisible()) assistantWindow.show();
+  assistantWindow.focus();
+  assistantWindow.webContents.send('assistant:activated');
+}
+
+/**
+ * 主窗口入口与快捷键的语义：助手在前台就收起，在后台（隐藏、最小化或被其他窗口盖住）就唤到前台。
+ * 「在前台」= 可见且未最小化，并且持有焦点，或刚刚因为这次点击才失去焦点。
+ */
+function toggleAssistantWindow(): void {
+  const target = assistantWindow;
+  if (!target || target.isDestroyed()) {
+    createAssistantWindow();
+    return;
+  }
+  const front = target.isVisible() && !target.isMinimized()
+    && (target.isFocused() || Date.now() - assistantBlurAt < ASSISTANT_FRONT_GRACE_MS);
+  if (front) target.close();
+  else openAssistantWindow();
+}
+
+/** 主窗口关闭即退出；仍有回复或待发消息时先确认。 */
+function confirmQuit(): boolean {
+  const { running, pending } = assistantActivity;
+  if (!mainWindow || (running <= 0 && pending <= 0)) return true;
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: 'warning',
+    buttons: ['取消', '退出应用'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: '退出 Drill Notebook',
+    message: running > 0 ? `仍有 ${running} 个会话正在回复` : `仍有 ${pending} 条消息等待发送`,
+    detail: '退出后这些回复会中断，已生成的内容会保留；待发送的消息下次打开时保持暂停。'
+  });
+  return choice === 1;
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -76,8 +245,19 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault();
   });
+  mainWindow.on('close', (event) => {
+    if (quitting) return;
+    if (!confirmQuit()) {
+      event.preventDefault();
+      return;
+    }
+    quitting = true;
+  });
   mainWindow.on('closed', () => {
     mainWindow = undefined;
+    // 助手依赖主窗口提供当前页面与资料定位，不单独留下。
+    quitting = true;
+    if (assistantWindow && !assistantWindow.isDestroyed()) assistantWindow.close();
   });
 
   const entry = rendererEntry();
@@ -99,6 +279,47 @@ function isTrustedRendererUrl(url: string): boolean {
     return false;
   }
 }
+
+function trustedSender(event: Electron.IpcMainInvokeEvent): boolean {
+  return !!event.senderFrame && isTrustedRendererUrl(event.senderFrame.url);
+}
+
+ipcMain.handle('assistant:open', (event) => {
+  if (trustedSender(event)) openAssistantWindow();
+});
+ipcMain.handle('assistant:toggle', (event) => {
+  if (trustedSender(event)) toggleAssistantWindow();
+});
+ipcMain.handle('assistant:hide', (event) => {
+  if (trustedSender(event) && assistantVisible()) assistantWindow!.close();
+});
+ipcMain.handle('assistant:get-state', () => assistantState());
+// 回复结束而窗口不在前台时，只闪烁任务栏按钮，不抢焦点也不弹系统通知。
+ipcMain.handle('assistant:attention', (event) => {
+  if (trustedSender(event) && assistantVisible() && !assistantWindow!.isFocused()) assistantWindow!.flashFrame(true);
+});
+ipcMain.handle('window:focus-main', (event) => {
+  if (trustedSender(event)) activateMainWindow();
+});
+/** 两个窗口之间的消息中转：只转发约定类型，发给另一个窗口；运行计数同时留给退出确认。 */
+ipcMain.handle('bus:publish', (event, message: unknown) => {
+  if (!trustedSender(event) || !message || typeof message !== 'object') return;
+  const type = (message as { type?: unknown }).type;
+  if (typeof type !== 'string' || !BUS_TYPES.has(type)) return;
+  const fromAssistant = !!assistantWindow && !assistantWindow.isDestroyed() && event.sender === assistantWindow.webContents;
+  if (type === 'assistant-activity') {
+    if (!fromAssistant) return;
+    const count = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(999, Math.floor(value))) : 0;
+    const next = { running: count((message as { running?: unknown }).running), pending: count((message as { pending?: unknown }).pending) };
+    if (next.running !== assistantActivity.running || next.pending !== assistantActivity.pending) {
+      assistantActivity = next;
+      broadcastAssistantState();
+    }
+    return;
+  }
+  const target = fromAssistant ? mainWindow : assistantWindow;
+  if (target && !target.isDestroyed()) target.webContents.send('bus:message', message);
+});
 
 ipcMain.handle('backend:get-base-url', () => backend?.baseUrl ?? 'http://127.0.0.1:18080');
 ipcMain.handle('app:get-root', () => portablePaths.root);

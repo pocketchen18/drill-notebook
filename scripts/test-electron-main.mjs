@@ -27,6 +27,9 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 function boot({ ownsLock = true } = {}) {
   const calls = [];
   const windows = [];
+  const handlers = new Map();
+  const written = new Map();
+  const quitDialog = { answer: 1, shown: [] };
   const ready = deferred();
   const backendReady = deferred();
   const warningClosed = deferred();
@@ -47,7 +50,8 @@ function boot({ ownsLock = true } = {}) {
       this.minimized = false;
       this.visible = true;
       this.actions = [];
-      this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {} });
+      this.sent = [];
+      this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, send: (channel, value) => this.sent.push([channel, value]) });
       windows.push(this);
       calls.push('window');
     }
@@ -56,18 +60,36 @@ function boot({ ownsLock = true } = {}) {
     isVisible() { return this.visible; }
     restore() { this.actions.push('restore'); this.minimized = false; }
     show() { this.actions.push('show'); this.visible = true; }
-    focus() { this.actions.push('focus'); }
+    focus() { this.actions.push('focus'); this.focused = true; this.emit('focus'); }
     loadFile() { this.actions.push('load'); return Promise.resolve(); }
     loadURL() { this.actions.push('load'); return Promise.resolve(); }
-    close() { this.destroyed = true; this.emit('closed'); }
+    hide() { this.actions.push('hide'); this.visible = false; this.emit('hide'); }
+    maximize() { this.actions.push('maximize'); }
+    isMaximized() { return false; }
+    isFocused() { return this.focused === true; }
+    blur() { this.focused = false; this.emit('blur'); }
+    flashFrame(value) { this.actions.push(value ? 'flash' : 'unflash'); }
+    getBounds() { return { x: 0, y: 0, width: 1440, height: 920 }; }
+    getNormalBounds() { return { x: 100, y: 80, width: 980, height: 760 }; }
+    close() {
+      let prevented = false;
+      this.emit('close', { preventDefault() { prevented = true; } });
+      if (prevented) return;
+      this.destroyed = true; this.emit('closed');
+    }
   }
   const modules = {
     electron: {
-      app, BrowserWindow, ipcMain: { handle() {} }, net: {}, shell: {},
+      app, BrowserWindow, ipcMain: { handle(channel, handler) { handlers.set(channel, handler); } }, net: {}, shell: {},
+      screen: { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }],
+        getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }),
+        getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }) },
       session: { defaultSession: { webRequest: { onHeadersReceived() {}, onBeforeSendHeaders() {} } } },
-      dialog: { showMessageBox() { calls.push('warning'); return warningClosed.promise; } },
+      dialog: { showMessageBox() { calls.push('warning'); return warningClosed.promise; },
+        showMessageBoxSync(_window, options) { quitDialog.shown.push(options); return quitDialog.answer; } },
     },
-    'node:fs': { existsSync() { return false; } },
+    'node:fs': { existsSync(file) { return written.has(file); }, readFileSync(file) { return written.get(file); },
+      writeFileSync(file, content) { written.set(file, content); } },
     './paths': {
       setupPortablePaths() { calls.push('paths'); return paths; },
       getPortablePaths(rootPath) { assert.equal(rootPath, paths.root); return paths; },
@@ -84,7 +106,10 @@ function boot({ ownsLock = true } = {}) {
     process: { platform: 'win32', env: {} },
     console: { error() {} }, URL,
   }, { filename: 'electron/main.ts' });
-  return { app, calls, windows, ready, backendReady, warningClosed, handle };
+  // 模拟渲染进程调用：sender 即发起窗口，来源页面按受信入口处理。
+  const entryUrl = new URL('../frontend/dist/index.html', import.meta.url).href;
+  const invoke = (channel, sender, ...args) => handlers.get(channel)({ sender: sender.webContents, senderFrame: { url: entryUrl + '#/x' } }, ...args);
+  return { app, calls, windows, ready, backendReady, warningClosed, handle, invoke, written, quitDialog };
 }
 
 async function launch() {
@@ -178,4 +203,129 @@ test('窗口关闭后不再操作已销毁对象，主实例退出仍回收自�
   assert.deepEqual(window.actions, []);
   h.app.emit('window-all-closed');
   assert.deepEqual(h.calls.slice(-3), ['quit', ['stop', h.handle], 'clear']);
+});
+
+test('AI 助手是唯一的独立窗口：重复打开只唤回，关闭只是收起，任务状态保留', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:open', main);
+  assert.equal(h.windows.length, 2);
+  const assistant = h.windows[1];
+  assert.equal(assistant.options.title, 'AI 助手');
+  assert.equal(assistant.options.show, false);
+  assert.equal('alwaysOnTop' in assistant.options, false, '助手窗口不保持在最前');
+  assert.deepEqual([assistant.options.minWidth, assistant.options.minHeight], [420, 520]);
+  assert.equal(assistant.options.webPreferences.sandbox, true);
+  assert.equal(assistant.options.webPreferences.backgroundThrottling, false);
+  // 首次打开落在主窗口所在显示器内
+  assert.ok(assistant.options.x >= 0 && assistant.options.x + assistant.options.width <= 1920);
+  assistant.emit('ready-to-show');
+  assert.deepEqual(assistant.actions, ['load', 'show', 'focus']);
+
+  assistant.close();
+  assert.equal(assistant.isDestroyed(), false, '关闭只是收起');
+  assert.equal(assistant.visible, false);
+  assert.equal((await h.invoke('assistant:get-state', main)).visible, false);
+  assert.equal(main.sent.at(-1)[0], 'assistant:state');
+
+  await h.invoke('assistant:open', main);
+  assert.equal(h.windows.length, 2, '再次打开复用同一个窗口');
+  assert.equal(assistant.visible, true);
+  assert.equal(assistant.sent.at(-1)[0], 'assistant:activated');
+  assert.equal(h.calls.filter(call => call === 'backend').length, 1);
+});
+
+test('窗口位置保存到便携配置目录', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:open', main);
+  h.windows[1].close();
+  const [file, content] = [...h.written.entries()][0];
+  assert.ok(file.split(path.sep).join('/').endsWith('temp/mock-app/config/assistant-window.json'), file);
+  assert.deepEqual(JSON.parse(content), { x: 100, y: 80, width: 980, height: 760, maximized: false });
+});
+
+test('入口切换：助手在前台时收起，在后台、最小化或已收起时唤到前台', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:toggle', main);
+  assert.equal(h.windows.length, 2, '尚未打开时创建窗口');
+  const assistant = h.windows[1];
+  assistant.emit('ready-to-show');
+  assert.equal(assistant.focused, true);
+
+  // 点击主窗口入口会先让助手失去焦点：刚失焦仍按「在前台」处理，收起它。
+  assistant.blur();
+  await h.invoke('assistant:toggle', main);
+  assert.equal(assistant.visible, false, '在前台时点击入口是收起');
+  assert.equal(assistant.isDestroyed(), false);
+
+  await h.invoke('assistant:toggle', main);
+  assert.equal(assistant.visible, true, '已收起时点击入口是唤起');
+  assert.equal(assistant.focused, true);
+
+  // 助手早已在后台（被主窗口盖住）：点击入口把它切到前台，而不是收起。
+  assistant.blur();
+  await new Promise(resolve => setTimeout(resolve, 800));
+  const before = assistant.actions.length;
+  await h.invoke('assistant:toggle', main);
+  assert.equal(assistant.visible, true);
+  assert.deepEqual(assistant.actions.slice(before), ['focus']);
+
+  assistant.blur();
+  await new Promise(resolve => setTimeout(resolve, 800));
+  assistant.minimized = true;
+  await h.invoke('assistant:toggle', main);
+  assert.deepEqual(assistant.actions.slice(-2), ['restore', 'focus'], '最小化时还原并聚焦');
+  assert.equal(h.windows.length, 2);
+});
+
+test('跨窗口消息只转发约定类型且只发给另一个窗口', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:open', main);
+  const assistant = h.windows[1];
+  await h.invoke('bus:publish', assistant, { type: 'navigate', route: '/notebooks?pageId=3' });
+  assert.deepEqual(main.sent.at(-1), ['bus:message', { type: 'navigate', route: '/notebooks?pageId=3' }]);
+  const before = assistant.sent.length;
+  await h.invoke('bus:publish', main, { type: 'page-context', context: { kind: 'note', title: '导数', markdown: '' } });
+  assert.equal(assistant.sent.length, before + 1);
+  assert.equal(assistant.sent.at(-1)[1].type, 'page-context');
+  const mainCount = main.sent.length;
+  await h.invoke('bus:publish', assistant, { type: 'run-shell', command: 'x' });
+  await h.invoke('bus:publish', assistant, null);
+  await h.invoke('bus:publish', main, { type: 'assistant-activity', running: 9, pending: 9 });
+  assert.equal(main.sent.length, mainCount, '未知类型与伪造的运行计数都不转发');
+  assert.equal((await h.invoke('assistant:get-state', main)).running, 0);
+});
+
+test('仍有回复或待发时关闭主窗口先确认；确认后两个窗口一起退出', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:open', main);
+  const assistant = h.windows[1];
+  await h.invoke('bus:publish', assistant, { type: 'assistant-activity', running: 2, pending: 1 });
+  // 状态对象来自沙箱上下文，按序列化后的值比较。
+  assert.equal(JSON.stringify(main.sent.at(-1)), JSON.stringify(['assistant:state', { visible: true, running: 2, pending: 1 }]));
+
+  h.quitDialog.answer = 0;
+  main.close();
+  assert.equal(main.isDestroyed(), false, '取消后应用继续运行');
+  assert.equal(h.quitDialog.shown[0].message, '仍有 2 个会话正在回复');
+  assert.equal(h.quitDialog.shown[0].buttons.join('|'), '取消|退出应用');
+
+  h.quitDialog.answer = 1;
+  main.close();
+  assert.equal(main.isDestroyed(), true);
+  assert.equal(assistant.isDestroyed(), true, '助手窗口不单独留下');
+});
+
+test('没有任务时关闭主窗口不询问；助手窗口随之关闭', async () => {
+  const h = await launch();
+  const main = h.windows[0];
+  await h.invoke('assistant:open', main);
+  h.windows[1].close();
+  main.close();
+  assert.equal(h.quitDialog.shown.length, 0);
+  assert.equal(h.windows[1].isDestroyed(), true);
 });

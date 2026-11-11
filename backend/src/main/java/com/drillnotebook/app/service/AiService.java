@@ -203,9 +203,12 @@ public class AiService {
         @Override public void close() { usage.close(); }
     }
 
-    AcceptedConfig captureConfig(String password) {
+    AcceptedConfig captureConfig(String password) { return captureConfig(null, password); }
+
+    /** 受理时冻结目标会话当时的模型与档位；之后改选不影响已受理的消息。 */
+    AcceptedConfig captureConfig(Long sessionId, String password) {
         synchronized (AiConnectionUsage.LOCK) {
-            var row = requireChatConfig();
+            var row = chatConfigFor(sessionId);
             decryptedChatUpstream(row, password);
             return new AcceptedConfig(row, AiConnectionUsage.acquire(row));
         }
@@ -464,7 +467,10 @@ public class AiService {
         String model = body.containsKey("model")
                 ? nullBlankToNull(string(body, "model", ""))
                 : (config == null ? null : nullBlankToNull(config.model()));
+        // 先校验再建会话：选择无效时不留下空会话。
+        String[] choice = modelChoice(new AiChatSessionRepository.ModelChoice(null, null), body);
         long id = sessions.create(title.isBlank() ? "新会话" : title, model);
+        if (choice != null) sessions.setModelChoice(id, choice[0], choice[1]);
         return sessions.find(id);
     }
 
@@ -474,8 +480,147 @@ public class AiService {
         Boolean archived = body.containsKey("archived") ? Boolean.valueOf(String.valueOf(body.get("archived"))) : null;
         String model = body.containsKey("model") ? string(body, "model", "") : null;
         if (title != null && title.isBlank()) throw new IllegalArgumentException("会话标题不能为空");
+        String[] choice = modelChoice(sessions.modelChoice(id), body);
+        if (body.containsKey("pinned") && !(body.get("pinned") instanceof Boolean)) throw new IllegalArgumentException("置顶状态须为布尔值");
         sessions.update(id, title, archived, model);
+        if (body.get("pinned") instanceof Boolean pinned) sessions.setPinned(id, pinned);
+        if (choice != null) sessions.setModelChoice(id, choice[0], choice[1]);
         return sessions.find(id);
+    }
+
+    /**
+     * 会话级模型与思考档位。空值表示跟随主模型 / 模型默认；只影响之后提交的消息。
+     * 档位必须是目标模型声明支持的；只换模型而旧档位不再适用时回到模型默认。
+     *
+     * @return {modelConfigId, effort}；请求没有涉及这两项时返回 null
+     */
+    private String[] modelChoice(AiChatSessionRepository.ModelChoice current, Map<String, Object> body) {
+        boolean setsModel = body.containsKey("modelConfigId"), setsEffort = body.containsKey("reasoningEffort");
+        if (!setsModel && !setsEffort) return null;
+        String model = setsModel ? nullBlankToNull(body.get("modelConfigId") == null ? "" : String.valueOf(body.get("modelConfigId"))) : current.modelConfigId();
+        String effort = setsEffort ? nullBlankToNull(body.get("reasoningEffort") == null ? "" : String.valueOf(body.get("reasoningEffort"))) : current.effort();
+        var state = configs.connections().read();
+        if (model != null && (state == null || state.model(model) == null)) throw new IllegalArgumentException("所选模型不存在，请重新选择");
+        if (effort != null && !supportsEffort(state, model != null ? model : state == null ? null : state.chatModelId(), effort)) {
+            if (setsEffort) throw new IllegalArgumentException("该模型不支持所选思考档位");
+            effort = null;
+        }
+        return new String[] { model, effort };
+    }
+
+    private static boolean supportsEffort(com.drillnotebook.app.repository.AiConnectionsStore.State state, String modelId, String effort) {
+        if (state == null || modelId == null || state.model(modelId) == null) return false;
+        try {
+            AiReasoningSettings settings = AiReasoningSettings.read(state.model(modelId).params(), state.owner(modelId).apiFormat());
+            return "effort".equals(settings.control()) && settings.efforts().contains(effort);
+        } catch (IllegalArgumentException error) {
+            return false;
+        }
+    }
+
+    /**
+     * 这个会话发消息时使用的配置：会话选了模型就用它，否则跟随主模型；档位不适用于当前模型时使用模型默认。
+     * 会话选择的模型已被删除时明确报错，不静默换用别的模型。
+     */
+    private AiConfigRepository.ConfigRow chatConfigFor(Long sessionId) {
+        AiChatSessionRepository.ModelChoice choice = sessionId == null ? null : sessions.modelChoice(sessionId);
+        if (choice == null || (choice.modelConfigId() == null && choice.effort() == null)) return requireChatConfig();
+        var store = configs.connections();
+        var state = store.read();
+        AiConfigRepository.ConfigRow row;
+        if (choice.modelConfigId() == null) row = requireChatConfig();
+        else {
+            if (state == null || state.model(choice.modelConfigId()) == null)
+                throw new IllegalArgumentException("此会话选择的模型已被删除，请在输入框下方重新选择模型");
+            row = store.resolve(new com.drillnotebook.app.repository.AiConnectionsStore.State(state.revision(), state.providers(),
+                    choice.modelConfigId(), state.importModelId()), AiConfigRepository.PURPOSE_CHAT);
+            if (!AiModelLimits.noKey(row) && (row.encryptedKey() == null || row.encryptedKey().isBlank()))
+                throw new IllegalArgumentException("此会话选择的模型尚未配置 API Key，请检查 AI 连接");
+            if (row.endpoint() == null || row.endpoint().isBlank()) throw new IllegalArgumentException("此会话选择的模型缺少 Base URL，请检查 AI 连接");
+            AiModelLimits.requireConfigured(paramsOf(row));
+        }
+        if (choice.effort() == null) return row;
+        AiReasoningSettings settings = AiReasoningSettings.from(row);
+        if (!"effort".equals(settings.control()) || !settings.efforts().contains(choice.effort())) return row;
+        Map<String, Object> params = new LinkedHashMap<>(paramsOf(row));
+        params.put("defaultReasoningEffort", choice.effort());
+        try {
+            return new AiConfigRepository.ConfigRow(row.purpose(), row.provider(), row.endpoint(), row.model(), row.encryptedKey(),
+                    row.keyMeta(), mapper.writeValueAsString(params));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
+            throw new IllegalArgumentException("AI 配置无法读取", error);
+        }
+    }
+
+    /** 提交时绑定的业务页面：历史里据此说明「这页」指的是哪一页。没有业务页面时不记录。 */
+    private void recordTurnPage(ChatTurnService.Lease lease, Map<String, Object> body) {
+        try {
+            PageSnapshot snapshot = PageSnapshot.from(body.get("pageSnapshot"));
+            if (snapshot == null || "none".equals(snapshot.data().get("kind"))) return;
+            String title = java.util.Objects.toString(snapshot.data().get("title"), "").trim();
+            if (title.isEmpty()) return;
+            String link = null;
+            for (var target : List.of(Map.entry("pageId", "note"), Map.entry("pointId", "knowledge"), Map.entry("questionId", "question"),
+                    Map.entry("bankId", "bank"), Map.entry("notebookId", "notebook"))) {
+                if (snapshot.data().get(target.getKey()) instanceof Number id) { link = MaterialReadService.link(target.getValue(), id.longValue()); break; }
+            }
+            sessions.recordTurnPage(lease.requestId(), RetrievalService.truncateCodepoints(title, 80), link);
+        } catch (RuntimeException error) {
+            log.warn("本轮绑定页面未记录: {}", error.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 记下这次请求实际送入模型的长度（含缓存命中的部分），只在供应商回报时记录。
+     * 同一轮有多次请求时覆盖为最近一次：上下文占用说的是一次请求的长度，不是累计用量。
+     */
+    private void recordTurnContext(TurnCall call, AiUpstreamClient.Usage usage) {
+        if (usage == null || !usage.reported() || usage.inputTokens() == null) return;
+        try {
+            long tokens = usage.inputTokens();
+            if (!usage.cacheReadIncludedInInput() && usage.cacheReadTokens() != null) tokens += usage.cacheReadTokens();
+            if (!usage.cacheReadIncludedInInput() && usage.cacheWriteTokens() != null) tokens += usage.cacheWriteTokens();
+            sessions.recordTurnContext(call.lease().requestId(), (int) Math.min(Integer.MAX_VALUE, tokens), AiModelLimits.contextWindow(call.config()));
+        } catch (RuntimeException error) {
+            log.warn("本轮上下文占用未记录: {}", error.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 会话的上下文占用：最近一次请求的实测长度，以及当前所选模型的窗口与输出预留。
+     * 没有实测值时 latest 为 null，由界面如实显示尚无数据；模型不可用时窗口为 null。
+     */
+    public Map<String, Object> sessionContextUsage(long sessionId) {
+        requireSession(sessionId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("sessionId", sessionId);
+        result.put("latest", sessions.latestContext(sessionId));
+        try {
+            AiConfigRepository.ConfigRow config = chatConfigFor(sessionId);
+            String provider = config.provider() == null || config.provider().isBlank() ? "" : config.provider() + " · ";
+            result.put("model", provider + config.model());
+            result.put("contextWindow", AiModelLimits.contextWindow(config));
+            result.put("outputReserve", AiModelLimits.output(config, runtimeSettings().requestOutputTokens()));
+        } catch (RuntimeException error) {
+            result.put("model", null);
+            result.put("contextWindow", null);
+            result.put("outputReserve", null);
+        }
+        return result;
+    }
+
+    private static Long sessionIdOf(Map<String, Object> body) {
+        return body.get("sessionId") instanceof Number number ? Long.valueOf(number.longValue()) : null;
+    }
+
+    /** 记下这一轮实际使用的供应商、模型与档位；失败不影响对话。 */
+    private void recordTurnModel(ChatTurnService.Lease lease, AiConfigRepository.ConfigRow config) {
+        try {
+            String provider = config.provider() == null || config.provider().isBlank() ? "" : config.provider() + " · ";
+            sessions.recordTurnModel(lease.requestId(), provider + config.model(), nullBlankToNull(AiReasoningSettings.from(config).defaultEffort()));
+        } catch (RuntimeException error) {
+            log.warn("本轮模型记录未保存: {}", error.getClass().getSimpleName());
+        }
     }
 
     public void deleteSession(long id) {
@@ -570,7 +715,7 @@ public class AiService {
         AiConfigRepository.ConfigRow config;
         AiConnectionUsage usage;
         synchronized (AiConnectionUsage.LOCK) {
-            config = requireChatConfig();
+            config = chatConfigFor(sessionIdOf(body));
             usage = AiConnectionUsage.acquire(config);
         }
         try (usage) { return chatWithConfig(body, config); }
@@ -587,6 +732,8 @@ public class AiService {
                     "saved", true, true);
         }
         ChatTurnService.Lease lease = begun.lease();
+        recordTurnModel(lease, config);
+        recordTurnPage(lease, body);
         boolean finalized = false;
         try {
             sessions.fillTemporaryTitle(request.sessionId(), request.userText());
@@ -709,7 +856,7 @@ public class AiService {
         AiConfigRepository.ConfigRow config;
         AiConnectionUsage usage;
         synchronized (AiConnectionUsage.LOCK) {
-            config = requireChatConfig();
+            config = chatConfigFor(sessionIdOf(body));
             usage = AiConnectionUsage.acquire(config);
         }
         try (usage) { return chatStreamWithConfig(body, listener, metadataSender, config); }
@@ -729,6 +876,8 @@ public class AiService {
                             "saved", true, true));
         }
         ChatTurnService.Lease lease = begun.lease();
+        recordTurnModel(lease, config);
+        recordTurnPage(lease, body);
         String attempt = null;
         boolean finalized = false;
         ChatTurnService.FinalResult lastFinal = null;
@@ -1341,6 +1490,7 @@ public class AiService {
             }
             limits.consume(result.usage(), budget);
             chatTurns.settleUsage(attempt, result.usage());
+            recordTurnContext(call, result.usage());
             log.info("AI 请求：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={} captureLimited={}",
                     System.currentTimeMillis() - start,
                     result.text() == null ? 0 : result.text().length(),

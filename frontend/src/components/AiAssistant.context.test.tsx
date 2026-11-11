@@ -139,9 +139,9 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     const before = apiGet.mock.calls.length + apiPost.mock.calls.length;
     await sendOnce();
     expect(screen.getByRole('button', { name: '本轮提供 2 条记忆' })).toBeTruthy();
-    // 除了配置/会话/消息与那一次聊天，没有为徽标多发请求
-    expect(apiGet.mock.calls.filter((call) => String(call[0]).includes('/context'))).toHaveLength(0);
-    expect(apiPost.mock.calls.filter((call) => String(call[0]).includes('/context'))).toHaveLength(0);
+    // 除了配置/会话/消息与那一次聊天，没有为徽标多读本轮账本（会话级的上下文占用是另一个只读接口）
+    expect(apiGet.mock.calls.filter((call) => String(call[0]).includes('/turns/'))).toHaveLength(0);
+    expect(apiPost.mock.calls.filter((call) => String(call[0]).includes('/turns/'))).toHaveLength(0);
     expect(apiGet.mock.calls.length + apiPost.mock.calls.length).toBeGreaterThan(before);
   });
 

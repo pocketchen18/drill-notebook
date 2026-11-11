@@ -1,0 +1,107 @@
+/* AI 助手独立窗口（v0.8）：会话栏 | 对话区 | 详情栏。只有会话列表、消息流、详情栏三处滚动。 */
+.ai-window { display: flex; height: 100vh; min-width: 0; background: var(--panel-bg); color: var(--text); position: relative; overflow: hidden; }
+.ai-window button { font: inherit; }
+.ai-window-side { position: relative; flex: none; width: min(var(--ai-side-width, 264px), 45%); min-height: 0; display: flex; flex-direction: column; background: var(--subtle-bg); border-right: 1px solid var(--line); }
+.ai-window-side[hidden] { display: none; }
+.ai-window-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.ai-window-col { width: 100%; max-width: 760px; margin: 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+
+/* 顶栏 */
+.ai-window-head { flex: none; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.ai-window-icon { flex: none; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; }
+.ai-window-icon:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
+.ai-window-icon:disabled { opacity: .4; cursor: default; }
+.ai-window-icon.is-on { background: var(--accent-soft); color: var(--accent); }
+.ai-window-title { flex: 0 1 auto; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-strong); font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; }
+.ai-window-title:hover:not(:disabled) { background: var(--hover-bg); }
+.ai-window-title span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ai-window-status { flex: none; padding: 2px 9px; border-radius: var(--radius-pill); background: var(--hover-bg); color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ai-window-status.is-running { background: var(--accent-soft); color: var(--accent); }
+.ai-window-spacer { flex: 1; }
+.ai-window-icon:focus-visible, .ai-window-title:focus-visible, .ai-window-page:focus-visible, .ai-window-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* 消息流：助手回复不加气泡，占满内容列 */
+.ai-window .ai-window-stream { flex: 1; min-height: 0; display: block; overflow-y: auto; padding: 20px 24px 12px; border: 0; border-radius: 0; background: transparent; }
+.ai-window .ai-window-stream > .ai-window-col { gap: 16px; min-height: 100%; }
+.ai-window .chat-message.user { align-self: flex-end; max-width: 86%; color: var(--text); background: var(--hover-bg); border-radius: 12px 12px 4px 12px; }
+.ai-window .chat-message.assistant { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.ai-window .chat-message-actions { justify-content: flex-start; margin-left: -6px; }
+.ai-window-empty { margin: auto; border: 0; background: transparent; }
+.ai-window-empty .ai-quick-prompts { justify-content: center; margin-top: 14px; }
+
+/* 输入区 */
+.ai-window-foot { flex: none; padding: 0 24px 14px; }
+.ai-window-foot > .ai-window-col { gap: 8px; }
+.ai-window .ai-drawer-compose { flex-wrap: wrap; align-items: center; gap: 8px; border-color: var(--input-border); box-shadow: none; }
+.ai-window .ai-drawer-compose:focus-within { border-color: var(--accent); }
+.ai-window .ai-drawer-compose > .arco-textarea-wrapper, .ai-window .ai-drawer-compose > textarea { flex: 1 1 100%; }
+.ai-window .ai-drawer-compose textarea { resize: none; border: 0; background: transparent; box-shadow: none; padding: 2px 4px; }
+.ai-window-page { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; min-height: 28px; margin-right: auto; padding: 3px 10px; border: 0; border-radius: var(--radius-pill); background: var(--subtle-bg); color: var(--muted); font-size: 12px; cursor: pointer; }
+.ai-window-page span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ai-window-page:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.ai-window-page.is-empty { cursor: default; opacity: .7; }
+
+/* 会话栏（停靠的会话导航） */
+.session-nav-docked { flex: 1; min-height: 0; display: flex; flex-direction: column; font-size: 13px; }
+.session-nav-docked-top { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 8px; }
+.session-nav-new { height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--panel-bg); color: var(--text); font-weight: 600; cursor: pointer; }
+.session-nav-new:hover:not(:disabled) { border-color: var(--accent-border); color: var(--accent); }
+.session-nav-new:disabled { opacity: .5; cursor: not-allowed; }
+.session-nav-search { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-bg); color: var(--muted); }
+.session-nav-search:focus-within { border-color: var(--accent); }
+.session-nav-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.session-nav-docked .session-nav-rows { flex: 1; padding: 0 8px 8px; }
+.session-nav-docked .session-nav-row { min-height: 44px; }
+.session-nav-docked .session-nav-empty { margin: 0; padding: 16px 8px; color: var(--muted); }
+.session-nav-docked button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ai-window-side-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.ai-window-side-foot .ai-storage-meter { flex: 1 1 100%; min-width: 0; }
+.ai-window-link { padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+
+/* 详情栏 */
+.ai-window-detail { position: relative; flex: none; width: min(var(--ai-detail-width, 320px), 65%); min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel-bg); }
+.ai-window-detail-head { flex: none; height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+.ai-window-detail-head strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-strong); font-weight: 600; }
+.ai-window-detail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; overflow-wrap: anywhere; }
+.ai-window-detail-body .ai-inspector, .ai-window-detail-body .session-reference-preview { max-height: none; overflow: visible; }
+
+/* 面板分隔条：贴着面板边缘的 8px 热区，悬停、聚焦或拖动时显示一条强调线 */
+.ai-window-resizer { position: absolute; top: 0; bottom: 0; z-index: 22; width: 8px; cursor: col-resize; touch-action: none; }
+.ai-window-resizer.is-right { right: -4px; }
+.ai-window-resizer.is-left { left: -4px; }
+.ai-window-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--accent); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.ai-window-resizer:hover::after, .ai-window-resizer:focus-visible::after, .ai-window-resizer.is-dragging::after { opacity: .7; }
+.ai-window-resizer:focus-visible { outline: none; }
+
+/* 760–1179px：详情栏覆盖在对话区右侧 */
+@media (max-width: 1179px) {
+  .ai-window-detail { position: absolute; inset: 0 0 0 auto; z-index: 20; width: min(max(var(--ai-detail-width, 360px), 360px), 100%); box-shadow: var(--shadow-lg); }
+}
+/* 分屏后的窄窗口：会话栏变浮层，详情栏占满 */
+.ai-window.is-narrow .ai-window-side { position: absolute; inset: 0 auto 0 0; z-index: 30; width: min(300px, 86%); box-shadow: var(--shadow-lg); }
+.ai-window-scrim { position: absolute; inset: 0; z-index: 25; background: rgb(15 20 32 / 32%); }
+.ai-window.is-narrow .ai-window-detail { width: 100%; box-shadow: none; }
+.ai-window.is-narrow .ai-window-stream { padding: 16px 16px 10px; }
+.ai-window.is-narrow .ai-window-foot { padding: 0 12px 12px; }
+.ai-window.is-narrow .ai-window-page { flex: 1 1 100%; max-width: none; margin-right: 0; }
+@media (prefers-reduced-motion: reduce) { .ai-window * { transition-duration: 1ms !important; } }
+
+/* 切片 4：分组、绑定页面、回到最新、操作行 */
+.session-nav-group { padding: 10px 8px 4px; color: var(--muted); font-size: 12px; }
+.ai-window-stream-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.ai-window-latest { position: absolute; right: 24px; bottom: 12px; z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--panel-bg); color: var(--text); font-size: 12px; box-shadow: var(--shadow-md); cursor: pointer; }
+.ai-window-latest:hover { border-color: var(--accent-border); color: var(--accent); }
+.ai-window-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ai-window-latest-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-fill); }
+.ai-window .chat-message.user { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding: 0; background: transparent; }
+.ai-window .chat-message.user > .markdown-content { padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--hover-bg); max-width: 100%; }
+.chat-bound-page { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.chat-bound-page { cursor: pointer; }
+button.chat-bound-page:hover { color: var(--accent); }
+button.chat-bound-page:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 操作行在悬停或键盘聚焦到该回复时出现，最后一条回复始终显示；触控设备始终显示。 */
+.ai-window .chat-message.assistant .chat-message-actions { align-items: center; flex-wrap: wrap; min-height: 28px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.ai-window .chat-message.assistant:hover .chat-message-actions, .ai-window .chat-message.assistant:focus-within .chat-message-actions,
+.ai-window .chat-message.assistant.is-latest .chat-message-actions { opacity: 1; }
+@media (hover: none) { .ai-window .chat-message.assistant .chat-message-actions { opacity: 1; } }
+.ai-window.is-narrow .ai-window-latest { right: 16px; }

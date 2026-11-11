@@ -403,6 +403,10 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 
 新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用当前应用模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
 
+- v0.8 起会话可保存自己的模型与思考档位：`POST /ai/sessions`、`PUT /ai/sessions/{id}` 接受可选 `modelConfigId`、`reasoningEffort`（空串 / null 清除），会话视图返回二者，null 表示跟随主模型 / 模型默认。模型须存在，档位须为该模型声明支持的 effort；只换模型且旧档位不适用时回到模型默认。发送时按受理瞬间的会话选择冻结配置，所选模型已删除、缺密钥或缺容量时拒绝，不换用其他模型。历史分页的助手消息在有记录时返回该轮实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
+
+- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按会话当前所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
+
 #### 3.4.1 人工排队与插话（v0.7.2）
 
 | 方法 | 路径 | 用途 |

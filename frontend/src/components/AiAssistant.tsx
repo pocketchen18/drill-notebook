@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from 'react';
+import { PanelResizer } from './ai-session/PanelResizer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Drawer, Input, Message, Select, Space, Tag, Typography } from '@arco-design/web-react';
-import { Download, FilePlus2, Layers, Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
-import { SessionNavigation } from './ai-session/SessionNavigation';
+import { Button, Input, Message, Select, Space, Typography } from '@arco-design/web-react';
+import { ArrowDown, Copy, Download, FilePlus2, FileText, Layers, MoreHorizontal, PanelLeft, Paperclip, Pin, Send, Sparkles, Square, X } from 'lucide-react';
+import { SessionNavigation, type SessionNavigationHandle } from './ai-session/SessionNavigation';
+import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
+import './ai-window.css';
+import { ModelPicker, type ModelChoice } from './ai-session/ModelPicker';
+import type { Connections } from './ai-connections/types';
+import { ContextMeter, formatTokens } from './ai-session/ContextMeter';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -23,7 +29,7 @@ import { ChatStorageMeter } from './ai-memory/ChatStorageMeter';
 import { ChatHistoryCleanup } from './ai-memory/ChatHistoryCleanup';
 import { attachmentLimitError } from '../lib/aiAttachmentLimits';
 import type { PendingAttachment } from '../lib/aiAttachmentLimits';
-import { describeAccelerators, matchesAny } from '../lib/shortcuts';
+import { describeAccelerators, isShortcutRecording, matchesAny } from '../lib/shortcuts';
 import { MarkdownContent } from './markdown/MarkdownRenderer';
 import { SessionReferencePreview } from './ai-session/SessionReferencePreview';
 import { useUiStore } from '../stores/uiStore';
@@ -36,6 +42,25 @@ import { ChatQueue } from './ai-session/ChatQueue';
 import { splitReply } from '../lib/chatQueue';
 
 const { TextArea } = Input;
+const LS_SIDE_COLLAPSED = 'ai.window.sideCollapsed';
+const NARROW_WIDTH = 760;
+const readSideCollapsed = (): boolean => { try { return localStorage.getItem(LS_SIDE_COLLAPSED) === '1'; } catch { return false; } };
+/** 会话栏与详情栏的宽度可拖动调整，分别记住；窗口变窄时由 CSS 的比例上限兜底。 */
+const PANELS = {
+  side: { key: 'ai.window.sideWidth', min: 200, max: 480, base: 264, ratio: 0.45 },
+  detail: { key: 'ai.window.detailWidth', min: 280, max: 900, base: 320, ratio: 0.65 }
+} as const;
+type PanelName = keyof typeof PANELS;
+const readPanelWidth = (panel: PanelName): number => {
+  const config = PANELS[panel];
+  try {
+    const saved = Number(localStorage.getItem(config.key));
+    return Number.isFinite(saved) && saved >= config.min && saved <= config.max ? Math.round(saved) : config.base;
+  } catch { return config.base; }
+};
+const savePanelWidth = (panel: PanelName, width: number): void => {
+  try { localStorage.setItem(PANELS[panel].key, String(width)); } catch { /* ignore */ }
+};
 
 type AttachmentKind = 'text' | 'image';
 interface Attachment {
@@ -105,6 +130,12 @@ export function AiAssistant(): JSX.Element {
     enabled: aiOpen
   });
 
+  const connectionsQuery = useQuery({ queryKey: ['ai-connections'], queryFn: () => get<Connections>('/api/ai/connections'), enabled: aiOpen });
+  // 新会话页还没有数据库记录：选择先留在本地，首条消息创建会话时一并提交。
+  const [draftChoice, setDraftChoice] = useState<ModelChoice>({ modelConfigId: null, reasoningEffort: null });
+  const draftChoiceRef = useRef(draftChoice);
+  draftChoiceRef.current = draftChoice;
+
   const [sessionId, setSessionId] = useState<number>();
   const [message, setMessage] = useState('');
   const [queueSubmitting, setQueueSubmitting] = useState(false);
@@ -116,11 +147,39 @@ export function AiAssistant(): JSX.Element {
   const [targetPageId, setTargetPageId] = useState<number>();
   const [pendingInsert, setPendingInsert] = useState<string>();
   const [exporting, setExporting] = useState(false);
-  const [sessionReference, setSessionReference] = useState<string>();
+  const [sessionReference, setSessionReferenceState] = useState<string>();
+  const setSessionReference = (link: string | undefined): void => { setReferenceTitle(''); setSessionReferenceState(link); };
   // 打开中的上下文检查器：面板里可能有逐条对照出来的正文片段，切会话时必须整体销毁（§4.5）
   const [inspectorTarget, setInspectorTarget] = useState<{ requestId: string; snapshot?: TurnResult } | null>(null);
   const selectedSessionRef = useRef(sessionId);
   selectedSessionRef.current = sessionId;
+  const [referenceTitle, setReferenceTitle] = useState('');
+  // 窗口框架：会话栏可收起；窄窗口（系统分屏后）会话栏改为浮层，详情栏占满。
+  const navigation = useRef<SessionNavigationHandle>(null);
+  const composeRef = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_WIDTH);
+  const [sideCollapsed, setSideCollapsed] = useState(readSideCollapsed);
+  const [sideOverlay, setSideOverlay] = useState(false);
+  const [sideWidth, setSideWidth] = useState(() => readPanelWidth('side'));
+  const [detailWidth, setDetailWidth] = useState(() => readPanelWidth('detail'));
+  const sideOpen = narrow ? sideOverlay : !sideCollapsed;
+  const setSide = (open: boolean): void => {
+    if (narrow) { setSideOverlay(open); return; }
+    setSideCollapsed(!open);
+    try { localStorage.setItem(LS_SIDE_COLLAPSED, open ? '0' : '1'); } catch { /* ignore */ }
+  };
+  const focusCompose = (): void => { composeRef.current?.querySelector('textarea')?.focus(); };
+  useEffect(() => {
+    const onResize = (): void => setNarrow(window.innerWidth < NARROW_WIDTH);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  useEffect(() => { if (!narrow) setSideOverlay(false); }, [narrow]);
+  useEffect(() => {
+    const api = window.api?.assistant;
+    if (!api) return;
+    return api.onActivated(focusCompose);
+  }, []);
 
   // 稳定消息 key：消息创建时分配一次，后续 refetch 也保持稳定，避免列表 remount 造成滚动/输入抖动。
   const messageKeyCounter = useRef(0);
@@ -138,6 +197,9 @@ export function AiAssistant(): JSX.Element {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // 上翻阅读时出现「回到最新」；其间有新内容到达则带提示点。
+  const [away, setAway] = useState(false);
+  const [unseen, setUnseen] = useState(false);
   // 往前翻页前的列表高度：用来把视口补回原来看着的那条消息
   const olderAnchorRef = useRef<number | null>(null);
   const draftCache = useRef(new Map<number | 'new', { message: string; attachments: Attachment[]; messages: ChatMessage[];
@@ -145,6 +207,7 @@ export function AiAssistant(): JSX.Element {
   const restoreScrollRef = useRef<number | null>(null);
   const observedStatusRef = useRef(new Map<string, string>());
   function selectSession(next: number | undefined): void {
+    setSideOverlay(false);
     if (firstSendPendingRef.current || next === sessionId) return;
     draftCache.current.set(sessionId ?? 'new', { message, attachments, messages, target: turnTargetRef.current,
       sticky: stickyBottomRef.current, scroll: chatContainerRef.current?.scrollTop ?? 0 });
@@ -156,6 +219,23 @@ export function AiAssistant(): JSX.Element {
     olderAnchorRef.current = null; setPendingInsert(undefined);
   }
 
+  const sessionChoice = sessionsQuery.data?.find((item) => item.id === sessionId);
+  const modelChoice: ModelChoice = sessionId === undefined ? draftChoice
+    : { modelConfigId: sessionChoice?.modelConfigId ?? null, reasoningEffort: sessionChoice?.reasoningEffort ?? null };
+  const activeModel = (() => {
+    const id = modelChoice.modelConfigId ?? connectionsQuery.data?.chatModelId ?? null;
+    for (const provider of connectionsQuery.data?.providers ?? []) {
+      const model = provider.models.find((item) => item.id === id);
+      if (model) return { provider, model };
+    }
+    return undefined;
+  })();
+  const activeEffort = modelChoice.reasoningEffort && (activeModel?.model.reasoningEfforts ?? []).includes(modelChoice.reasoningEffort)
+    ? modelChoice.reasoningEffort : activeModel?.model.defaultReasoningEffort ?? null;
+  // 会话自己选了模型时，以那个供应商是否可用为准；否则沿用主模型的配置状态。
+  const configured = modelChoice.modelConfigId && activeModel
+    ? activeModel.provider.hasKey || activeModel.provider.authMode === 'none'
+    : !!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none');
   const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
   const streaming = turn.busy;
@@ -166,6 +246,37 @@ export function AiAssistant(): JSX.Element {
   useEffect(() => {
     void queryClient.invalidateQueries({ queryKey: storageQueryKey });
   }, [queryClient, runtimeStorageSignature]);
+
+  // 运行与待发数量交给主进程：主窗口入口显示后台任务，退出应用前据此确认。
+  const runningCount = turn.runtimes.filter((item) => item.status === 'RUNNING').length;
+  const pendingCount = turn.runtimes.reduce((sum, item) => sum + (item.queueCount || 0) + (item.status === 'QUEUED' ? 1 : 0), 0);
+  const previousRunning = useRef(0);
+  useEffect(() => {
+    publish({ type: 'assistant-activity', running: runningCount, pending: pendingCount });
+    // 有回复结束而窗口不在前台：只闪任务栏按钮。
+    if (runningCount < previousRunning.current) void window.api?.assistant?.attention();
+    previousRunning.current = runningCount;
+  }, [runningCount, pendingCount]);
+  // 窗口内快捷键（设置 → 常规 → 快捷键 → AI 助手窗口）。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (isShortcutRecording()) return;
+      const config = useUiStore.getState().shortcutConfig;
+      if (matchesAny(event, config.aiNewSession)) { event.preventDefault(); handleNewSession(); focusCompose(); }
+      else if (matchesAny(event, config.aiFindSession)) {
+        event.preventDefault(); setSide(true);
+        window.requestAnimationFrame(() => navigation.current?.focusSearch());
+      } else if (matchesAny(event, config.aiToggleSidebar)) { event.preventDefault(); setSide(!sideOpen); }
+      else if (event.key === 'Escape' && !event.defaultPrevented) {
+        // 依次关闭浮层、详情栏；都没有时不做任何事，不关闭窗口。
+        if (narrow && sideOverlay) setSideOverlay(false);
+        else if (sessionReference) setSessionReference(undefined);
+        else if (inspectorTarget) setInspectorTarget(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const targetPagesQuery = useQuery({
     queryKey: ['ai-drawer-pages', targetNotebookId],
@@ -180,6 +291,7 @@ export function AiAssistant(): JSX.Element {
     const snapshots = new Map<string, ChatMessage>();
     for (const item of messages) {
       if (item.role === 'assistant' && item.requestId) snapshots.set(item.requestId, item);
+      if (item.role === 'user' && item.requestId && item.page) snapshots.set(`user:${item.requestId}`, item);
     }
     const covered = new Set<string>();
     const server: ChatMessage[] = history.messages.map((row) => {
@@ -188,6 +300,10 @@ export function AiAssistant(): JSX.Element {
       return {
         id: row.id,
         role: row.role,
+        model: row.model ?? mirror?.model,
+        reasoningEffort: row.reasoningEffort ?? mirror?.reasoningEffort,
+        usage: row.usage,
+        page: row.page ?? snapshots.get(`user:${row.requestId}`)?.page,
         content: mirror?.streaming || !row.content ? mirror?.content ?? row.content : row.content,
         reasoning: mirror?.streaming ? mirror.reasoning : row.reasoning ?? mirror?.reasoning,
         supplements: mirror?.streaming ? mirror.supplements : row.supplements ?? mirror?.supplements,
@@ -242,6 +358,7 @@ export function AiAssistant(): JSX.Element {
   // 切会话先销毁检查器：它可能正显示上一轮逐条对照出来的正文片段，不能跨会话留着（§4.5、C08）
   useEffect(() => {
     setInspectorTarget(null);
+    setSessionReference(undefined);
   }, [sessionId]);
 
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
@@ -255,6 +372,9 @@ export function AiAssistant(): JSX.Element {
     } else if (el.scrollTop > lastScrollTopRef.current) {
       stickyBottomRef.current = distanceFromBottom < 80;
     }
+    const nowAway = distanceFromBottom > 160;
+    setAway((value) => (value === nowAway ? value : nowAway));
+    if (!nowAway) setUnseen(false);
     lastScrollTopRef.current = el.scrollTop;
     // 滚到顶部附近就取更早的一页（§7.4：向上滚动可重新加载），并记住当前高度以便补回位移
     if (el.scrollTop < 60) requestOlder();
@@ -282,7 +402,10 @@ export function AiAssistant(): JSX.Element {
     if (restoreScrollRef.current !== null && !history.isLoading) {
       el.scrollTop = restoreScrollRef.current; lastScrollTopRef.current = el.scrollTop; restoreScrollRef.current = null;
     }
-    if (!stickyBottomRef.current) return;
+    if (!stickyBottomRef.current) {
+      if (el.scrollHeight - el.clientHeight - el.scrollTop > 160) setUnseen(true);
+      return;
+    }
     el.scrollTop = el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   }, [visibleMessages, history.isLoading]);
@@ -311,8 +434,17 @@ export function AiAssistant(): JSX.Element {
       refreshedMaterialCalls.current.add(key);
       if (refreshedMaterialCalls.current.size > 2400) refreshedMaterialCalls.current.delete(refreshedMaterialCalls.current.values().next().value!);
       refreshToolMutation(queryClient, row);
+      // 主窗口有自己的查询缓存与编辑草稿，同一条确认事件转给它处理一次。
+      publish({ type: 'tool-mutation', row });
     }
   }
+
+  /** 资料在主窗口定位：助手窗口保持原样，只把主窗口提到前面。非桌面双窗口环境退回本页跳转。 */
+  const goToMain = (route: string): void => {
+    if (isAssistantWindow()) { publish({ type: 'navigate', route }); focusMainWindow(); return; }
+    useUiStore.getState().setAiOpen(false);
+    navigate(route);
+  };
 
   const openMaterial = async (link: string): Promise<void> => {
     const target = materialLinkTarget(link);
@@ -329,13 +461,13 @@ export function AiAssistant(): JSX.Element {
         const question = await get<Question>(`/api/questions/${target.id}`);
         route = `/banks?bankId=${question.bankId}&questionId=${target.id}`;
       }
-      useUiStore.getState().setAiOpen(false);
-      navigate(route);
+      goToMain(route);
     } catch (error) { Message.error(friendlyMessage(error, '资料不存在或暂时无法打开')); }
   };
 
   const createSessionMutation = useMutation({
-    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
+    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话',
+      ...(draftChoiceRef.current.modelConfigId || draftChoiceRef.current.reasoningEffort ? draftChoiceRef.current : {}) }),
     onSuccess: (session) => {
       // 只在首条消息发送时创建；先写缓存和选择，下一次渲染后再启动首轮。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
@@ -345,6 +477,7 @@ export function AiAssistant(): JSX.Element {
       });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = session.id;
+      setDraftChoice({ modelConfigId: null, reasoningEffort: null });
       draftCache.current.delete('new');
       setSessionId(session.id);
     }
@@ -361,6 +494,17 @@ export function AiAssistant(): JSX.Element {
     queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).map((item) =>
       item.id === session.id && (session.titleRevision ?? 0) >= (item.titleRevision ?? 0) ? session : item));
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
+  };
+  /** 改选只作用于当前会话之后提交的消息；已开始的轮次和已受理的待发消息保持提交时的配置。 */
+  const changeModelChoice = async (next: ModelChoice): Promise<void> => {
+    if (sessionId === undefined) { setDraftChoice(next); return; }
+    try {
+      updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${sessionId}`, next));
+    } catch (error) { Message.error(friendlyMessage(error, '模型选择未保存，请重试')); }
+  };
+  /** 置顶属于会话：每个会话各自记录，置顶的排在会话列表最前，先置顶的在上。 */
+  const pinSession = async (id: number, pinned: boolean): Promise<void> => {
+    updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { pinned }));
   };
   const renameSession = async (id: number, title: string): Promise<void> => {
     updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { title }));
@@ -380,50 +524,6 @@ export function AiAssistant(): JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
     }
   });
-
-  // 抽屉宽度：可拖拽调整并持久化到 localStorage。
-  const AI_DRAWER_WIDTH_KEY = 'drill-notebook-ai-drawer-width';
-  const AI_DRAWER_DEFAULT_WIDTH = 460;
-  const AI_DRAWER_MIN_WIDTH = 360;
-  const AI_DRAWER_MAX_WIDTH = 900;
-  const loadDrawerWidth = (): number => {
-    try {
-      const raw = window.localStorage.getItem(AI_DRAWER_WIDTH_KEY);
-      if (raw === null) return AI_DRAWER_DEFAULT_WIDTH;
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed)) return AI_DRAWER_DEFAULT_WIDTH;
-      return Math.min(AI_DRAWER_MAX_WIDTH, Math.max(AI_DRAWER_MIN_WIDTH, Math.round(parsed)));
-    } catch {
-      return AI_DRAWER_DEFAULT_WIDTH;
-    }
-  };
-  const [drawerWidth, setDrawerWidth] = useState<number>(loadDrawerWidth);
-  const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  const onResizeStart = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    resizeDragRef.current = { startX: event.clientX, startWidth: drawerWidth };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  const onResizeMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const drag = resizeDragRef.current;
-    if (!drag) return;
-    if (event.buttons === 0) {
-      // pointer capture lost：结束拖拽。
-      resizeDragRef.current = null;
-      return;
-    }
-    const next = drag.startWidth + (drag.startX - event.clientX);
-    const clamped = Math.min(AI_DRAWER_MAX_WIDTH, Math.max(AI_DRAWER_MIN_WIDTH, Math.round(next)));
-    setDrawerWidth(clamped);
-  };
-  const onResizeEnd = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    resizeDragRef.current = null;
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-    try { window.localStorage.setItem(AI_DRAWER_WIDTH_KEY, String(drawerWidth)); } catch { /* ignore quota */ }
-  };
-  const onResizeDouble = (): void => {
-    setDrawerWidth(AI_DRAWER_DEFAULT_WIDTH);
-    try { window.localStorage.setItem(AI_DRAWER_WIDTH_KEY, String(AI_DRAWER_DEFAULT_WIDTH)); } catch { /* ignore quota */ }
-  };
 
   const invalidateSessionLists = (refetchMessages: boolean): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
@@ -632,7 +732,7 @@ export function AiAssistant(): JSX.Element {
   const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
     if (firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed) return;
     if (!continuation && !message.trim() && !attachments.length) return;
-    if (!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')) {
+    if (!configured) {
       Message.warning('请先在设置中配置 API Key');
       return;
     }
@@ -679,9 +779,14 @@ export function AiAssistant(): JSX.Element {
     const input: TurnInput = { ...inputSnapshot, sessionId: targetSessionId! };
     const userKey = nextMessageKey();
     const assistantKey = nextMessageKey();
+    // 发送时就标出将使用的模型；服务端历史行到达后以它记录的实际值为准。
+    const usedModel = activeModel ? { model: `${activeModel.provider.name} · ${activeModel.model.modelId}`,
+      ...(activeEffort ? { reasoningEffort: activeEffort } : {}) } : {};
     turnTargetRef.current = { userKey, assistantKey };
-    setMessages((current) => [...current, { role: 'user', content, displayContent: displayText, _key: userKey },
-      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey }]);
+    const snapshot = inputSnapshot.pageSnapshot;
+    const boundPage = snapshot && snapshot.kind !== 'none' && snapshot.title ? { page: { title: snapshot.title } } : {};
+    setMessages((current) => [...current, { role: 'user', content, displayContent: displayText, _key: userKey, ...boundPage },
+      { role: 'assistant', content: '', streaming: true, reasoning: '', _key: assistantKey, ...usedModel }]);
     setMessage('');
     setAttachments([]);
     if (isFirstSend) pendingFirstTurnRef.current = input;
@@ -707,6 +812,7 @@ export function AiAssistant(): JSX.Element {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['note-page', targetPageId] });
       void queryClient.invalidateQueries({ queryKey: ['note-pages'] });
+      publish({ type: 'invalidate', keys: [['note-page', targetPageId], ['note-page-deep-link', targetPageId], ['note-pages']] });
       setPendingInsert(undefined);
       Message.success('已插入到笔记（可编辑 Markdown 块）');
     },
@@ -789,58 +895,93 @@ export function AiAssistant(): JSX.Element {
     { label: '总结成笔记', text: '把当前内容整理成结构化学习笔记（标题+要点+易错点）。' }
   ];
 
+  const currentSession = sessionsQuery.data?.find((item) => item.id === sessionId);
+  const runtime = turn.runtimes.find((item) => item.sessionId === sessionId);
+  const statusText = streaming ? `正在回复${runtime?.queueCount ? ` · 待发 ${runtime.queueCount}` : ''}`
+    : runtime?.paused && runtime.queueCount ? `待发 ${runtime.queueCount} · 已暂停`
+      : runtime?.queueCount ? `待发 ${runtime.queueCount}` : '';
+  const pageTarget = pageContext.kind !== 'none' && !!pageContext.title;
+  // 供应商不回报用量时的退路：最近一轮上下文计划的本地估算。
+  const contextEstimate = (() => {
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+      const tokens = visibleMessages[index].turn?.contextUsage?.estimatedInputTokens;
+      if (typeof tokens === 'number' && tokens > 0) return { tokens, requestId: visibleMessages[index].requestId };
+    }
+    return null;
+  })();
+  const detailOpen = !!inspectorTarget || !!sessionReference;
+  const jumpToLatest = (): void => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    stickyBottomRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    lastScrollTopRef.current = el.scrollTop;
+    setAway(false); setUnseen(false);
+  };
+  const copyReply = async (value: string): Promise<void> => {
+    try { await navigator.clipboard.writeText(value); Message.success('已复制回复'); }
+    catch { Message.error('复制失败，请手动选择文本复制'); }
+  };
+  const lastAssistantKey = [...visibleMessages].reverse().find((item) => item.role === 'assistant')?._key;
+  const closeDetail = (): void => { setInspectorTarget(null); setSessionReference(undefined); };
+
   return (
-    <>
-      <Drawer
-        width={drawerWidth}
-        title={
-          <div className="ai-drawer-title">
-            <Sparkles size={16} />
-            <span>AI 学习助手</span>
-            <Tag size="small" color={configQuery.data?.hasKey || configQuery.data?.authMode === 'none' ? 'green' : 'orange'}>{configQuery.data?.hasKey || configQuery.data?.authMode === 'none' ? '已配置' : '未配置'}</Tag>
+    <div className={`ai-window ai-assistant${sideOpen ? '' : ' is-side-closed'}${narrow ? ' is-narrow' : ''}${detailOpen ? ' has-detail' : ''}`}
+      style={{ '--ai-side-width': `${sideWidth}px`, '--ai-detail-width': `${detailWidth}px` } as CSSProperties}>
+      <nav className="ai-window-side" aria-label="会话" hidden={!sideOpen}>
+        {narrow ? null : <PanelResizer label="调整会话栏宽度" edge="right" value={sideWidth} min={PANELS.side.min} max={PANELS.side.max}
+          maxRatio={PANELS.side.ratio} defaultValue={PANELS.side.base} onChange={setSideWidth} onCommit={(width) => savePanelWidth('side', width)} />}
+        <SessionNavigation ref={navigation} docked visible={aiOpen} sessions={sessionsQuery.data ?? []} currentId={sessionId}
+          busyId={streaming ? turn.activeSessionId : undefined}
+          runtimes={turn.runtimes} reconnecting={turn.reconnecting} onStop={turn.stopSession}
+          loading={sessionsQuery.isLoading} error={sessionsQuery.isError} creating={createSessionMutation.isPending}
+          exporting={exporting} onRetry={() => { void sessionsQuery.refetch(); }} onCreate={handleNewSession}
+          onSelect={selectSession}
+          onRename={renameSession} onGenerate={generateSessionTitle}
+          onDelete={async (id) => { await deleteSessionMutation.mutateAsync(id); }} onExport={exportSession}
+          onPin={pinSession}
+          footer={<>
+          <div className="ai-window-side-foot">
+            <ChatStorageMeter enabled={aiOpen} />
+            <ChatHistoryCleanup
+              sessionId={sessionId}
+              enabled={aiOpen}
+              messages={history.messages}
+              hasOlder={history.hasOlder}
+              isLoadingOlder={history.isLoadingOlder}
+              loadOlder={history.loadOlder}
+            />
+            <button type="button" className="ai-window-link" onClick={() => goToMain('/settings')}>设置 ↗</button>
           </div>
-        }
-        visible={aiOpen}
-        onCancel={() => setAiOpen(false)}
-        footer={null}
-        unmountOnExit={false}
-        className="ai-drawer"
-      >
-        <div
-          className="ai-drawer-resize-handle"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="拖动调整 AI 助手宽度（双击重置）"
-          title="拖动调整宽度，双击重置"
-          onPointerDown={onResizeStart}
-          onPointerMove={onResizeMove}
-          onPointerUp={onResizeEnd}
-          onPointerCancel={onResizeEnd}
-          onDoubleClick={onResizeDouble}
-        />
-        <div className="ai-drawer-body">
-          <SessionNavigation visible={aiOpen} sessions={sessionsQuery.data ?? []} currentId={sessionId}
-            busyId={streaming ? turn.activeSessionId : undefined}
-            runtimes={turn.runtimes} reconnecting={turn.reconnecting} onStop={turn.stopSession}
-            loading={sessionsQuery.isLoading} error={sessionsQuery.isError} creating={createSessionMutation.isPending}
-            exporting={exporting} onRetry={() => { void sessionsQuery.refetch(); }} onCreate={handleNewSession}
-            onSelect={selectSession}
-            onRename={renameSession} onGenerate={generateSessionTitle}
-            onDelete={async (id) => { await deleteSessionMutation.mutateAsync(id); }} onExport={exportSession} />
+          </>} />
+      </nav>
+      {narrow && sideOpen ? <div className="ai-window-scrim" onClick={() => setSideOverlay(false)} /> : null}
 
-          <div className="ai-quick-prompts">
-            {quickPrompts.map((item) => (
-              <button key={item.label} type="button" className="ai-chip" disabled={!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none')} onClick={() => {
-                setMessage(item.text);
-              }}>{item.label}</button>
-            ))}
-          </div>
+      <main className="ai-window-main">
+        <header className="ai-window-head">
+          <button type="button" className="ai-window-icon" aria-label={sideOpen ? '收起会话栏' : '展开会话栏'} aria-expanded={sideOpen}
+            title={`会话栏 ${describeAccelerators(useUiStore.getState().shortcutConfig.aiToggleSidebar)}`} onClick={() => setSide(!sideOpen)}><PanelLeft size={17} /></button>
+          <button type="button" className="ai-window-title" aria-label="切换会话" disabled={createSessionMutation.isPending}
+            title={currentSession?.title} onClick={() => setSide(true)}>
+            <span>{currentSession?.title ?? (sessionsQuery.isLoading ? '正在加载会话…' : '新会话')}</span></button>
+          {statusText ? <span className={`ai-window-status${streaming ? ' is-running' : ''}`} role="status">{statusText}</span> : null}
+          <span className="ai-window-spacer" />
+          <button type="button" className={`ai-window-icon${currentSession?.pinnedAt ? ' is-on' : ''}`} aria-pressed={!!currentSession?.pinnedAt}
+            aria-label={currentSession?.pinnedAt ? '取消置顶当前会话' : '置顶当前会话'} title={currentSession?.pinnedAt ? '取消置顶' : '置顶：排到会话列表最前'}
+            disabled={!currentSession || createSessionMutation.isPending}
+            onClick={() => { if (currentSession) void pinSession(currentSession.id, !currentSession.pinnedAt).catch((error) => Message.error(friendlyMessage(error, '置顶未保存，请重试'))); }}>
+            <Pin size={16} fill={currentSession?.pinnedAt ? 'currentColor' : 'none'} /></button>
+          <button type="button" className="ai-window-icon" aria-label="会话更多操作" title="会话更多操作" disabled={!currentSession || createSessionMutation.isPending}
+            onClick={(event) => { if (currentSession) navigation.current?.openMenu(currentSession.id, event.currentTarget); }}><MoreHorizontal size={17} /></button>
+        </header>
 
+          <div className="ai-window-stream-wrap">
           <div
-            className="ai-drawer-chat"
+            className="ai-drawer-chat ai-window-stream"
             ref={chatContainerRef}
             onScroll={onChatScroll}
           >
+            <div className="ai-window-col">
             {history.isError ? (
               <div className="empty-state ai-empty">
                 <p>{friendlyMessage(history.error, '会话历史读取失败')}</p>
@@ -866,7 +1007,8 @@ export function AiAssistant(): JSX.Element {
               const turnSnapshot = item.turn?.requestId ? item.turn : null;
               const turnId = item.requestId ?? turnSnapshot?.requestId ?? null;
               return (
-                <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}`}>
+                <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}${isAssistant && item._key === lastAssistantKey ? ' is-latest' : ''}`}>
+                  {isAssistant && item.model ? <p className="chat-turn-model">{item.model}{item.reasoningEffort ? ` · 思考 ${item.reasoningEffort}` : ''}</p> : null}
                   {isAssistant && item.reasoning ? (
                     <details className="chat-reasoning" open={item.streaming}>
                       <summary>思考过程{item.streaming ? '（生成中…）' : ''}</summary>
@@ -891,6 +1033,9 @@ export function AiAssistant(): JSX.Element {
                         {!!part.attachments?.length && <small>{part.attachments.join(' · ')}</small>}</div>
                       : <MarkdownContent key={part.key} value={part.text} onSessionLink={setSessionReference} onMaterialLink={openMaterial} />)
                     : <MarkdownContent value={text} onSessionLink={setSessionReference} onMaterialLink={openMaterial} />}
+                  {!isAssistant && item.page ? (item.page.link
+                    ? <button type="button" className="chat-bound-page" title="提交时的业务页面，点击在主窗口查看" onClick={() => { void openMaterial(item.page!.link!); }}><FileText size={12} />{item.page.title}</button>
+                    : <span className="chat-bound-page" title="提交时的业务页面"><FileText size={12} />{item.page.title}</span>) : null}
                   {item.streaming && !item.toolActivities?.length ? <span className="chat-stream-cursor" aria-hidden="true" /> : null}
                   {item.notice ? (
                     <div className="ai-retrieval-notice">
@@ -932,28 +1077,42 @@ export function AiAssistant(): JSX.Element {
                         />
                       ) : null}
                       <div className="chat-message-actions">
+                        {text ? <Button type="text" size="mini" icon={<Copy size={14} />} onClick={() => { void copyReply(text); }}>复制</Button> : null}
                         {text ? <Button type="text" size="mini" icon={<FilePlus2 size={14} />} onClick={() => setPendingInsert(text)}>插入笔记</Button> : null}
                         {turnId ? (
                           <Button type="text" size="mini" icon={<Layers size={14} />} onClick={() => setInspectorTarget({ requestId: turnId, snapshot: turnSnapshot ?? undefined })}>
                             本轮上下文
                           </Button>
                         ) : null}
+                        {item.usage ? <span className="chat-turn-usage" title={item.usage.requests > 1 ? `本轮 ${item.usage.requests} 次模型请求的累计实测用量` : '本轮实测用量'}>
+                          输入 {formatTokens(item.usage.inputTokens)} · 输出 {formatTokens(item.usage.outputTokens)}</span> : null}
                       </div>
                     </>
                   ) : null}
                 </div>
               );
             }) : (
-              <div className="empty-state ai-empty">
+              <div className="empty-state ai-empty ai-window-empty">
                 <div>
                   <Sparkles size={28} />
-                  <p>{sessionId === undefined ? '开始一段新对话' : '当前会话还没有消息。可新建多个会话分别保存不同主题的对话。'}</p>
+                  <p>{sessionId === undefined ? '开始一段新对话' : '当前会话还没有消息。'}</p>
+                  <div className="ai-quick-prompts">
+                    {quickPrompts.map((item) => (
+                      <button key={item.label} type="button" className="ai-chip" disabled={!configured} onClick={() => { setMessage(item.text); focusCompose(); }}>{item.label}</button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
             </>)}
+            </div>
+          </div>
+          {away ? <button type="button" className="ai-window-latest" onClick={jumpToLatest} aria-label={unseen ? '回到最新，有新内容' : '回到最新'}>
+            <ArrowDown size={14} />回到最新{unseen ? <span className="ai-window-latest-dot" aria-hidden="true" /> : null}</button> : null}
           </div>
 
+        <footer className="ai-window-foot">
+          <div className="ai-window-col">
           {pendingInsert ? (
             <div className="ai-insert-bar">
               <Typography.Text type="secondary">插入到</Typography.Text>
@@ -981,25 +1140,12 @@ export function AiAssistant(): JSX.Element {
               ))}
             </div>
           ) : null}
-
-          <div className="ai-storage-row">
-            <ChatStorageMeter enabled={aiOpen} />
-            <ChatHistoryCleanup
-              sessionId={sessionId}
-              enabled={aiOpen}
-              messages={history.messages}
-              hasOlder={history.hasOlder}
-              isLoadingOlder={history.isLoadingOlder}
-              loadOlder={history.loadOlder}
-            />
-          </div>
-
           {queue.unconfirmed && !queueSubmitting && <div className="chat-queue-uncertain" role="status">上次提交结果待确认
             <Button type="text" size="mini" loading={queueSubmitting} onClick={() => void retryQueueSubmission()}>核对提交</Button>
           </div>}
           <ChatQueue sessionId={sessionId} view={queue.data} runningId={streaming ? turn.requestId : null}
             loadingError={queue.isError} retry={() => void queue.refetch()} action={queue.action} pause={queue.pause} />
-          <div className={`chat-compose ai-drawer-compose${queue.data?.items?.length || queue.data?.steering?.length ? ' has-queue' : ''}`}>
+          <div ref={composeRef} className={`chat-compose ai-drawer-compose${queue.data?.items?.length || queue.data?.steering?.length ? ' has-queue' : ''}`}>
             <TextArea
               autoSize={{ minRows: 2, maxRows: 6 }}
               disabled={createSessionMutation.isPending}
@@ -1030,6 +1176,14 @@ export function AiAssistant(): JSX.Element {
                 void addAttachments(files);
               }}
             />
+            <button type="button" className={`ai-window-page${pageTarget ? '' : ' is-empty'}`} disabled={!pageTarget}
+              title={pageTarget ? '主窗口当前页面，点击在主窗口查看' : '主窗口没有可读取的业务页面'}
+              onClick={() => goToMain(pageRoute(pageContext))}>
+              <FileText size={13} /><span>{pageTarget ? pageContext.title : '无当前页面'}</span></button>
+            <ContextMeter sessionId={sessionId} estimate={contextEstimate} refreshKey={`${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}`}
+              onInspect={(requestId) => { setSessionReference(undefined); setInspectorTarget({ requestId }); }} />
+            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming} disabled={createSessionMutation.isPending}
+              onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             {streaming && <>
               <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
@@ -1040,28 +1194,42 @@ export function AiAssistant(): JSX.Element {
               type="primary"
               icon={<Send size={16} />}
               loading={createSessionMutation.isPending || queueSubmitting}
-              disabled={!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || (streaming && !message.trim() && !attachments.length)}
+              disabled={!configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || (streaming && !message.trim() && !attachments.length)}
               onClick={send}
               aria-label={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
               title={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
             />
           </div>
-          {!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none') ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
+          {!configured ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
-        </div>
+          </div>
+        </footer>
+      </main>
 
-        {inspectorTarget ? (
-          <ChatContextInspector
-            sessionId={sessionId}
-            requestId={inspectorTarget.requestId}
-            turn={inspectorTarget.snapshot}
-            open
-            onClose={() => setInspectorTarget(null)}
-          />
-        ) : null}
-      </Drawer>
-      {sessionReference ? <SessionReferencePreview key={sessionReference} link={sessionReference}
-        onClose={() => setSessionReference(undefined)} onSessionLink={setSessionReference} /> : null}
-    </>
+      {detailOpen ? (
+        <aside className="ai-window-detail" aria-label={sessionReference ? '会话记录' : '本轮上下文'}>
+          {narrow ? null : <PanelResizer label="调整详情栏宽度" edge="left" value={detailWidth} min={PANELS.detail.min} max={PANELS.detail.max}
+            maxRatio={PANELS.detail.ratio} defaultValue={PANELS.detail.base} onChange={setDetailWidth} onCommit={(width) => savePanelWidth('detail', width)} />}
+          <header className="ai-window-detail-head">
+            <strong>{sessionReference ? referenceTitle || '会话记录' : '本轮上下文'}</strong>
+            <button type="button" className="ai-window-icon" aria-label="关闭详情" onClick={closeDetail}><X size={16} /></button>
+          </header>
+          <div className="ai-window-detail-body">
+            {sessionReference ? <SessionReferencePreview key={sessionReference} link={sessionReference} embedded onTitle={setReferenceTitle}
+              onClose={() => setSessionReference(undefined)} onSessionLink={setSessionReference} />
+              : inspectorTarget ? <ChatContextInspector sessionId={sessionId} requestId={inspectorTarget.requestId}
+                turn={inspectorTarget.snapshot} open embedded onClose={() => setInspectorTarget(null)} /> : null}
+          </div>
+        </aside>
+      ) : null}
+    </div>
   );
+}
+
+/** 页面标记点击后回到主窗口的那一页。 */
+function pageRoute(context: { route?: string; notePageId?: number; notebookId?: number; bankId?: number; pointId?: number; questionId?: number }): string {
+  if (context.notePageId) return `/notebooks?pageId=${context.notePageId}`;
+  if (context.pointId) return `/knowledge?pointId=${context.pointId}${context.bankId ? `&bankId=${context.bankId}` : ''}`;
+  if (context.bankId && context.route === '/banks') return `/banks?bankId=${context.bankId}${context.questionId ? `&questionId=${context.questionId}` : ''}`;
+  return context.route ?? '/notebooks';
 }

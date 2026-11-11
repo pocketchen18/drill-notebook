@@ -380,6 +380,9 @@ button, input, textarea, select { font: inherit; }
 }
 .topbar-ai-pill svg { color: var(--accent); }
 .topbar-ai-pill:hover { border-color: var(--accent-border-2); background: var(--accent-soft-2); color: var(--accent); }
+/* 助手窗口已打开：选中底色；窗口收起但后台仍在回复：显示任务数。 */
+.topbar-ai-pill.is-open { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
+.topbar-ai-count { min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--accent-contrast); font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .topbar-ai-pill:focus-visible, .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .topbar-ai-pill kbd { min-width: 22px; padding: 0 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--subtle-bg); color: var(--muted); font: 600 11px/18px inherit; font-family: inherit; text-align: center; }
 .theme-toggle { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--panel-bg); color: var(--label); cursor: pointer; transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }

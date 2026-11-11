@@ -13,7 +13,7 @@
  *   避免改绑「打开 AI 助手」时旧绑定把侧栏一起唤出。
  */
 
-export type ShortcutScope = 'global' | 'quiz' | 'knowledgeCard' | 'editor' | 'bank' | 'notebook' | 'ai';
+export type ShortcutScope = 'global' | 'quiz' | 'knowledgeCard' | 'editor' | 'bank' | 'notebook' | 'ai' | 'aiWindow';
 
 export interface ShortcutScopeMeta {
   id: ShortcutScope;
@@ -31,7 +31,8 @@ export const SHORTCUT_SCOPES: ShortcutScopeMeta[] = [
   { id: 'editor', label: '笔记编辑器', description: '笔记页面内生效。', plainKeys: false },
   { id: 'bank', label: '题库', description: '题库列表项选中时生效。', plainKeys: true },
   { id: 'notebook', label: '笔记本', description: '笔记页列表项选中时生效。', plainKeys: true },
-  { id: 'ai', label: 'AI 助手', description: '侧栏输入框内生效。', plainKeys: true }
+  { id: 'ai', label: 'AI 助手', description: '助手输入框内生效。', plainKeys: true },
+  { id: 'aiWindow', label: 'AI 助手窗口', description: '仅在助手窗口内生效。', plainKeys: false }
 ];
 
 export type ShortcutAction =
@@ -41,7 +42,8 @@ export type ShortcutAction =
   | 'editorFinishBlock' | 'editorFind' | 'editorReplace'
   | 'bankRename'
   | 'noteRename'
-  | 'aiSend';
+  | 'aiSend'
+  | 'aiNewSession' | 'aiFindSession' | 'aiToggleSidebar';
 
 export interface ShortcutActionMeta {
   id: ShortcutAction;
@@ -59,7 +61,7 @@ export interface ShortcutActionMeta {
 }
 
 export const SHORTCUT_ACTIONS: ShortcutActionMeta[] = [
-  { id: 'toggleAi', scope: 'global', label: '打开 / 关闭 AI 助手', description: '任意页面唤出或收起侧栏。', defaults: ['Ctrl+J'] },
+  { id: 'toggleAi', scope: 'global', label: '打开 / 关闭 AI 助手', description: '任意页面唤出或收起助手窗口。', defaults: ['Ctrl+J'] },
   { id: 'toggleTheme', scope: 'global', label: '切换深浅主题', description: '明暗主题一键互换。', defaults: [] },
   { id: 'openSettings', scope: 'global', label: '打开设置', description: '直达设置页。', defaults: [] },
   { id: 'quizSubmit', scope: 'quiz', phase: 'answering', label: '提交答案', description: '作答中生效。', defaults: ['Enter', 'Ctrl+S'] },
@@ -75,7 +77,10 @@ export const SHORTCUT_ACTIONS: ShortcutActionMeta[] = [
   { id: 'editorReplace', scope: 'editor', label: '查找并替换', description: '', defaults: ['Ctrl+H'] },
   { id: 'bankRename', scope: 'bank', label: '重命名题库', description: '', defaults: ['F2'] },
   { id: 'noteRename', scope: 'notebook', label: '重命名笔记页', description: '', defaults: ['F2'] },
-  { id: 'aiSend', scope: 'ai', label: '发送消息', description: '其余 Enter 组合用于换行。', defaults: ['Enter'], mainKeys: ['Enter'] }
+  { id: 'aiSend', scope: 'ai', label: '发送消息', description: '其余 Enter 组合用于换行。', defaults: ['Enter'], mainKeys: ['Enter'] },
+  { id: 'aiNewSession', scope: 'aiWindow', label: '新建会话', description: '', defaults: ['Ctrl+N'] },
+  { id: 'aiFindSession', scope: 'aiWindow', label: '查找会话', description: '会话栏收起时先展开。', defaults: ['Ctrl+K'] },
+  { id: 'aiToggleSidebar', scope: 'aiWindow', label: '展开 / 收起会话栏', description: '', defaults: ['Ctrl+B'] }
 ];
 
 const ACTION_BY_ID = new Map(SHORTCUT_ACTIONS.map((meta) => [meta.id, meta] as const));

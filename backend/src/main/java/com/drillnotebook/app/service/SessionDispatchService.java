@@ -103,7 +103,7 @@ public class SessionDispatchService {
         String password=vault.sessionPassword(session).orElse(Objects.toString(raw.get("masterPassword"),""));
         checkReadable(session,password);ai.getObject().validatePending(body);
         if(!password.isBlank())vault.rememberSessionPassword(session,password);
-        var config=ai.getObject().captureConfig(password);
+        var config=ai.getObject().captureConfig(session,password);
         try {
             var payload=Map.<String,Object>of("body",body,"config",ai.getObject().configReference(config));
             var receipt=pending.accept(id,session,fingerprint,encryptPayload(payload,password),parent);
@@ -275,7 +275,7 @@ public class SessionDispatchService {
         checkCapacity();
         String password=Objects.toString(body.getOrDefault("masterPassword",vault.sessionPassword(n.longValue()).orElse("")),"");
         checkReadable(n.longValue(),password);
-        var config=ai.getObject().captureConfig(password);
+        var config=ai.getObject().captureConfig(n.longValue(),password);
         try {
             Receipt r=receipts.accept(id,n.longValue(),null,null,fingerprint,null,config.row().model());
             var copy=new LinkedHashMap<>(body); copy.put("masterPassword",password);
@@ -311,7 +311,7 @@ public class SessionDispatchService {
             if(origin!=null) password=Objects.toString(origin.body.get("masterPassword"),"");
         }
         checkReadable(passwordSession,password);
-        var config=ai.getObject().captureConfig(password);
+        var config=ai.getObject().captureConfig(target,password);
         try {
             var r=receipts.accept(UuidV7.generate(System.currentTimeMillis()),target,plan.sessionId(),key,fingerprint,title,config.row().model(),plan.contextGeneration());
             if(target==null && !password.isBlank()) vault.rememberSessionPassword(r.sessionId(),password);

@@ -33,8 +33,8 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.7.3-features.md](state/v0.7.3-features.md) | 当前版本：界面清理、资料读取 / 新增 / 修改、删除工具、全部内置工具开关、模型容量必填已实现；真实供应商与 Electron 实机待验收 |
-| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 17）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
+| [state/v0.8-features.md](state/v0.8-features.md) | 当前版本：独立 AI 助手窗口、会话模型 / effort、上下文反馈、会话与消息体验四个切片已实现，待用户验收 |
+| [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 18）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
 版本启动前先收尾并归档上一版材料，再在 `docs/state/` 编写新版功能需求清单。开发期间原位维护范围与状态，不把规划提前写成全局已交付能力。切片验收完成后更新该版清单，同步已落地的数据结构、接口等状态文档；施工材料继续保留在 `docs/work/`，标明完成状态，不因单个功能完成立即归档。涉及全局设计规范或专题说明时原位维护。
@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能完成后标记结果并同步状态，施工材料保留至本版收尾；**下一版本开始前**统一移入 `docs/archive/<version>/`。归档时保留真实未完成项和验收限制，不以归档代替验收。
 
-v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插话材料已在开始 v0.7.3 前整理至 [版本归档](archive/v0.7.2/README.md)。v0.7.3 当前施工材料包括[上下文卡片与入口清理](work/ai-chat-entry-cleanup/ui-ux.md)、[资料读取工具](work/material-read-tools/spec.md)、[新增资料工具](work/material-create-tool/spec.md)、[修改资料工具](work/material-update-tool/spec.md)、[删除工具与全局工具设置](work/delete-tools/spec.md)及[模型容量必填](work/model-required-limits/spec.md)，均保留至下一版开始前归档；推进状态见 [版本清单](state/v0.7.3-features.md)。既有验证与未覆盖项见[测试清单](test/QA_CHECKLIST.md)和 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8 独立 AI 窗口与联网搜索配置尚未进入施工。
+v0.7.3 已由用户于 2026-11-11 确认全部完成，其功能清单及六个施工目录在进入 v0.8 前移入 [版本归档](archive/v0.7.3/README.md)；更早的 [v0.7.2 归档](archive/v0.7.2/README.md)继续保留。v0.8 的[功能清单](state/v0.8-features.md)与[助手窗口施工材料](work/ai-window/ui-ux.md)（UI/UX、规格、计划、交互草图）为当前施工依据。历史测试记录与发布边界仍见[测试清单](test/QA_CHECKLIST.md)及 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。联网搜索配置继续留作后续候选。
 
 ## 3. 测试文档
 
@@ -89,7 +89,7 @@ v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插�
 | [reference/knowledge-point-import.md](reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [reference/quiz-markdown-flow.md](reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
 
-`docs/release/v<版本>-release-notes.md` 保存各版发行记录，当前发布准备为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
+`docs/release/v<版本>-release-notes.md` 保存各版发行记录，上一版为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8 尚处于范围规划，工作流默认版本暂保留 v0.7.3，到发布准备时再调整。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
 
 ## 5. 交接记忆
 
@@ -103,7 +103,7 @@ v0.7.2 的版本清单、会话导航、四个会话工具、人工排队与插�
 
 ## 6. 归档
 
-`docs/archive/<version>/` 在下一版本开始前接收上一版的功能清单（`features.md`）、施工文档、草图与版本验收证据。长期架构、数据模型、接口留在 `docs/state/` 原位更新，发布说明留在 `docs/release/`，通用测试文档留在 `docs/test/`，不复制成第二份事实来源。v0.7.2 的入口见 [归档说明](archive/v0.7.2/README.md)。
+`docs/archive/<version>/` 在下一版本开始前接收上一版的功能清单（`features.md`）、施工文档、草图与版本验收证据。长期架构、数据模型、接口留在 `docs/state/` 原位更新，发布说明留在 `docs/release/`，通用测试文档留在 `docs/test/`，不复制成第二份事实来源。上一版入口见 [v0.7.3 归档说明](archive/v0.7.3/README.md)。
 
 归档后只作历史参考，不自动加载为当前施工依据；已经提前归档的旧切片不来回搬动，本次补齐上一版材料即可。迁移时修正相对链接和状态说明，保留历史测试结论、未完成验收与风险，不把 PARTIAL 改为 PASS。截图仍只留本地。
 

@@ -20,7 +20,8 @@ export function useRegisterPageContext(context: AiPageContext, enabled = true): 
     useUiStore.getState().setPageContext(owned);
     owned = useUiStore.getState().pageContext;
     const onSelection = (): void => {
-      if (useUiStore.getState().aiOpen || useUiStore.getState().pageContext !== owned) return;
+      // 助手在独立窗口里，它的选区不会出现在本文档；businessSelection 只认业务页面内的选区。
+      if (useUiStore.getState().pageContext !== owned) return;
       const selection = businessSelection(live.current.markdown);
       useUiStore.getState().setPageContext({ ...live.current, ...(selection ? { selection } : {}) });
       owned = useUiStore.getState().pageContext;

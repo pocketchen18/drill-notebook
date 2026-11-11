@@ -36,3 +36,10 @@
 .session-nav-copy-fallback { width: 100%; min-height: 100px; box-sizing: border-box; resize: vertical; background: var(--subtle-bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 @media (pointer: coarse) { .session-nav-row-more { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .session-nav-spin { animation: none; } }
+/* 会话置顶：置顶的会话归入独立分组；图钉在悬停或聚焦到该行时出现，已置顶的显示为高亮实心 */
+.session-nav-row-pin { flex: none; padding: 6px; border: 0; background: transparent; border-radius: 5px; color: var(--muted); display: flex; opacity: 0; cursor: pointer; }
+.session-nav-row:hover .session-nav-row-pin, .session-nav-row:focus-within .session-nav-row-pin, .session-nav-row.has-menu .session-nav-row-pin { opacity: 1; }
+.session-nav-row-pin:hover { background: var(--hover-bg); color: var(--text); }
+.session-nav-row-pin.is-pinned { color: var(--accent); }
+.session-nav-row-pin:disabled { cursor: default; }
+@media (hover: none) { .session-nav-row-pin { opacity: 1; } }

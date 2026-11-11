@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Modal, Spin } from '@arco-design/web-react';
 import { get } from '../../lib/api';
@@ -7,8 +8,10 @@ import { MarkdownContent } from '../markdown/MarkdownRenderer';
 import './session-reference-preview.css';
 
 /** 引用预览只读：不切换主聊天，不覆盖输入草稿，也不重发历史轮次。 */
-export function SessionReferencePreview({ link, onClose, onSessionLink }: {
+export function SessionReferencePreview({ link, onClose, onSessionLink, embedded, onTitle }: {
   link: string; onClose: () => void; onSessionLink: (link: string) => void;
+  /** 助手窗口的详情栏里直接铺开；标题交给外层栏头显示。 */
+  embedded?: boolean; onTitle?: (title: string) => void;
 }): JSX.Element {
   const session = useQuery({
     queryKey: ['ai-session-reference', link],
@@ -24,9 +27,9 @@ export function SessionReferencePreview({ link, onClose, onSessionLink }: {
   const history = useChatHistoryPages(session.isSuccess ? session.data.id : undefined);
   const statuses: Record<string, string> = { FAILED: '回复失败', ABORTED: '已停止', INTERRUPTED: '已中断',
     TRUNCATED: '回复未完成', RUNNING: '回复中' };
-  return <Modal visible title={<span style={{ overflowWrap: 'anywhere' }}>{session.data?.title ?? '会话记录'}</span>} footer={null} onCancel={onClose}
-    style={{ width: 'min(720px, calc(100vw - 32px))' }} unmountOnExit>
-    <div className="session-reference-preview">
+  const title = session.data?.title;
+  useEffect(() => { if (title) onTitle?.(title); }, [title]); // eslint-disable-line react-hooks/exhaustive-deps -- 只在标题变化时上报
+  const body = <div className="session-reference-preview">
       {session.isPending || history.isLoading ? <Spin tip="正在读取会话…" /> : null}
       {session.isError ? <Alert type="warning" content={session.error instanceof Error ? session.error.message : '会话暂时无法读取'}
         action={<Button size="mini" onClick={() => { void session.refetch(); }}>重试</Button>} /> : null}
@@ -45,6 +48,10 @@ export function SessionReferencePreview({ link, onClose, onSessionLink }: {
         </div>
         <MarkdownContent value={message.contentDeleted ? '消息内容已清理' : message.content} onSessionLink={onSessionLink} />
       </article>)}
-    </div>
+    </div>;
+  if (embedded) return body;
+  return <Modal visible title={<span style={{ overflowWrap: 'anywhere' }}>{session.data?.title ?? '会话记录'}</span>} footer={null} onCancel={onClose}
+    style={{ width: 'min(720px, calc(100vw - 32px))' }} unmountOnExit>
+    {body}
   </Modal>;
 }

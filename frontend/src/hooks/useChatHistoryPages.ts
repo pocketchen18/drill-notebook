@@ -19,6 +19,10 @@ export interface ChatHistoryMessage {
   id: number;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  page?: { title: string; link?: string };
+  model?: string;
+  reasoningEffort?: string;
+  usage?: { requests: number; inputTokens: number; outputTokens: number };
   reasoning?: string;
   createdAt?: string;
   turnId?: number | null;

@@ -25,7 +25,7 @@ export function capturePageSnapshot(context: AiPageContext, now = new Date()): P
   };
 }
 
-/** 主界面选区由 selectionchange 记录；打开抽屉后输入框选区不能覆盖它。 */
+/** 主界面选区由 selectionchange 记录；只认业务页面内的选区，弹层和输入框里的选区不算。 */
 export function businessSelection(markdown: string): string | undefined {
   const selected = window.getSelection();
   if (!selected || selected.isCollapsed) return undefined;
