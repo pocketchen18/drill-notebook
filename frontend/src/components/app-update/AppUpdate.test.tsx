@@ -9,9 +9,9 @@ import { UpdateLifecycleBridge } from './UpdateLifecycleBridge';
 import { registerUpdateParticipant } from '../../lib/updatePreparation';
 import type { AppUpdateState, AppUpdaterApi, NotesRange, UpdateRelease, UpdatePreparationRequest } from '../../../../electron/update-types';
 
-const release = (version: string): UpdateRelease => ({ version, tag: `v${version}`, name: `v${version}`, body: `## v${version} 的说明\n\n- 保留完整正文\n\n[项目链接](https://github.com/pocketchen18/drill-notebook)`,
-  publishedAt: '2026-11-12T00:00:00Z', url: `https://github.com/pocketchen18/drill-notebook/releases/tag/v${version}`, prerelease: true,
-  asset: { name: `Drill-Notebook-${version}-win-x64-portable.zip`, size: 1024, url: 'https://github.com/pocketchen18/drill-notebook/releases/download/x', digest: 'a'.repeat(64) } });
+const release = (version: string): UpdateRelease => ({ version, tag: `v${version}`, name: `v${version}`, body: `## v${version} 的说明\n\n- 保留完整正文\n\n[项目链接](https://github.com/qilin-software/drill-notebook)`,
+  publishedAt: '2026-11-12T00:00:00Z', url: `https://github.com/qilin-software/drill-notebook/releases/tag/v${version}`, prerelease: true,
+  asset: { name: `Drill-Notebook-${version}-win-x64-portable.zip`, size: 1024, url: 'https://github.com/qilin-software/drill-notebook/releases/download/x', digest: 'a'.repeat(64) } });
 const base = (): AppUpdateState => ({ currentVersion: '0.7.3', development: false, installSupported: true,
   settings: { automaticUpdate: false, automaticCheck: true, intervalHours: 24, startupReminder: true }, checking: false, checkStatus: 'available',
   target: release('0.8.0'), updateVisible: true, startupBusy: false, progress: { phase: 'idle', received: 0, bytesPerSecond: 0 } });
@@ -46,7 +46,7 @@ describe('关于与更新入口', () => {
     mountAbout(); await screen.findByText('v0.7.3');
     const home = screen.getByRole('button', { name: 'GitHub 主页' }); expect(home.querySelector('svg.lucide-github')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '更新内容' })).toHaveLength(1);
-    fireEvent.click(home); expect(openExternal).toHaveBeenCalledWith('https://github.com/pocketchen18/drill-notebook');
+    fireEvent.click(home); expect(openExternal).toHaveBeenCalledWith('https://github.com/qilin-software/drill-notebook');
     fireEvent.click(screen.getByRole('button', { name: '去 GitHub 点 Star' })); expect(openExternal).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole('button', { name: '检查更新' })); expect(api.check).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: '更新内容' })); expect(api.openHistory).toHaveBeenCalledTimes(1);

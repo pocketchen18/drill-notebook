@@ -80,3 +80,5 @@ pwsh -NoProfile -File cache/portable-registry-audit.ps1
 本轮 `node --test scripts/test-release-config.mjs` **10 项全部通过、0 跳过**，覆盖 v0.8.0 / rc 版本与说明选择、默认应用版本和 ZIP 命名、缺失依赖及构建失败阻断；`npm run build:electron` 和 `npm run build:frontend` 均通过，前端保留既有分块大小提示。业务全量与完整应用结果沿用上表。
 
 保持标签触发 Pre-release、`make_latest=false`；手动触发默认只上传产物，开启 `publish_release` 才发布。本轮仅准备工作区文件，没有创建或推送标签，没有执行云端发行；实际发布结果以 GitHub Actions / Release 为准。
+
+仓库迁移补验（2026-11-12）：主页 / Star、Release API、下载地址和缓存链接校验已同步到 `qilin-software/drill-notebook`，测试夹具与草图 / 需求 / 规格同步更新。更新器 22 项、关于组件 9 项及 `npm run build` 通过；生产 `fetchReleases` 实际读取组织仓库，识别现有 7 个版本及 7 个便携 ZIP，最新为 v0.7.3，资产摘要可用。轻量证据在本地 `temp/app-update-check/github-org-frontend.log` 与 `github-org-feed.log`。

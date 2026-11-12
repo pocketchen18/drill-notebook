@@ -5,7 +5,7 @@ import { BrandMark } from '../BrandMark';
 import { updateAction, useAppUpdate } from './AppUpdateProvider';
 import type { UpdateSettings } from '../../../../electron/update-types';
 
-export const PROJECT_URL = 'https://github.com/pocketchen18/drill-notebook';
+export const PROJECT_URL = 'https://github.com/qilin-software/drill-notebook';
 export function openUpdateLink(url: string): void {
   if (!/^https:\/\//i.test(url)) return;
   if (window.api?.shell) updateAction(window.api.shell.openExternal(url));

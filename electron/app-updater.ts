@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import type { PortablePaths } from './paths';
 import { assetUrlAllowed, compareVersions, downloadDestinationAllowed, fetchReleases, orderReleases, readLimitedText,
-  selectNotes, selectPending, versionOf, type UpdateFetch } from './update-feed';
+  REPOSITORY_URL, selectNotes, selectPending, versionOf, type UpdateFetch } from './update-feed';
 import { APP_EXECUTABLE, assertNoLinks, fileDigest, PROGRAM_MANIFEST, validateManifest, writeAtomicJson, type ProgramManifest } from './program-manifest';
 import { extractUpdateArchive } from './update-archive';
 import type { AppUpdateState, NotesRange, UpdateNotes, UpdateRelease, UpdateSettings } from './update-types';
@@ -147,7 +147,7 @@ export class AppUpdater {
       if (raw.format !== 1 || !Array.isArray(raw.releases) || raw.releases.length > 1000) return;
       this.releases = orderReleases(raw.releases.filter(r => versionOf(r.version) === r.version
         && versionOf(r.tag) === r.version && typeof r.body === 'string' && typeof r.name === 'string'
-        && typeof r.publishedAt === 'string' && r.url === `https://github.com/pocketchen18/drill-notebook/releases/tag/${encodeURIComponent(r.tag)}`
+        && typeof r.publishedAt === 'string' && r.url === `${REPOSITORY_URL}/releases/tag/${encodeURIComponent(r.tag)}`
         && (!r.asset || this.validCachedAsset(r.asset, `Drill-Notebook-${r.version}-win-x64-portable.zip`, r.tag))
         && (!r.checksum || this.validCachedAsset(r.checksum, `Drill-Notebook-${r.version}-win-x64-portable.zip.sha256`, r.tag))));
       this.cacheAt = timeOf(raw.at) ?? 0;

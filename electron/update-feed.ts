@@ -1,7 +1,7 @@
 import semver from 'semver';
 import type { NotesRange, UpdateAsset, UpdateRelease } from './update-types';
 
-export const REPOSITORY = 'pocketchen18/drill-notebook';
+export const REPOSITORY = 'qilin-software/drill-notebook';
 export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
 export const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases`;
 export type UpdateFetch = (url: string, init?: RequestInit) => Promise<Response>;

@@ -58,6 +58,6 @@ export function releaseRaw(version = '0.8.0', assetBytes, options = {}) {
   const name = `Drill-Notebook-${version}-win-x64-portable.zip`;
   return { tag_name: `v${version}`, name: `v${version}`, draft: false, prerelease: true, published_at: '2026-11-12T00:00:00Z',
     body: `## v${version}\n完整的更新内容\n\n- 修复与改进`,
-    assets: assetBytes ? [{ name, size: assetBytes.length, browser_download_url: `https://github.com/pocketchen18/drill-notebook/releases/download/v${version}/${name}`,
+    assets: assetBytes ? [{ name, size: assetBytes.length, browser_download_url: `https://github.com/qilin-software/drill-notebook/releases/download/v${version}/${name}`,
       digest: `sha256:${hash(assetBytes)}` }] : [], ...options };
 }

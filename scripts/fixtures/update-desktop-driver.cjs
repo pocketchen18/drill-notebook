@@ -17,8 +17,8 @@ report('started');
 const fetchOriginal = net.fetch.bind(net);
 net.fetch = async (url, init) => {
   const value = String(url);
-  const api = value.startsWith('https://api.github.com/repos/pocketchen18/drill-notebook/releases?');
-  const asset = value.startsWith('https://github.com/pocketchen18/drill-notebook/releases/download/');
+  const api = value.startsWith('https://api.github.com/repos/qilin-software/drill-notebook/releases?');
+  const asset = value.startsWith('https://github.com/qilin-software/drill-notebook/releases/download/');
   if (!api && !asset) return fetchOriginal(url, init);
   const target = api ? '/releases' : value.endsWith('.sha256') ? '/checksum' : '/archive';
   const response = await fetch(feed + target, init);

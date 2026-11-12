@@ -42,7 +42,7 @@ Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操
 
 ## 3. Release 与说明筛选
 
-固定仓库 `pocketchen18/drill-notebook`，使用 `/releases?per_page=100&page=...`，最多 10 页；单页响应限制 16 MiB，每次请求有超时。排除 draft，规范化 `v` 前缀后使用语义版本排序，兼容所有 v0.x 预发行；不使用 Latest。手动与自动检查合并同一在途请求。
+固定仓库 `qilin-software/drill-notebook`，使用 `/releases?per_page=100&page=...`，最多 10 页；单页响应限制 16 MiB，每次请求有超时。排除 draft，规范化 `v` 前缀后使用语义版本排序，兼容所有 v0.x 预发行；不使用 Latest。手动与自动检查合并同一在途请求。
 
 匹配 `Drill-Notebook-<version>-win-x64-portable.zip`，资产大小限制 1 GiB，下载源必须为本仓库公开 HTTPS Release 地址。允许 GitHub 的公开资产重定向，拒绝其他目标、嵌入凭证与额外端口。请求不使用用户账号或浏览器会话凭证。
 

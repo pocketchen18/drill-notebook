@@ -126,7 +126,7 @@ async function sandbox(name, { automatic = false, faulty = false } = {}) {
     published_at: '2026-11-12T00:00:00Z', body: `## v${version} 更新内容\n\n- 完整保留每个版本的 Release 说明。\n- 自动下载安装并重启，保留笔记、附件和模型。`, assets: [] });
   const release = notes('0.8.0');
   const assetName = path.basename(asset.filename);
-  const url = `https://github.com/pocketchen18/drill-notebook/releases/download/v0.8.0/${assetName}`;
+  const url = `https://github.com/qilin-software/drill-notebook/releases/download/v0.8.0/${assetName}`;
   release.assets = [{ name: assetName, browser_download_url: url, size: asset.size },
     { name: assetName + '.sha256', browser_download_url: url + '.sha256', size: Buffer.byteLength(asset.checksum) }];
   const releases = [release, notes('0.7.3'), notes('0.7.2'), notes('0.7.1')];

@@ -52,14 +52,16 @@ test('语义版本选择兼容 v0 预发行、数字排序，排除 draft 与错
   const wrong = releaseRaw('0.8.0', Buffer.from('asset'));
   wrong.assets[0].name = 'Drill-Notebook-0.8.0-linux-x64.zip';
   assert.equal(releaseOf(wrong).asset, undefined);
+  assert.equal(assetUrlAllowed('https://github.com/qilin-software/drill-notebook/releases/download/v0.8.0/a.zip', 'v0.8.0'), true);
   assert.equal(assetUrlAllowed('https://github.com/another/repo/releases/download/v0.8.0/a.zip', 'v0.8.0'), false);
-  assert.equal(assetUrlAllowed('https://github.com/pocketchen18/drill-notebook/releases/download/v0.7.3/a.zip', 'v0.8.0'), false);
+  assert.equal(assetUrlAllowed('https://github.com/qilin-software/drill-notebook/releases/download/v0.7.3/a.zip', 'v0.8.0'), false);
 });
 
 test('Release 分页读取并保留每版原正文，限流与错误响应不冒充最新版', async () => {
   let pages = 0;
   const result = await fetchReleases(async url => {
     pages++;
+    assert.equal(new URL(url).pathname, '/repos/qilin-software/drill-notebook/releases');
     assert.match(url, /per_page=100&page=/);
     return Response.json(pages === 1 ? Array.from({ length: 100 }, (_, i) => releaseRaw(`0.6.${i}`)) : [releaseRaw('0.7.3')]);
   });
