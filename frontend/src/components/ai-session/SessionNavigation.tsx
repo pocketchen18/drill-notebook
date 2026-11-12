@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Message, Modal } from '@arco-design/web-react';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Clock, Copy, Download, Link, LoaderCircle, MoreHorizontal, Pencil, Plus, Sparkles, Square, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Clock, Copy, Download, Link, LoaderCircle, MoreHorizontal, Pencil, Pin, Plus, Search, Sparkles, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { isSessionRunning, type SessionRuntime } from '../../hooks/useAiChatTurn';
 import type { AiChatSession } from '../../lib/types';
 import './session-navigation.css';
@@ -25,11 +25,35 @@ interface Props {
   onGenerate: (session: AiChatSession, overwriteManual: boolean) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onExport: (id: number, format: 'md' | 'html' | 'json') => Promise<void>;
+  /** 置顶或取消置顶一个会话；不提供时不显示图钉。 */
+  onPin?: (id: number, pinned: boolean) => Promise<void>;
+  /** 停靠模式：列表常驻在助手窗口的会话栏里，带新建与标题查找；不再有顶部的切换入口。 */
+  docked?: boolean;
+  /** 停靠模式下列表底部的附加区域（存储占用、清理、设置）。 */
+  footer?: ReactNode;
+}
+export interface SessionNavigationHandle {
+  /** 从对话区顶栏对当前会话打开同一份菜单。 */
+  openMenu: (sessionId: number, origin: HTMLElement) => void;
+  focusSearch: () => void;
 }
 type MenuTarget = { id: number; x: number; y: number; origin: HTMLElement };
 type Edit = { id: number; original: string; draft: string; error?: string };
 const errorText = (error: unknown): string => error instanceof Error ? error.message : '操作失败，请重试';
 const clamp = (value: number, max: number): number => Math.max(8, Math.min(value, max));
+
+const parseTime = (value?: string): number => {
+  if (!value) return NaN;
+  return new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`).getTime();
+};
+/** 会话栏按最近活动分组；组内保持列表原有顺序。 */
+export function sessionGroup(updatedAt: string | undefined, now = Date.now()): '今天' | '近 7 天' | '更早' {
+  const time = parseTime(updatedAt);
+  if (Number.isNaN(time)) return '更早';
+  const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
+  if (time >= startOfToday.getTime()) return '今天';
+  return time >= startOfToday.getTime() - 6 * 86400000 ? '近 7 天' : '更早';
+}
 
 function recentTime(value?: string): string {
   if (!value) return '尚无对话';
@@ -42,8 +66,23 @@ function recentTime(value?: string): string {
 }
 
 /** 菜单始终持有目标 ID；没有任何动作通过“当前会话”隐式决定目标。 */
-export function SessionNavigation(props: Props): JSX.Element {
-  const { sessions, currentId, visible } = props;
+export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(function SessionNavigation(props, handle): JSX.Element {
+  const { sessions, currentId, visible, docked = false } = props;
+  const [query, setQuery] = useState('');
+  const search = useRef<HTMLInputElement>(null);
+  const needle = query.trim().toLowerCase();
+  // 置顶的会话排在最前，先置顶的在上；其余保持列表原有顺序。
+  const pinnedFirst = sessions.filter((s) => s.pinnedAt)
+    .sort((a, b) => (a.pinnedAt! < b.pinnedAt! ? -1 : a.pinnedAt! > b.pinnedAt! ? 1 : a.id - b.id));
+  const ordered = pinnedFirst.length ? [...pinnedFirst, ...sessions.filter((s) => !s.pinnedAt)] : sessions;
+  const shown = docked && needle ? ordered.filter((s) => s.title.toLowerCase().includes(needle)) : ordered;
+  const groupOf = (s: AiChatSession): string => s.pinnedAt ? '置顶' : sessionGroup(s.updatedAt);
+  const [pinning, setPinning] = useState<number | null>(null);
+  const togglePin = (session: AiChatSession): void => {
+    if (!props.onPin || pinning !== null) return;
+    setPinning(session.id);
+    void props.onPin(session.id, !session.pinnedAt).catch((error: unknown) => Message.error(errorText(error))).finally(() => setPinning(null));
+  };
   const current = sessions.find((s) => s.id === currentId);
   const runtimeFor = (id: number): SessionRuntime | undefined => props.runtimes?.find((item) => item.sessionId === id);
   const busy = (id: number): boolean => id === props.busyId || isSessionRunning(runtimeFor(id));
@@ -71,7 +110,8 @@ export function SessionNavigation(props: Props): JSX.Element {
   const mainMenu = useRef<HTMLDivElement>(null);
   const childMenu = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState(false);
+  const [openState, setOpen] = useState(false);
+  const open = docked || openState;
   const [position, setPosition] = useState({ left: 8, top: 8, width: 340, height: 360 });
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [menu, setMenu] = useState<MenuTarget | null>(null);
@@ -92,11 +132,13 @@ export function SessionNavigation(props: Props): JSX.Element {
   const target = sessions.find((s) => s.id === menu?.id);
   const menuWidth = Math.min(196, viewport.width - 16);
   const menuX = clamp(menu?.x ?? 8, viewport.width - menuWidth - 8);
-  const menuY = clamp(menu?.y ?? 8, viewport.height - 258 - 8);
+  // 提供置顶时菜单多一项，高度与子菜单的起点随之下移。
+  const pinRow = props.onPin ? 34 : 0;
+  const menuY = clamp(menu?.y ?? 8, viewport.height - 258 - pinRow - 8);
   const stacked = viewport.width < menuWidth * 2 + 24
     || (menuX - 8 < menuWidth && viewport.width - menuX - menuWidth - 8 < menuWidth);
   const childX = menuX + menuWidth * 2 + 8 <= viewport.width ? menuX + menuWidth : menuX - menuWidth;
-  const childY = clamp(menuY + (sub === 'copy' ? 82 : 116), viewport.height - (sub === 'copy' ? 84 : 118) - 8);
+  const childY = clamp(menuY + pinRow + (sub === 'copy' ? 82 : 116), viewport.height - (sub === 'copy' ? 84 : 118) - 8);
 
   const setEdit = (value: Edit | null): void => { editRef.current = value; setEditState(value); };
   const closeMenu = (restore = false): void => {
@@ -140,9 +182,13 @@ export function SessionNavigation(props: Props): JSX.Element {
     const rect = origin.getBoundingClientRect();
     void showMenu(session, origin, rect.right - 196, rect.bottom + 4);
   };
+  useImperativeHandle(handle, () => ({
+    openMenu: (sessionId, origin) => { const session = sessions.find((s) => s.id === sessionId); if (session) rowMenu(session, origin); },
+    focusSearch: () => { search.current?.focus(); search.current?.select(); }
+  }));
 
   useLayoutEffect(() => {
-    if (!open || !visible) return;
+    if (docked || !open || !visible) return;
     const reposition = (): void => {
       const rect = bar.current?.getBoundingClientRect();
       if (!rect) return;
@@ -166,7 +212,7 @@ export function SessionNavigation(props: Props): JSX.Element {
   }, []);
   useLayoutEffect(() => { if (edit) { input.current?.focus(); input.current?.select(); } }, [edit?.id]);
   useLayoutEffect(() => {
-    if (open && visible && !editRef.current) list.current?.querySelector<HTMLButtonElement>(`[data-session="${currentId}"]`)?.focus();
+    if (!docked && open && visible && !editRef.current) list.current?.querySelector<HTMLButtonElement>(`[data-session="${currentId}"]`)?.focus();
   }, [open, visible]);
   useLayoutEffect(() => {
     if (menu) mainMenu.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
@@ -183,14 +229,14 @@ export function SessionNavigation(props: Props): JSX.Element {
     }
   }, [sessions]);
   useEffect(() => {
-    if (!visible || (!open && !menu)) return;
+    if (!visible || (!open && !menu) || (docked && !menu && !edit)) return;
     const outside = (event: PointerEvent): void => {
       const node = event.target as Node;
       if (bar.current?.contains(node) || list.current?.contains(node) || mainMenu.current?.contains(node) || childMenu.current?.contains(node)) return;
       void closeList();
     };
     const escape = (event: globalThis.KeyboardEvent): void => {
-      if (event.key !== 'Escape' || confirm || copyFallback !== null || editRef.current) return;
+      if (event.key !== 'Escape' || confirm || copyFallback !== null || editRef.current || (docked && !menu)) return;
       event.preventDefault(); event.stopImmediatePropagation();
       if (sub) { setSub(null); requestAnimationFrame(() => mainMenu.current?.querySelector<HTMLButtonElement>(`[data-child="${sub}"]`)?.focus()); }
       else if (menu) closeMenu(true);
@@ -257,7 +303,68 @@ export function SessionNavigation(props: Props): JSX.Element {
       }}><Download size={14} />{format === 'md' ? 'Markdown' : format.toUpperCase()}</button>)}
   </>;
 
+  const rows = (
+    <div className="session-nav-rows" onScroll={() => closeMenu()}>
+      {props.loading ? <p className="session-nav-empty">正在加载会话…</p> : props.error ?
+        <div className="session-nav-empty">会话加载失败 <button onClick={props.onRetry}>重试</button></div> :
+        sessions.length === 0 ? <div className="session-nav-empty">暂无会话 <button onClick={props.onCreate}>新建会话</button></div> :
+        shown.length === 0 ? <p className="session-nav-empty">没有匹配的会话</p> :
+        shown.map((session, index) => <Fragment key={session.id}>
+          {docked && (index === 0 || groupOf(shown[index - 1]) !== groupOf(session))
+            ? <div className="session-nav-group" role="presentation">{groupOf(session)}</div> : null}
+          <div className={`session-nav-row${session.id === currentId ? ' is-current' : ''}${session.id === menu?.id ? ' has-menu' : ''}`}
+          onContextMenu={(event) => { event.preventDefault(); void showMenu(session, event.currentTarget.querySelector('button')!, event.clientX, event.clientY); }}>
+          {edit?.id === session.id ? <div className="session-nav-edit">
+            <input ref={input} aria-label="重命名会话" value={edit.draft} disabled={saving} aria-invalid={!!edit.error}
+              onChange={(e) => setEdit({ ...edit, draft: e.target.value, error: undefined })}
+              onBlur={() => void saveRename()} onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                if (e.key === 'Enter') { e.preventDefault(); void saveRename(); }
+                if (e.key === 'Escape') { e.preventDefault(); setEdit(null); requestAnimationFrame(() => list.current?.querySelector<HTMLButtonElement>(`[data-session="${session.id}"]`)?.focus()); }
+              }} />
+            {edit.error && <small role="alert">{edit.error}</small>}
+            {saving && <small>正在保存…</small>}
+          </div> : <>
+            <button data-session={session.id} className="session-nav-select" title={session.title} disabled={props.creating} aria-current={session.id === currentId ? 'true' : undefined}
+              onClick={async () => { if (await saveRename()) { closeMenu(); setOpen(false); if (session.id !== currentId) props.onSelect(session.id); } }}
+              onKeyDown={(e) => {
+                if (e.key === 'F2') { e.preventDefault(); void beginRename(session); }
+                if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); rowMenu(session, e.currentTarget); }
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>('[data-session]') ?? [])];
+                  rows[(rows.indexOf(e.currentTarget) + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus();
+                }
+              }}>
+              <span className="session-nav-mark">{session.id === currentId && <Check size={14} />}</span>
+              <span className="session-nav-copy"><span className="session-nav-name">{session.title}</span>
+                <span className="session-nav-meta">{session.messageCount ?? 0} 条消息 · {recentTime(session.updatedAt)}
+                  {!!runtimeFor(session.id)?.queueCount && ` · 待发送 ${runtimeFor(session.id)?.queueCount}`}
+                  {session.titleStatus === 'generating' && ' · 正在生成标题'}</span></span>
+              {statusIcon(session.id)}
+            </button>
+            {props.onPin ? <button className={`session-nav-row-pin${session.pinnedAt ? ' is-pinned' : ''}`} aria-pressed={!!session.pinnedAt}
+              aria-label={`${session.pinnedAt ? '取消置顶' : '置顶'}：${session.title}`} title={session.pinnedAt ? '取消置顶' : '置顶'}
+              disabled={pinning === session.id} onClick={() => togglePin(session)}><Pin size={14} fill={session.pinnedAt ? 'currentColor' : 'none'} /></button> : null}
+            <button className="session-nav-row-more" aria-label={`更多操作：${session.title}`} onClick={(e) => rowMenu(session, e.currentTarget)}><MoreHorizontal size={16} /></button>
+          </>}
+        </div></Fragment>)}
+    </div>
+  );
+
   return <>
+    {docked ? <div className="session-nav-docked" ref={list}>
+      <div className="session-nav-docked-top" ref={bar}>
+        <button className="session-nav-new" aria-label="新建会话" disabled={props.creating}
+          onClick={async () => { if (await saveRename()) { closeMenu(); props.onCreate(); } }}><Plus size={16} />新建会话</button>
+        <label className="session-nav-search"><Search size={14} aria-hidden="true" />
+          <input ref={search} value={query} placeholder="查找会话" aria-label="查找会话" onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.stopPropagation(); setQuery(''); } }} /></label>
+      </div>
+      {rows}
+      {props.footer}
+    </div> : <>
     <div className="session-nav" ref={bar}>
       <button className="session-nav-trigger" ref={trigger} disabled={props.creating} aria-label="切换会话" aria-haspopup="dialog" aria-expanded={open}
         title={current?.title} onClick={() => { if (open) void closeList(); else setOpen(true); }}
@@ -280,47 +387,9 @@ export function SessionNavigation(props: Props): JSX.Element {
       style={{ left: position.left, top: position.top, width: position.width, maxHeight: position.height }}>
       <div className="session-nav-heading">会话 <span>{sessions.length}</span>
         {runningCount > 0 && <span>{runningCount} 个进行中</span>}{waitingCount > 0 && <span>{waitingCount} 个等待执行</span>}</div>
-      <div className="session-nav-rows" onScroll={() => closeMenu()}>
-        {props.loading ? <p className="session-nav-empty">正在加载会话…</p> : props.error ?
-          <div className="session-nav-empty">会话加载失败 <button onClick={props.onRetry}>重试</button></div> :
-          sessions.length === 0 ? <div className="session-nav-empty">暂无会话 <button onClick={props.onCreate}>新建会话</button></div> :
-          sessions.map((session) => <div key={session.id} className={`session-nav-row${session.id === currentId ? ' is-current' : ''}${session.id === menu?.id ? ' has-menu' : ''}`}
-            onContextMenu={(event) => { event.preventDefault(); void showMenu(session, event.currentTarget.querySelector('button')!, event.clientX, event.clientY); }}>
-            {edit?.id === session.id ? <div className="session-nav-edit">
-              <input ref={input} aria-label="重命名会话" value={edit.draft} disabled={saving} aria-invalid={!!edit.error}
-                onChange={(e) => setEdit({ ...edit, draft: e.target.value, error: undefined })}
-                onBlur={() => void saveRename()} onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                  if (e.key === 'Enter') { e.preventDefault(); void saveRename(); }
-                  if (e.key === 'Escape') { e.preventDefault(); setEdit(null); requestAnimationFrame(() => list.current?.querySelector<HTMLButtonElement>(`[data-session="${session.id}"]`)?.focus()); }
-                }} />
-              {edit.error && <small role="alert">{edit.error}</small>}
-              {saving && <small>正在保存…</small>}
-            </div> : <>
-              <button data-session={session.id} className="session-nav-select" title={session.title} disabled={props.creating} aria-current={session.id === currentId ? 'true' : undefined}
-                onClick={async () => { if (await saveRename()) { closeMenu(); setOpen(false); if (session.id !== currentId) props.onSelect(session.id); } }}
-                onKeyDown={(e) => {
-                  if (e.key === 'F2') { e.preventDefault(); void beginRename(session); }
-                  if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); rowMenu(session, e.currentTarget); }
-                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>('[data-session]') ?? [])];
-                    rows[(rows.indexOf(e.currentTarget) + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus();
-                  }
-                }}>
-                <span className="session-nav-mark">{session.id === currentId && <Check size={14} />}</span>
-                <span className="session-nav-copy"><span className="session-nav-name">{session.title}</span>
-                  <span className="session-nav-meta">{session.messageCount ?? 0} 条消息 · {recentTime(session.updatedAt)}
-                    {!!runtimeFor(session.id)?.queueCount && ` · 待发送 ${runtimeFor(session.id)?.queueCount}`}
-                    {session.titleStatus === 'generating' && ' · 正在生成标题'}</span></span>
-                {statusIcon(session.id)}
-              </button>
-              <button className="session-nav-row-more" aria-label={`更多操作：${session.title}`} onClick={(e) => rowMenu(session, e.currentTarget)}><MoreHorizontal size={16} /></button>
-            </>}
-          </div>)}
-      </div>
+      {rows}
     </div>, document.body)}
+    </>}
     {menu && target && visible && createPortal(<>
       <div className="session-nav-menu" role="menu" aria-label={`会话操作：${target.title}`} ref={mainMenu}
         style={{ left: menuX, top: menuY, width: menuWidth }} onKeyDown={menuKeys}>
@@ -330,6 +399,8 @@ export function SessionNavigation(props: Props): JSX.Element {
             title={!target.canGenerateTitle ? '首轮完整回复保存后可用' : undefined}>
             <Sparkles size={14} />{target.titleStatus === 'generating' ? '正在生成标题…' : ['ai', 'manual'].includes(target.titleSource ?? '') ? '重新生成标题' : '生成会话标题'}</button>
           <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => void beginRename(target)}><Pencil size={14} />重命名 <kbd>F2</kbd></button>
+          {props.onPin ? <button role="menuitem" onMouseEnter={() => setSub(null)} onClick={() => { closeMenu(); togglePin(target); }}>
+            <Pin size={14} className="session-nav-pin-icon" />{target.pinnedAt ? '取消置顶' : '置顶'}</button> : null}
           <div role="separator" />
           <button role="menuitem" data-child="copy" aria-haspopup="menu" aria-expanded={sub === 'copy'} onMouseEnter={() => { if (!stacked) setSub('copy'); }} onClick={() => openChild('copy')}><Copy size={14} />复制 <ChevronRight size={13} className="session-nav-chevron" /></button>
           <button role="menuitem" data-child="export" aria-haspopup="menu" aria-expanded={sub === 'export'} onMouseEnter={() => { if (!stacked) setSub('export'); }} onClick={() => openChild('export')}><Download size={14} />导出 <ChevronRight size={13} className="session-nav-chevron" /></button>
@@ -372,4 +443,4 @@ export function SessionNavigation(props: Props): JSX.Element {
       <textarea className="session-nav-copy-fallback" aria-label="待复制内容" value={copyFallback ?? ''} readOnly onFocus={(e) => e.target.select()} autoFocus />
     </Modal>
   </>;
-}
+});

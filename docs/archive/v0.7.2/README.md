@@ -11,4 +11,4 @@
 | 会话创建、发送与并行运行 | [UI/UX](ai-session-dispatch/ui-ux.md)、[交互草图](ai-session-dispatch/preview.html)、[Spec](ai-session-dispatch/spec.md)、[Plan](ai-session-dispatch/plan.md) | 两个写工具、队列与并行状态已实现，相关验证完成，已提交（1072f3e） |
 | 人工排队与插话 | [UI/UX](ai-chat-queue/ui-ux.md)、[交互草图](ai-chat-queue/chat-queue-preview.html)、[Spec](ai-chat-queue/spec.md)、[Plan](ai-chat-queue/plan.md) | 已实现并完成针对性验收，用户已提交（6342de9）；版本切换前同步状态并归档 |
 
-验收截图只含虚构测试数据，随原目录移动且仍只留本地、不入 Git。归档不代表已发布或新增验收通过；发布前业务全量、真实供应商与发行包的既有待验项保持原记录。v0.7.3 从 [新功能清单](../../state/v0.7.3-features.md) 开始，不能将本目录中的历史“下一步”当成当前任务。
+验收截图只含虚构测试数据，随原目录移动且仍只留本地、不入 Git。归档不代表已发布或新增验收通过；发布前业务全量、真实供应商与发行包的既有待验项保持原记录。后续 v0.7.3 的[功能清单](../v0.7.3/features.md)现也已归档，不能将本目录中的历史“下一步”当成当前任务。

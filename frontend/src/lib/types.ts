@@ -188,6 +188,12 @@ export interface AiChatSession {
   canGenerateTitle?: boolean;
   archived?: boolean;
   model?: string;
+  /** 置顶时刻；null 表示未置顶。先置顶的排在前面。 */
+  pinnedAt?: string | null;
+  /** 会话自己选择的模型配置；null 表示跟随主模型。 */
+  modelConfigId?: string | null;
+  /** 会话自己选择的思考档位；null 表示模型默认。 */
+  reasoningEffort?: string | null;
   tags?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -238,6 +244,13 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string | ChatContentPart[];
   displayContent?: string;
+  /** 提交这条提问时绑定的业务页面；没有业务页面时为空。 */
+  page?: { title: string; link?: string };
+  /** 这一轮实际使用的模型与思考档位；旧记录没有。 */
+  model?: string;
+  reasoningEffort?: string;
+  /** 供应商回报的本轮累计用量（可能包含多次模型请求）；未回报时没有。 */
+  usage?: { requests: number; inputTokens: number; outputTokens: number };
   createdAt?: string;
   citations?: ChatCitation[];
   /** 检索降级/状态轻量提示（Task 14）；仅随当前会话 response 保留，不持久化。 */

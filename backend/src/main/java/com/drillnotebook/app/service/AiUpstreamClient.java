@@ -848,6 +848,8 @@ public class AiUpstreamClient {
         Integer output = intOrNull(usage.path("completion_tokens"));
         JsonNode details = usage.path("prompt_tokens_details");
         Integer cacheRead = intOrNull(details.path("cached_tokens"));
+        // DeepSeek 等网关把命中数放在 usage 顶层；两处都没有才算未回报。
+        if (cacheRead == null) cacheRead = intOrNull(usage.path("prompt_cache_hit_tokens"));
         Integer cacheWrite = intOrNull(details.path("cache_write_tokens"));
         if (input == null && output == null && cacheRead == null && cacheWrite == null) return Usage.unknown();
         return new Usage("provider", input, output, cacheRead, cacheWrite, true);

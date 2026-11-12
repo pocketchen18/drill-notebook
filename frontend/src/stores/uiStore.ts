@@ -51,6 +51,18 @@ interface UiState {
   setNotebookPanelsSwapped: (swapped: boolean) => void;
 }
 
+/**
+ * 助手是独立窗口：主窗口里「打开 / 关闭」要转成对那个窗口的操作，助手窗口里「关闭」只是收起自己。
+ * 由各窗口的根组件登记；未登记（单元测试）时 aiOpen 只是普通状态。返回值是应写入的 aiOpen。
+ */
+export type AssistantRequest = 'open' | 'close' | 'toggle';
+let assistantLauncher: ((request: AssistantRequest, current: boolean) => boolean) | null = null;
+export function setAssistantLauncher(launcher: ((request: AssistantRequest, current: boolean) => boolean) | null): void {
+  assistantLauncher = launcher;
+}
+const launch = (request: AssistantRequest, current: boolean): boolean => assistantLauncher
+  ? assistantLauncher(request, current) : request === 'toggle' ? !current : request === 'open';
+
 const emptyContext: AiPageContext = { kind: 'none', title: '无页面上下文', markdown: '' };
 
 /** 系统当前偏好深色时返回 dark（jsdom / 无 matchMedia 环境回落 light）。 */
@@ -127,8 +139,8 @@ export const useUiStore = create<UiState>((set) => ({
     set({ shortcutConfig: normalized });
   },
   aiOpen: false,
-  setAiOpen: (aiOpen) => set({ aiOpen }),
-  toggleAi: () => set((state) => ({ aiOpen: !state.aiOpen })),
+  setAiOpen: (aiOpen) => set((state) => ({ aiOpen: launch(aiOpen ? 'open' : 'close', state.aiOpen) })),
+  toggleAi: () => set((state) => ({ aiOpen: launch('toggle', state.aiOpen) })),
   pageContext: emptyContext,
   setPageContext: (pageContext) => set((state) => {
     const prev = state.pageContext;

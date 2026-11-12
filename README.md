@@ -1,13 +1,13 @@
 # Drill Notebook（面向开发者）
 
-当前发布准备：**v0.7.3**，学习资料读取 / 新增 / 修改 / 删除、全部内置工具设置、模型容量必填，以及聊天入口精简，见 [功能清单](docs/state/v0.7.3-features.md)与[发布说明](docs/release/v0.7.3-release-notes.md)。v0.7.2 文档已[归档](docs/archive/v0.7.2/README.md)；v0.7.3 材料保留至下一版本开始前。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
+当前版本规划：**v0.8**，将 AI 助手改为独立窗口并优化会话与消息体验，范围见 [功能清单](docs/state/v0.8-features.md)；当前尚未进行 UI/UX 设计或实现。v0.7.3 已由用户确认完成，功能清单与施工材料已[归档](docs/archive/v0.7.3/README.md)，发行记录仍见 [发布说明](docs/release/v0.7.3-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
 
 | 项 | 说明 |
 |---|---|
 | 平台 | Windows 优先，**绿色便携**（数据默认不写系统目录） |
 | 架构 | Electron 壳 + React/TS 渲染进程 + 内嵌 Spring Boot（Java）+ SQLite |
 | 通信 | 后端仅监听 `127.0.0.1`，前端 HTTP 调用本地 API |
-| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话；`v0.5` AI 总结知识点 + 背知识点重构 + 笔记本混合检索（BM25 + 可选向量 RAG）；`v0.5.1` 会话内短周期记忆曲线（循环背诵全流程重构）+ 题库选题继承 + 会话↔日历联动（顽固项加练、评分最终态、日历实时今天）；`v0.5.2` 界面状态记忆（启动回到上次页面 + 各页选择/切换/筛选持久化）；`v0.5.3` 常规设置完善（主题跟随系统 + AI 悬浮球开关 + 自定义快捷键：全局 + 页面内）；`v0.6` 前端 UI 全面重塑；`v0.6.1` 错题本频率改版 + 会话结束返回初始界面；`v0.6.2` 笔记本编辑器现代化（斜杠命令、块手柄、表格 / 代码高亮 / 页内查找替换、Markdown 粘贴）+ 自动保存跨页串写修复；`v0.6.3` 编辑器稳定性修复；`v0.7.0`（预发行）AI 跨会话记忆、用量/缓存适配、删除与恢复安全；`v0.7.1`（预发行）多供应商/模型、记忆工具活动与全局运行限制；`v0.7.2` 会话标题、四工具、并行运行、人工排队与插话；`v0.7.3`（预发行准备）资料读写 / 删除工具、全局启停、模型容量必填与入口精简 |
+| 版本线索 | `git log`：`v0.3` PDF/导出/高级挑题；`v0.4` 记忆曲线 + 日历 + AI 多会话；`v0.5` AI 总结知识点 + 背知识点重构 + 笔记本混合检索（BM25 + 可选向量 RAG）；`v0.5.1` 会话内短周期记忆曲线（循环背诵全流程重构）+ 题库选题继承 + 会话↔日历联动（顽固项加练、评分最终态、日历实时今天）；`v0.5.2` 界面状态记忆（启动回到上次页面 + 各页选择/切换/筛选持久化）；`v0.5.3` 常规设置完善（主题跟随系统 + AI 悬浮球开关 + 自定义快捷键：全局 + 页面内）；`v0.6` 前端 UI 全面重塑；`v0.6.1` 错题本频率改版 + 会话结束返回初始界面；`v0.6.2` 笔记本编辑器现代化（斜杠命令、块手柄、表格 / 代码高亮 / 页内查找替换、Markdown 粘贴）+ 自动保存跨页串写修复；`v0.6.3` 编辑器稳定性修复；`v0.7.0`（预发行）AI 跨会话记忆、用量/缓存适配、删除与恢复安全；`v0.7.1`（预发行）多供应商/模型、记忆工具活动与全局运行限制；`v0.7.2` 会话标题、四工具、并行运行、人工排队与插话；`v0.7.3`（已完成）资料读写 / 删除工具、全局启停、模型容量必填与入口精简 |
 
 ---
 
@@ -212,7 +212,7 @@
 
 ### 1.16 明确后置（未作为当前目标）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，已落地能力同步至 v0.7.3。v0.8 计划改为独立 AI 窗口；联网搜索配置、移动与批量删除仍未实现。
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，已落地能力同步至 v0.7.3。v0.8 已进入[独立 AI 助手窗口的范围规划](docs/state/v0.8-features.md)，尚未设计或实现；联网搜索配置、移动与批量删除仍未实现。
 
 ---
 
@@ -496,7 +496,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 |---|---|
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
 | [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
-| [docs/state/v0.7.3-features.md](docs/state/v0.7.3-features.md) | v0.7.3 功能清单：资料工具、全局开关、模型容量与入口精简，预发行准备中 |
+| [docs/state/v0.8-features.md](docs/state/v0.8-features.md) | 当前 v0.8 功能清单：独立 AI 助手窗口、会话体验、模型与 effort、上下文反馈；仅规划 |
 | [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 17） |
 | [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
@@ -509,7 +509,8 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 | [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 | [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
-| [docs/release/v0.7.3-release-notes.md](docs/release/v0.7.3-release-notes.md) | 当前 v0.7.3 发布准备、验证、升级与预发行边界 |
+| [docs/release/v0.7.3-release-notes.md](docs/release/v0.7.3-release-notes.md) | v0.7.3 发行记录、验证、升级与预发行边界 |
+| [docs/archive/v0.7.3/](docs/archive/v0.7.3/) | v0.7.3 功能清单、资料工具、全局工具设置、模型容量与入口清理施工归档 |
 | [docs/release/v0.7.2-release-notes.md](docs/release/v0.7.2-release-notes.md) | v0.7.2 发行说明与升级边界 |
 | [docs/archive/v0.7.2/](docs/archive/v0.7.2/) | v0.7.2 功能清单、会话工具、人工排队与插话施工归档 |
 | [docs/release/v0.7.1-release-notes.md](docs/release/v0.7.1-release-notes.md) | v0.7.1 验证、升级与已知边界 |

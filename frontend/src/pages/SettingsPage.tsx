@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography } from '@arco-design/web-react';
-import { Edit3, Plus, RotateCcw, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Edit3, Plus, RotateCcw, Star, Trash2 } from 'lucide-react';
 import { AiConnectionsPanel, type SettingsLeaveGuard } from '../components/ai-connections/AiConnectionsPanel';
 import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard';
 import { MemoryManager } from '../components/ai-memory/MemoryManager';
@@ -93,7 +93,6 @@ export function SettingsPage(): JSX.Element {
   const setOutlineSide = useUiStore((state) => state.setOutlineSide);
   const notebookPanelsSwapped = useUiStore((state) => state.notebookPanelsSwapped);
   const setNotebookPanelsSwapped = useUiStore((state) => state.setNotebookPanelsSwapped);
-  const setAiOpen = useUiStore((state) => state.setAiOpen);
   const shortcutConfig = useUiStore((state) => state.shortcutConfig);
   const setShortcutConfig = useUiStore((state) => state.setShortcutConfig);
   const [activeTab, setActiveTab] = useState<SettingsTab>(readTabFromUrl);
@@ -317,7 +316,6 @@ export function SettingsPage(): JSX.Element {
               <Switch checked={rememberViewState} onChange={onRememberViewStateChange} />
             </Space>
           </div>
-          <Button type="outline" icon={<Sparkles size={16} />} onClick={() => setAiOpen(true)}>打开 AI 助手</Button>
         </div>
       </section>
       <section className="panel">

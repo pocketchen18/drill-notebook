@@ -71,7 +71,8 @@ describe('SettingsPage 常规分区', () => {
     expect(screen.getByText('浅色')).toBeInTheDocument();
     expect(screen.getByText('深色')).toBeInTheDocument();
     expect(screen.getByText('跟随系统')).toBeInTheDocument();
-    expect(document.querySelectorAll('[data-scope]')).toHaveLength(7);
+    expect(document.querySelectorAll('[data-scope]')).toHaveLength(8);
+    expect(screen.getByText('AI 助手窗口 · 仅在助手窗口内生效。')).toBeInTheDocument();
     expect(screen.getByText('全局 · 任意页面生效。')).toBeInTheDocument();
     expect(screen.getByText('知识卡片全屏 · 知识点全屏阅读时生效。')).toBeInTheDocument();
     expect(screen.getByText('笔记本 · 笔记页列表项选中时生效。')).toBeInTheDocument();
@@ -97,10 +98,9 @@ describe('SettingsPage 常规分区', () => {
     expect(useUiStore.getState().theme).toBe('dark');
   });
 
-  it('SET-3: opens the AI assistant from settings', () => {
+  it('SET-3: 常规设置不再提供「打开 AI 助手」入口（顶栏入口已够用）', () => {
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
-    expect(useUiStore.getState().aiOpen).toBe(true);
+    expect(screen.queryByRole('button', { name: '打开 AI 助手' })).toBeNull();
   });
 
   it('focus outline side and preview panel swap persist independently', () => {

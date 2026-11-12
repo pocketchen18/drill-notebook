@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 17;
+    private static final int SCHEMA_VERSION = 18;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -128,6 +128,22 @@ public class DatabaseInitializer {
             ensureColumn(connection, "ai_chat_session", "memory_skipped_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(connection, "ai_chat_session", "summary_skipped_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(connection, "ai_chat_session", "last_scan_notice", "TEXT");
+            // v18 会话级模型与思考档位：NULL 表示跟随主模型 / 模型默认；轮次记录实际使用的模型。
+            ensureColumn(connection, "ai_chat_session", "model_config_id", "TEXT");
+            ensureColumn(connection, "ai_chat_session", "reasoning_effort", "TEXT");
+            // 会话置顶：记录置顶时刻，先置顶的排在前面；NULL 表示未置顶。
+            ensureColumn(connection, "ai_chat_session", "pinned_at", "TEXT");
+            ensureColumn(connection, "ai_chat_turn", "model_label", "TEXT");
+            ensureColumn(connection, "ai_chat_turn", "reasoning_effort", "TEXT");
+            // 最近一次模型请求实际送入的 token 数与当时的模型窗口；供应商未回报时保持 NULL，不写估算。
+            ensureColumn(connection, "ai_chat_turn", "context_tokens", "INTEGER");
+            ensureColumn(connection, "ai_chat_turn", "context_window", "INTEGER");
+            // 最近一次请求里缓存命中的部分与输出长度：界面按「输入（命中 / 未命中）+ 输出」展示。
+            ensureColumn(connection, "ai_chat_turn", "cache_read_tokens", "INTEGER");
+            ensureColumn(connection, "ai_chat_turn", "output_tokens", "INTEGER");
+            // 提交时绑定的业务页面：只留标题与本地定位，正文仍只在本轮内存与加密队列里。
+            ensureColumn(connection, "ai_chat_turn", "page_title", "TEXT");
+            ensureColumn(connection, "ai_chat_turn", "page_link", "TEXT");
             migrateAiChatSessions(connection);
             ensureColumn(connection, "ai_chat_session", "session_ref", "TEXT");
             ensureColumn(connection, "ai_chat_session", "title_source", "TEXT NOT NULL DEFAULT 'legacy'");

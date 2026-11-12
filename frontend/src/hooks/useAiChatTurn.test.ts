@@ -106,6 +106,7 @@ describe('useAiChatTurn 请求体', () => {
     const body = streamBody();
     expect(body.pageContext).toBeUndefined();
     expect(body.retrievalOptions).toBeUndefined();
+    expect(body.retryOf).toBeUndefined();
   });
 
   it('进行中再点发送不产生第二个身份（一次逻辑发送只有一个 requestId）', async () => {
@@ -206,10 +207,12 @@ describe('useAiChatTurn 停止与取消', () => {
 });
 
 describe('useAiChatTurn 失败出口', () => {
-  it('确定没开始的早失败：查状态确认查无此轮后，用同一个 requestId 走非流式补完', async () => {
+  it('确定没开始的早失败：非流式补完保持同一个 requestId、重新生成来源与原附件', async () => {
     const turn = renderTurn();
+    const retryOf = '01981234-5678-7000-8000-000000000001';
     await act(async () => {
-      turn.result.current.send({ sessionId: 10, userText: '补完我' });
+      turn.result.current.send({ sessionId: 10, userText: '补完我', retryOf,
+        attachments: [{ clientId: 'c0', kind: 'text', name: '原笔记.txt', mimeType: 'text/plain', text: '原附件正文' }] });
     });
     const id = turnId();
     apiGet.mockRejectedValue(new ApiError('TURN_NOT_FOUND', '没有这个轮次', 404));
@@ -220,7 +223,9 @@ describe('useAiChatTurn 失败出口', () => {
     });
 
     expect(apiGet).toHaveBeenCalledWith(`/api/ai/turns/${id}`);
-    expect(apiPost).toHaveBeenCalledWith('/api/ai/chat', expect.objectContaining({ requestId: id }));
+    expect(id).not.toBe(retryOf);
+    expect(apiPost).toHaveBeenCalledWith('/api/ai/chat', streamBody());
+    expect(streamBody()).toMatchObject({ requestId: id, retryOf, input: { attachments: [{ text: '原附件正文' }] } });
     expect(events.at(-1)).toMatchObject({ type: 'result', reply: 'ANSWER' });
   });
 

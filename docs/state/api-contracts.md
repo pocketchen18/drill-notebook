@@ -190,6 +190,7 @@ v2 请求核心字段：
 - `pageSnapshot` 可选，只提交到本地后端，模型初始请求只收到页面定位提示，正文经 `read_current_page` 按需取得。快照正文和选区不进入明文 request/result 元数据；请求选项仅含快照指纹，参与幂等校验。新前端不发送 `pageContext` / `retrievalOptions`，不读取旧检索偏好；后端仍接受旧客户端的自动上下文协议。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
 - 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。直接向聊天接口提交忙碌会话的另一条请求仍返回 `409 SESSION_BUSY`；前端人工排队改走 §3.4.1 队列接口，与工具派发按序接续。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
+- `retryOf` 是 v2 顶层可选字段，指向同一会话中要重新回答的原 requestId；重新生成使用新的 requestId，按受理时的会话模型与本次提交的页面快照生成，并将新问答追加到历史。它不覆盖原回答；已有资料写入工具按显式 retryOf 链复用回执，参数改变仍拒绝冲突。原提问与完整附件可通过 §3.3 的只读接口取得。
 
 SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
@@ -370,10 +371,15 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 |---|---|---|
 | GET | `/ai/turns/{requestId}` | 查询轮次终态（reply / reasoning / 状态） |
 | POST | `/ai/turns/{requestId}/cancel` | 取消运行中的轮次 |
+| GET | `/ai/turns/{requestId}/input` | 只读原提问与完整附件，供重新生成使用 |
 | GET | `/ai/turns/{requestId}/context` | 读取上下文审计详情 |
 | POST | `/ai/turns/{requestId}/context/preview` | 预览上下文计划 |
 
 v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 active/status/phase 和内存 reply/reasoning/toolActivities；只有已经开始的项才带 userText。终态优先读取现有轮次记录；未开始就取消的收据只返回真实状态，不伪造聊天正文。取消旧 requestId 不得结束同目标后来的新轮。
+
+原输入接口返回 `{requestId,sessionId,input:{role:"user",userText,attachments?}}`，成功响应带 `Cache-Control: no-store`。附件条目为 `{clientId,kind,name,mimeType,text?,dataBase64?}`：文本返回正文，图片返回 base64；无附件时省略 attachments。接口不调用模型、不重新提取记忆、不写历史或修改资料，前端只在点击重新生成时读取，不存入浏览器存储。
+
+无效 ID 返回 400 `RETRY_ID_INVALID`；原轮次不存在返回 404 `TURN_NOT_FOUND`；正文已清理返回 410 `TURN_CONTENT_DELETED`；原轮次运行中返回 409 `RETRY_TARGET_ACTIVE`；受保护正文未解锁返回 423 `CHAT_PASSWORD_REQUIRED`；原提问、加密元数据或附件无法完整恢复返回 409 `RETRY_INPUT_UNAVAILABLE`。恢复的附件数量必须与保存的原输入一致，不能丢失部分附件后继续发送。
 
 ### 3.4 会话与历史
 
@@ -402,6 +408,15 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少应用模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
 
 新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用当前应用模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
+
+- v0.8 起会话可保存自己的模型与思考档位：`POST /ai/sessions`、`PUT /ai/sessions/{id}` 接受可选 `modelConfigId`、`reasoningEffort`（空串 / null 清除），会话视图返回二者，null 表示跟随主模型 / 模型默认。模型须存在，档位须为该模型声明支持的 effort；只换模型且旧档位不适用时回到模型默认。发送时按受理瞬间的会话选择冻结配置，所选模型已删除、缺密钥或缺容量时拒绝，不换用其他模型。历史分页的助手消息在有记录时返回该轮实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
+
+- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按会话当前所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
+
+- 会话置顶（v0.8）：`PUT /ai/sessions/{id}` 接受布尔 `pinned`，会话视图返回 `pinnedAt`（ISO 时刻或 null）。重复置顶保留最初的时刻，置顶不改变 `updatedAt`；列表接口的顺序不变，置顶分组与排序由前端按 `pinnedAt` 升序处理。
+- 上下文占用（v0.8）：`GET /ai/sessions/{id}/context-usage` 的 `latest` 增加 `cacheReadTokens` 与 `outputTokens`，均为供应商回报的数字或 null（未回报不补 0）。`inputTokens` 仍是这次请求送入的总长度（含命中的缓存），未命中部分由前端按 `inputTokens - cacheReadTokens` 得出。
+- 上下文占用响应里的顶层 `model` 与 `latest.model` 只返回模型 ID，不加供应商前缀；历史助手消息的实际模型显示仍为「供应商 · 模型」。
+- 窗口固定（v0.8，Electron IPC）：`assistant:set-fixed` 接受布尔值开关助手窗口的 `alwaysOnTop`；助手窗口状态 `assistant:get-state` / `assistant:state` 增加 `fixed` 字段。
 
 #### 3.4.1 人工排队与插话（v0.7.2）
 

@@ -690,4 +690,54 @@ public class ChatHistoryRepository {
             }
         }
     }
+    /**
+     * 各轮的事实记录：实际使用的模型与思考档位，以及供应商回报的累计用量。
+     * 没有记录或供应商未回报的项不返回，由界面留空，不补估算。
+     */
+    public java.util.Map<String, java.util.Map<String, Object>> turnFacts(long sessionId, java.util.Collection<String> requestIds)
+            throws SQLException {
+        java.util.Map<String, java.util.Map<String, Object>> result = new java.util.HashMap<>();
+        if (requestIds.isEmpty()) return result;
+        String marks = String.join(",", java.util.Collections.nCopies(requestIds.size(), "?"));
+        try (Connection connection = dataSource.getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement("SELECT request_id, model_label, reasoning_effort, page_title, page_link"
+                    + " FROM ai_chat_turn WHERE session_id = ? AND (model_label IS NOT NULL OR page_title IS NOT NULL) AND request_id IN (" + marks + ")")) {
+                statement.setLong(1, sessionId);
+                int index = 2;
+                for (String id : requestIds) statement.setString(index++, id);
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) {
+                        java.util.Map<String, Object> facts = result.computeIfAbsent(rows.getString(1), key -> new java.util.LinkedHashMap<>());
+                        if (rows.getString(2) != null) facts.put("model", rows.getString(2));
+                        if (rows.getString(3) != null && !rows.getString(3).isBlank()) facts.put("reasoningEffort", rows.getString(3));
+                        if (rows.getString(4) != null) {
+                            java.util.Map<String, Object> page = new java.util.LinkedHashMap<>();
+                            page.put("title", rows.getString(4));
+                            if (rows.getString(5) != null) page.put("link", rows.getString(5));
+                            facts.put("page", page);
+                        }
+                    }
+                }
+            }
+            // 一轮可能有多次模型请求：这里是各次实测值的累计，不是一次请求的上下文长度。
+            try (PreparedStatement statement = connection.prepareStatement("SELECT a.operation_id, COUNT(*), SUM(a.input_tokens), SUM(a.output_tokens)"
+                    + " FROM ai_usage_attempt a JOIN ai_chat_turn t ON t.request_id = a.operation_id"
+                    + " WHERE t.session_id = ? AND a.purpose = 'CHAT' AND a.usage_source = 'provider' AND a.state = 'SETTLED'"
+                    + " AND a.operation_id IN (" + marks + ") GROUP BY a.operation_id")) {
+                statement.setLong(1, sessionId);
+                int index = 2;
+                for (String id : requestIds) statement.setString(index++, id);
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) {
+                        java.util.Map<String, Object> usage = new java.util.LinkedHashMap<>();
+                        usage.put("requests", rows.getInt(2));
+                        usage.put("inputTokens", rows.getLong(3));
+                        usage.put("outputTokens", rows.getLong(4));
+                        result.computeIfAbsent(rows.getString(1), key -> new java.util.LinkedHashMap<>()).put("usage", usage);
+                    }
+                }
+            }
+        }
+        return result;
+    }
 }

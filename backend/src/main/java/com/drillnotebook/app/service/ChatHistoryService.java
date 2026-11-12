@@ -57,6 +57,21 @@ public class ChatHistoryService {
         for (int index = from; index < rows.size() && messages.size() < bounded; index++) {
             messages.add(view(rows.get(index), password));
         }
+        java.util.Set<String> requestIds = new java.util.HashSet<>();
+        for (Map<String, Object> message : messages) {
+            if (message.get("requestId") instanceof String id) requestIds.add(id);
+        }
+        Map<String, Map<String, Object>> facts = history.turnFacts(sessionId, requestIds);
+        for (Map<String, Object> message : messages) {
+            Map<String, Object> used = facts.get(message.get("requestId"));
+            if (used == null) continue;
+            // 绑定页面属于提问，模型与用量属于回答。
+            boolean question = "user".equals(message.get("role"));
+            for (var entry : used.entrySet()) {
+                if (question == "page".equals(entry.getKey()) && ("user".equals(message.get("role")) || "assistant".equals(message.get("role"))))
+                    message.put(entry.getKey(), entry.getValue());
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessionId", sessionId);
         result.put("messages", messages);

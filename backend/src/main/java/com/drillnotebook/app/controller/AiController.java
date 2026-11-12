@@ -282,6 +282,12 @@ public class AiController {
         return ai.updateSession(id, body);
     }
 
+    /** 当前会话的上下文占用：只读，不发起模型请求，也不读取消息正文。 */
+    @GetMapping("/sessions/{id}/context-usage")
+    public Map<String, Object> sessionContextUsage(@PathVariable long id) {
+        return ai.sessionContextUsage(id);
+    }
+
     @DeleteMapping("/sessions/{id}")
     public void deleteSession(@PathVariable long id) {
         ai.deleteSession(id);

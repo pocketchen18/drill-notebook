@@ -126,7 +126,7 @@ v0.7.1 的对话内记忆工具不新增表：`search_memories` 与 `list_memori
 
 ## 5. 版本与迁移
 
-- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`，v15 增加资料新增回执与人工错题基线，v16 增加资料修改回执，v17 增加删除回执与工具开关。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
+- `schema_version` 表记录当前迁移版本；v8 → v9 增加记忆/用量域，v10 增加 `ai_connections`，v11 增加 `ai_runtime_settings`，v12 增加稳定会话引用/标题元数据，v13 增加 `ai_session_dispatch`，v14 增加 `ai_chat_pending` 与 `ai_chat_queue_state`，v15 增加资料新增回执与人工错题基线，v16 增加资料修改回执，v17 增加删除回执与工具开关。v18 为会话增加模型配置与思考档位选择、置顶时刻，为轮次补记最近一次请求的缓存命中与输出长度，为轮次增加实际使用的模型与档位、最近一次请求的实测输入长度与模型窗口、提交时绑定的业务页面标题与链接。升级保留原会话、标题、消息及收据；`DatabaseInitializer` 在 APP_ROOT 的 `backups/` 创建升级前快照，失败则停止升级，未来版本的库拒绝降级打开。
 - `AiConnectionsStore` 在首次管理读取时幂等迁移旧 chat/import，保留密文与参数；旧表保留为迁移源，已迁移的用途写入统一走连接接口。全局预算不由模型参数迁移，不创建重复的每模型副本。
 - 旧备份缺列时按兼容路径读取；恢复流程在换库前做 staged 校验，换库后执行安全事务（重置记忆启用/同意指纹、推进 vault epoch 与会话 generation、处理 RUNNING turn 与活动 job）。
 - 修改表结构时同步更新本文与 `schema.sql`，并补迁移测试；数据模型属于状态文档，不写未落地的计划字段。

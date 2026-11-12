@@ -11,7 +11,7 @@ import { BankPage } from './pages/BankPage';
 import { WrongPage } from './pages/WrongPage';
 import { NotebookPage } from './pages/NotebookPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { AiAssistant } from './components/AiAssistant';
+import { useAssistantBridge } from './hooks/useAssistantBridge';
 import { PracticePage } from './pages/PracticePage';
 import { KnowledgePointPage } from './pages/KnowledgePointPage';
 import { CalendarPage } from './pages/CalendarPage';
@@ -56,12 +56,15 @@ function Shell(): JSX.Element {
   const toggleTheme = useUiStore((state) => state.toggleTheme);
   const setThemeMode = useUiStore((state) => state.setThemeMode);
   const clearPageContext = useUiStore((state) => state.clearPageContext);
-  const setAiOpen = useUiStore((state) => state.setAiOpen);
+  const toggleAi = useUiStore((state) => state.toggleAi);
   const notebookFocusMode = useUiStore((state) => state.notebookFocusMode);
   // AI 助手当前的第一个绑定（设置页改绑后提示同步更新）
   const aiAccelerator = useUiStore((state) => state.shortcutConfig.toggleAi[0]);
   // 全局快捷键（设置 → 常规 → 快捷键）
   useGlobalShortcuts();
+  // AI 助手是独立窗口：这里只负责唤起它、提供当前页面并响应它的资料定位。
+  const assistant = useAssistantBridge();
+  const assistantBusy = assistant.running + assistant.pending;
   const [configLoaded, setConfigLoaded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   // 折叠后自动隐藏：折叠态停留 3 秒自动收起侧栏；鼠标靠近左边缘唤回（保持折叠态）。
@@ -232,9 +235,12 @@ function Shell(): JSX.Element {
           <Header className="topbar">
             <span className="topbar-title">{title}</span>
             <div className="topbar-actions">
-              <button type="button" className="topbar-ai-pill" onClick={() => setAiOpen(true)} title="打开 AI 助手">
+              <button type="button" className={`topbar-ai-pill${assistant.visible ? ' is-open' : ''}`} onClick={toggleAi}
+                aria-pressed={assistant.visible}
+                title={assistant.visible ? 'AI 助手在前台时收起，在后台时切到前台' : assistant.running ? `打开 AI 助手 · ${assistant.running} 个会话正在回复` : '打开 AI 助手'}>
                 <Sparkles size={15} />
                 <span>AI 助手</span>
+                {!assistant.visible && assistantBusy > 0 ? <span className="topbar-ai-count" aria-label={`${assistant.running} 个会话正在回复，${assistant.pending} 条待发送`}>{assistantBusy}</span> : null}
                 {aiAccelerator ? <kbd>{describeAccelerator(aiAccelerator)}</kbd> : null}
               </button>
               <button
@@ -253,7 +259,6 @@ function Shell(): JSX.Element {
         )}
         <Content><AppRoutes /></Content>
       </Layout>
-      <AiAssistant />
     </Layout>
   );
 }

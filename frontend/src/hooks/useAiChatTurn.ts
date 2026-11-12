@@ -40,6 +40,15 @@ export interface TurnInput {
   pageContext?: TurnPageContext;
   pageSnapshot?: PageSnapshot;
   retrievalOptions?: RetrievalOptions;
+  /** 重新生成：指回要重答的那一轮。服务端据此沿用写入类工具的原回执，不重复写入。 */
+  retryOf?: string;
+}
+
+/** 点击重新生成时才读取的原输入；只在内存里使用，不缓存到浏览器存储。 */
+export interface OriginalTurnInput {
+  requestId: string;
+  sessionId: number;
+  input: { userText: string; attachments?: TurnAttachment[] };
 }
 
 /** GET /turns/{requestId} 的可见事实（§4.5）：界面只能拿这些字段描述这一轮。 */
@@ -120,6 +129,7 @@ export function buildTurnBody(requestId: string, input: TurnInput): Record<strin
     protocolVersion: 2,
     requestId,
     sessionId: input.sessionId,
+    ...(input.retryOf ? { retryOf: input.retryOf } : {}),
     input: { role: 'user', userText: input.userText, ...(attachments.length ? { attachments } : {}) },
     ...(input.pageSnapshot ? { pageSnapshot: { ...input.pageSnapshot,
       ...(input.pageSnapshot.selectedIds ? { selectedIds: [...input.pageSnapshot.selectedIds] } : {}) } } : {}),

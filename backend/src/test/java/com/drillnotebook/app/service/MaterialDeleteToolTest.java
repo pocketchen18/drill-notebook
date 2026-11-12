@@ -223,7 +223,7 @@ class MaterialDeleteToolTest {
         jdbc.update("INSERT INTO ai_material_update(request_id,operation_id,session_id,fingerprint,material_type,material_id) VALUES('request','old',1,'hash','note',1)");
         jdbc.execute("DROP TABLE ai_material_deletion"); jdbc.execute("DROP TABLE ai_tool_settings"); jdbc.update("UPDATE schema_version SET version=16");
         new DatabaseInitializer(jdbc.getDataSource(), Schema9Fixture.resolver(root)).initialize();
-        assertEquals(17, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
         assertEquals(1, count("ai_material_update")); assertEquals(0, count("ai_material_deletion")); assertEquals(3, count("note_page"));
         var settings = new AiToolSettingsRepository(jdbc).read();
         assertEquals(0, settings.revision());

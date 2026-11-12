@@ -84,6 +84,11 @@ const sendOnce = async (): Promise<void> => {
   await waitFor(() => expect(screen.getByText('ANSWER')).toBeTruthy());
 };
 
+const openBadgeInspector = async (): Promise<void> => {
+  fireEvent.click(screen.getByRole('button', { name: /本轮提供/ }));
+  fireEvent.click(await screen.findByRole('button', { name: '查看本轮上下文' }));
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -139,9 +144,9 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     const before = apiGet.mock.calls.length + apiPost.mock.calls.length;
     await sendOnce();
     expect(screen.getByRole('button', { name: '本轮提供 2 条记忆' })).toBeTruthy();
-    // 除了配置/会话/消息与那一次聊天，没有为徽标多发请求
-    expect(apiGet.mock.calls.filter((call) => String(call[0]).includes('/context'))).toHaveLength(0);
-    expect(apiPost.mock.calls.filter((call) => String(call[0]).includes('/context'))).toHaveLength(0);
+    // 除了配置/会话/消息与那一次聊天，没有为徽标多读本轮账本（会话级的上下文占用是另一个只读接口）
+    expect(apiGet.mock.calls.filter((call) => String(call[0]).includes('/turns/'))).toHaveLength(0);
+    expect(apiPost.mock.calls.filter((call) => String(call[0]).includes('/turns/'))).toHaveLength(0);
     expect(apiGet.mock.calls.length + apiPost.mock.calls.length).toBeGreaterThan(before);
   });
 
@@ -216,23 +221,30 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
       if (url.endsWith('/context')) {
         return Promise.resolve({ requestId: historyTurn, sessionId: 10, status: 'COMPLETED', available: true, audit: contextAudit });
       }
+      if (url.endsWith('/context-usage')) {
+        return Promise.resolve({ sessionId: 10, model: 'm', contextWindow: 32000,
+          latest: { requestId: historyTurn, inputTokens: 1200, contextWindow: 32000, model: 'm' } });
+      }
       return Promise.resolve({});
     });
     renderAssistant();
     await waitFor(() => expect(screen.getByText('OLD ANSWER')).toBeTruthy());
     // D156 结清：/history 现在给 requestId，重开抽屉后的旧回答也能追回本轮账本
     expect(screen.queryByRole('button', { name: /本轮提供/ })).toBeNull();
-    fireEvent.click(screen.getAllByRole('button', { name: '本轮上下文' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
+    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
     await waitFor(() => expect(apiGet).toHaveBeenCalledWith(`/api/ai/turns/${historyTurn}/context`));
     await waitFor(() => expect(screen.getByText('已发送给模型')).toBeTruthy());
     // 没有轮次身份的 legacy 行不该出现入口
-    expect(screen.getAllByRole('button', { name: '本轮上下文' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: '重新生成' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: '本轮上下文' })).toBeNull();
   });
 
-  it('动作区的「本轮上下文」打开检查器，仍然只读账本', async () => {
+  it('回复动作区不再放上下文入口，记忆徽标仍能只读打开检查器', async () => {
     renderAssistant();
     await sendOnce();
-    fireEvent.click(screen.getByRole('button', { name: '本轮上下文' }));
+    expect(screen.queryByRole('button', { name: '本轮上下文' })).toBeNull();
+    await openBadgeInspector();
     await waitFor(() => expect(screen.getByText('计划与发送态')).toBeTruthy());
     expect(screen.getByText('已发送给模型')).toBeTruthy();
     expect(apiPost.mock.calls.filter((call) => String(call[0]) === '/api/ai/chat')).toHaveLength(1);
@@ -241,7 +253,7 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
   it('检查器里的省略计数与未扫描标记照账本说话', async () => {
     renderAssistant();
     await sendOnce();
-    fireEvent.click(screen.getByRole('button', { name: '本轮上下文' }));
+    await openBadgeInspector();
     await waitFor(() => expect(screen.getByText('更早历史未扫描')).toBeTruthy());
     expect(screen.getByText('未解锁，未提供')).toBeTruthy();
     expect(screen.getByText('1 项')).toBeTruthy();

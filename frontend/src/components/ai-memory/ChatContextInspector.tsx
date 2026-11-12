@@ -28,9 +28,12 @@ export interface ChatContextInspectorProps {
   turn?: TurnResult;
   open: boolean;
   onClose: () => void;
+  /** 助手窗口的详情栏里直接铺开，不再套弹窗。 */
+  embedded?: boolean;
 }
 
-export function ChatContextInspector({ sessionId, requestId, turn, open, onClose }: ChatContextInspectorProps) {
+export function ChatContextInspector({ sessionId, requestId, turn, open, onClose, embedded }: ChatContextInspectorProps) {
+  if (embedded) return open ? <InspectorBody sessionId={sessionId} requestId={requestId} turn={turn} /> : null;
   return (
     <Modal title="本轮上下文" visible={open} footer={null} onCancel={onClose} autoFocus={false} unmountOnExit style={{ width: 660 }}>
       {open ? <InspectorBody sessionId={sessionId} requestId={requestId} turn={turn} /> : null}

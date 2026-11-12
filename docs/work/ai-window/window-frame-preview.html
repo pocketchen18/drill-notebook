@@ -1,0 +1,403 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI 助手窗口框架</title>
+<style>
+[hidden]{display:none!important}
+body{margin:0}
+/* 布局：上方场景切换，中间一个按真实比例绘制的助手窗口（会话栏 | 对话区 | 详情栏），下方是主窗口入口与退出确认。颜色与字号取自 docs/DESIGN.md。 */
+:root{
+  --page-bg:#f4f6fa;--panel-bg:#ffffff;--sider-bg:#fafbfd;--line:#e4e7ee;--line-strong:#d3d8e2;--muted:#6b7385;
+  --hover-bg:#eff2f7;--subtle-bg:#f6f8fb;--text:#1e2433;--text-strong:#0f1420;--input-border:#cbd3e0;
+  --accent:#2f54eb;--accent-fill:#2f54eb;--accent-contrast:#ffffff;--accent-soft:#eef2ff;--accent-border:#c7d2fe;
+  --danger:#e5484d;--success:#1f9d55;--warn:#d97706;--warn-soft:#fff7e6;--warn-text:#9a5b00;
+  --shadow-md:0 6px 16px rgb(16 24 40 / 10%),0 2px 4px rgb(16 24 40 / 5%);
+  --shadow-lg:0 16px 40px rgb(16 24 40 / 16%),0 4px 10px rgb(16 24 40 / 6%);
+  --desk:#dfe4ee;--scrim:rgb(15 20 32 / 28%);
+  --ui:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;--mono:Consolas,"Cascadia Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --page-bg:#131519;--panel-bg:#1b1e24;--sider-bg:#16181d;--line:#2a2f38;--line-strong:#3a404b;--muted:#98a2b3;
+  --hover-bg:#242931;--subtle-bg:#20242b;--text:#e2e6ee;--text-strong:#f7f8fa;--input-border:#3d4451;
+  --accent:#8da2ff;--accent-fill:#4b6bf0;--accent-contrast:#ffffff;--accent-soft:#1f2a4d;--accent-border:#3b52a8;
+  --danger:#ff7b7b;--success:#4ade80;--warn:#f5a524;--warn-soft:#3a2b16;--warn-text:#fcd38b;
+  --shadow-md:0 6px 16px rgb(0 0 0 / 40%);--shadow-lg:0 16px 40px rgb(0 0 0 / 55%);
+  --desk:#0b0c0f;--scrim:rgb(0 0 0 / 50%);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --page-bg:#131519;--panel-bg:#1b1e24;--sider-bg:#16181d;--line:#2a2f38;--line-strong:#3a404b;--muted:#98a2b3;
+  --hover-bg:#242931;--subtle-bg:#20242b;--text:#e2e6ee;--text-strong:#f7f8fa;--input-border:#3d4451;
+  --accent:#8da2ff;--accent-fill:#4b6bf0;--accent-contrast:#ffffff;--accent-soft:#1f2a4d;--accent-border:#3b52a8;
+  --danger:#ff7b7b;--success:#4ade80;--warn:#f5a524;--warn-soft:#3a2b16;--warn-text:#fcd38b;
+  --shadow-md:0 6px 16px rgb(0 0 0 / 40%);--shadow-lg:0 16px 40px rgb(0 0 0 / 55%);
+  --desk:#0b0c0f;--scrim:rgb(0 0 0 / 50%);color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--page-bg);color:var(--text);font:14px/1.6 var(--ui)}
+.page{max-width:1240px;margin:0 auto;padding-block:24px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+h1{font-size:20px;font-weight:700;line-height:1.35;margin:0;color:var(--text-strong);text-wrap:balance}
+h2{font-size:14px;font-weight:600;margin:0 0 10px;color:var(--text-strong)}
+.intro p{margin:6px 0 0;color:var(--muted);max-width:70ch}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none;border-radius:6px}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.seg{display:flex;flex-wrap:wrap;gap:2px;padding:3px;background:var(--hover-bg);border-radius:8px}
+.seg button{padding:5px 11px;font-size:13px;color:var(--muted);min-height:30px}
+.seg button[aria-pressed="true"]{background:var(--panel-bg);color:var(--text-strong);font-weight:600;box-shadow:0 1px 2px rgb(16 24 40 / 12%)}
+.seg-label{font-size:12px;color:var(--muted)}
+.desk{background:var(--desk);border-radius:12px;padding:22px 14px}
+/* —— 助手窗口 —— */
+.win{display:flex;flex-direction:column;height:700px;max-width:1180px;margin:0 auto;border:1px solid var(--line-strong);border-radius:9px;overflow:hidden;background:var(--panel-bg);box-shadow:var(--shadow-lg);position:relative}
+.win[data-w="narrow"]{max-width:440px}
+.tbar{height:34px;flex:none;display:flex;align-items:center;gap:8px;padding-left:12px;background:var(--sider-bg);border-bottom:1px solid var(--line);font-size:12px;color:var(--text)}
+.tbar i{width:14px;height:14px;border-radius:4px;background:var(--accent-fill)}
+.caps{margin-left:auto;display:flex;color:var(--muted)}.caps span{width:42px;height:34px;display:grid;place-items:center}
+.body{flex:1;min-height:0;display:flex;position:relative}
+.side{width:264px;flex:none;background:var(--subtle-bg);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.win[data-side="off"] .side,.win[data-side="off"] .scrim{display:none}
+.win[data-narrow] .side{position:absolute;inset:0 auto 0 0;z-index:5;width:min(300px,86%);box-shadow:var(--shadow-lg)}
+.scrim{display:none;position:absolute;inset:0;background:var(--scrim);z-index:4}
+.win[data-narrow] .scrim{display:block}
+.side-top{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px}
+.new{display:flex;align-items:center;justify-content:center;gap:6px;height:34px;border:1px solid var(--input-border);background:var(--panel-bg);font-size:13px;font-weight:600}
+.new:hover{border-color:var(--accent-border);color:var(--accent)}
+.find{display:flex;align-items:center;gap:6px;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel-bg);color:var(--muted)}
+.find input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13px;color:var(--text)}
+.find kbd{font:11px var(--mono);color:var(--muted)}
+.list{flex:1;min-height:0;overflow:auto;padding:0 8px 8px}
+.grp{font-size:12px;color:var(--muted);padding:10px 8px 4px}
+.row{display:flex;align-items:center;gap:8px;width:100%;min-height:36px;padding:6px 8px;text-align:left;font-size:13px}
+.row:hover{background:var(--hover-bg)}.row[aria-current]{background:var(--accent-soft);color:var(--text-strong);font-weight:600}
+.row b{flex:1;min-width:0;font-weight:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row small{font-size:12px;color:var(--muted);font-weight:400;white-space:nowrap}
+.row small.q{color:var(--warn-text)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent-fill);flex:none;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot,.cursor{animation:none}}
+.side-foot{border-top:1px solid var(--line);padding:10px 14px 12px;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.meter{height:4px;border-radius:2px;background:var(--line)}.meter span{display:block;height:100%;width:12%;border-radius:2px;background:var(--accent-fill)}
+.side-foot div:last-child{display:flex;gap:14px}.lnk{color:var(--accent);font-size:12px;padding:0}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;position:relative}
+.head{height:48px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+.ib{width:32px;height:32px;display:grid;place-items:center;color:var(--muted)}.ib:hover{background:var(--hover-bg);color:var(--text)}.ib:disabled{opacity:.4;cursor:default}
+.head h3{flex:0 1 auto;min-width:0;margin:0;font-size:14px;font-weight:600;color:var(--text-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.sp{flex:1}
+.stream{flex:1;min-height:0;overflow:auto;padding:20px 24px 12px}
+.win[data-narrow] .stream{padding:16px 16px 10px}.win[data-narrow] .foot{padding:0 12px 12px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:16px;min-width:0}
+.u{align-self:flex-end;max-width:86%;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.u p{margin:0;padding:9px 13px;background:var(--hover-bg);border-radius:12px 12px 4px 12px}
+.bind{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;padding:0}.bind:hover{color:var(--accent)}.bind svg{width:13px;height:13px}
+.a{display:flex;flex-direction:column;gap:8px;min-width:0}
+.used{font-size:12px;color:var(--muted)}
+.fold{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);padding:5px 8px;margin-left:-8px;align-self:flex-start}.fold:hover{background:var(--hover-bg)}
+.tools{border:1px solid var(--line);border-radius:8px;font-size:13px}
+.tools header{display:flex;align-items:center;gap:8px;padding:8px 11px}.tools header span{color:var(--muted);font-size:12px;margin-left:auto}
+.tools li{display:flex;gap:8px;align-items:center;padding:6px 11px;border-top:1px solid var(--line)}.tools ul{list-style:none;margin:0;padding:0}
+.tools li span{color:var(--muted);margin-left:auto;font-size:12px;text-align:right}.ok{color:var(--success)}.run{color:var(--accent)}
+.a p{margin:0}.a code{font:13px var(--mono);background:var(--subtle-bg);padding:1px 5px;border-radius:4px}
+.math{overflow-x:auto;padding:10px 14px;background:var(--subtle-bg);border-radius:8px;font:italic 15px "Cambria Math",Cambria,serif;white-space:nowrap}
+.src{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--accent);border:1px solid var(--accent-border);border-radius:999px;padding:2px 10px}
+.acts{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:12px;color:var(--muted)}
+.acts button{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;min-height:28px}.acts button:hover{background:var(--hover-bg);color:var(--text)}.acts svg{width:14px;height:14px}
+.acts em{font-style:normal;margin-left:auto;font-variant-numeric:tabular-nums}
+.cursor{display:inline-block;width:7px;height:15px;background:var(--accent-fill);vertical-align:-2px;animation:pulse 1s steps(2) infinite}
+.latest{position:absolute;right:24px;bottom:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:6px 11px;border-radius:999px;background:var(--panel-bg);border:1px solid var(--line-strong);box-shadow:var(--shadow-md)}
+.swrap{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
+.empty{margin:auto;text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center;padding:20px 0}
+.empty strong{font-size:16px;font-weight:600;color:var(--text-strong)}
+.chips{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;max-width:440px}
+.chip{border:1px solid var(--line-strong);border-radius:999px;padding:5px 13px;font-size:13px}.chip:hover{border-color:var(--accent-border);color:var(--accent)}
+.foot{padding:0 24px 14px;position:relative}
+.queue{margin:0 10px -1px;border:1px solid var(--line);border-bottom:0;border-radius:10px 10px 0 0;background:var(--subtle-bg);padding:6px 10px;font-size:12px;display:flex;flex-direction:column;gap:2px}
+.queue div{display:flex;align-items:center;gap:8px;color:var(--muted)}.queue div b{color:var(--text);font-weight:600}.queue div button{margin-left:auto;color:var(--muted);padding:2px 6px}
+.queue p{margin:0;font-size:13px;display:flex;gap:8px;min-width:0}.queue p span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.box{border:1px solid var(--input-border);border-radius:12px;background:var(--panel-bg);position:relative}
+.box:focus-within{border-color:var(--accent)}
+.box textarea{display:block;width:100%;border:0;background:none;outline:0;resize:none;font:inherit;color:var(--text);padding:11px 14px 4px;min-height:52px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px 8px}
+.tag{display:inline-flex;align-items:center;gap:5px;max-width:170px;font-size:12px;color:var(--muted);padding:3px 9px;border-radius:999px;background:var(--subtle-bg);min-height:28px}
+.tag span,.pick span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tag svg{width:13px;height:13px}
+.pick{display:inline-flex;align-items:center;gap:4px;max-width:190px;font-size:12px;padding:3px 7px;min-height:30px;color:var(--text)}.pick:hover,.pick[aria-expanded="true"]{background:var(--hover-bg)}.pick svg{width:13px;height:13px;color:var(--muted)}
+.ring{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);padding:3px 7px;min-height:30px;font-variant-numeric:tabular-nums}.ring:hover,.ring[aria-expanded="true"]{background:var(--hover-bg)}
+.ring svg{width:18px;height:18px;stroke-width:3;transform:rotate(-90deg)}.ring circle:first-child{stroke:var(--line-strong)}.ring circle:last-child{stroke:var(--accent-fill)}
+.btn{height:32px;padding:0 12px;font-size:13px;border:1px solid var(--input-border);display:inline-flex;align-items:center;gap:6px}
+.btn.icon{width:32px;padding:0;justify-content:center}.btn.pri{background:var(--accent-fill);border-color:var(--accent-fill);color:var(--accent-contrast)}
+.win[data-narrow] .bar .sp{flex-basis:100%;height:0}
+.pop{position:absolute;right:24px;bottom:58px;z-index:3;width:360px;max-width:calc(100% - 24px);background:var(--panel-bg);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-lg);font-size:13px;overflow:hidden}
+.win[data-narrow] .pop{right:12px;left:12px;width:auto}
+.pop .find{margin:10px;border-color:var(--input-border)}
+.pop h4{margin:0;padding:8px 14px 3px;font-size:12px;font-weight:400;color:var(--muted)}
+.opt{display:flex;align-items:center;gap:8px;width:100%;padding:7px 14px;text-align:left;border-radius:0}.opt:hover{background:var(--hover-bg)}.opt[aria-checked="true"]{background:var(--accent-soft)}
+.opt b{font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.opt small{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.opt[disabled]{opacity:.5;cursor:default}.opt i{width:14px;color:var(--accent);font-style:normal}
+.pop footer{border-top:1px solid var(--line);padding:8px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center;color:var(--muted);font-size:12px}
+.eff{display:flex;gap:4px;flex-wrap:wrap;padding:4px 14px 12px}.eff button{border:1px solid var(--line-strong);padding:3px 10px;font-size:12px;border-radius:999px}.eff button[aria-checked="true"]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent);font-weight:600}
+.ctx{padding:14px}.ctx strong{display:block;font-size:13px;color:var(--text-strong)}.ctx>span{font-size:12px;color:var(--muted)}
+.stack{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin:12px 0 10px}
+.stack i{display:block}.s1{background:var(--accent-fill)}.s2{background:var(--success)}.s3{background:var(--warn)}.s4{background:var(--muted)}
+.ctx dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:12px;font-variant-numeric:tabular-nums}.ctx dt{display:flex;align-items:center;gap:7px}.ctx dt i{width:8px;height:8px;border-radius:2px}.ctx dd{margin:0;text-align:right;color:var(--muted)}
+.insp{width:320px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;background:var(--panel-bg);min-height:0}
+.win[data-narrow] .insp{position:absolute;inset:0;width:auto;z-index:6;border:0}
+.insp header{height:48px;flex:none;display:flex;align-items:center;padding:0 8px 0 16px;border-bottom:1px solid var(--line);font-weight:600;color:var(--text-strong)}
+.insp section{padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}.insp section h5{margin:0 0 6px;font-size:12px;font-weight:400;color:var(--muted)}
+.insp section p{margin:0 0 4px}.insp .scroll{overflow:auto}
+/* —— 下方说明 —— */
+.aux{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.card{background:var(--panel-bg);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+.entry{display:flex;flex-direction:column;gap:10px}.entry div{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.entry span{font-size:12px;color:var(--muted)}
+.ai{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--input-border);font-size:13px}
+.ai.on{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent)}.ai u{text-decoration:none;font-size:11px;background:var(--accent-fill);color:var(--accent-contrast);border-radius:999px;padding:0 6px}
+.dlg{border:1px solid var(--line-strong);border-radius:10px;padding:16px;box-shadow:var(--shadow-md)}.dlg strong{color:var(--text-strong)}.dlg p{margin:6px 0 14px;font-size:13px;color:var(--muted)}.dlg div{display:flex;justify-content:flex-end;gap:8px}
+.notes{margin:0;padding-left:18px;color:var(--muted);font-size:13px;max-width:78ch}.notes li+li{margin-top:4px}
+</style>
+
+<svg hidden>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7L10 17.3a1.7 1.7 0 0 1-2.3-2.3L15.5 7"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-regenerate" viewBox="0 0 24 24"><path d="M21 3v6h-6M21 9a9 9 0 1 0 0 6"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5zM3 13l9 5 9-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="intro">
+    <h1>AI 助手独立窗口 · 框架草图</h1>
+    <p>v0.8 的助手从模态侧栏改为独立系统窗口。下面的窗口可以操作：切换场景、收起会话栏、换成分屏后的窄窗口。内容为示例数据。</p>
+  </header>
+
+  <div class="controls" role="group" aria-label="草图控制">
+    <span class="seg-label">场景</span>
+    <div class="seg" id="scenes">
+      <button data-scene="chat" aria-pressed="true">回复中</button>
+      <button data-scene="new" aria-pressed="false">新会话</button>
+      <button data-scene="model" aria-pressed="false">选择模型</button>
+      <button data-scene="context" aria-pressed="false">上下文占用</button>
+      <button data-scene="inspector" aria-pressed="false">本轮上下文</button>
+    </div>
+    <span class="seg-label">窗口</span>
+    <div class="seg" id="widths">
+      <button data-w="wide" aria-pressed="true">宽窗口</button>
+      <button data-w="narrow" aria-pressed="false">分屏窄窗口</button>
+    </div>
+  </div>
+
+  <div class="desk">
+    <div class="win" id="win" data-scene="chat" data-w="wide" data-side="on">
+      <div class="tbar"><i></i>AI 助手<div class="caps" aria-hidden="true"><span>─</span><span>□</span><span>✕</span></div></div>
+      <div class="body">
+        <nav class="side" aria-label="会话">
+          <div class="side-top">
+            <button class="new" data-go="new"><svg><use href="#i-plus"/></svg>新建会话</button>
+            <label class="find"><svg><use href="#i-search"/></svg><input id="find-session" placeholder="查找会话" aria-label="查找会话"><kbd>Ctrl K</kbd></label>
+          </div>
+          <div class="list">
+            <div class="grp">今天</div>
+            <button class="row" aria-current="true" data-go="chat"><span class="dot" title="正在回复"></span><b>导数与连续性的关系</b></button>
+            <button class="row"><b>高数错题：积分换元法</b><small class="q">待发 1 · 已暂停</small></button>
+            <button class="row"><b>操作系统内存管理复习计划</b><small>14:26</small></button>
+            <div class="grp">近 7 天</div>
+            <button class="row"><b>神经递质的分类与记忆方法</b><small>周一</small></button>
+            <button class="row"><b>线性代数：矩阵可对角化的条件</b><small>周日</small></button>
+            <button class="row"><b>把第三章总结整理成知识点</b><small>上周六</small></button>
+            <div class="grp">更早</div>
+            <button class="row"><b>英语长难句拆分练习</b><small>10月28日</small></button>
+          </div>
+          <div class="side-foot">
+            <span>本地存储 12% · 61 MB / 512 MB</span>
+            <div class="meter"><span></span></div>
+            <div><button class="lnk">清理聊天记录</button><button class="lnk">设置 ↗</button></div>
+          </div>
+        </nav>
+        <div class="scrim" id="scrim"></div>
+
+        <main class="main">
+          <div class="head">
+            <button class="ib" id="toggle-side" aria-label="展开或收起会话栏" title="会话栏 Ctrl+B"><svg><use href="#i-menu"/></svg></button>
+            <h3 id="title">导数与连续性的关系</h3>
+            <span class="pill" data-only="chat model context inspector"><span class="dot"></span>正在回复 · 待发 1</span>
+            <span class="sp"></span>
+            <button class="ib" id="more" aria-label="会话更多操作"><svg><use href="#i-more"/></svg></button>
+          </div>
+
+          <div class="swrap">
+            <div class="stream" tabindex="0" aria-label="消息">
+              <div class="col" data-only="chat model context inspector">
+                <div class="u"><p>讲解一下当前这页，重点说说为什么可导一定连续。</p>
+                  <button class="bind" title="在主窗口打开"><svg><use href="#i-file"/></svg>笔记 · 导数的定义</button></div>
+                <div class="a">
+                  <span class="used">DeepSeek · deepseek-reasoner · 思考 high</span>
+                  <button class="fold"><svg><use href="#i-right"/></svg>思考过程 · 12 秒</button>
+                  <div class="tools">
+                    <header><svg class="ok"><use href="#i-check"/></svg>已读取学习资料<span>2 次工具调用 · 0.4 秒</span></header>
+                    <ul><li><svg class="ok"><use href="#i-check"/></svg>读取当前页面<span>本次读取 1 项</span></li>
+                      <li><svg class="ok"><use href="#i-check"/></svg>读取笔记<span>本次读取 1 项</span></li></ul>
+                  </div>
+                  <p>这页用差商的极限定义了导数。可导意味着下面这个极限存在且有限：</p>
+                  <div class="math">f′(x₀) = lim<sub>h→0</sub> [ f(x₀ + h) − f(x₀) ] / h</div>
+                  <p>把分子改写成 <code>差商 × h</code>：当 h→0 时差商趋于有限数 f′(x₀)，h 趋于 0，乘积也趋于 0，所以 f(x₀+h) → f(x₀)，这正是连续的定义。反过来不成立，页面里 |x| 在 0 处的例子就是连续但不可导。</p>
+                  <button class="src"><svg><use href="#i-file"/></svg>导数的定义</button>
+                  <div class="acts"><button><svg><use href="#i-copy"/></svg>复制</button><button><svg><use href="#i-plus"/></svg>插入笔记</button><button aria-label="重新生成" title="重新生成"><svg><use href="#i-regenerate"/></svg></button><em>输入 18.4k · 输出 1.2k</em></div>
+                </div>
+                <div class="u"><p>从题库里找两道相关的题，我练一下。</p></div>
+                <div class="a">
+                  <span class="used">DeepSeek · deepseek-reasoner · 思考 high</span>
+                  <div class="tools">
+                    <header><span class="dot"></span>正在查找学习资料<span>1 次工具调用 · 已结束 0 项</span></header>
+                    <ul><li><span class="dot"></span>查找学习资料<span class="run">执行中 · 1.3 秒</span></li></ul>
+                  </div>
+                  <span class="cursor" aria-hidden="true"></span>
+                </div>
+              </div>
+              <div class="empty" data-only="new" hidden>
+                <svg style="width:28px;height:28px;color:var(--accent)"><use href="#i-spark"/></svg>
+                <strong>开始一段新对话</strong>
+                <div class="chips"><button class="chip">讲解当前内容</button><button class="chip">出几道练习题</button><button class="chip">整理成知识点</button><button class="chip">分析这道错题</button></div>
+              </div>
+            </div>
+            <button class="latest" data-only="chat"><svg><use href="#i-down"/></svg>回到最新</button>
+          </div>
+
+          <div class="foot">
+            <div class="col" style="gap:0">
+              <div class="queue" data-only="chat model context inspector">
+                <div><b>待发送 1</b>本轮结束后发送<button>暂停接续</button></div>
+                <p><span>再给一个连续但不可导的例子，最好不是绝对值。</span></p>
+              </div>
+              <div class="box">
+                <textarea id="compose" rows="2" aria-label="输入消息" placeholder="正在回复，可先输入下一条问题"></textarea>
+                <div class="bar">
+                  <button class="btn icon" aria-label="添加附件" style="border:0"><svg><use href="#i-clip"/></svg></button>
+                  <span class="tag" title="主窗口当前页面"><svg><use href="#i-file"/></svg><span>导数的定义</span></span>
+                  <span class="sp"></span>
+                  <button class="pick" id="pick-model" data-go="model" aria-haspopup="dialog" aria-expanded="false"><span>deepseek-reasoner</span><svg><use href="#i-down"/></svg></button>
+                  <button class="pick" data-go="model" aria-label="思考档位 high"><span>high</span><svg><use href="#i-down"/></svg></button>
+                  <button class="ring" id="pick-ctx" data-go="context" aria-haspopup="dialog" aria-expanded="false" aria-label="上下文占用 41%"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke-dasharray="23.2 56.5"/></svg>41%</button>
+                  <button class="btn" data-only="chat model context inspector" title="提交，但不中断模型运行">插话</button>
+                  <button class="btn icon" data-only="chat model context inspector" aria-label="停止回复"><svg><use href="#i-stop"/></svg></button>
+                  <button class="btn icon pri" aria-label="发送"><svg><use href="#i-send"/></svg></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pop" data-only="model" role="dialog" aria-label="选择模型" hidden>
+              <label class="find"><svg><use href="#i-search"/></svg><input id="find-model" placeholder="查找模型或供应商" aria-label="查找模型"></label>
+              <button class="opt" role="menuitemradio" aria-checked="false"><i></i><b>跟随主模型（DeepSeek · deepseek-chat）</b></button>
+              <h4>DeepSeek</h4>
+              <button class="opt" role="menuitemradio" aria-checked="false"><i></i><b>deepseek-chat</b><small>工具</small></button>
+              <button class="opt" role="menuitemradio" aria-checked="true"><i>✓</i><b>deepseek-reasoner</b><small>工具</small></button>
+              <h4>Anthropic</h4>
+              <button class="opt" role="menuitemradio" aria-checked="false"><i></i><b>claude-sonnet-5-5</b><small>工具</small><small>视觉</small></button>
+              <h4>本地 Ollama</h4>
+              <button class="opt" disabled><i></i><b>qwen3:14b</b><small>需先补全容量</small></button>
+              <h4>思考档位</h4>
+              <div class="eff" role="radiogroup" aria-label="思考档位"><button role="radio" aria-checked="false">模型默认</button><button role="radio" aria-checked="false">low</button><button role="radio" aria-checked="false">medium</button><button role="radio" aria-checked="true">high</button></div>
+              <footer><span>从下一条消息开始使用</span><button class="lnk">管理 AI 连接 ↗</button></footer>
+            </div>
+
+            <div class="pop" data-only="context" role="dialog" aria-label="上下文占用" hidden>
+              <div class="ctx">
+                <strong>最近一次请求 · 实测 52.4k / 128k</strong>
+                <span>deepseek-reasoner 的上下文窗口，另为输出预留 8.2k</span>
+                <div class="stack"><i class="s1" style="width:24.2%"></i><i class="s2" style="width:11.1%"></i><i class="s3" style="width:.9%"></i><i class="s4" style="width:4.8%"></i></div>
+                <dl>
+                  <dt><i class="s1"></i>历史对话</dt><dd>31.0k</dd>
+                  <dt><i class="s2"></i>资料与工具结果</dt><dd>14.2k</dd>
+                  <dt><i class="s3"></i>记忆</dt><dd>1.1k</dd>
+                  <dt><i class="s4"></i>系统提示与工具定义</dt><dd>6.1k · 估算</dd>
+                </dl>
+              </div>
+              <footer><span>不含多次工具往返的累计用量</span><button class="lnk" data-go="inspector">查看本轮上下文</button></footer>
+            </div>
+          </div>
+        </main>
+
+        <aside class="insp" data-only="inspector" aria-label="本轮上下文" hidden>
+          <header>本轮上下文<span class="sp"></span><button class="ib" data-go="chat" aria-label="关闭"><svg><use href="#i-x"/></svg></button></header>
+          <div class="scroll">
+            <section><h5>模型</h5><p>DeepSeek · deepseek-reasoner</p><p>思考 high · 3 次模型请求</p></section>
+            <section><h5>送入内容</h5><p>最近对话 6 轮 · 31.0k</p><p>工具结果 2 项 · 14.2k</p><p>记忆 2 条 · 1.1k</p><p>较早对话已摘要：无</p></section>
+            <section><h5>本轮用量（实测）</h5><p>输入 18.4k · 输出 1.2k</p><p>缓存读取 9.6k</p></section>
+            <section><h5>页面</h5><p>笔记 · 导数的定义（已保存）</p></section>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <div class="aux">
+    <div class="card">
+      <h2>主窗口右上角的入口</h2>
+      <div class="entry">
+        <div><button class="ai"><svg><use href="#i-spark"/></svg>AI 助手</button><span>助手窗口未打开</span></div>
+        <div><button class="ai on"><svg><use href="#i-spark"/></svg>AI 助手</button><span>已打开，点击回到助手窗口</span></div>
+        <div><button class="ai"><svg><use href="#i-spark"/></svg>AI 助手<u>2</u></button><span>窗口已收起，2 个会话仍在回复</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>退出应用时仍有任务</h2>
+      <div class="dlg">
+        <strong>仍有 2 个会话正在回复</strong>
+        <p>退出后这些回复会中断，已生成的内容会保留；待发送的消息下次打开时保持暂停。</p>
+        <div><button class="btn">取消</button><button class="btn pri">退出应用</button></div>
+      </div>
+    </div>
+  </div>
+
+  <ul class="notes">
+    <li>关闭助手窗口只是收起，回复和队列继续；关闭主窗口才退出应用。</li>
+    <li>点击资料来源或页面标记会把主窗口提到前面并定位，助手窗口保持不动。</li>
+    <li>窗口窄于 760px 时会话栏变为浮层，工具条分成两行；宽于 1180px 时详情栏与对话并排。</li>
+    <li>模型、档位和上下文占用三个控件分别在第 2、第 3 切片接入，第 1 切片的工具条里不出现。</li>
+  </ul>
+</div>
+
+<script>
+(function () {
+  var win = document.getElementById('win'), title = document.getElementById('title');
+  var compose = document.getElementById('compose'), more = document.getElementById('more');
+  function scene(name) {
+    win.dataset.scene = name;
+    document.querySelectorAll('[data-only]').forEach(function (el) { el.hidden = el.dataset.only.split(' ').indexOf(name) < 0; });
+    document.querySelectorAll('#scenes button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.scene === name)); });
+    var fresh = name === 'new';
+    title.textContent = fresh ? '新会话' : '导数与连续性的关系';
+    more.disabled = fresh;
+    compose.placeholder = fresh ? '问点什么，Enter 发送' : '正在回复，可先输入下一条问题';
+    document.getElementById('pick-model').setAttribute('aria-expanded', String(name === 'model'));
+    document.getElementById('pick-ctx').setAttribute('aria-expanded', String(name === 'context'));
+    if (win.hasAttribute('data-narrow')) win.dataset.side = 'off';
+  }
+  function fit() {
+    var narrow = win.clientWidth < 760, was = win.hasAttribute('data-narrow');
+    if (narrow === was) return;
+    win.toggleAttribute('data-narrow', narrow);
+    win.dataset.side = narrow ? 'off' : 'on';
+  }
+  document.addEventListener('click', function (event) {
+    var go = event.target.closest('[data-go]'), s = event.target.closest('#scenes button'), w = event.target.closest('#widths button');
+    if (s) scene(s.dataset.scene);
+    else if (w) {
+      win.dataset.w = w.dataset.w;
+      document.querySelectorAll('#widths button').forEach(function (b) { b.setAttribute('aria-pressed', String(b === w)); });
+      fit();
+    } else if (go) scene(win.dataset.scene === go.dataset.go && go.dataset.go !== 'chat' && go.dataset.go !== 'new' ? 'chat' : go.dataset.go);
+    else if (event.target.closest('#toggle-side')) win.dataset.side = win.dataset.side === 'on' ? 'off' : 'on';
+    else if (event.target.id === 'scrim') win.dataset.side = 'off';
+    else if (event.target.closest('.chip')) { compose.value = event.target.closest('.chip').textContent; compose.focus(); }
+  });
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(win);
+  fit();
+})();
+</script>
