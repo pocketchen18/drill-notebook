@@ -1,6 +1,6 @@
 # Drill Notebook（面向开发者）
 
-当前版本规划：**v0.8**，将 AI 助手改为独立窗口并优化会话与消息体验，范围见 [功能清单](docs/state/v0.8-features.md)；当前尚未进行 UI/UX 设计或实现。v0.7.3 已由用户确认完成，功能清单与施工材料已[归档](docs/archive/v0.7.3/README.md)，发行记录仍见 [发布说明](docs/release/v0.7.3-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
+当前 **v0.8.0** 已实现独立 AI 助手窗口、会话模型与消息体验改版，以及软件内更新与关于，正在准备发布、尚未发布。范围见 [功能清单](docs/state/v0.8-features.md)，发行与升级见 [本版说明](docs/release/v0.8.0-release-notes.md)，工程验证见 [实施记录](docs/work/app-update/plan.md)。v0.7.3 的功能清单与施工材料已[归档](docs/archive/v0.7.3/README.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
 
 | 项 | 说明 |
 |---|---|
@@ -210,9 +210,21 @@
 | **聊天与模型配置** | 去除常驻上下文卡片与右下角入口；上下文窗口、最大输出必填，取消最大输入与保守窗口 |
 | **发行与升级** | schema 17，仍为不保证稳定性的预发行版；实际验证和发布前待办见 [发布说明](docs/release/v0.7.3-release-notes.md) |
 
-### 1.16 明确后置（未作为当前目标）
+### 1.16 v0.8.0（独立 AI 助手与软件内更新）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)，已落地能力同步至 v0.7.3。v0.8 已进入[独立 AI 助手窗口的范围规划](docs/state/v0.8-features.md)，尚未设计或实现；联网搜索配置、移动与批量删除仍未实现。
+| 项 | 说明 |
+|---|---|
+| **独立窗口与协作** | 助手可移动、缩放与固定；主窗口保持可操作，业务目标、资料来源和资料修改跨窗口同步 |
+| **模型与会话** | 当前会话选择供应商、模型与 effort；标题筛选、置顶、双击改名，侧栏拖动调宽并恢复偏好 |
+| **消息与反馈** | 选中文字复制 / 引用、统一回复操作按钮与重新生成；展示输入缓存命中 / 未命中、输出和上下文占用 |
+| **关于与更新内容** | 实际版本、GitHub 图标 / Star、唯一更新内容入口；按范围逐版展示 Release 正文 |
+| **检查与自动更新** | 手动 / 周期检查、共享提醒间隔默认 24 小时、顶部常驻提示 / 跳过；默认关闭的独立启动自动更新 |
+| **便携替换与恢复** | 一次操作下载、校验、保存、正常退出、替换并重启；内置 helper、清单 / ZIP 摘要、停机备份和失败恢复 |
+| **发行与升级** | schema 18；发布准备与验收范围见 [本版说明](docs/release/v0.8.0-release-notes.md)，尚未发布 |
+
+### 1.17 明确后置（未作为当前目标）
+
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)。v0.8.0 已完成[本版实现](docs/state/v0.8-features.md)并进入发布准备；笔记向量检索接入资料工具规划在 v0.8.1，联网搜索配置、移动与批量删除仍未实现。
 
 ---
 
@@ -356,7 +368,7 @@
 6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。  
 7. **笔记本检索（v0.5）**：侧栏内开启「检索」，选范围 `全部笔记本` / `当前笔记本`；回答下方列出引用来源，点击跳回对应页面。向量检索需在设置页启用本地模型或远程 embedding（见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md)）。
 8. **长期记忆与工具**：开启记忆且模型支持工具时，助手可按需检索、列出、新增和更新记忆；回复内的工具活动组显示执行中、成功、失败或未执行等真实状态，可展开安全摘要并在历史中恢复。删除来源会话不删除长期记忆。
-9. **阅读与长轮次**：流式生成期间向上滚动会暂停自动跟随，回到底部后恢复；达到运行限制会保留已有结果并说明原因，「继续」开启同会话新一轮。思考参数使用模型设置中的默认值；侧栏直接选择模型和思考档位留待后续改版。
+9. **阅读与长轮次**：流式生成期间向上滚动会暂停自动跟随，回到底部后恢复；达到运行限制会保留已有结果并说明原因，「继续」开启同会话新一轮。独立助手窗口可选择当前会话的模型与支持的思考档位，已受理的轮次保留提交时配置。
 
 ### 2.11 设置
 
@@ -450,14 +462,14 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 
 ### 4.3 云端便携发布
 
-发行包只在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/test/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证，本地不生成发行包或模拟 ZIP。
+公开发行包在 GitHub Actions 构建；前后端全量测试在本地完成，云端保留发布配置检查、类型检查、编译、打包与产物校验。发布者按 [测试规范](docs/test/TESTING_GUIDELINES.md) 确认待发布提交已通过本地验证；软件内更新专项可在工作区 `temp/` 使用隔离验证产物，本地不执行发布。
 
 1. 更新对应的 `docs/release/<版本>-release-notes.md`，完成测试并提交、推送准备发布的代码。
-2. 在该提交上创建并推送标签：`git tag v0.7.3`，随后 `git push <remote> v0.7.3`（本工作区远程名为 `github`，按实际仓库替换 `<remote>`）。
-3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；发布配置回归通过后，构建前端、Electron、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.7.3-win-x64-portable.zip`。云端不重复执行前后端业务全量测试；后端使用 `-DskipTests package`，仍执行编译检查。
-4. 标签推送自动创建 **Pre-release**，不标记为 Latest，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.7.3`，默认仅上传构建产物，勾选 `publish_release` 才发布。v1.0 之前全部为预发行版，不保证稳定性；正式发行渠道届时另行确认。
+2. 在该提交上创建并推送标签：`git tag v0.8.0`，随后 `git push <remote> v0.8.0`（本工作区远程名为 `github`，按实际仓库替换 `<remote>`）。
+3. `release-portable.yml` 校验版本与发布说明，使用 `npm ci` 安装依赖；先编译 Electron 与发布元数据模块，再运行发布配置回归，随后构建前端、Rust 更新助手、后端 JAR 与内嵌 JRE，生成 `Drill-Notebook-0.8.0-win-x64-portable.zip` 和对应 `.zip.sha256`。ZIP 内含程序文件清单；云端不重复执行前后端业务全量测试，后端使用 `-DskipTests package`。
+4. 标签推送自动创建 **Pre-release**，不标记为 Latest，正文载入本版发布说明并附自动生成的提交说明。手动触发默认 `v0.8.0`，默认仅上传构建产物，勾选 `publish_release` 才发布。v1.0 之前全部为预发行版，不保证稳定性；正式发行渠道届时另行确认。
 
-工作流按完整基础版本选择发布说明，`v0.7.3-rc.1` 共用 `v0.7.3-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 17 的迁移与回退边界见 [发布说明](docs/release/v0.7.3-release-notes.md)。
+工作流按完整基础版本选择发布说明，`v0.8.0-rc.1` 共用 `v0.8.0-release-notes.md`；说明缺失或空白会在安装依赖前失败。发行版本由标签注入，工程内部 `package.json` 和后端 JAR 的 `0.1.0` 不代表发行版本。升级前备份完整便携目录；schema 18 的迁移与回退边界见 [发布说明](docs/release/v0.8.0-release-notes.md)。
 
 云端 JAR 构建直接使用 runner 预装的 `mvn`（日志打印版本），不再由 wrapper 下载 Maven 本体；本地全量测试仍保留 `mvnw.cmd`。Java 17、依赖与打包内容不变，Maven 不随软件分发；项目依赖下载仍需要访问 Maven 仓库。
 
@@ -510,6 +522,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
 | [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
 | [docs/release/v0.7.3-release-notes.md](docs/release/v0.7.3-release-notes.md) | v0.7.3 发行记录、验证、升级与预发行边界 |
+| [docs/release/v0.8.0-release-notes.md](docs/release/v0.8.0-release-notes.md) | v0.8.0 发布准备、助手改版、软件内更新与升级说明 |
 | [docs/archive/v0.7.3/](docs/archive/v0.7.3/) | v0.7.3 功能清单、资料工具、全局工具设置、模型容量与入口清理施工归档 |
 | [docs/release/v0.7.2-release-notes.md](docs/release/v0.7.2-release-notes.md) | v0.7.2 发行说明与升级边界 |
 | [docs/archive/v0.7.2/](docs/archive/v0.7.2/) | v0.7.2 功能清单、会话工具、人工排队与插话施工归档 |
@@ -526,7 +539,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 ## 6. 约束与安全
 
 - **便携**：用户数据、日志、缓存应落在应用根目录策略下（开发态见启动脚本使用的便携数据目录）。  
-- **网络**：业务 API 仅本机回环；外发仅为用户配置的 AI Endpoint。  
+- **网络**：业务 API 仅本机回环；AI 调用使用用户配置的 Endpoint，检查与下载更新访问 GitHub HTTPS。
 - **密钥与会话**：API Key 与 AI 消息加密存储；前端不长期持有明文 Key。  
 - **检索隐私**：BM25 与本地 embedding 不出本机；远程 embedding（OpenAI/Ollama）仅在用户当前授权下发送笔记内容，授权绑定 endpoint/model（见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md)）。
 - **健康检查**：生产构建避免在健康接口暴露敏感路径。  

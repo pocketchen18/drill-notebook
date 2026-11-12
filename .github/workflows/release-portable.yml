@@ -3,7 +3,7 @@ name: Build portable pre-release
 # 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 发行策略：v1.0 之前均为不保证稳定性的预发行版；正式发行需另行确认渠道，不能仅凭无后缀标签转正。
 # 两种触发方式：
-#   1) 打标签推送：git tag v0.7.3 && git push <remote> v0.7.3  → 自动编译并发布 v0.7.3 预发行版
+#   1) 打标签推送：git tag v0.8.0 && git push <remote> v0.8.0  → 自动编译并发布 v0.8.0 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
 # 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '预发行版本号（含 v 前缀），例如 v0.7.3；v1.0 之前不保证稳定性'
+        description: '预发行版本号（含 v 前缀），例如 v0.8.0；v1.0 之前不保证稳定性'
         required: true
-        default: 'v0.7.3'
+        default: 'v0.8.0'
       publish_release:
         description: '是否发布为 GitHub Pre-release（关闭则仅上传构建产物）'
         type: boolean
@@ -67,7 +67,7 @@ jobs:
       - name: 解析版本号
         id: ver
         env:
-          # 手动触发用输入值；标签推送用 tag 名（如 v0.7.3）
+          # 手动触发用输入值；标签推送用 tag 名（如 v0.8.0）
           RAW: ${{ inputs.version || github.ref_name }}
         run: |
           $tag = $env:RAW
@@ -84,7 +84,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          # v0.7.3-rc.1 与 v0.7.3 共用对应版本说明；不以 startsWith 混淆 v0.7.30。
+          # v0.8.0-rc.1 与 v0.8.0 共用对应版本说明；必须精确匹配基础版本。
           $baseTag = ($env:RELEASE_TAG -split '-', 2)[0]
           $notes = "docs/release/$baseTag-release-notes.md"
           if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) { throw "缺少发布说明：$notes" }
@@ -94,6 +94,10 @@ jobs:
 
       - name: 安装依赖（含 frontend workspace 与 electron-builder）
         run: npm ci
+
+      # 发布配置的打包夹具需要编译后的清单模块；干净检出中没有 electron-dist。
+      - name: 构建 Electron 主进程与发布元数据模块
+        run: npm run build:electron
 
       - name: 验证发布配置与本地打包脚本
         run: node --test scripts/test-release-config.mjs
@@ -112,8 +116,8 @@ jobs:
           --strip-debug --no-header-files --no-man-pages --compress=2
           --output jre
 
-      - name: 构建前端与 Electron 主进程
-        run: npm run build
+      - name: 构建前端
+        run: npm run build:frontend
 
       - name: 构建便携更新辅助程序
         run: npm run build:updater

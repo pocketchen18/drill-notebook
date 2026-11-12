@@ -105,6 +105,6 @@ Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操
 
 只能清理具有匹配 UUID / 所有权标记的更新材料。下载取消、校验失败及未交接事务清理自身暂存；成功或已回滚且 helper 已退出后清理 ZIP 与工作目录。未完成事务保留可恢复材料，程序 / 数据库备份最多保留最近两份，用户目录不进入清理范围。
 
-[package-portable.ps1](../../../scripts/package-portable.ps1)与[发布工作流](../../../.github/workflows/release-portable.yml)先构建内置 Rust helper，目录打包后生成程序清单，再生成 ZIP 与 `.zip.sha256` 并上传校验材料。实际版本继续由发行参数注入，本轮保留默认 0.7.3。业务全量测试仍是本地发布前门禁，云端只做配置检查与编译打包。
+[package-portable.ps1](../../../scripts/package-portable.ps1)与[发布工作流](../../../.github/workflows/release-portable.yml)先构建内置 Rust helper，目录打包后生成程序清单，再生成 ZIP 与 `.zip.sha256` 并上传校验材料。实际版本继续由发行参数注入，发布准备已将云端与本地默认同步为 0.8.0。业务全量测试仍是本地发布前门禁，云端先编译发布配置夹具所需的 Electron 模块，再做配置检查与其余编译打包。
 
 完整应用专项只在隔离 `temp/` 包中注入 QA driver，生产打包配置不包含它，并在注入前断言生产 ASAR 没有该入口。测试不会发布 Release、注册系统协议或修改用户安装目录。实现后的全部验证结果与尚未验收范围见[计划](plan.md#2-验证结果)。

@@ -15,14 +15,14 @@ Keep the resulting `jre/` directory at the repository root while packaging. The 
 From the repository root, the checked-in packaging command validates this directory and creates the portable artifact:
 
 ```powershell
-npm run package:portable -- -Rebuild -Version v0.7.3
+npm run package:portable -- -Rebuild -Version v0.8.0
 ```
 
 The builder copies `jre/` into the packaged resources. The source `jre/` directory is intentionally not committed because it is a generated binary runtime.
 
-Use PowerShell 7 and run the [local quality gates](test/TESTING_GUIDELINES.md) before packaging; the local packaging script does not run tests. `-Rebuild` refreshes existing build outputs. The current default version is `0.7.3`; `-Version` accepts it with or without the `v` prefix and sets both the application metadata and ZIP filename. Local packaging creates a verification artifact and never publishes a release. v0.8.0 is implemented in the working tree but has not been released; implementation tests do not change this default.
+Use PowerShell 7 and run the [local quality gates](test/TESTING_GUIDELINES.md) before packaging; the local packaging script does not run tests. `-Rebuild` refreshes existing build outputs. The current default version is `0.8.0`, synchronized with the workflow; `-Version` accepts it with or without the `v` prefix and sets both the application metadata and ZIP filename. Local packaging creates a verification artifact and never publishes a release. v0.8.0 is ready for release preparation and has not been published; see the [release notes](release/v0.8.0-release-notes.md).
 
-The GitHub workflow installs locked dependencies with `npm ci`, runs release-configuration tests, builds the frontend and Electron, builds the Rust update helper, and compiles/packages the backend with Java 17 and `-DskipTests`. Full frontend/backend business tests remain local release gates. Tag pushes publish a **pre-release**; manual runs only upload artifacts unless `publish_release` is enabled.
+The GitHub workflow installs locked dependencies with `npm ci`, compiles Electron and its release metadata modules, runs release-configuration tests, builds the frontend and Rust update helper, and compiles/packages the backend with Java 17 and `-DskipTests`. Metadata compilation precedes the configuration tests because their packaging fixtures use those modules; a clean checkout has no `electron-dist/`. Full frontend/backend business tests remain local release gates. Tag pushes publish a **pre-release**; manual runs only upload artifacts unless `publish_release` is enabled.
 
 The portable update feature uses the same directory ZIP layout. Packaging includes `resources/updater/drill-updater.exe`, generates a root `drill-program-manifest.json` with a size and SHA-256 for every managed program file, and emits a matching `.zip.sha256` beside the ZIP. Both ZIP and checksum are uploaded. User data, configuration, models and attachments are outside the program manifest. Build the helper with `npm run build:updater`; it requires an installed Rust toolchain, while Cargo cache, build output and temporary files remain inside the workspace.
 

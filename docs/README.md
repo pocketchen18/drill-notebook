@@ -89,7 +89,7 @@ v0.7.3 已由用户于 2026-11-11 确认全部完成，其功能清单及六个�
 | [reference/knowledge-point-import.md](reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [reference/quiz-markdown-flow.md](reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
 
-`docs/release/v<版本>-release-notes.md` 保存各版发行记录，上一版为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8.0 尚未发布，AI 助手已验收，软件内更新已实现并通过工程验证，尚未进行本轮更新 UI 的人工观感验收；工作流默认版本暂保留 v0.7.3，到发布准备时再调整。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
+`docs/release/v<版本>-release-notes.md` 保存各版发行记录，上一版为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)，当前为 [v0.8.0 发布准备](release/v0.8.0-release-notes.md)。AI 助手已验收，软件内更新已实现并通过工程验证，尚未进行本轮更新 UI 的人工观感验收；云端工作流与本地打包默认版本已同步为 v0.8.0，发布配置 10 项及前端 / Electron 构建通过，尚未发布。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.8.0-rc.1` 选择 v0.8.0，缺失或空白即失败。
 
 ## 5. 交接记忆
 

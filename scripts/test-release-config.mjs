@@ -20,7 +20,7 @@ const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.repl
 const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
-  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.7.3');
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.8.0');
   assert.equal(workflow.on.workflow_dispatch.inputs.publish_release.default, false);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.prerelease, true);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.make_latest, 'false');
@@ -30,13 +30,16 @@ test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () 
   assert.match(packageJson.scripts['package:portable'], /^pwsh .* -File scripts\/package-portable\.ps1$/);
 });
 
-test('锁文件安装与发布配置检查通过后构建发布，不重复本地业务全量测试', () => {
+test('干净检出先编译发布模块，配置检查通过后构建发布，不重复本地业务全量测试', () => {
   const install = steps.findIndex(step => step.run === 'npm ci');
-  const build = steps.findIndex(step => step.run === 'npm run build');
-  assert.ok(install >= 0 && build > install);
+  const electronBuild = steps.findIndex(step => step.run === 'npm run build:electron');
+  const build = steps.findIndex(step => step.run === 'npm run build:frontend');
+  assert.ok(install >= 0 && electronBuild > install && build > electronBuild);
   for (const command of ['node --test scripts/test-release-config.mjs']) {
     const index = steps.findIndex(step => step.run === command);
-    assert.ok(index > install && index < build, `${command} 必须在安装后、构建前`);
+    assert.ok(index > electronBuild && index < build, `${command} 必须在 Electron 编译后、前端构建前`);
+    assert.equal(steps[electronBuild]['continue-on-error'], undefined);
+    assert.equal(steps[electronBuild].if, undefined);
     assert.equal(steps[index]['continue-on-error'], undefined);
     assert.equal(steps[index].if, undefined);
   }
@@ -137,14 +140,14 @@ test('发布说明按完整版本选择，预发行复用同版正文，缺失�
     rmSync(dir, { recursive: true, force: true });
   });
   mkdirSync(join(dir, 'docs/release'), { recursive: true });
-  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.30']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.30', 'v0.8.0']) {
     writeFileSync(join(dir, `docs/release/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
   }
   writeFileSync(join(dir, 'docs/release/v0.7.4-release-notes.md'), ' \n');
   const script = join(dir, 'select-notes.ps1');
   const output = join(dir, 'notes-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'notes').run);
-  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.3-rc.1', 'v0.7.30', 'v0.7.4', 'v0.7.5']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.3-rc.1', 'v0.7.30', 'v0.8.0', 'v0.8.0-rc.1', 'v0.7.4', 'v0.7.5']) {
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RELEASE_TAG: tag, GITHUB_OUTPUT: output },
@@ -166,8 +169,8 @@ test('云端版本校验拒绝路径、命令及多行输入，正常输出发�
   const script = join(dir, 'scripts/validate-version.ps1');
   const output = join(dir, 'version-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'ver').run);
-  for (const version of ['v0.7.1', 'v0.7.1-rc.1', '../outside', 'v0.7.1;echo bad', 'v0.7.1\ntag=other', 'v0.7.1\n', '0.7.1']) {
-    const valid = version === 'v0.7.1' || version === 'v0.7.1-rc.1';
+  for (const version of ['v0.8.0', 'v0.8.0-rc.1', '../outside', 'v0.8.0;echo bad', 'v0.8.0\ntag=other', 'v0.8.0\n', '0.8.0']) {
+    const valid = version === 'v0.8.0' || version === 'v0.8.0-rc.1';
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RAW: version, GITHUB_OUTPUT: output },
@@ -198,10 +201,10 @@ test('本地默认版本与 CI 一致，注入应用版本并生成同版本 ZIP
 
 test('自定义版本去除 v 前缀，应用版本与 ZIP 名称一致', windowsOnly, t => {
   const dir = fixture(t);
-  const result = runPackage(dir, ['-Version', 'v0.7.1-rc.1']);
+  const result = runPackage(dir, ['-Version', 'v0.8.0-rc.1']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.7.1-rc.1'));
-  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.7.1-rc.1-win-x64-portable.zip')));
+  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.8.0-rc.1'));
+  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.8.0-rc.1-win-x64-portable.zip')));
 });
 
 test('非法版本在构建和写入产物前被拒绝', windowsOnly, t => {

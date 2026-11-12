@@ -56,11 +56,11 @@ Electron 主进程有改动时，执行 `npm run test:electron` 和 `npm run bui
 
 更新真实程序路径不能用普通 Electron `node:fs` 验证 `.asar` 的原始字节，必须覆盖生产使用的 `original-fs`；失败恢复需验证停机 SQLite、完整备份、健康提交后的编辑和防自动循环，不能只以文件复制或检查状态作为通过。QA 控制入口仅注入测试 ASAR，生产包必须无该入口。测试指令绑定具体进程，恢复后的同版本不能重放上次安装指令。
 
-发布配置有改动时，本地执行 `node --test --test-name-pattern='^(发布默认值|锁文件安装|云端后端|发布说明)' scripts/test-release-config.mjs`：检查发布配置检查与构建顺序、预装 Maven 和跳过测试执行的约定，以及发布说明按完整基础版本选择、缺失/空白时拒绝；不构建或生成模拟 ZIP。完整 `node --test scripts/test-release-config.mjs` 还包含假打包器 / ZIP 用例，留在 GitHub Actions 执行。
+发布配置有改动时，本地执行 `node --test --test-name-pattern='^(发布默认值|干净检出|云端后端|发布说明)' scripts/test-release-config.mjs`：检查发布配置检查与构建顺序、预装 Maven 和跳过测试执行的约定，以及发布说明按完整基础版本选择、缺失/空白时拒绝；不构建或生成模拟 ZIP。完整 `node --test scripts/test-release-config.mjs` 还包含假打包器 / ZIP 用例，通常在 GitHub Actions 执行；完整用例需先运行 `npm run build:electron`，提供夹具使用的发布元数据模块。
 
 当更新 helper、程序清单或 ZIP 发布结构改变时，本地也应运行完整发布配置专项，所有模拟包只写工作区 `temp/`。这类隔离工程验证不属于发布。写盘功能还需运行便携审计；`scripts/portable-audit.ps1 -RunScript scripts/test-app-update-desktop.mjs` 可监控完整应用更新专项，外部目录只采集名字 / 大小 / 时间等元数据，不读取用户内容或凭证。测试结果、既有告警与跳过项、工程验证和未人工验收的边界分别记录。
 
-前后端业务全量测试在本地作为发布前门禁，发布者应确认结果对应待发布提交，并在发布说明记录实际范围与未解决问题；云端不会自动验证本地测试是否执行。GitHub Actions 在 `npm ci` 后运行轻量发布配置回归，再进行前端类型检查、前端/Electron 构建、后端 Java 17 编译、打包及产物校验。后端使用 runner 预装 `mvn -DskipTests package` 跳过测试执行，本地全量测试仍用 wrapper。不得将取消云端重复测试描述为已修复某个测试失败；发现的业务缺陷仍需独立定位。发行打包只在 GitHub Actions 上执行。
+前后端业务全量测试在本地作为发布前门禁，发布者应确认结果对应待发布提交，并在发布说明记录实际范围与未解决问题；云端不会自动验证本地测试是否执行。GitHub Actions 在 `npm ci` 后先编译 Electron 和发布元数据模块，再运行发布配置回归，随后进行前端类型检查与构建、Rust 更新助手及后端 Java 17 编译、打包和产物校验。后端使用 runner 预装 `mvn -DskipTests package` 跳过测试执行，本地全量测试仍用 wrapper。不得将取消云端重复测试描述为已修复某个测试失败；发现的业务缺陷仍需独立定位。公开发行产物在 GitHub Actions 上构建，本地更新专项使用隔离验证产物。
 
 ---
 
