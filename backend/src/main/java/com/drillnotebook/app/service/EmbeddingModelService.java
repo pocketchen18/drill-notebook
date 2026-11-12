@@ -89,6 +89,8 @@ public class EmbeddingModelService {
     private final Path embeddingModelsRoot;
     private final boolean autoRecover;
     private final RetrievalMaintenanceService maintenance;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.drillnotebook.app.config.PortableUpdateRequestGate updateGate;
     private final HuggingFaceCatalogService hfCatalog;
 
     private final ExecutorService tasks = Executors.newSingleThreadExecutor(r -> {
@@ -177,7 +179,7 @@ public class EmbeddingModelService {
                     JobHandle handle = new JobHandle(model.id(), false);
                     activeDownloadByModel.put(model.id(), handle);
                     downloadJobs.put(handle.jobId, handle);
-                    tasks.submit(() -> {
+                    submitModelTask(() -> {
                         try {
                             verifyAndFinalize(model, handle);
                         } finally {
@@ -197,7 +199,7 @@ public class EmbeddingModelService {
                 case "UNINSTALLING" -> {
                     JobHandle handle = new JobHandle(model.id(), false);
                     activeUninstallByModel.put(model.id(), handle);
-                    tasks.submit(() -> runUninstall(model, handle));
+                    submitModelTask(() -> runUninstall(model, handle));
                 }
                 default -> { /* AVAILABLE / FAILED / PAUSED need no action */ }
             }
@@ -223,6 +225,10 @@ public class EmbeddingModelService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+    private void submitModelTask(Runnable task) {
+        if (updateGate == null) tasks.submit(task);
+        else if (!updateGate.executeBackground(tasks, task)) throw new java.util.concurrent.RejectedExecutionException("Preparing portable update");
     }
 
     // ── Catalog API ─────────────────────────────────────────────────────────
@@ -282,7 +288,7 @@ public class EmbeddingModelService {
         activeDownloadByModel.put(catalogId, handle);
         models.updateStateAndError(catalogId, "DOWNLOADING", null);
         persistProgress(model, handle, Map.of());
-        tasks.submit(() -> {
+        submitModelTask(() -> {
             try {
                 runDownload(model, handle);
             } finally {
@@ -412,7 +418,7 @@ public class EmbeddingModelService {
         });
         clearProviderIfModel(model);
         // Single-thread executor: this runs only after any download task exits.
-        tasks.submit(() -> runUninstall(model, handle));
+        submitModelTask(() -> runUninstall(model, handle));
         return new ApiResult(202, Map.of("jobId", handle.jobId, "state", "UNINSTALLING"));
     }
 

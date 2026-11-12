@@ -4,9 +4,15 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { clearPortableTemp, getPortablePaths, setupPortablePaths, type PortablePaths } from './paths';
 import { startBackend, stopBackend, type BackendHandle } from './java-bridge';
+import { PortableUpdateHost } from './update-host';
 
 let portablePaths: PortablePaths;
 let backend: BackendHandle | undefined;
+// 启动更新先展示窗口；此时助手快捷键仍可能触发 API，不能让渲染进程缓存尚未就绪的备用地址。
+let settleBackendStartup: () => void;
+const backendStartup = new Promise<void>(resolve => { settleBackendStartup = resolve; });
+let updateHost: PortableUpdateHost | undefined;
+let updateQuit = false;
 let mainWindow: BrowserWindow | undefined;
 let pendingActivation = false;
 /** AI 助手窗口：整个应用只有一个，关闭只是收起，随主窗口一起退出。 */
@@ -248,6 +254,12 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault();
   });
+  mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
+    if (code === -3 || !updateHost?.awaitingBoot) return;
+    updateHost.failBoot(`新版本界面无法加载：${description}`);
+    quitting = true;
+    app.quit();
+  });
   mainWindow.on('close', (event) => {
     if (quitting) return;
     if (!confirmQuit()) {
@@ -330,7 +342,10 @@ ipcMain.handle('bus:publish', (event, message: unknown) => {
   if (target && !target.isDestroyed()) target.webContents.send('bus:message', message);
 });
 
-ipcMain.handle('backend:get-base-url', () => backend?.baseUrl ?? 'http://127.0.0.1:18080');
+ipcMain.handle('backend:get-base-url', async () => {
+  await backendStartup;
+  return backend?.baseUrl ?? 'http://127.0.0.1:18080';
+});
 ipcMain.handle('app:get-root', () => portablePaths.root);
 ipcMain.handle('app:get-portable-info', () => ({ root: portablePaths.root, database: portablePaths.database, portable: true }));
 ipcMain.handle('app:get-config', () => {
@@ -522,9 +537,32 @@ async function startPrimaryInstance(): Promise<void> {
     }
   );
 
+  updateHost = new PortableUpdateHost({
+    paths: portablePaths,
+    mainWindow: () => mainWindow,
+    assistantWindow: () => assistantWindow,
+    backend: () => backend,
+    trusted: trustedSender,
+    quitForUpdate: () => { updateQuit = true; quitting = true; app.quit(); }
+  });
+  if (await updateHost.recoverIfNeeded()) return;
+  const updateBeforeWork = updateHost.bootingUpdate || updateHost.updater.getState().settings.automaticUpdate;
+  if (updateBeforeWork) {
+    updateHost.updater.setStartupBusy(true);
+    createWindow();
+    if (await updateHost.updater.startup(updateHost.bootingUpdate)) return;
+  }
   try {
     backend = await startBackend(portablePaths);
   } catch (error) {
+    settleBackendStartup!();
+    if (updateHost.awaitingBoot) {
+      updateHost.failBoot(error instanceof Error ? error.message : String(error));
+      quitting = true;
+      app.quit();
+      return;
+    }
+    updateHost.backendUnavailable();
     console.error('[backend] startup failed', error);
     await dialog.showMessageBox({
       type: 'warning',
@@ -533,7 +571,9 @@ async function startPrimaryInstance(): Promise<void> {
       detail: error instanceof Error ? error.message : String(error)
     });
   }
-  createWindow();
+  settleBackendStartup!();
+  if (!mainWindow) createWindow();
+  if (backend) updateHost.backendReady();
 }
 
 if (ownsSingleInstanceLock) {
@@ -542,7 +582,8 @@ if (ownsSingleInstanceLock) {
     if (process.platform !== 'darwin') app.quit();
   });
   app.on('before-quit', () => {
-    stopBackend(backend);
+    updateHost?.dispose();
+    if (!updateQuit) stopBackend(backend);
     clearPortableTemp(getPortablePaths(portablePaths.root));
   });
   void startPrimaryInstance();

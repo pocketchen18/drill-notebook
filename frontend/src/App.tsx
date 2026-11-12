@@ -15,6 +15,8 @@ import { useAssistantBridge } from './hooks/useAssistantBridge';
 import { PracticePage } from './pages/PracticePage';
 import { KnowledgePointPage } from './pages/KnowledgePointPage';
 import { CalendarPage } from './pages/CalendarPage';
+import { AppUpdateProvider, useAppUpdate } from './components/app-update/AppUpdateProvider';
+import { UpdateEntry, UpdateStartupView } from './components/app-update/UpdateEntry';
 
 const { Sider, Header, Content } = Layout;
 
@@ -50,6 +52,8 @@ const settingsItem: NavItem = { key: '/settings', label: '设置', icon: <Settin
 const navItems: NavItem[] = [...navGroups.flatMap((group) => group.items), settingsItem];
 
 function Shell(): JSX.Element {
+  const update = useAppUpdate();
+  const startupBusy = !!update.api && ((!update.state && !update.error) || !!update.state?.startupBusy);
   const location = useLocation();
   const navigate = useNavigate();
   const theme = useUiStore((state) => state.theme);
@@ -235,6 +239,7 @@ function Shell(): JSX.Element {
           <Header className="topbar">
             <span className="topbar-title">{title}</span>
             <div className="topbar-actions">
+              <UpdateEntry />
               <button type="button" className={`topbar-ai-pill${assistant.visible ? ' is-open' : ''}`} onClick={toggleAi}
                 aria-pressed={assistant.visible}
                 title={assistant.visible ? 'AI 助手在前台时收起，在后台时切到前台' : assistant.running ? `打开 AI 助手 · ${assistant.running} 个会话正在回复` : '打开 AI 助手'}>
@@ -257,7 +262,8 @@ function Shell(): JSX.Element {
             </div>
           </Header>
         )}
-        <Content><AppRoutes /></Content>
+        {notebookFocusMode && <div className="focus-update-entry"><UpdateEntry /></div>}
+        <Content>{startupBusy ? <UpdateStartupView /> : <AppRoutes />}</Content>
       </Layout>
     </Layout>
   );
@@ -265,7 +271,7 @@ function Shell(): JSX.Element {
 
 export function App(): JSX.Element {
   const [router] = useState(() => createHashRouter([{ path: '*', element: <Shell /> }]));
-  return <RouterProvider router={router} />;
+  return <AppUpdateProvider><RouterProvider router={router} /></AppUpdateProvider>;
 }
 
 export function AppRoutes(): JSX.Element {

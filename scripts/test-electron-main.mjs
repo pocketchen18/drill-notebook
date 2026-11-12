@@ -24,7 +24,7 @@ function deferred() {
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function boot({ ownsLock = true } = {}) {
+function boot({ ownsLock = true, automaticUpdate = false } = {}) {
   const calls = [];
   const windows = [];
   const handlers = new Map();
@@ -102,6 +102,17 @@ function boot({ ownsLock = true } = {}) {
       startBackend(value) { assert.equal(value, paths); calls.push('backend'); return backendReady.promise; },
       stopBackend(value) { calls.push(['stop', value]); },
     },
+    './update-host': {
+      PortableUpdateHost: class {
+        bootingUpdate = false;
+        awaitingBoot = false;
+        updater = { getState: () => ({ settings: { automaticUpdate } }), setStartupBusy() {}, startup: async () => false };
+        async recoverIfNeeded() { return false; }
+        backendReady() {}
+        backendUnavailable() {}
+        dispose() {}
+      },
+    },
   };
   vm.runInNewContext(source, {
     exports: {}, __dirname: path.join(root, 'electron'),
@@ -134,6 +145,31 @@ test('便携路径先于锁，只有主实例在 ready 后启动一次后端', a
   h.backendReady.resolve(h.handle);
   await flush();
   assert.equal(h.windows.length, 1);
+});
+
+test('启动更新期间提前打开的窗口等待真实后端端口，不缓存备用地址', async () => {
+  const h = boot({ automaticUpdate: true });
+  h.ready.resolve();
+  await flush();
+  assert.equal(h.windows.length, 1);
+  let settled = false;
+  const baseUrl = h.invoke('backend:get-base-url', h.windows[0]).then(value => { settled = true; return value; });
+  await flush();
+  assert.equal(settled, false, '后端就绪前不返回备用端口');
+  h.backendReady.resolve(h.handle);
+  assert.equal(await baseUrl, h.handle.baseUrl);
+  assert.equal(await h.invoke('backend:get-base-url', h.windows[0]), h.handle.baseUrl);
+});
+
+test('后端启动失败也结束地址等待，不让提前发起的请求永久挂起', async () => {
+  const h = boot({ automaticUpdate: true });
+  h.ready.resolve();
+  await flush();
+  const baseUrl = h.invoke('backend:get-base-url', h.windows[0]);
+  h.backendReady.reject(new Error('startup failed'));
+  assert.equal(await baseUrl, 'http://127.0.0.1:18080');
+  h.warningClosed.resolve({ response: 0 });
+  await flush();
 });
 
 test('未获锁的实例只退出，不启动后端/窗口，也不清理主实例资源', async () => {

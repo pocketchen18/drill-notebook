@@ -51,6 +51,8 @@ public class EmbeddingJobExecutor {
     private final Object monitor = new Object();
     private volatile boolean running = false;
     private Thread pollerThread;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.drillnotebook.app.config.PortableUpdateRequestGate updateGate;
 
     public EmbeddingJobExecutor(
             EmbeddingJobRepository jobs,
@@ -131,6 +133,12 @@ public class EmbeddingJobExecutor {
      * immediately; {@code false} means idle-wait.
      */
     public boolean runOnce() {
+        var lease = updateGate == null ? null : updateGate.enterTask();
+        if (updateGate != null && lease == null) return false;
+        try { return runOnceGuarded(); }
+        finally { if (lease != null) lease.close(); }
+    }
+    private boolean runOnceGuarded() {
         Map<String, Object> space = jobs.findSelectedSpaceAnyState();
         if (space == null) return false;
         String spaceId = (String) space.get("embedding_space_id");

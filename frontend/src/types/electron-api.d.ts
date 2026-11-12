@@ -1,6 +1,7 @@
 interface AssistantWindowState { visible: boolean; running: number; pending: number; fixed: boolean }
 
 interface ElectronApi {
+  update?: import('../../../electron/update-types').AppUpdaterApi;
   backend: {
     getBaseUrl: () => Promise<string>;
     getAppRoot: () => Promise<string>;

@@ -8,6 +8,8 @@ import './styles/app.css';
 import { App } from './App';
 import { AssistantApp } from './AssistantApp';
 import { isAssistantWindow } from './lib/windowBus';
+import { UpdateLifecycleBridge } from './components/app-update/UpdateLifecycleBridge';
+import './components/app-update/app-update.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +41,7 @@ createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <ConfigProvider>
+        <UpdateLifecycleBridge />
         {isAssistantWindow() ? <AssistantApp /> : <App />}
       </ConfigProvider>
     </QueryClientProvider>

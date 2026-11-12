@@ -37,6 +37,18 @@ public class SessionDispatchService {
     });
     private boolean closed;
 
+    /** Portable update may close an idle dispatcher; persisted human queue items remain paused for the next run. */
+    public synchronized boolean readyForPortableUpdate() {
+        return !active.values().stream().anyMatch(run -> run.started || run.scheduled || run.toolDispatched);
+    }
+
+    public synchronized boolean beginPortableUpdateShutdown() {
+        if (!readyForPortableUpdate()) return false;
+        closed = true;
+        for (Long session : queues.keySet()) pending.forcePause(session);
+        return true;
+    }
+
     private static final class Run {
         final Receipt receipt;
         final Map<String,Object> body;

@@ -1,6 +1,7 @@
 import { ChildProcess, spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { app } from 'electron';
 import type { PortablePaths } from './paths';
 
@@ -9,6 +10,7 @@ export interface BackendHandle {
   port: number;
   baseUrl: string;
   pidFile: string;
+  exitCapability: string;
 }
 
 function isDev(): boolean {
@@ -134,6 +136,7 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
   const jar = findBackendJar(paths);
   const java = javaBinary(paths);
   const workerExe = findEmbeddingWorker(paths);
+  const exitCapability = randomBytes(32).toString('hex');
   if (workerExe) console.log(`[portable] embedding worker: ${workerExe}`);
   else console.warn('[portable] embedding worker not found; local vector index stays unavailable (run npm run build:embedding-worker)');
   const child = spawn(
@@ -147,7 +150,9 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
       '-jar',
       jar,
       '--server.address=127.0.0.1',
-      '--server.port=0'
+      '--server.port=0',
+      '--server.shutdown=graceful',
+      '--spring.lifecycle.timeout-per-shutdown-phase=30s'
     ],
     {
       cwd: paths.root,
@@ -157,6 +162,7 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
         TEMP: paths.tmp,
         TMP: paths.tmp,
         TMPDIR: paths.tmp,
+        DRILL_UPDATE_EXIT_TOKEN: exitCapability,
         ...(workerExe ? { DRILL_EMBEDDING_WORKER_EXE: workerExe } : {})
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -171,8 +177,37 @@ export async function startBackend(paths: PortablePaths): Promise<BackendHandle>
     if (fs.existsSync(pidFile) && readPid(pidFile) === child.pid) fs.rmSync(pidFile, { force: true });
   });
 
-  const port = await waitForHealth('http://127.0.0.1:0', path.join(paths.runtime, 'backend.port'));
-  return { process: child, port, baseUrl: `http://127.0.0.1:${port}`, pidFile };
+  try {
+    const port = await waitForHealth('http://127.0.0.1:0', path.join(paths.runtime, 'backend.port'));
+    return { process: child, port, baseUrl: `http://127.0.0.1:${port}`, pidFile, exitCapability };
+  } catch (error) {
+    // A failed boot has no business tasks. Do not leave an orphan JVM holding files needed for recovery.
+    if (child.pid) killTree(child.pid);
+    throw error;
+  }
+}
+
+export async function backendReadyForUpdate(handle: BackendHandle | undefined): Promise<{ ok: boolean; reason?: string }> {
+  if (!handle) return { ok: true };
+  const response = await fetch(`${handle.baseUrl}/api/app/update/ready`, {
+    headers: { 'X-Drill-Update-Exit': handle.exitCapability }, signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) return { ok: false, reason: '后端暂时无法准备更新，请等待当前操作完成。' };
+  const result = await response.json() as { ready?: boolean; reason?: string };
+  return { ok: result.ready === true, reason: result.reason };
+}
+
+export async function shutdownBackendForUpdate(handle: BackendHandle | undefined): Promise<void> {
+  if (!handle) return;
+  const response = await fetch(`${handle.baseUrl}/api/app/update/shutdown`, {
+    method: 'POST', headers: { 'X-Drill-Update-Exit': handle.exitCapability }, signal: AbortSignal.timeout(5000)
+  });
+  const result = await response.json() as { accepted?: boolean; reason?: string };
+  if (!response.ok || result.accepted !== true) {
+    const error = new Error(result.reason ?? '后端尚未完成保存，已暂停更新。');
+    if (response.status === 409) Object.assign(error, { code: 'UPDATE_BUSY' });
+    throw error;
+  }
 }
 
 export function stopBackend(handle: BackendHandle | undefined): void {

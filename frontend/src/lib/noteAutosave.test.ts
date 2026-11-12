@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { NoteAutosave } from './noteAutosave';
+import { NoteAutosave, saveAllNotesBeforeRestart } from './noteAutosave';
 
 const doc = (text: string): Record<string, unknown> => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 
@@ -127,5 +127,39 @@ describe('NoteAutosave', () => {
     expect(autosave.hasPendingFor(11)).toBe(true);
     autosave.discard(11);
     expect(autosave.hasPendingFor(11)).toBe(false);
+  });
+  it('restart waits for a confirmed save and drains the newest draft after a pending request', async () => {
+    let finish!: () => void;
+    const send = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; })).mockResolvedValue({});
+    const autosave = new NoteAutosave(send);
+    autosave.change(12, doc('第一份')); autosave.flush();
+    autosave.change(12, doc('最新草稿'));
+    let ready = false;
+    const waiting = autosave.flushAndWait().then(() => { ready = true; });
+    expect(send).toHaveBeenCalledTimes(1); expect(ready).toBe(false);
+    finish(); await waiting;
+    expect(send).toHaveBeenCalledTimes(2); expect(send).toHaveBeenLastCalledWith({ pageId: 12, content: doc('最新草稿') });
+    expect(autosave.hasPendingFor(12)).toBe(false);
+  });
+  it('undo during an in-flight save is queued so the older save cannot overwrite the undo', async () => {
+    let finish!: () => void;
+    const send = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; })).mockResolvedValue({});
+    const autosave = new NoteAutosave(send);
+    autosave.noteServer(13, doc('原文')); autosave.change(13, doc('修改')); autosave.flush();
+    autosave.change(13, doc('原文'));
+    const waiting = autosave.flushAndWait(); finish(); await waiting;
+    expect(send).toHaveBeenLastCalledWith({ pageId: 13, content: doc('原文') });
+  });
+  it('failed save blocks restart, retains the draft, and a successful retry releases the guard', async () => {
+    const send = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({});
+    const autosave = new NoteAutosave(send); autosave.change(14, doc('不能丢失'));
+    await expect(autosave.flushAndWait()).rejects.toThrow('草稿已保留');
+    expect(autosave.hasPendingFor(14)).toBe(true);
+    await autosave.flushAndWait(); expect(autosave.hasPendingFor(14)).toBe(false);
+  });
+  it('restart includes drafts whose page has unmounted', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const autosave = new NoteAutosave(send); autosave.change(15, doc('切走的页面'));
+    await saveAllNotesBeforeRestart(); expect(send).toHaveBeenCalledWith({ pageId: 15, content: doc('切走的页面') });
   });
 });

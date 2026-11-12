@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AiAssistant, quoteBlock } from './AiAssistant';
@@ -9,6 +9,8 @@ import { defaultShortcutConfig } from '../lib/shortcuts';
 import type { AiChatSession } from '../lib/types';
 import { ApiError } from '../lib/api';
 import type { OriginalTurnInput } from '../hooks/useAiChatTurn';
+import type { AssistantDraftDocument } from '../lib/assistantDrafts';
+import { prepareForRestart } from '../lib/updatePreparation';
 
 /** v0.8 助手窗口框架：会话栏、绑定页面、实际模型与用量、回到最新、窗口快捷键与详情栏。 */
 const { apiGet, apiPost, apiPut, streamChatMock } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: vi.fn(), streamChatMock: vi.fn() }));
@@ -36,6 +38,10 @@ function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}><MemoryRouter><AiAssistant /><Location /></MemoryRouter></QueryClientProvider>);
 }
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>(next => { resolve = next; }), resolve: value => resolve(value) };
+}
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear();
   streamChatMock.mockResolvedValue(() => undefined);
@@ -57,6 +63,129 @@ beforeEach(() => {
         { id: 'm1', modelId: 'deepseek-chat', name: '', group: '', streaming: true, tools: true, contextWindow: 128000, maxOutputTokens: 8000 },
         { id: 'm2', modelId: 'deepseek-reasoner', name: '', group: '', streaming: true, tools: true, contextWindow: 128000, maxOutputTokens: 8000, reasoningEfforts: ['low', 'high'] }] }] });
     return Promise.resolve({});
+  });
+});
+
+describe('更新时的便携助手草稿', () => {
+  const readDrafts = vi.fn();
+  const saveDrafts = vi.fn();
+  const composeInput = (): HTMLTextAreaElement => document.querySelector<HTMLTextAreaElement>('.ai-drawer-compose textarea')!;
+  const saved = (): AssistantDraftDocument => ({ format: 1, selectedSessionId: null,
+    choice: { modelConfigId: 'm2', reasoningEffort: 'high' }, titleDraft: null,
+    drafts: [
+      { sessionId: null, message: '新会话未发送的内容', scroll: 0,
+        attachments: [{ id: 'text-1', name: '问题.txt', kind: 'text', value: '附件全文', mime: 'text/plain', bytes: 12, codepoints: 4 }] },
+      { sessionId: 10, message: '导数会话草稿', attachments: [], scroll: 240 },
+      { sessionId: 11, message: '积分会话草稿', attachments: [], scroll: 120 }
+    ] });
+  beforeEach(() => {
+    readDrafts.mockResolvedValue(null); saveDrafts.mockResolvedValue(undefined);
+    Object.defineProperty(window, 'api', { value: { update: { readAssistantDrafts: readDrafts, saveAssistantDrafts: saveDrafts } }, configurable: true });
+  });
+  afterEach(async () => { cleanup(); await Promise.resolve(); Reflect.deleteProperty(window, 'api'); });
+
+  it('读取完成前禁用输入与快捷提示，恢复实际选中会话、文字和图片', async () => {
+    const pending = deferred<AssistantDraftDocument>(); readDrafts.mockReturnValue(pending.promise);
+    mount();
+    const input = composeInput();
+    expect(input).toBeDisabled();
+    expect(screen.getByRole('button', { name: '添加附件' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: '讲解当前内容' })).toBeDisabled();
+    await expect(prepareForRestart(() => 0)).rejects.toThrow('尚未读取成功');
+    expect(saveDrafts).not.toHaveBeenCalled();
+    const document = saved(); document.selectedSessionId = 11;
+    document.drafts[2].attachments = [{ id: 'image-1', name: '图.png', kind: 'image', value: 'data:image/png;base64,aGVsbG8=', mime: 'image/png', bytes: 5 }];
+    await act(async () => pending.resolve(document));
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveValue('积分会话草稿');
+    expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法');
+    expect(screen.getByAltText('图.png')).toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
+    await prepareForRestart(() => 0);
+    expect(saveDrafts.mock.calls.at(-1)?.[0]).toMatchObject({ selectedSessionId: 11, drafts: expect.arrayContaining([
+      expect.objectContaining({ sessionId: 11, message: '积分会话草稿', attachments: document.drafts[2].attachments })
+    ]) });
+  });
+
+  it('未保存的新会话恢复模型选择，切换会话保留各自草稿，更新前保存全部', async () => {
+    readDrafts.mockResolvedValue(saved()); mount();
+    const input = composeInput();
+    await waitFor(() => expect(input).toHaveValue('新会话未发送的内容'));
+    expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('新会话');
+    expect(screen.getByText('问题.txt')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^导数与连续性 4 条消息/ }));
+    await waitFor(() => expect(input).toHaveValue('导数会话草稿'));
+    fireEvent.change(input, { target: { value: '继续写的导数草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await waitFor(() => expect(input).toHaveValue('新会话未发送的内容'));
+    await prepareForRestart(() => 0);
+    expect(saveDrafts.mock.calls.at(-1)?.[0]).toMatchObject({ selectedSessionId: null, choice: { modelConfigId: 'm2', reasoningEffort: 'high' },
+      drafts: expect.arrayContaining([expect.objectContaining({ sessionId: 10, message: '继续写的导数草稿' }),
+        expect.objectContaining({ sessionId: null, message: '新会话未发送的内容', attachments: saved().drafts[0].attachments })]) });
+    expect(apiPost).not.toHaveBeenCalledWith('/api/ai/sessions', expect.anything());
+  });
+
+  it('保存串行执行，更新退出必须等待最后一份草稿落盘', async () => {
+    const firstSave = deferred<void>(); saveDrafts.mockReturnValueOnce(firstSave.promise);
+    readDrafts.mockResolvedValue(saved()); mount();
+    const input = composeInput();
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: '第一份内容' } });
+    let completed = false;
+    const first = prepareForRestart(() => 0).then(() => { completed = true; });
+    await waitFor(() => expect(saveDrafts).toHaveBeenCalledTimes(1));
+    expect(completed).toBe(false);
+    fireEvent.change(input, { target: { value: '最后一份内容' } });
+    const last = prepareForRestart(() => 0);
+    await act(async () => { await Promise.resolve(); });
+    expect(saveDrafts).toHaveBeenCalledTimes(1);
+    await act(async () => { firstSave.resolve(undefined); await Promise.all([first, last]); });
+    expect(saveDrafts.mock.calls.at(-1)?.[0].drafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: null, message: '最后一份内容' })
+    ]));
+  });
+
+  it('损坏的草稿文件保留并阻止退出，重试读取后才允许编辑', async () => {
+    const damaged = saved(); damaged.drafts.push(damaged.drafts[0]); readDrafts.mockResolvedValue(damaged);
+    mount();
+    expect(await screen.findByRole('alert')).toHaveTextContent('会话标识重复');
+    expect(composeInput()).toBeDisabled();
+    await expect(prepareForRestart(() => 0)).rejects.toThrow('尚未读取成功');
+    expect(saveDrafts).not.toHaveBeenCalled();
+    readDrafts.mockResolvedValue(saved()); fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(composeInput()).toBeEnabled());
+    expect(composeInput()).toHaveValue('新会话未发送的内容');
+  });
+
+  it('保存失败保留界面文字并阻止更新，重试成功保存原草稿', async () => {
+    readDrafts.mockResolvedValue(saved()); saveDrafts.mockRejectedValue(new Error('磁盘写入失败')); mount();
+    const input = composeInput();
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: '不能丢失的最新内容' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('磁盘写入失败');
+    await expect(prepareForRestart(() => 0)).rejects.toThrow('磁盘写入失败');
+    expect(input).toHaveValue('不能丢失的最新内容');
+    saveDrafts.mockResolvedValue(undefined); fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await prepareForRestart(() => 0);
+    expect(saveDrafts.mock.calls.at(-1)?.[0].drafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: null, message: '不能丢失的最新内容' })
+    ]));
+  });
+
+  it('附件读取期间阻止退出，读取结束后连同正文一起保存', async () => {
+    readDrafts.mockResolvedValue(saved()); mount();
+    await waitFor(() => expect(composeInput()).toBeEnabled());
+    const reading = deferred<string>();
+    const file = new File(['附件正文'], '慢速.txt', { type: 'text/plain' });
+    Object.defineProperty(file, 'text', { value: () => reading.promise });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await expect(prepareForRestart(() => 0)).rejects.toThrow('文件操作待确认');
+    await act(async () => reading.resolve('附件正文'));
+    await screen.findByText('慢速.txt');
+    await prepareForRestart(() => 0);
+    expect(saveDrafts.mock.calls.at(-1)?.[0].drafts).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: null,
+      attachments: expect.arrayContaining([expect.objectContaining({ name: '慢速.txt', value: '附件正文' })]) })]));
   });
 });
 

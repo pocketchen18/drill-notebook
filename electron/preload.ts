@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { AppUpdateState, NotesRange, UpdateNotes, UpdatePreparationRequest, UpdatePreparationResult, UpdateSettings } from './update-types';
 
 interface AssistantState { visible: boolean; running: number; pending: number; fixed: boolean }
 
@@ -18,6 +19,27 @@ contextBridge.exposeInMainWorld('api', {
   config: {
     get: (): Promise<{ theme?: 'light' | 'dark' }> => ipcRenderer.invoke('app:get-config'),
     set: (config: { theme: 'light' | 'dark' }): Promise<void> => ipcRenderer.invoke('app:set-config', config)
+  },
+  update: {
+    getState: (): Promise<AppUpdateState> => ipcRenderer.invoke('updater:get-state'),
+    setSettings: (patch: Partial<UpdateSettings>): Promise<AppUpdateState> => ipcRenderer.invoke('updater:set-settings', patch),
+    check: (): Promise<AppUpdateState> => ipcRenderer.invoke('updater:check'),
+    openAvailable: (): Promise<void> => ipcRenderer.invoke('updater:open-available'),
+    openHistory: (): Promise<void> => ipcRenderer.invoke('updater:open-history'),
+    closePresentation: (id: number): Promise<void> => ipcRenderer.invoke('updater:close-presentation', id),
+    notes: (range: NotesRange, version?: string, refresh?: boolean): Promise<UpdateNotes> => ipcRenderer.invoke('updater:notes', range, version, refresh),
+    skip: (version: string): Promise<void> => ipcRenderer.invoke('updater:skip', version),
+    restoreReminder: (): Promise<void> => ipcRenderer.invoke('updater:restore-reminder'),
+    install: (version: string): Promise<void> => ipcRenderer.invoke('updater:install', version),
+    cancelDownload: (): Promise<void> => ipcRenderer.invoke('updater:cancel-download'),
+    resumeInstall: (): Promise<void> => ipcRenderer.invoke('updater:resume-install'),
+    rendererReady: (): Promise<void> => ipcRenderer.invoke('updater:renderer-ready'),
+    prepared: (result: UpdatePreparationResult): Promise<void> => ipcRenderer.invoke('updater:prepared', result),
+    onState: (listener: (state: AppUpdateState) => void): (() => void) => subscribe('updater:state', listener),
+    onPrepare: (listener: (request: UpdatePreparationRequest) => void): (() => void) => subscribe('updater:prepare', listener),
+    onPreparationEnd: (listener: () => void): (() => void) => subscribe('updater:preparation-end', listener),
+    readAssistantDrafts: (): Promise<unknown> => ipcRenderer.invoke('updater:read-assistant-drafts'),
+    saveAssistantDrafts: (value: unknown): Promise<void> => ipcRenderer.invoke('updater:save-assistant-drafts', value)
   },
   dialog: {
     openTextFile: (extensions?: string[]): Promise<{ canceled: boolean; path?: string; content?: string }> => ipcRenderer.invoke('dialog:open-text-file', extensions),

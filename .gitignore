@@ -37,6 +37,7 @@ coverage/
 # Workspace-local Rust toolchain, cargo caches and build targets
 .tooling/
 embedding-worker/target/
+updater/target/
 
 # CodeGraph local index & daemon artifacts (db / shm / wal / log / pid)
 .codegraph/

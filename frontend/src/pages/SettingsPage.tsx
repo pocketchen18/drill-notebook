@@ -9,6 +9,7 @@ import { MemorySettingsCard } from '../components/ai-memory/MemorySettingsCard';
 import { AiRuntimeSettingsPanel } from '../components/AiRuntimeSettingsPanel';
 import { AiToolSettingsPanel } from '../components/AiToolSettingsPanel';
 import { DataManagementPanel } from '../components/DataManagementPanel';
+import { AboutPanel } from '../components/app-update/AboutPanel';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { useUiStore, type OutlineSide, type ThemeMode } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
@@ -74,7 +75,8 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'memory', label: '记忆' },
   { key: 'embedding', label: '嵌入与检索' },
   { key: 'study', label: '学习与复习' },
-  { key: 'data', label: '数据管理' }
+  { key: 'data', label: '数据管理' },
+  { key: 'about', label: '关于' }
 ];
 
 function readTabFromUrl(): SettingsTab {
@@ -561,6 +563,7 @@ export function SettingsPage(): JSX.Element {
 
     {activeTab === 'ai-behavior' && <div className="settings-tab-stack" role="tabpanel"><AiRuntimeSettingsPanel registerGuard={registerAiGuard} /></div>}
     {activeTab === 'tools' && <div className="settings-tab-stack" role="tabpanel"><AiToolSettingsPanel /></div>}
+    {activeTab === 'about' && <AboutPanel />}
 
       {/* 记忆 Tab：一个总开关 + 记忆库的手动管理，维护细节不堆进界面 */}
       {activeTab === 'memory' && (

@@ -35,6 +35,8 @@ public class AiSessionTitleService {
     private final ActiveTurnRegistry registry;
     private final AiUpstreamClient client;
     private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.drillnotebook.app.config.PortableUpdateRequestGate updateGate;
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(16), task -> {
                 Thread thread = new Thread(task, "ai-session-title");
@@ -93,15 +95,21 @@ public class AiSessionTitleService {
         }
         long id = ((Number) session.get("id")).longValue();
         long revision = ((Number) session.get("titleRevision")).longValue();
-        if (!inFlight.add(id)) throw reject(409, "TITLE_BUSY", "上一次标题任务仍在收尾，请稍后重试");
+        var lease = updateGate == null ? null : updateGate.enterTask();
+        if (updateGate != null && lease == null) throw reject(503, "UPDATE_RESTARTING", "正在准备更新，请稍候");
+        if (!inFlight.add(id)) {
+            if (lease != null) lease.close();
+            throw reject(409, "TITLE_BUSY", "上一次标题任务仍在收尾，请稍后重试");
+        }
         Map<String, Object> claimed;
         Job job;
         try {
             if (!sessions.claimTitle(id, revision, automatic)) throw reject(409, "TITLE_BUSY", "标题已变化或正在生成，请刷新后重试");
             claimed = sessions.find(id);
-            job = new Job(id, revision + 1, config, password, String.valueOf(session.get("sessionLink")));
+            job = new Job(id, revision + 1, config, password, String.valueOf(session.get("sessionLink")), lease);
         } catch (RuntimeException error) {
             inFlight.remove(id);
+            if (lease != null) lease.close();
             throw error;
         }
         try { executor.execute(job); }
@@ -119,8 +127,11 @@ public class AiSessionTitleService {
         private final String password;
         private final String operation;
         private final AiConnectionUsage connection;
+        private final com.drillnotebook.app.config.PortableUpdateRequestGate.TaskLease lease;
 
-        Job(long id, long revision, AiConfigRepository.ConfigRow config, String password, String link) {
+        Job(long id, long revision, AiConfigRepository.ConfigRow config, String password, String link,
+                com.drillnotebook.app.config.PortableUpdateRequestGate.TaskLease lease) {
+            this.lease = lease;
             this.id = id;
             this.revision = revision;
             this.config = config;
@@ -131,7 +142,7 @@ public class AiSessionTitleService {
 
         void cancel() {
             try { sessions.finishTitle(id, revision, null); }
-            finally { connection.close(); inFlight.remove(id); }
+            finally { connection.close(); inFlight.remove(id); if (lease != null) lease.close(); }
         }
 
         @Override public void run() {
@@ -186,6 +197,7 @@ public class AiSessionTitleService {
                 }
                 registry.release(operation, handle);
                 inFlight.remove(id);
+                if (lease != null) lease.close();
             }
         }
     }

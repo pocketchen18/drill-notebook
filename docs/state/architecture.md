@@ -6,9 +6,10 @@
 
 | 进程 | 技术 | 职责 |
 |---|---|---|
-| Electron Main | Node | 窗口、菜单、便携路径、单实例、spawn Java、生命周期 |
+| Electron Main | Node | 窗口、菜单、便携路径、单实例、spawn Java、生命周期、唯一更新状态与保存 / 退出协调 |
 | Renderer | React 18 + TS + Vite + Arco | 全部 UI；通过 `window.api` 与主进程交互；HTTP 访问后端 |
 | Backend | Spring Boot + SQLite | 领域 API：题库、练习会话、导入导出辅助、计划、SRS、AI 代理与会话 |
+| Portable Updater | Rust + Win32 | 仅更新事务期间运行，等待应用退出、备份 / 替换程序和停机数据库、重启与恢复 |
 
 - 后端绑定 **`127.0.0.1`**，端口由启动参数/协商文件决定（见 `electron/java-bridge.ts`）。  
 - 渲染进程 **不直连** 用户 AI 厂商密钥所在的业务逻辑：由后端代发。  
@@ -92,7 +93,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 | AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-当前 schema 17，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+当前 schema 18，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
 
 ### 3.1 AI 连接、轮次与工具（v0.7.1）
 
@@ -137,13 +138,28 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 
 - 开发：未打包时默认在工作区旁建立便携数据根（`APP_ROOT`，不入库）。  
 - 生产：`electron/paths.ts` 将 userData/cache/temp 指到可执行文件旁。  
-- 发行包只在 `.github/workflows/release-portable.yml` 构建。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、应用目录和 ZIP。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../../README.md#43-云端便携发布)，JRE 说明见 [jlink.md](../jlink.md)。本地不生成发行包。
+- 发行包由 `.github/workflows/release-portable.yml` 构建发布，本地 `package-portable.ps1` 可生成不发布的验证包。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、更新 helper、应用目录、程序清单、ZIP 与 SHA-256。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../../README.md#43-云端便携发布)，JRE 与更新材料见 [jlink.md](../jlink.md)。
+
+### 5.1 软件内更新（v0.8.0，已实现、尚未发布）
+
+主进程 `AppUpdater` 唯一管理偏好、公开 Releases、检查 / 提醒时间、跳过版和更新事务；renderer 通过受信 `window.api.update` 观察状态与发起操作，不直接下载或执行程序。关于提供实际版本、GitHub 主页、只读更新内容和 Star；新版说明与安装进度有各自的展示身份，关闭不取消事务。产品规则见[需求](../work/app-update/requirements.md)，实际协议见[规格](../work/app-update/spec.md)。
+
+公开 GitHub Releases 按语义版本排序，兼容 v0.x 预发行；匹配 Windows x64 目录 ZIP，校验公开源、大小 / SHA-256、程序清单与逐文件摘要。更新文件使用 Electron `original-fs`，避免 `.asar` 虚拟目录语义；只允许程序路径，用户数据和配置不在清单内。
+
+偏好及失败目标在 `config/`，Release / ZIP 在 `cache/updates/`，暂存、helper 和事务在 `runtime/updater/`，程序 / 停机数据库备份在 `backups/updates/`，全部从 PortablePaths.root 派生。助手未发送草稿用目录内密钥加密持久化，可随便携目录迁移；读取失败不覆盖现有草稿。缓存与完成事务按所有权标记清理，保留最近两份备份。
+
+替换前两窗口分别排空笔记保存、助手草稿和界面状态，并检查业务编辑 / AI 任务。后端 `PortableUpdateRequestGate` 将 HTTP 与后台写任务共同计数；最后退出检查关闭新写入及派发，正常关闭 Spring context。更新路径不强杀业务任务，忙碌 / 保存失败时等待并继续处理。
+
+Rust helper 验证事务和 Win32 进程身份，等待 Electron 与 JVM 都退出后备份，完整恢复基线持久化后才替换并重启。新主进程确认实际版本、后端健康和受信主界面就绪，再恢复业务页面；提前请求后端地址会等待启动完成。健康确认是提交点；失败或中断只在相关进程已退出、备份完整时恢复旧程序与停机数据库，保留失败数据副本，阻止同目标自动循环。确认健康后的用户编辑不能被恢复流程覆盖。
+
+真实应用的手动更新、启动自动更新、真实 JAR 启动失败恢复及便携审计已通过；完整范围见[验证记录](../work/app-update/plan.md)。QA driver 仅注入隔离测试 ASAR，生产包不包含它；本轮没有发布 Release。
 
 ## 6. 测试
 
 - 前端：Vitest（`frontend` 内 `*.test.ts` / `*.test.tsx`，如 `AiSummaryModal.test.tsx`、`TodayQueuePanel.urgency.test.ts`、`dayQueueSession.test.ts`、`studyPlan.test.ts`、`sessionCurve.test.ts`、`viewState.test.ts`）。
 - 后端：JUnit（`backend/src/test`，含 `KnowledgePointSummaryServiceTest`、`AiServiceSummarizeTest`、`KnowledgePointOriginalRepositoryTest`、`KnowledgePointControllerSummaryTest`、`ReviewRepositorySyncTest`、`ReviewServiceWireTest`、`CompletionSyncServiceTest`、`TodayQueueServiceTest`、`StudyPlanServiceTest` 等）。
 - 脚本：`scripts/smoke-mvp.ps1`、`scripts/portable-audit.ps1`、`scripts/mvp-test.ps1`（v0.5+ 后端核心接口冒烟）、`scripts/seed-test-bank.py`（Python 造题种子）。
+- 更新：`test-app-updater.mjs`、`updater/` 单元、`test-portable-updater.mjs` 原生专项、`test-app-update-desktop.mjs` 完整应用专项；最后一项使用实际 Electron / renderer / JAR / JRE 和独立 `temp/` 包，验证更新与恢复，不修改用户安装目录。运行入口见[测试规范](../test/TESTING_GUIDELINES.md)。
 
 ## 7. 版本演进（git 摘要）
 

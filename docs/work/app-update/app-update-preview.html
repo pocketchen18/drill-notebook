@@ -1,0 +1,929 @@
+<div id="drill-update-preview" aria-label="Drill Notebook 关于与更新设计">
+    <div class="dn-window" aria-label="Drill Notebook 关于与更新内容">
+      <div class="dn-chrome">
+        <div class="dn-caption">
+          <span class="dn-small-mark"><i data-lucide="notebook-pen" aria-hidden="true"></i></span>
+          <span>Drill Notebook</span>
+          <span class="dn-example">设计示例</span>
+          <div class="dn-caption-controls" aria-hidden="true"><i data-lucide="minus"></i><i data-lucide="square"></i><i data-lucide="x"></i></div>
+        </div>
+        <header class="dn-topbar">
+          <span class="dn-location"><i data-lucide="settings-2" aria-hidden="true"></i>设置</span>
+          <div class="dn-top-actions">
+            <button class="dn-update-icon cursor-interaction" type="button" data-action="open-update" aria-label="发现新版本 v0.8.1，查看更新内容" data-tooltip="发现新版本 v0.8.1，查看更新内容"><i data-lucide="circle-arrow-up" aria-hidden="true"></i></button>
+            <span class="dn-assistant"><i data-lucide="sparkles" aria-hidden="true"></i>AI 助手</span>
+          </div>
+        </header>
+        <div class="dn-app-body">
+          <aside class="dn-sidebar" aria-label="应用导航">
+            <div class="dn-nav-item"><i data-lucide="library" aria-hidden="true"></i><span>题库</span></div>
+            <div class="dn-nav-item"><i data-lucide="list-checks" aria-hidden="true"></i><span>刷题</span></div>
+            <div class="dn-nav-item"><i data-lucide="book-open-check" aria-hidden="true"></i><span>错题</span></div>
+            <div class="dn-nav-item"><i data-lucide="notebook" aria-hidden="true"></i><span>笔记</span></div>
+            <div class="dn-nav-item"><i data-lucide="repeat-2" aria-hidden="true"></i><span>背诵</span></div>
+            <div class="dn-nav-item"><i data-lucide="calendar-days" aria-hidden="true"></i><span>日历</span></div>
+            <div class="dn-nav-item dn-nav-current"><i data-lucide="settings" aria-hidden="true"></i><span>设置</span></div>
+          </aside>
+          <main class="dn-main">
+            <nav class="dn-settings-tabs" aria-label="设置分类">
+              <span>常规</span><span>AI 连接</span><span>AI 对话</span><span>工具</span><span>记忆</span><span>嵌入与检索</span><span>学习与复习</span><span>数据管理</span><span class="dn-tab-current" aria-current="page">关于</span>
+            </nav>
+            <div class="dn-settings-content">
+              <section class="dn-panel" aria-label="Drill Notebook 版本">
+                <div class="dn-brand-row">
+                  <span class="dn-brand-mark"><i data-lucide="notebook-pen" aria-hidden="true"></i></span>
+                  <div class="dn-brand-copy"><h2>Drill Notebook</h2><div class="dn-version">当前版本 <span class="dn-current-version">v0.8.0</span><span class="dn-badge">预发行</span></div></div>
+                  <button class="dn-button cursor-interaction dn-check-button" type="button" data-action="check"><i data-lucide="refresh-cw" aria-hidden="true"></i><span>检查更新</span></button>
+                </div>
+                <div class="dn-update-status" aria-live="polite"><span class="dn-status-text">发现新版本 v0.8.1（示例）</span></div>
+                <div class="dn-checked-at">上次检查：刚刚 · 示例数据</div>
+                <div class="dn-about-links">
+                  <a class="dn-button cursor-interaction" href="https://github.com/qilin-software/drill-notebook" target="_blank" rel="noopener noreferrer"><i data-lucide="github" aria-hidden="true"></i>GitHub 主页</a>
+                  <button class="dn-button cursor-interaction" type="button" data-action="open-notes" data-tooltip="查看各版本更新内容"><i data-lucide="file-text" aria-hidden="true"></i>更新内容</button>
+                </div>
+              </section>
+              <section class="dn-panel dn-preferences" aria-label="更新设置">
+                <div class="dn-panel-heading"><h2>更新设置</h2></div>
+                <label class="dn-setting-row">
+                  <span class="dn-setting-copy"><span>自动更新</span><small>每次启动立即检查，有新版本时自动下载并重启。</small></span>
+                  <input class="dn-switch cursor-interaction" type="checkbox" role="switch" aria-label="自动更新" data-setting="auto-update">
+                </label>
+                <label class="dn-setting-row">
+                  <span class="dn-setting-copy"><span>自动检查更新</span><small>按设定间隔检查新版本，在顶部显示更新入口。</small></span>
+                  <input class="dn-switch cursor-interaction" type="checkbox" role="switch" aria-label="自动检查更新" data-setting="automatic" checked>
+                </label>
+                <div class="dn-setting-row dn-interval-row">
+                  <label class="dn-setting-copy"><span>检查与提醒间隔</span><small>自动检查与启动弹窗共用，频繁重启不会重复提醒。</small></label>
+                  <div class="dn-interval-controls">
+                    <select class="dn-select cursor-interaction" aria-label="检查与提醒间隔" data-setting="interval"><option value="1">1 小时</option><option value="6">6 小时</option><option value="12">12 小时</option><option value="24" selected>24 小时</option><option value="48">48 小时</option><option value="custom">自定义</option></select>
+                    <label class="dn-custom-interval" hidden><input class="dn-number" type="number" min="1" max="168" step="1" value="24" aria-label="自定义间隔小时" data-setting="custom">小时</label>
+                  </div>
+                  <span class="dn-interval-error" role="alert" hidden>请输入 1–168 的整数小时。</span>
+                </div>
+                <label class="dn-setting-row">
+                  <span class="dn-setting-copy"><span>启动时更新提醒</span><small class="dn-reminder-copy">有新版且距上次提醒已满 24 小时，启动后显示更新说明。</small></span>
+                  <input class="dn-switch cursor-interaction" type="checkbox" role="switch" aria-label="启动时更新提醒" data-setting="reminder" checked>
+                </label>
+                <div class="dn-setting-row dn-skipped-row" hidden><span class="dn-setting-copy"><span>已跳过 v0.8.1</span><small>仍可手动查看或更新此版本。</small></span><button class="dn-text-button cursor-interaction" type="button" data-action="restore">恢复提醒</button></div>
+              </section>
+              <section class="dn-panel dn-star-panel" aria-label="支持项目">
+                <i data-lucide="star" aria-hidden="true"></i>
+                <p>如果 Drill Notebook 对你有帮助，<br class="dn-star-break">欢迎在 GitHub 点个 Star。</p>
+                <a class="dn-button cursor-interaction" href="https://github.com/qilin-software/drill-notebook" target="_blank" rel="noopener noreferrer"><i data-lucide="github" aria-hidden="true"></i>去 GitHub 点 Star</a>
+              </section>
+            </div>
+          </main>
+        </div>
+      </div>
+      <div class="dn-overlay" hidden>
+        <section class="dn-modal dn-notes-modal" role="dialog" aria-modal="true" aria-labelledby="drill-update-content-title" data-view="history">
+          <div class="dn-modal-header">
+            <span class="dn-modal-symbol"><i data-lucide="file-text" aria-hidden="true"></i></span>
+            <h2 id="drill-update-content-title" class="dn-modal-title">v0.8.0 更新内容</h2>
+            <div class="dn-range-picker">
+              <button id="drill-update-range-trigger" class="dn-range-trigger cursor-interaction" type="button" data-action="toggle-range" aria-label="显示的更新说明：上次更新以来" aria-haspopup="menu" aria-controls="drill-update-range-menu" aria-expanded="false"><span class="dn-range-label">上次更新以来</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+              <div id="drill-update-range-menu" class="dn-range-menu" role="menu" aria-labelledby="drill-update-range-menu-title" hidden>
+                <div id="drill-update-range-menu-title" class="dn-range-menu-title">显示的更新说明</div>
+                <button class="dn-range-option cursor-interaction" type="button" role="menuitemradio" aria-checked="true" data-action="select-range" data-range="since"><span class="dn-range-check-slot"><i class="dn-range-check" data-lucide="check" aria-hidden="true"></i></span><span>上次更新以来</span></button>
+                <button class="dn-range-option cursor-interaction" type="button" role="menuitemradio" aria-checked="false" data-action="select-range" data-range="10"><span class="dn-range-check-slot"><i class="dn-range-check" data-lucide="check" aria-hidden="true" hidden></i></span><span>当前版本及之前 10 个版本</span></button>
+                <button class="dn-range-option cursor-interaction" type="button" role="menuitemradio" aria-checked="false" data-action="select-range" data-range="20"><span class="dn-range-check-slot"><i class="dn-range-check" data-lucide="check" aria-hidden="true" hidden></i></span><span>当前版本及之前 20 个版本</span></button>
+                <button class="dn-range-option cursor-interaction" type="button" role="menuitemradio" aria-checked="false" data-action="select-range" data-range="50"><span class="dn-range-check-slot"><i class="dn-range-check" data-lucide="check" aria-hidden="true" hidden></i></span><span>当前版本及之前 50 个版本</span></button>
+                <button class="dn-range-option cursor-interaction" type="button" role="menuitemradio" aria-checked="false" data-action="select-range" data-range="100"><span class="dn-range-check-slot"><i class="dn-range-check" data-lucide="check" aria-hidden="true" hidden></i></span><span>当前版本及之前 100 个版本</span></button>
+              </div>
+            </div>
+            <button class="dn-close cursor-interaction" type="button" data-action="close" aria-label="关闭更新内容" data-tooltip="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+          </div>
+          <div class="dn-modal-meta"><div class="dn-version-pair"><span class="dn-from-version">当前安装 v0.8.0</span><i class="dn-version-arrow" data-lucide="arrow-right" aria-hidden="true" hidden></i><span class="dn-target-version" hidden>查看 v0.8.0</span><span class="dn-badge dn-target-status" hidden>当前安装</span><span class="dn-badge">预发行</span><span class="dn-badge">示例版本</span></div><div class="dn-release-source" aria-live="polite">v0.7.3 → v0.8.0 · 1 个版本 · 示例说明</div></div>
+          <div class="dn-modal-content">
+            <div class="dn-dialog-state">当前安装版的更新内容</div>
+            <div class="dn-modal-summary">各版本的 GitHub Release 说明。</div>
+            <div class="dn-notes-check-error" role="alert" hidden>检查失败，以下为上次成功检查时的更新内容（示例）。</div>
+            <div class="dn-modal-skipped" hidden>此版本已跳过自动提醒，仍可选择更新。</div>
+            <div class="dn-release-notes">
+              <article class="dn-release-entry" data-version="v0.8.0">
+                <header class="dn-release-heading"><h3>v0.8.0</h3><span class="dn-badge dn-installed">当前安装</span><span class="dn-release-date">2026-11-11 · 示例日期</span></header>
+                <h4>新增</h4><ul><li>独立 AI 助手窗口，主界面可继续编辑笔记。</li><li>会话内选择模型与思考档位。</li></ul>
+                <h4>改进与修复</h4><ul><li>支持会话置顶、标题改名和选中文字的复制与引用。</li><li>回复底部统一操作按钮，提供重新生成。</li></ul>
+                <a class="dn-release-link" href="https://github.com/qilin-software/drill-notebook/releases/tag/v0.8.0" target="_blank" rel="noopener noreferrer">在 GitHub 查看<i data-lucide="external-link" aria-hidden="true"></i></a>
+              </article>
+            </div>
+          </div>
+          <div class="dn-modal-footer">
+            <button class="dn-button dn-primary cursor-interaction dn-close-notes" type="button" data-action="close">关闭</button>
+            <button class="dn-button cursor-interaction dn-skip-button" type="button" data-action="skip">跳过此版本</button>
+            <button class="dn-button dn-primary cursor-interaction dn-primary-update" type="button" data-action="update"><i data-lucide="download" aria-hidden="true"></i><span>立即更新</span></button>
+          </div>
+        </section>
+        <section class="dn-modal dn-progress-modal" role="dialog" aria-modal="true" aria-labelledby="drill-update-progress-title" hidden>
+          <div class="dn-modal-header dn-progress-header">
+            <span class="dn-modal-symbol"><i data-lucide="download" aria-hidden="true"></i></span>
+            <h2 id="drill-update-progress-title" class="dn-progress-title">正在更新 Drill Notebook</h2>
+            <button class="dn-close cursor-interaction dn-progress-close" type="button" data-action="close" aria-label="关闭更新进度" data-tooltip="关闭进度窗口，更新仍会继续"><i data-lucide="x" aria-hidden="true"></i></button>
+          </div>
+          <div class="dn-progress-body">
+            <div class="dn-version-pair"><span class="dn-progress-from">当前 v0.8.0</span><i data-lucide="arrow-right" aria-hidden="true"></i><span class="dn-progress-target dn-target-version">v0.8.1</span><span class="dn-badge">设计示例</span></div>
+            <p class="dn-progress-summary" aria-live="polite">下载完成后将自动更新并重启。</p>
+            <div class="dn-transfer">
+              <div class="dn-progress-label"><span class="dn-transfer-text">正在下载更新包</span><span class="dn-progress-value">0%</span></div>
+              <div class="dn-progress" role="progressbar" aria-label="更新包下载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="dn-progress-fill"></div></div>
+              <div class="dn-transfer-size">0 / 128 MB · 24.8 MB/s · 示例数据</div>
+            </div>
+            <p class="dn-progress-error" role="alert" hidden>下载中断，请重试。当前版本仍可继续使用。</p>
+            <p class="dn-progress-hint">关闭窗口后仍会继续更新并重启。</p>
+          </div>
+          <div class="dn-modal-footer dn-progress-footer">
+            <button class="dn-button cursor-interaction dn-cancel-download" type="button" data-action="cancel-download">取消下载</button>
+            <a class="dn-button cursor-interaction dn-progress-release-link" href="https://github.com/qilin-software/drill-notebook/releases/tag/v0.8.1" target="_blank" rel="noopener noreferrer" hidden>在 GitHub 查看</a>
+            <button class="dn-button dn-primary cursor-interaction dn-retry-update" type="button" data-action="retry-update" hidden>重试更新</button>
+          </div>
+        </section>
+      </div>
+    </div>
+</div>
+<style>
+#drill-update-preview {
+  --dn-page: light-dark(#f4f6fa, #131519);
+  --dn-panel: light-dark(#ffffff, #1b1e24);
+  --dn-sider: light-dark(#fafbfd, #16181d);
+  --dn-line: light-dark(#e4e7ee, #2a2f38);
+  --dn-text: light-dark(#1e2433, #e2e6ee);
+  --dn-muted: light-dark(#6b7385, #98a2b3);
+  --dn-accent: light-dark(#2f54eb, #8da2ff);
+  --dn-accent-fill: light-dark(#2f54eb, #4b6bf0);
+  --dn-accent-text: light-dark(#ffffff, #ffffff);
+  --dn-accent-soft: light-dark(#eef2ff, #1f2a4d);
+  --dn-hover: light-dark(#eff2f7, #242931);
+  --dn-success: light-dark(#19834b, #70d99d);
+  --dn-success-soft: light-dark(#eaf7ee, #193126);
+  --dn-danger: light-dark(#b83842, #ff9096);
+  --dn-scrim: light-dark(rgb(20 28 44 / 28%), rgb(0 0 0 / 55%));
+  --dn-shadow: light-dark(0 14px 48px rgb(20 28 44 / 20%), 0 14px 48px rgb(0 0 0 / 50%));
+}
+#drill-update-preview .dn-window { position: relative; min-height: 892px; background: var(--dn-page); color: var(--dn-text); font: 14px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif; border: 1px solid var(--dn-line); border-radius: 10px; }
+#drill-update-preview .dn-window *, #drill-update-preview .dn-window *::before, #drill-update-preview .dn-window *::after { box-sizing: border-box; }
+#drill-update-preview .dn-window [hidden] { display: none !important; }
+#drill-update-preview .dn-window :where(button, input, select) { font: inherit; color: inherit; }
+#drill-update-preview .dn-window h2, #drill-update-preview .dn-window h3, #drill-update-preview .dn-window h4, #drill-update-preview .dn-window p { margin: 0; }
+#drill-update-preview .dn-window h2 { font-size: 16px; font-weight: 500; }
+#drill-update-preview .dn-window h3 { font-size: 14px; font-weight: 500; }
+#drill-update-preview .dn-window h4, #drill-update-preview .dn-window strong { font-size: 13px; font-weight: 500; }
+#drill-update-preview .dn-window svg { width: 16px; height: 16px; flex: none; }
+#drill-update-preview .dn-window :where(a) { color: var(--dn-accent); text-decoration: none; }
+#drill-update-preview .dn-window :where(a):hover { text-decoration: underline; }
+#drill-update-preview .dn-caption { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; background: var(--dn-sider); border-bottom: 1px solid var(--dn-line); border-radius: 10px 10px 0 0; font-size: 12px; }
+#drill-update-preview .dn-small-mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; color: var(--dn-accent-text); background: var(--dn-accent-fill); }
+#drill-update-preview .dn-small-mark svg { width: 13px; height: 13px; }
+#drill-update-preview .dn-example { color: var(--dn-muted); padding-left: 8px; }
+#drill-update-preview .dn-caption-controls { margin-left: auto; margin-right: 92px; display: flex; gap: 24px; color: var(--dn-muted); }
+#drill-update-preview .dn-caption-controls svg { width: 12px; height: 12px; }
+#drill-update-preview .dn-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 10px 20px; background: var(--dn-panel); border-bottom: 1px solid var(--dn-line); }
+#drill-update-preview .dn-location, #drill-update-preview .dn-top-actions, #drill-update-preview .dn-assistant { display: flex; align-items: center; gap: 8px; }
+#drill-update-preview .dn-assistant { color: var(--dn-muted); font-size: 13px; padding: 4px 8px; }
+#drill-update-preview .dn-update-icon { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; color: var(--dn-success); background: var(--dn-success-soft); }
+#drill-update-preview .dn-update-icon:hover { background: var(--dn-hover); }
+#drill-update-preview .dn-update-icon svg { width: 19px; height: 19px; }
+#drill-update-preview .dn-app-body { display: grid; grid-template-columns: 132px minmax(0, 1fr); min-height: 798px; }
+#drill-update-preview .dn-sidebar { padding: 16px 8px; border-right: 1px solid var(--dn-line); border-radius: 0 0 0 10px; background: var(--dn-sider); }
+#drill-update-preview .dn-nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 4px; color: var(--dn-muted); border-radius: 6px; font-size: 13px; }
+#drill-update-preview .dn-nav-current { color: var(--dn-accent); background: var(--dn-accent-soft); }
+#drill-update-preview .dn-main { min-width: 0; padding: 20px; }
+#drill-update-preview .dn-settings-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; margin-bottom: 20px; border-radius: 8px; background: var(--dn-hover); font-size: 12px; }
+#drill-update-preview .dn-settings-tabs span { padding: 6px 9px; border-radius: 6px; color: var(--dn-muted); white-space: nowrap; }
+#drill-update-preview .dn-settings-tabs .dn-tab-current { color: var(--dn-accent); background: var(--dn-panel); font-weight: 500; }
+#drill-update-preview .dn-settings-content { display: grid; gap: 16px; }
+#drill-update-preview .dn-panel { min-width: 0; background: var(--dn-panel); border: 1px solid var(--dn-line); border-radius: 8px; padding: 20px; }
+#drill-update-preview .dn-brand-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+#drill-update-preview .dn-brand-mark { width: 48px; height: 48px; border-radius: 12px; background: var(--dn-accent-fill); color: var(--dn-accent-text); display: grid; place-items: center; flex: none; }
+#drill-update-preview .dn-brand-mark svg { width: 30px; height: 30px; }
+#drill-update-preview .dn-brand-copy { flex: 1; min-width: 160px; }
+#drill-update-preview .dn-brand-copy h2 { font-size: 18px; margin-bottom: 4px; }
+#drill-update-preview .dn-version { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--dn-muted); }
+#drill-update-preview .dn-current-version { color: var(--dn-text); font-variant-numeric: tabular-nums; }
+#drill-update-preview .dn-badge { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--dn-hover); color: var(--dn-muted); font-size: 11px; }
+#drill-update-preview .dn-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; min-height: 32px; padding: 5px 10px; border: 1px solid var(--dn-line); border-radius: 6px; background: var(--dn-panel); color: var(--dn-text); font-size: 13px; line-height: 1.4; text-decoration: none; }
+#drill-update-preview .dn-button:hover { background: var(--dn-hover); text-decoration: none; }
+#drill-update-preview .dn-button:disabled { opacity: .55; cursor: default; }
+#drill-update-preview .dn-primary { color: var(--dn-accent-text); background: var(--dn-accent-fill); border-color: var(--dn-accent-fill); }
+#drill-update-preview .dn-primary:hover { color: var(--dn-accent-text); background: color-mix(in srgb, var(--dn-accent-fill), var(--dn-text) 10%); }
+#drill-update-preview .dn-text-button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; border: 0; border-radius: 3px; background: transparent; color: var(--dn-accent); font-size: 12px; }
+#drill-update-preview .dn-text-button:hover { text-decoration: underline; }
+#drill-update-preview .dn-update-status { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 16px; font-size: 13px; }
+#drill-update-preview .dn-status-text { color: var(--dn-accent); }
+#drill-update-preview .dn-status-text[data-tone="neutral"] { color: var(--dn-muted); }
+#drill-update-preview .dn-status-text[data-tone="error"] { color: var(--dn-danger); }
+#drill-update-preview .dn-checked-at { margin-top: 4px; font-size: 12px; color: var(--dn-muted); }
+#drill-update-preview .dn-about-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--dn-line); }
+#drill-update-preview .dn-preferences { padding: 0; }
+#drill-update-preview .dn-panel-heading { padding: 14px 20px; border-bottom: 1px solid var(--dn-line); }
+#drill-update-preview .dn-panel-heading h2 { font-size: 14px; }
+#drill-update-preview .dn-setting-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 14px 20px; }
+#drill-update-preview .dn-setting-row + .dn-setting-row { border-top: 1px solid var(--dn-line); }
+#drill-update-preview .dn-setting-copy { min-width: 0; flex: 1 1 260px; display: grid; gap: 3px; font-size: 13px; }
+#drill-update-preview .dn-setting-copy small { color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-switch { position: relative; appearance: none; flex: none; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 12px; background: var(--dn-line); }
+#drill-update-preview .dn-switch::after { content: ""; position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; border-radius: 50%; background: var(--dn-panel); }
+#drill-update-preview .dn-switch:checked { background: var(--dn-accent-fill); }
+#drill-update-preview .dn-switch:checked::after { transform: translateX(14px); background: var(--dn-accent-text); }
+#drill-update-preview .dn-switch:disabled, #drill-update-preview .dn-select:disabled, #drill-update-preview .dn-number:disabled { opacity: .45; cursor: default; }
+#drill-update-preview .dn-select, #drill-update-preview .dn-number { min-height: 32px; padding: 4px 8px; border: 1px solid var(--dn-line); border-radius: 6px; background: var(--dn-panel); font-size: 13px; }
+#drill-update-preview .dn-select { min-width: 108px; max-width: 100%; }
+#drill-update-preview .dn-interval-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#drill-update-preview .dn-custom-interval { display: flex; align-items: center; gap: 5px; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-number { width: 68px; }
+#drill-update-preview .dn-interval-error { width: 100%; color: var(--dn-danger); font-size: 12px; }
+#drill-update-preview .dn-star-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+#drill-update-preview .dn-star-panel > svg { color: var(--dn-accent); width: 20px; height: 20px; }
+#drill-update-preview .dn-star-panel p { flex: 1 1 220px; font-size: 13px; }
+#drill-update-preview .dn-star-break { display: none; }
+#drill-update-preview .dn-overlay { position: absolute; z-index: 10; inset: 0; display: grid; align-content: start; justify-items: center; padding: 112px 20px 20px; border-radius: 10px; background: var(--dn-scrim); }
+#drill-update-preview .dn-modal { width: min(720px, 100%); min-width: 0; background: var(--dn-panel); border: 1px solid var(--dn-line); border-radius: 12px; box-shadow: var(--dn-shadow); }
+#drill-update-preview .dn-progress-modal { width: min(480px, 100%); }
+#drill-update-preview .dn-modal-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 18px 20px; border-bottom: 1px solid var(--dn-line); }
+#drill-update-preview .dn-modal[data-view="pending"] .dn-modal-header { grid-template-columns: auto minmax(0, 1fr) auto; }
+#drill-update-preview .dn-progress-header { grid-template-columns: auto minmax(0, 1fr) auto; }
+#drill-update-preview .dn-modal-symbol { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--dn-accent); background: var(--dn-accent-soft); }
+#drill-update-preview .dn-modal-header h2 { flex: 1; min-width: 0; }
+#drill-update-preview .dn-range-picker { position: relative; min-width: 0; max-width: 248px; }
+#drill-update-preview .dn-range-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 30px; padding: 5px 10px; border: 1px solid var(--dn-line); border-radius: 18px; background: var(--dn-panel); font-size: 12px; text-align: left; }
+#drill-update-preview .dn-range-trigger:hover, #drill-update-preview .dn-range-trigger[aria-expanded="true"] { background: var(--dn-hover); }
+#drill-update-preview .dn-range-label { min-width: 0; overflow-wrap: anywhere; }
+#drill-update-preview .dn-range-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 2; width: 284px; max-width: calc(100vw - 44px); padding: 6px; border: 1px solid var(--dn-line); border-radius: 10px; background: var(--dn-panel); box-shadow: var(--dn-shadow); }
+#drill-update-preview .dn-range-menu-title { padding: 7px 10px; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-range-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 7px 10px; border: 0; border-radius: 6px; background: var(--dn-panel); text-align: left; font-size: 13px; }
+#drill-update-preview .dn-range-option:hover { background: var(--dn-hover); }
+#drill-update-preview .dn-range-option[aria-checked="true"] { background: var(--dn-accent-soft); }
+#drill-update-preview .dn-range-check-slot { display: flex; width: 16px; flex: none; color: var(--dn-accent); }
+#drill-update-preview .dn-close { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; color: var(--dn-muted); background: transparent; flex: none; }
+#drill-update-preview .dn-close:hover { background: var(--dn-hover); }
+#drill-update-preview .dn-modal-meta { padding: 16px 20px; }
+#drill-update-preview .dn-version-pair { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+#drill-update-preview .dn-from-version { color: var(--dn-muted); }
+#drill-update-preview .dn-target-version { color: var(--dn-accent); font-weight: 500; }
+#drill-update-preview .dn-release-source { margin-top: 7px; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-modal-content { padding: 0 20px 20px; min-width: 0; max-height: 530px; overflow-y: auto; overscroll-behavior: contain; }
+#drill-update-preview .dn-dialog-state { margin-bottom: 4px; color: var(--dn-accent); font-size: 13px; font-weight: 500; }
+#drill-update-preview .dn-modal-summary { margin-bottom: 16px; color: var(--dn-muted); font-size: 13px; }
+#drill-update-preview .dn-notes-check-error { margin-bottom: 12px; color: var(--dn-danger); font-size: 12px; }
+#drill-update-preview .dn-modal-skipped { margin-bottom: 12px; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-release-notes { padding-top: 16px; border-top: 1px solid var(--dn-line); font-size: 13px; overflow-wrap: anywhere; }
+#drill-update-preview .dn-release-notes h3 { margin-bottom: 12px; }
+#drill-update-preview .dn-release-entry + .dn-release-entry { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--dn-line); }
+#drill-update-preview .dn-release-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+#drill-update-preview .dn-release-heading h3 { margin: 0; }
+#drill-update-preview .dn-release-date { margin-left: auto; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-uninstalled, #drill-update-preview .dn-target-status[data-uninstalled="true"] { color: var(--dn-accent); background: var(--dn-accent-soft); }
+#drill-update-preview .dn-release-notes h4 { margin-top: 12px; }
+#drill-update-preview .dn-release-notes ul { padding-left: 20px; margin: 6px 0 10px; }
+#drill-update-preview .dn-release-notes li { margin: 5px 0; }
+#drill-update-preview .dn-release-notes code { display: inline; background: var(--dn-hover); color: var(--dn-muted); padding: 2px 5px; border-radius: 4px; font-size: 12px; }
+#drill-update-preview .dn-release-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 16px; font-size: 12px; }
+#drill-update-preview .dn-release-link svg { width: 13px; height: 13px; }
+#drill-update-preview .dn-modal-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 16px 20px; background: var(--dn-sider); border-top: 1px solid var(--dn-line); border-radius: 0 0 12px 12px; }
+#drill-update-preview .dn-modal-footer .dn-button { min-height: 36px; padding-inline: 13px; }
+#drill-update-preview .dn-transfer { margin-top: 18px; }
+#drill-update-preview .dn-progress-body { padding: 20px; }
+#drill-update-preview .dn-progress-body .dn-progress-summary { margin-top: 14px; color: var(--dn-muted); font-size: 13px; }
+#drill-update-preview .dn-progress-body .dn-progress-hint { margin-top: 20px; color: var(--dn-muted); font-size: 12px; }
+#drill-update-preview .dn-progress-body .dn-progress-error { margin-top: 18px; color: var(--dn-danger); font-size: 13px; }
+#drill-update-preview .dn-progress-label { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; margin-bottom: 8px; }
+#drill-update-preview .dn-progress-value, #drill-update-preview .dn-transfer-size { font-variant-numeric: tabular-nums; }
+#drill-update-preview .dn-progress { height: 6px; background: var(--dn-hover); border-radius: 4px; }
+#drill-update-preview .dn-progress-fill { height: 100%; width: 0; background: var(--dn-accent-fill); border-radius: 4px; transition: width 250ms linear; }
+#drill-update-preview .dn-transfer-size { margin-top: 6px; color: var(--dn-muted); font-size: 12px; }
+@media (max-width: 760px) {
+  #drill-update-preview .dn-window { min-height: 1030px; }
+  #drill-update-preview .dn-app-body { grid-template-columns: 52px minmax(0, 1fr); min-height: 936px; }
+  #drill-update-preview .dn-sidebar { padding-inline: 6px; }
+  #drill-update-preview .dn-nav-item { justify-content: center; padding-inline: 8px; }
+  #drill-update-preview .dn-nav-item span { display: none; }
+  #drill-update-preview .dn-main { padding: 16px; }
+  #drill-update-preview .dn-brand-copy { min-width: 140px; }
+  #drill-update-preview .dn-check-button { margin-left: auto; }
+  #drill-update-preview .dn-star-break { display: initial; }
+  #drill-update-preview .dn-overlay { padding-top: 126px; }
+}
+@media (max-width: 480px) {
+  #drill-update-preview .dn-window { min-height: 1210px; }
+  #drill-update-preview .dn-app-body { display: block; min-height: 1116px; }
+  #drill-update-preview .dn-sidebar, #drill-update-preview .dn-caption-controls { display: none; }
+  #drill-update-preview .dn-main { padding: 12px; }
+  #drill-update-preview .dn-topbar { padding-inline: 12px; }
+  #drill-update-preview .dn-settings-tabs { margin-bottom: 12px; }
+  #drill-update-preview .dn-settings-tabs span { padding: 5px 7px; }
+  #drill-update-preview .dn-panel { padding: 16px; }
+  #drill-update-preview .dn-preferences { padding: 0; }
+  #drill-update-preview .dn-panel-heading, #drill-update-preview .dn-setting-row { padding-inline: 16px; }
+  #drill-update-preview .dn-setting-copy { flex-basis: 175px; }
+  #drill-update-preview .dn-interval-controls { width: 100%; }
+  #drill-update-preview .dn-brand-mark { width: 40px; height: 40px; border-radius: 10px; }
+  #drill-update-preview .dn-brand-copy { min-width: 130px; }
+  #drill-update-preview .dn-brand-copy h2 { font-size: 16px; }
+  #drill-update-preview .dn-check-button { margin-left: 54px; }
+  #drill-update-preview .dn-star-panel p { flex-basis: 180px; }
+  #drill-update-preview .dn-star-panel .dn-button { margin-left: 32px; }
+  #drill-update-preview .dn-overlay { padding: 116px 10px 16px; }
+  #drill-update-preview .dn-modal-header, #drill-update-preview .dn-modal-meta { padding: 14px; }
+  #drill-update-preview .dn-modal-header { grid-template-columns: auto minmax(0, 1fr) auto; }
+  #drill-update-preview .dn-range-picker { grid-column: 1 / -1; grid-row: 2; width: 100%; max-width: none; }
+  #drill-update-preview .dn-range-menu { width: 100%; max-width: 100%; }
+  #drill-update-preview .dn-close { grid-column: 3; grid-row: 1; }
+  #drill-update-preview .dn-release-date { width: 100%; margin-left: 0; }
+  #drill-update-preview .dn-modal-content { padding: 0 14px 16px; }
+  #drill-update-preview .dn-modal-footer { padding: 14px; gap: 8px; }
+}
+@media (pointer: coarse) {
+  #drill-update-preview .dn-button, #drill-update-preview .dn-close, #drill-update-preview .dn-update-icon, #drill-update-preview .dn-text-button, #drill-update-preview .dn-range-trigger, #drill-update-preview .dn-range-option { min-height: 44px; }
+  #drill-update-preview .dn-close, #drill-update-preview .dn-update-icon { min-width: 44px; }
+  #drill-update-preview .dn-select, #drill-update-preview .dn-number { min-height: 44px; font-size: 16px; }
+  #drill-update-preview .dn-setting-row { min-height: 70px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #drill-update-preview .dn-progress-fill { transition: none; }
+}
+</style>
+<script>
+(() => {
+  const root = document.getElementById("drill-update-preview");
+  if (!root) return;
+  const win = root.querySelector(".dn-window");
+  const query = selector => win.querySelector(selector);
+  const candidateVersion = "v0.8.1";
+  const releases = [
+    { version: "v0.8.1", date: "2026-11-12", body: "<h4>新增</h4><ul><li>笔记混合检索接入资料工具，结果附来源与相关片段。</li></ul><h4>改进</h4><ul><li>提供按需读取内容的入口。</li></ul>" },
+    { version: "v0.8.0", date: "2026-11-11", body: "<h4>新增</h4><ul><li>独立 AI 助手窗口，主界面可继续编辑笔记。</li><li>会话内选择模型与思考档位。</li></ul><h4>改进与修复</h4><ul><li>支持会话置顶、标题改名和选中文字的复制与引用。</li><li>回复底部统一操作按钮，提供重新生成。</li></ul>" },
+    { version: "v0.7.3", date: "2026-11-10", body: "<h4>新增</h4><ul><li>扩展资料工具，支持创建与修改学习资料。</li></ul><h4>改进</h4><ul><li>完善笔记与错题的操作反馈。</li></ul>" },
+    { version: "v0.7.2", date: "2026-11-09", body: "<h4>新增</h4><ul><li>会话回复时可排队发送，支持插话。</li></ul><h4>改进</h4><ul><li>显示待发消息和工具活动状态。</li></ul>" },
+    { version: "v0.7.1", date: "2026-11-08", body: "<h4>改进</h4><ul><li>完善设置保存与操作反馈。</li></ul>" }
+  ];
+  const state = {
+    autoUpdate: false, automatic: true, reminder: true, interval: "24", hours: 24, custom: 24,
+    invalid: false, available: true, skipped: false, checking: false, failure: false,
+    phase: "idle", progress: 0, updateTarget: "", updateError: "", dialog: false, installed: false,
+    lastRunVersion: "v0.7.3", range: "since", view: "history", viewTarget: "v0.8.0"
+  };
+  const design = { checkResult: "available", downloadResult: "success", scenario: "normal" };
+  const stateKind = "drill-update-preview-v5";
+  const overlay = query(".dn-overlay");
+  const chrome = query(".dn-chrome");
+  const notesModal = query(".dn-notes-modal");
+  const progressModal = query(".dn-progress-modal");
+  const closeButton = notesModal.querySelector('[data-action="close"]');
+  const progressCloseButton = query(".dn-progress-close");
+  const primary = query(".dn-primary-update");
+  const rangeTrigger = query(".dn-range-trigger");
+  const rangeMenu = query(".dn-range-menu");
+  const rangeOptions = Array.from(rangeMenu.querySelectorAll('[data-action="select-range"]'));
+  let rangeOpen = false;
+  let updateTimer = null;
+  let checkTimer = null;
+  let trigger = null;
+  let dialogWasVisible = false;
+  let notesKey = "";
+
+  const installedVersion = () => state.installed ? candidateVersion : "v0.8.0";
+  const currentTarget = () => state.available && !state.installed ? candidateVersion : installedVersion();
+  const updateLabels = {
+    downloading: "正在下载更新包", verifying: "正在校验更新包",
+    preparing: "正在保存并准备重启", restarting: "正在自动重启"
+  };
+  const isUpdating = () => Object.prototype.hasOwnProperty.call(updateLabels, state.phase);
+  function compare(a, b) {
+    const first = a.slice(1).split(".").map(Number);
+    const second = b.slice(1).split(".").map(Number);
+    for (let index = 0; index < 3; index++) {
+      if (first[index] !== second[index]) return first[index] - second[index];
+    }
+    return 0;
+  }
+  function selectedReleases() {
+    if (state.view === "pending") {
+      return releases.filter(release => compare(release.version, installedVersion()) > 0 && compare(release.version, state.viewTarget) <= 0);
+    }
+    const eligible = releases.filter(release => compare(release.version, installedVersion()) <= 0);
+    if (state.range !== "since") return eligible.slice(0, Number(state.range) + 1);
+    const selected = eligible.filter(release => compare(release.version, state.lastRunVersion) > 0);
+    const installedNotes = selected.length ? selected : eligible.slice(0, 1);
+    const waitingNotes = state.available && !state.installed
+      ? releases.filter(release => compare(release.version, installedVersion()) > 0 && compare(release.version, currentTarget()) <= 0)
+      : [];
+    return [...waitingNotes, ...installedNotes];
+  }
+  function renderRangeMenu() {
+    if (state.view !== "history" || !state.dialog) rangeOpen = false;
+    query(".dn-range-picker").hidden = state.view !== "history";
+    const selected = rangeOptions.find(option => option.dataset.range === state.range);
+    const label = selected.lastElementChild.textContent;
+    query(".dn-range-label").textContent = label;
+    rangeTrigger.setAttribute("aria-label", "显示的更新说明：" + label);
+    rangeTrigger.setAttribute("aria-expanded", String(rangeOpen));
+    rangeOptions.forEach(option => {
+      const checked = option.dataset.range === state.range;
+      option.setAttribute("aria-checked", String(checked));
+      option.querySelector(".dn-range-check").hidden = !checked;
+    });
+    rangeMenu.hidden = !rangeOpen;
+  }
+  function renderNotes() {
+    const key = [state.view, state.viewTarget, state.range, installedVersion(), state.lastRunVersion, state.skipped, state.available].join("|");
+    if (notesKey === key) return;
+    notesKey = key;
+    const selected = selectedReleases();
+    const list = query(".dn-release-notes");
+    list.replaceChildren();
+    selected.forEach(release => {
+      const article = document.createElement("article");
+      article.className = "dn-release-entry";
+      article.dataset.version = release.version;
+      const heading = document.createElement("header");
+      heading.className = "dn-release-heading";
+      const title = document.createElement("h3");
+      title.textContent = release.version;
+      heading.appendChild(title);
+      const isUninstalled = compare(release.version, installedVersion()) > 0;
+      if (isUninstalled || release.version === installedVersion()) {
+        const badge = document.createElement("span");
+        badge.className = "dn-badge" + (isUninstalled ? " dn-uninstalled" : " dn-installed");
+        badge.textContent = isUninstalled ? "尚未安装" : "当前安装";
+        heading.appendChild(badge);
+      }
+      if (state.skipped && release.version === candidateVersion && isUninstalled) {
+        const badge = document.createElement("span");
+        badge.className = "dn-badge dn-release-skipped";
+        badge.textContent = "已跳过";
+        heading.appendChild(badge);
+      }
+      const date = document.createElement("span");
+      date.className = "dn-release-date";
+      date.textContent = release.date + " · 示例日期";
+      heading.appendChild(date);
+      article.appendChild(heading);
+      const body = document.createElement("div");
+      body.className = "dn-release-body";
+      body.innerHTML = release.body;
+      article.appendChild(body);
+      const link = document.createElement("a");
+      link.className = "dn-release-link";
+      link.href = "https://github.com/qilin-software/drill-notebook/releases/tag/" + release.version;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.setAttribute("aria-label", "在 GitHub 查看 " + release.version + " 的更新内容");
+      link.innerHTML = '在 GitHub 查看<i data-lucide="external-link" aria-hidden="true"></i>';
+      article.appendChild(link);
+      list.appendChild(article);
+    });
+    const span = selected.length > 1 ? selected[selected.length - 1].version + " → " + selected[0].version : selected[0].version;
+    query(".dn-release-source").textContent = state.view === "pending"
+      ? installedVersion() + " → " + state.viewTarget + " · " + selected.length + " 个未安装版本 · 示例说明"
+      : (state.range === "since" ? span : "当前安装 " + installedVersion() + " 及之前版本") + " · " + selected.length + " 个版本 · 示例说明";
+    query(".dn-modal-content").scrollTop = 0;
+    if (globalThis.lucide) lucide.createIcons({ attrs: { width: 16, height: 16 } });
+  }
+  function render() {
+    const updating = isUpdating();
+    const visibleUpdate = (state.available || updating) && !state.skipped && !state.installed;
+    const downloading = state.phase === "downloading";
+    const updateFailed = state.phase === "update-error";
+    const iconLabel = updating ? updateLabels[state.phase] + "，查看进度" : updateFailed ? "更新失败，查看详情" : "发现新版本 " + candidateVersion + "，查看更新内容";
+    query(".dn-update-icon").hidden = !visibleUpdate;
+    query(".dn-update-icon").setAttribute("data-tooltip", iconLabel);
+    query(".dn-update-icon").setAttribute("aria-label", iconLabel);
+    query(".dn-current-version").textContent = installedVersion();
+    query('[data-setting="auto-update"]').checked = state.autoUpdate;
+    query('[data-setting="automatic"]').checked = state.automatic;
+    query('[data-setting="reminder"]').checked = state.reminder;
+    query('[data-setting="reminder"]').disabled = !state.automatic || state.autoUpdate;
+    query('[data-setting="interval"]').value = state.interval;
+    query('[data-setting="interval"]').disabled = !state.automatic;
+    query('[data-setting="custom"]').disabled = !state.automatic;
+    query('[data-setting="custom"]').setAttribute("aria-invalid", String(state.invalid));
+    query(".dn-custom-interval").hidden = state.interval !== "custom";
+    query(".dn-interval-error").hidden = !state.invalid;
+    query(".dn-reminder-copy").textContent = state.autoUpdate
+      ? "自动更新已开启，启动时直接显示更新进度。"
+      : "有新版且距上次提醒已满 " + state.hours + " 小时，启动后显示更新说明。";
+    query(".dn-skipped-row").hidden = !state.skipped || !state.available || state.installed;
+    const status = query(".dn-status-text");
+    status.dataset.tone = state.failure || updateFailed ? "error" : !state.available || state.skipped ? "neutral" : "active";
+    status.textContent = state.checking ? "正在检查更新…" : updating
+      ? updateLabels[state.phase] + (downloading ? " · " + state.progress + "%" : "") : updateFailed
+      ? "更新未完成，可重试" : state.failure
+      ? "检查失败：暂时无法连接 GitHub（示例）" : state.installed || !state.available
+      ? "当前已是最新版本（示例）" : state.skipped ? "发现 " + candidateVersion + "，已跳过此版本"
+      : "发现新版本 " + candidateVersion + "（示例）";
+    query(".dn-check-button").disabled = state.checking;
+    query(".dn-check-button span").textContent = state.checking ? "检查中…" : state.failure ? "重试检查" : "检查更新";
+    query(".dn-checked-at").textContent = state.failure ? "上次成功检查：刚刚 · 示例数据" : "上次检查：刚刚 · 示例数据";
+
+    overlay.hidden = !state.dialog;
+    chrome.inert = state.dialog;
+    notesModal.hidden = state.view === "progress";
+    progressModal.hidden = state.view !== "progress";
+    if (state.view === "history") state.viewTarget = selectedReleases()[0].version;
+    const readOnly = state.view === "history" || compare(state.viewTarget, installedVersion()) <= 0;
+    notesModal.dataset.view = state.view === "history" ? "history" : "pending";
+    query(".dn-modal-title").textContent = state.viewTarget + " 更新内容";
+    query(".dn-from-version").textContent = "当前安装 " + installedVersion();
+    query(".dn-version-arrow").hidden = readOnly;
+    query(".dn-target-version").textContent = "查看 " + state.viewTarget;
+    query(".dn-target-version").hidden = state.view === "history";
+    query(".dn-target-status").textContent = readOnly ? "当前安装" : "尚未安装";
+    query(".dn-target-status").hidden = state.view === "history";
+    query(".dn-target-status").dataset.uninstalled = String(!readOnly);
+    renderRangeMenu();
+    query(".dn-dialog-state").textContent = readOnly ? state.range === "since" ? "上次更新以来" : "当前与历史版本" : "发现新版本";
+    query(".dn-modal-summary").textContent = readOnly ? "各版本的 GitHub Release 说明。"
+      : "点击立即更新后自动下载、更新并重启。";
+    query(".dn-notes-check-error").hidden = !state.failure || (state.view === "history" && (state.range !== "since" || !state.available || state.installed));
+    query(".dn-modal-skipped").hidden = !state.skipped || readOnly;
+    query(".dn-skip-button").hidden = readOnly;
+    query(".dn-skip-button").disabled = state.skipped;
+    query(".dn-skip-button").textContent = state.skipped ? "已跳过此版本" : "跳过此版本";
+    primary.hidden = readOnly;
+    query(".dn-close-notes").hidden = !readOnly;
+    if (state.view !== "progress") renderNotes();
+
+    query(".dn-progress-title").textContent = updateFailed ? "更新未完成" : "正在更新 Drill Notebook";
+    query(".dn-progress-from").textContent = "当前 " + installedVersion();
+    query(".dn-progress-target").textContent = state.updateTarget;
+    const transferText = updating ? updateLabels[state.phase] : "更新未完成";
+    if (query(".dn-transfer-text").textContent !== transferText) query(".dn-transfer-text").textContent = transferText;
+    const progressSummary = updateFailed ? "当前版本仍可继续使用。"
+      : state.phase === "verifying" ? "下载完成，正在校验更新包。"
+      : state.phase === "preparing" ? "正在保存当前工作，随后自动重启。"
+      : state.phase === "restarting" ? "正在重新启动软件，笔记和设置会保留。"
+      : "下载完成后将自动更新并重启。";
+    if (query(".dn-progress-summary").textContent !== progressSummary) query(".dn-progress-summary").textContent = progressSummary;
+    query(".dn-transfer").hidden = !updating;
+    query(".dn-progress-value").hidden = !downloading;
+    query(".dn-progress-value").textContent = state.progress + "%";
+    query(".dn-progress-fill").style.width = state.progress + "%";
+    query(".dn-progress").setAttribute("aria-valuenow", String(state.progress));
+    query(".dn-transfer-size").hidden = !downloading && state.phase !== "verifying";
+    query(".dn-transfer-size").textContent = Math.round(128 * state.progress / 100) + " / 128 MB" + (downloading ? " · 24.8 MB/s" : "") + " · 示例数据";
+    query(".dn-cancel-download").hidden = !downloading;
+    query(".dn-progress-error").hidden = !updateFailed;
+    query(".dn-progress-error").textContent = state.updateError;
+    query(".dn-retry-update").hidden = !updateFailed;
+    query(".dn-progress-release-link").hidden = !updateFailed;
+    query(".dn-progress-release-link").href = "https://github.com/qilin-software/drill-notebook/releases/tag/" + state.updateTarget;
+    query(".dn-progress-footer").hidden = !downloading && !updateFailed;
+    query(".dn-progress-hint").textContent = updateFailed ? "关闭窗口后可继续使用当前版本。" : "关闭窗口后仍会继续更新并重启。";
+    progressCloseButton.setAttribute("data-tooltip", updateFailed ? "关闭" : "关闭进度窗口，更新仍会继续");
+    if (state.dialog && !dialogWasVisible) (state.view === "progress" ? progressCloseButton : readOnly ? query(".dn-close-notes") : closeButton).focus({ preventScroll: true });
+    if (state.dialog && state.view === "progress" && !downloading && document.activeElement === query(".dn-cancel-download")) progressCloseButton.focus({ preventScroll: true });
+    if (!state.dialog && dialogWasVisible) {
+      const returnTarget = trigger && trigger.isConnected && !trigger.closest("[hidden]") ? trigger : query(".dn-check-button");
+      returnTarget.focus({ preventScroll: true });
+    }
+    dialogWasVisible = state.dialog;
+  }
+  function snapshot() {
+    return {
+      kind: stateKind, autoUpdate: state.autoUpdate, automatic: state.automatic, reminder: state.reminder, hours: state.hours,
+      skipped: state.skipped, available: state.available, installed: state.installed,
+      lastRunVersion: state.lastRunVersion, failure: state.failure,
+      dialog: state.dialog && state.view !== "progress", range: state.range,
+      view: state.view === "progress" ? "pending" : state.view, viewTarget: state.viewTarget,
+      checkResult: design.checkResult, downloadResult: design.downloadResult
+    };
+  }
+  function save() {
+    if (!window.openai || typeof window.openai.setWidgetState !== "function") return;
+    const saved = snapshot();
+    window.openai.setWidgetState({
+      modelContent: {
+        kind: stateKind, layout: "逐版更新内容", automaticUpdate: state.autoUpdate, automaticCheck: state.automatic,
+        startupReminder: state.reminder, sharedIntervalHours: state.hours,
+        installedVersion: installedVersion(), viewingVersion: state.viewTarget,
+        view: state.view, range: state.view === "history" ? state.range : "未安装版本",
+        skippedVersion: state.skipped ? candidateVersion : null, updateStage: state.phase,
+        updateFlow: "下载、校验、保存后自动更新并重启"
+      },
+      privateContent: saved
+    }).catch(() => {});
+  }
+  function apply(saved) {
+    if (!saved || saved.kind !== stateKind) return;
+    if (updateTimer) clearTimeout(updateTimer);
+    if (checkTimer) clearTimeout(checkTimer);
+    updateTimer = null;
+    checkTimer = null;
+    rangeOpen = false;
+    state.checking = false;
+    state.autoUpdate = saved.autoUpdate === true;
+    state.automatic = saved.automatic !== false;
+    state.reminder = saved.reminder !== false;
+    state.hours = Number.isInteger(saved.hours) && saved.hours >= 1 && saved.hours <= 168 ? saved.hours : 24;
+    state.custom = state.hours;
+    state.interval = [1, 6, 12, 24, 48].includes(state.hours) ? String(state.hours) : "custom";
+    query('[data-setting="custom"]').value = String(state.hours);
+    state.invalid = false;
+    state.skipped = saved.skipped === true;
+    state.available = saved.available !== false;
+    state.installed = saved.installed === true;
+    state.lastRunVersion = releases.some(release => release.version === saved.lastRunVersion && compare(release.version, installedVersion()) <= 0) ? saved.lastRunVersion : installedVersion();
+    state.phase = state.installed ? "installed" : "idle";
+    state.progress = 0;
+    state.updateTarget = "";
+    state.updateError = "";
+    state.failure = saved.failure === true;
+    state.dialog = saved.dialog === true;
+    state.range = ["since", "10", "20", "50", "100"].includes(saved.range) ? saved.range : "since";
+    state.view = saved.view === "pending" && state.available && !state.installed ? "pending" : "history";
+    state.viewTarget = state.view === "history" ? installedVersion() : currentTarget();
+    design.checkResult = ["available", "current", "failure"].includes(saved.checkResult) ? saved.checkResult : "available";
+    design.downloadResult = ["success", "failure", "verification-failure"].includes(saved.downloadResult) ? saved.downloadResult : "success";
+    design.scenario = "normal";
+    render();
+  }
+  function open(view, button) {
+    if (view === "pending" && (isUpdating() || state.phase === "update-error")) view = "progress";
+    if (view === "pending" && (!state.available || state.installed)) return;
+    trigger = button;
+    rangeOpen = false;
+    state.view = view;
+    state.viewTarget = view === "progress" ? state.updateTarget : view === "history" ? installedVersion() : currentTarget();
+    if (view === "history") state.range = "since";
+    state.dialog = true;
+    render();
+    save();
+  }
+  function close() {
+    rangeOpen = false;
+    state.dialog = false;
+    render();
+    save();
+  }
+  function startUpdate(button) {
+    const target = state.phase === "update-error" ? state.updateTarget : state.viewTarget;
+    if (isUpdating() || state.installed || compare(target, installedVersion()) <= 0) return;
+    trigger = button;
+    rangeOpen = false;
+    state.view = "progress";
+    state.updateTarget = target;
+    state.viewTarget = target;
+    state.dialog = true;
+    state.phase = "downloading";
+    state.progress = 4;
+    state.updateError = "";
+    render();
+    progressCloseButton.focus({ preventScroll: true });
+    updateTimer = setTimeout(advanceUpdate, 340);
+    save();
+  }
+  function finishUpdate() {
+    if (checkTimer) clearTimeout(checkTimer);
+    checkTimer = null;
+    state.checking = false;
+    state.lastRunVersion = installedVersion();
+    state.installed = true;
+    state.available = false;
+    state.skipped = false;
+    state.failure = false;
+    state.dialog = false;
+    state.phase = "installed";
+    state.view = "history";
+    state.viewTarget = installedVersion();
+    render();
+    save();
+  }
+  function advanceUpdate() {
+    if (!isUpdating()) return;
+    updateTimer = null;
+    const previousPhase = state.phase;
+    let delay = 340;
+    if (state.phase === "downloading") {
+      state.progress = Math.min(100, state.progress + 16);
+      if (design.downloadResult === "failure" && state.progress >= 60) {
+        state.phase = "update-error";
+        state.updateError = "下载中断，请重试。当前版本仍可继续使用。";
+      } else if (state.progress >= 100) {
+        state.phase = "verifying";
+        delay = 650;
+      }
+    } else if (state.phase === "verifying") {
+      if (design.downloadResult === "verification-failure") {
+        state.phase = "update-error";
+        state.updateError = "更新包校验失败，未替换程序。请重试更新。";
+      } else {
+        state.phase = "preparing";
+        delay = 600;
+      }
+    } else if (state.phase === "preparing") {
+      state.phase = "restarting";
+      delay = 900;
+    } else if (state.phase === "restarting") {
+      finishUpdate();
+      return;
+    }
+    if (isUpdating()) updateTimer = setTimeout(advanceUpdate, delay);
+    render();
+    if (state.phase !== previousPhase) save();
+  }
+  function checkForUpdates(source, button) {
+    if (state.checking) return;
+    state.checking = true;
+    state.failure = false;
+    render();
+    checkTimer = setTimeout(() => {
+      checkTimer = null;
+      state.checking = false;
+      state.failure = design.checkResult === "failure";
+      if (!state.failure) state.available = design.checkResult === "available" && !state.installed;
+      render();
+      if (source === "startup" && state.autoUpdate && state.available && !state.skipped && !state.failure) {
+        state.viewTarget = currentTarget();
+        startUpdate(button);
+      } else if (source === "manual" && state.available && !state.failure) open("pending", button);
+      else save();
+    }, 500);
+  }
+  function resetSession() {
+    if (updateTimer) clearTimeout(updateTimer);
+    if (checkTimer) clearTimeout(checkTimer);
+    updateTimer = null;
+    checkTimer = null;
+    state.checking = false;
+    state.phase = state.installed ? "installed" : "idle";
+    state.progress = 0;
+    state.updateTarget = "";
+    state.updateError = "";
+    state.dialog = false;
+    state.view = "history";
+    state.viewTarget = installedVersion();
+    rangeOpen = false;
+  }
+  function runStartup() {
+    resetSession();
+    render();
+    if (state.autoUpdate) checkForUpdates("startup", query(".dn-check-button"));
+  }
+  win.addEventListener("click", event => {
+    if (rangeOpen && !event.target.closest(".dn-range-picker")) {
+      rangeOpen = false;
+      renderRangeMenu();
+    }
+    const button = event.target.closest("[data-action]");
+    if (!button || button.disabled) return;
+    const action = button.dataset.action;
+    if (action === "toggle-range" && state.view === "history" && state.dialog) {
+      rangeOpen = !rangeOpen;
+      renderRangeMenu();
+      if (rangeOpen) rangeOptions.find(option => option.dataset.range === state.range).focus({ preventScroll: true });
+    }
+    if (action === "select-range" && state.view === "history" && state.dialog) {
+      state.range = button.dataset.range;
+      rangeOpen = false;
+      render();
+      rangeTrigger.focus({ preventScroll: true });
+      save();
+    }
+    if (action === "open-update") open("pending", button);
+    if (action === "open-notes") open("history", button);
+    if (action === "close") close();
+    if (action === "skip" && state.view === "pending") {
+      state.skipped = true;
+      state.dialog = false;
+      render();
+      query(".dn-check-button").focus({ preventScroll: true });
+      save();
+    }
+    if (action === "restore") {
+      state.skipped = false;
+      render();
+      query(".dn-check-button").focus({ preventScroll: true });
+      save();
+    }
+    if (action === "check") checkForUpdates("manual", button);
+    if (action === "cancel-download" && state.phase === "downloading") {
+      if (updateTimer) clearTimeout(updateTimer);
+      updateTimer = null;
+      state.phase = "idle";
+      state.progress = 0;
+      state.viewTarget = state.updateTarget;
+      state.updateTarget = "";
+      state.view = "pending";
+      state.dialog = true;
+      render();
+      closeButton.focus({ preventScroll: true });
+      save();
+    }
+    if (action === "update" && state.view === "pending" && compare(state.viewTarget, installedVersion()) > 0) {
+      startUpdate(button);
+    }
+    if (action === "retry-update" && state.view === "progress" && state.phase === "update-error") startUpdate(button);
+  });
+  win.addEventListener("change", event => {
+    const control = event.target;
+    const setting = control.dataset.setting;
+    if (!setting || control.disabled) return;
+    if (setting === "auto-update") state.autoUpdate = control.checked;
+    if (setting === "automatic") state.automatic = control.checked;
+    if (setting === "reminder") state.reminder = control.checked;
+    if (setting === "interval") {
+      state.interval = control.value;
+      state.invalid = false;
+      if (control.value !== "custom") state.hours = Number(control.value);
+      else {
+        state.hours = state.custom;
+        query('[data-setting="custom"]').value = String(state.custom);
+      }
+    }
+    if (setting === "custom") {
+      const value = Number(control.value);
+      state.invalid = control.value === "" || !Number.isInteger(value) || value < 1 || value > 168;
+      if (!state.invalid) { state.hours = value; state.custom = value; }
+    }
+    render();
+    if (!state.invalid) save();
+  });
+  win.addEventListener("keydown", event => {
+    if (!state.dialog) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (rangeOpen) {
+        rangeOpen = false;
+        renderRangeMenu();
+        rangeTrigger.focus({ preventScroll: true });
+      } else close();
+      return;
+    }
+    if (state.view === "history" && query(".dn-range-picker").contains(event.target)
+      && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
+      && (rangeOpen || event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      const index = rangeOptions.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? rangeOptions.length - 1
+        : index < 0 ? event.key === "ArrowUp" ? rangeOptions.length - 1 : 0
+        : (index + (event.key === "ArrowUp" ? -1 : 1) + rangeOptions.length) % rangeOptions.length;
+      rangeOpen = true;
+      renderRangeMenu();
+      rangeOptions[next].focus({ preventScroll: true });
+      return;
+    }
+    if (event.key === "Tab") {
+      const focusable = Array.from(overlay.querySelectorAll("button:not(:disabled), a[href], select:not(:disabled), input:not(:disabled)"))
+        .filter(element => !element.closest("[hidden]"));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
+  win.addEventListener("focusout", event => {
+    if (rangeOpen && query(".dn-range-picker").contains(event.target)
+      && !query(".dn-range-picker").contains(event.relatedTarget)) {
+      rangeOpen = false;
+      renderRangeMenu();
+    }
+  });
+  const stored = window.openai && window.openai.widgetState && window.openai.widgetState.privateContent;
+  if (stored && stored.kind === stateKind) apply(stored); else render();
+  let lastDesignResult = design.checkResult;
+  let lastDesignScenario = design.scenario;
+  if (globalThis.Tweak) {
+    const tweak = new Tweak({ container: win, onChange: () => {
+      const resultChanged = lastDesignResult !== design.checkResult;
+      const scenarioChanged = lastDesignScenario !== design.scenario;
+      if (resultChanged) {
+        lastDesignResult = design.checkResult;
+        resetSession();
+        state.installed = false;
+        state.lastRunVersion = "v0.7.3";
+        state.phase = "idle";
+        state.failure = design.checkResult === "failure";
+        if (!state.failure) state.available = design.checkResult === "available";
+        state.view = "history";
+        state.viewTarget = installedVersion();
+        state.range = "since";
+      }
+      if (scenarioChanged || (resultChanged && design.scenario === "startup")) {
+        lastDesignScenario = design.scenario;
+        if (design.scenario === "startup") {
+          runStartup();
+          return;
+        }
+        resetSession();
+      }
+      render();
+    } });
+    tweak.addSelect(design, "checkResult", { label: "检查结果", options: [
+      { label: "发现新版", value: "available" }, { label: "已是最新", value: "current" }, { label: "检查失败", value: "failure" }
+    ] });
+    tweak.addSelect(design, "downloadResult", { label: "更新结果", options: [
+      { label: "成功并自动重启", value: "success" }, { label: "下载中断", value: "failure" }, { label: "校验失败", value: "verification-failure" }
+    ] });
+    tweak.addSelect(design, "scenario", { label: "使用场景", options: [
+      { label: "正常使用", value: "normal" }, { label: "软件启动", value: "startup" }
+    ] });
+  }
+  window.addEventListener("openai:set_globals", event => {
+    const saved = event.detail && event.detail.globals && event.detail.globals.widgetState;
+    if (saved && saved.privateContent && saved.privateContent.kind === stateKind) {
+      apply(saved.privateContent);
+      lastDesignResult = design.checkResult;
+      lastDesignScenario = design.scenario;
+    }
+  });
+})();
+</script>
