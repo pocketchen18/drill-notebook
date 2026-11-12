@@ -97,6 +97,9 @@ function fixture(t, builderExit = 0) {
   }
   mkdirSync(join(dir, 'scripts'));
   copyFileSync(join(root, 'scripts/package-portable.ps1'), join(dir, 'scripts/package-portable.ps1'));
+  copyFileSync(join(root, 'scripts/generate-update-metadata.mjs'), join(dir, 'scripts/generate-update-metadata.mjs'));
+  for (const name of ['program-manifest', 'update-feed', 'update-fs']) copyFileSync(join(root, `electron-dist/${name}.js`), join(dir, `electron-dist/${name}.js`));
+  writeFileSync(join(dir, 'scripts/build-updater.ps1'), "New-Item -ItemType Directory -Path updater/target/release -Force | Out-Null\n[IO.File]::WriteAllText((Join-Path (Get-Location) 'updater/target/release/drill-updater.exe'), 'fixture')\n");
   mkdirSync(join(dir, 'node_modules/.bin'), { recursive: true });
   writeFileSync(join(dir, 'node_modules/.bin/electron-builder.cmd'), [
     '@echo off',
@@ -104,6 +107,11 @@ function fixture(t, builderExit = 0) {
     `if ${builderExit} NEQ 0 exit /b ${builderExit}`,
     'if not exist "dist\\win-unpacked" mkdir "dist\\win-unpacked"',
     '>"dist\\win-unpacked\\Drill Notebook.exe" echo fixture',
+    'mkdir "dist\\win-unpacked\\resources\\backend" "dist\\win-unpacked\\resources\\jre\\bin" "dist\\win-unpacked\\resources\\updater"',
+    '>"dist\\win-unpacked\\resources\\app.asar" echo fixture',
+    '>"dist\\win-unpacked\\resources\\backend\\app.jar" echo fixture',
+    '>"dist\\win-unpacked\\resources\\jre\\bin\\java.exe" echo fixture',
+    '>"dist\\win-unpacked\\resources\\updater\\drill-updater.exe" echo fixture',
     'exit /b 0',
     '',
   ].join('\r\n'));

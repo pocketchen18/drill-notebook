@@ -465,3 +465,36 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 | DELETE | `/ai/embeddings/models/{id}` | 卸载模型与向量 |
 
 检索、嵌入、摘要的请求 / 响应细节见 [ai-retrieval.md](../reference/ai-retrieval.md) 与 [ai-summary.md](../reference/ai-summary.md)。
+
+## 4. 软件更新与退出协调（v0.8.0）
+
+### 4.1 主进程专用后端接口
+
+路径仍以 `/api` 为前缀。这两个端点只供 Electron 正常退出协调，不是 renderer 或 AI 工具能力；必须携带 `X-Drill-Update-Exit`，值由主进程每次启动 JVM 时生成，仅以进程环境传给后端。缺失、错误或未配置能力均返回 403；不得将该值写日志、配置或暴露给渲染进程。
+
+| 方法 | 路径 | 响应 |
+|---|---|---|
+| GET | `/app/update/ready` | 200 `{ready:boolean,reason:string}`；HTTP / 后台写任务、正在回复或队列忙碌时 ready 为 false |
+| POST | `/app/update/shutdown` | 接受时 200 `{accepted:true}`，稍后正常关闭 Spring context；并发写或 AI 任务忙碌时 409 `{accepted:false,reason}`，恢复正常接收任务 |
+
+后端原子进入退出状态后拒绝新业务写请求，返回 503 `{code:"UPDATE_RESTARTING",message}`。标题、模型下载、嵌入、检索与记忆后台写任务使用同一 gate 租约，排队与在途任务均计数；readiness 不是一次不加保护的空闲快照。
+
+### 4.2 Electron 更新契约
+
+`window.api.update` 类型以 [update-types.ts](../../electron/update-types.ts) 为准。所有 IPC 必须来自本应用受信入口；除状态读取、保存握手和助手草稿外，用户更新命令只接受主窗口。
+
+| API | 结果 / 行为 |
+|---|---|
+| `getState / onState` | `AppUpdateState`：实际版本、开发 / 替换能力、设置、检查结果 / 时间、目标、跳过 / 失败版、顶部可见性、启动等待、真实进度与当前弹窗 |
+| `setSettings(patch)` | 部分更新四个设置，校验布尔值及 1–168 整数小时，返回实际状态，不重置时间 |
+| `check()` | 手动合并检查，忽略间隔与跳过记录；发现新版打开待安装说明 |
+| `openAvailable / openHistory / closePresentation(id)` | 新版或进度 / 关于只读入口；关闭只影响当前展示 ID，不取消更新 |
+| `notes(range,version?,refresh?)` | `{releases,range,cached,error?}`；范围为 `since / 10 / 20 / 50 / 100`，指定目标时只取未安装版；历史 N 以实际安装版为上限 |
+| `skip(version) / restoreReminder()` | 持久化目标版跳过或清除；清除不重置已有提醒时间 |
+| `install(version)` | 冻结更高目标，一次操作下载、校验、保存、退出、替换并重启；同一在途事务不重复下载 |
+| `cancelDownload / resumeInstall` | 仅下载阶段可取消；保存保护解除后继续原事务，不重新下载 |
+| `onPrepare / prepared / onPreparationEnd` | 请求 `{id}`、回复 `{id,ok,reason?}`；只接受本轮对应窗口的回复，失败或超时暂停并解除编辑锁 |
+| `rendererReady()` | 只以受信主窗口完成启动握手，结合真实后端健康确认提交；辅助窗口不能替代 |
+| `readAssistantDrafts / saveAssistantDrafts` | 目录内加密草稿；读取返回 unknown 由前端严格校验，损坏 / 超限拒绝，不以空值覆盖原文件 |
+
+`backend.getBaseUrl()` 在后端启动完成或明确失败前保持等待，避免启动更新期间的提前请求缓存备用地址。程序清单、事务、健康提交点、恢复边界与 APP_ROOT 路径见[更新规格](../work/app-update/spec.md)。本切片不新增 schema。

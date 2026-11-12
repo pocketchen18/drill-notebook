@@ -52,5 +52,7 @@ export function useChatQueue(sessionId?: number, enabled = true) {
     const view = await post<ChatQueueView>(`/api/ai/sessions/${id}/queue/pause`, { paused });
     client.setQueryData(queueKey(id), view);
   };
-  return { ...query, submit, action, pause, refresh, retrySubmission, unconfirmed: sessionId !== undefined && unresolved.current.has(sessionId) };
+  return { ...query, submit, action, pause, refresh, retrySubmission,
+    hasUnconfirmedSubmissions: () => unresolved.current.size > 0,
+    unconfirmed: sessionId !== undefined && unresolved.current.has(sessionId) };
 }

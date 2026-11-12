@@ -33,7 +33,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.8-features.md](state/v0.8-features.md) | 当前版本：独立 AI 助手窗口、会话模型 / effort、上下文反馈、会话与消息体验四个切片已实现，待用户验收 |
+| [state/v0.8-features.md](state/v0.8-features.md) | 当前 v0.8.0 五个切片已实现、尚未发布；AI 助手已由用户验收，软件内更新已完成工程测试、真实便携更新 / 失败恢复和便携审计 |
 | [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 18）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
@@ -58,7 +58,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能完成后标记结果并同步状态，施工材料保留至本版收尾；**下一版本开始前**统一移入 `docs/archive/<version>/`。归档时保留真实未完成项和验收限制，不以归档代替验收。
 
-v0.7.3 已由用户于 2026-11-11 确认全部完成，其功能清单及六个施工目录在进入 v0.8 前移入 [版本归档](archive/v0.7.3/README.md)；更早的 [v0.7.2 归档](archive/v0.7.2/README.md)继续保留。v0.8 的[功能清单](state/v0.8-features.md)与[助手窗口施工材料](work/ai-window/ui-ux.md)（UI/UX、规格、计划、交互草图）为当前施工依据。历史测试记录与发布边界仍见[测试清单](test/QA_CHECKLIST.md)及 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。联网搜索配置继续留作后续候选。
+v0.7.3 已由用户于 2026-11-11 确认全部完成，其功能清单及六个施工目录在进入 v0.8 前移入 [版本归档](archive/v0.7.3/README.md)；更早的 [v0.7.2 归档](archive/v0.7.2/README.md)继续保留。v0.8.0 的[功能清单](state/v0.8-features.md)记录当前状态：[助手窗口施工材料](work/ai-window/ui-ux.md)已完成用户验收；[软件内更新需求](work/app-update/requirements.md)、[UI/UX](work/app-update/ui-ux.md)、[规格](work/app-update/spec.md)与[实施验证](work/app-update/plan.md)均已同步完成状态，工程验证通过，材料继续保留在 work。历史测试记录与发布边界仍见[测试清单](test/QA_CHECKLIST.md)及 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。联网搜索配置继续留作后续候选。
 
 ## 3. 测试文档
 
@@ -89,7 +89,7 @@ v0.7.3 已由用户于 2026-11-11 确认全部完成，其功能清单及六个�
 | [reference/knowledge-point-import.md](reference/knowledge-point-import.md) | 知识点 Markdown 导入 |
 | [reference/quiz-markdown-flow.md](reference/quiz-markdown-flow.md) | 刷题 Markdown 解析与渲染 |
 
-`docs/release/v<版本>-release-notes.md` 保存各版发行记录，上一版为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8 尚处于范围规划，工作流默认版本暂保留 v0.7.3，到发布准备时再调整。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
+`docs/release/v<版本>-release-notes.md` 保存各版发行记录，上一版为 [v0.7.3 发布说明](release/v0.7.3-release-notes.md)。v0.8.0 尚未发布，AI 助手已验收，软件内更新已实现并通过工程验证，尚未进行本轮更新 UI 的人工观感验收；工作流默认版本暂保留 v0.7.3，到发布准备时再调整。**v1.0 之前均为不保证稳定性的预发行版**，没有预发行后缀也不代表稳定。工作流固定使用 Pre-release，不标记 Latest；正式发行渠道在 v1.0 时另行确认。正文按标签的完整基础版本选择，例如 `v0.7.3-rc.1` 选择 v0.7.3，缺失或空白即失败。
 
 ## 5. 交接记忆
 

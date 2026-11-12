@@ -36,6 +36,7 @@ export interface SessionNavigationHandle {
   /** 从对话区顶栏对当前会话打开同一份菜单。 */
   openMenu: (sessionId: number, origin: HTMLElement) => void;
   focusSearch: () => void;
+  prepareForRestart: () => Promise<void>;
 }
 type MenuTarget = { id: number; x: number; y: number; origin: HTMLElement };
 type Edit = { id: number; original: string; draft: string; error?: string };
@@ -184,7 +185,11 @@ export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(func
   };
   useImperativeHandle(handle, () => ({
     openMenu: (sessionId, origin) => { const session = sessions.find((s) => s.id === sessionId); if (session) rowMenu(session, origin); },
-    focusSearch: () => { search.current?.focus(); search.current?.select(); }
+    focusSearch: () => { search.current?.focus(); search.current?.select(); },
+    prepareForRestart: async () => {
+      if (pinning !== null || confirmBusy || generatingId !== null || props.exporting) throw new Error('会话操作尚未完成，请稍候。');
+      if (!(await saveRename())) throw new Error('会话名称尚未保存，请先完成改名。');
+    }
   }));
 
   useLayoutEffect(() => {

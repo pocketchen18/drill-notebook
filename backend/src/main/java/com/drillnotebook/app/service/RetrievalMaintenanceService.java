@@ -49,6 +49,8 @@ public class RetrievalMaintenanceService {
     private final EmbeddingModelRepository models;
     private final EmbeddingJobRepository jobs;
     private final EmbeddingJobExecutor executor;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.drillnotebook.app.config.PortableUpdateRequestGate updateGate;
 
     /** Live reindex job ids keyed by {@code spaceId + ':' + scopeKey}. */
     private final Map<String, String> activeReindexJobs = new ConcurrentHashMap<>();
@@ -165,7 +167,9 @@ public class RetrievalMaintenanceService {
      */
     public void scheduleDisabledSpaceCleanup(String embeddingSpaceId) {
         if (embeddingSpaceId == null) return;
-        cleanupTasks.submit(() -> cleanupDisabledSpaceVectors(embeddingSpaceId));
+        Runnable cleanup = () -> cleanupDisabledSpaceVectors(embeddingSpaceId);
+        if (updateGate == null) cleanupTasks.submit(cleanup);
+        else updateGate.executeBackground(cleanupTasks, cleanup);
     }
 
     /** Synchronous cleanup body (public for deterministic tests). */

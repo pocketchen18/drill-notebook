@@ -60,6 +60,7 @@ if (-not (Test-Path -LiteralPath $backendJar)) {
 # 目录模式打包：绿色便携以「zip 解压即用」的文件夹分发。
 # 不用单文件 portable——它会自解压到 %TEMP%，数据写进临时目录、退出即丢，且部分机器上
 # 会触发杀软拦截/深路径问题导致内置 JRE 起不来（后端 30 秒不健康、需管理员）。
+Invoke-Checked 'pwsh' @('-NoProfile', '-File', 'scripts/build-updater.ps1')
 Invoke-Checked $electronBuilder @('--win', 'dir', '--publish', 'never', "--config.extraMetadata.version=$Version")
 
 $unpacked = Join-Path $workspace 'dist\win-unpacked'
@@ -68,11 +69,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'Drill Notebook.exe'))) {
 }
 
 $zip = Join-Path $workspace ("dist\Drill-Notebook-$Version-win-x64-portable.zip")
+Invoke-Checked 'node' @('scripts/generate-update-metadata.mjs', '--directory', $unpacked, '--version', $Version)
 Compress-Archive -Path (Join-Path $unpacked '*') -DestinationPath $zip -CompressionLevel Optimal -Force
 
 if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
     throw "electron-builder completed but the portable zip was not found: $zip"
 }
+Invoke-Checked 'node' @('scripts/generate-update-metadata.mjs', '--archive', $zip)
 
 Write-Host 'Portable package created:' -ForegroundColor Green
 Write-Host $zip
+Write-Host "$zip.sha256"

@@ -1,0 +1,20 @@
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+const { app } = require('electron');
+const raw = require('original-fs');
+const { setupPortablePaths } = require('../../electron-dist/paths.js');
+const { extractUpdateArchive } = require('../../electron-dist/update-archive.js');
+const { assertNoLinks, fileDigest } = require('../../electron-dist/program-manifest.js');
+const root = process.env.APP_ROOT;
+if (!root || !path.resolve(root).startsWith(path.resolve(__dirname, '../../temp') + path.sep)) throw new Error('Isolated workspace APP_ROOT required');
+setupPortablePaths();
+app.whenReady().then(async () => {
+  const stage = path.join(root, 'stage');
+  const manifest = await extractUpdateArchive(process.argv[2], stage, '0.8.0');
+  const archive = assertNoLinks(stage, 'resources/app.asar');
+  assert.equal(raw.readFileSync(archive, 'utf8'), 'new renderer');
+  assert.equal(await fileDigest(archive), createHash('sha256').update('new renderer').digest('hex'));
+  console.log('RAW-ASAR-OK:' + manifest.version);
+  app.quit();
+}).catch(error => { console.error(error.stack); app.exit(1); });

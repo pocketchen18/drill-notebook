@@ -1,6 +1,9 @@
+#requires -Version 7.0
 param(
     [string]$AppRoot = '',
-    [switch]$RunSmoke
+    [switch]$RunSmoke,
+    [string]$RunScript = '',
+    [string[]]$RunArguments = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,18 +19,20 @@ if (-not $root.Equals($workspace, [System.StringComparison]::OrdinalIgnoreCase) 
     -not $root.StartsWith($workspace.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Audit AppRoot must stay inside the workspace: $workspace"
 }
-$evidence = Join-Path $workspace '.omo\evidence\task-13-portable-audit.txt'
-$evidenceRag = Join-Path $workspace '.omo\evidence\task-16-remote-portable.txt'
-New-Item -ItemType Directory -Force -Path (Split-Path $evidence) | Out-Null
+$auditDirectory = Join-Path $workspace ('temp\portable-audit-' + [guid]::NewGuid().ToString())
+[IO.Directory]::CreateDirectory($auditDirectory) | Out-Null
+$evidence = Join-Path $auditDirectory 'portable-audit.txt'
+$evidenceRag = Join-Path $auditDirectory 'rag-paths.txt'
 
 # APP_ROOT 内允许的运行数据（RAG 产物只允许出现在这里）
 $AppRootAllowed = @('data\models\embeddings', 'data\study.db', 'cache', 'runtime', 'logs')
 # 工作区源码树额外允许的 Cargo 构建产物
-$WorkspaceAllowed = @('embedding-worker\target')
+$WorkspaceAllowed = @('embedding-worker\target', 'updater\target')
 
 function Get-FileFingerprint([System.IO.FileInfo]$file) {
     $hash = ''
-    if ($file.Length -le 10MB) {
+    # Outside the workspace, use names/sizes/timestamps only; never open user files or credentials.
+    if ($file.Length -le 10MB -and $file.FullName.StartsWith($workspace.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         try { $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash } catch { $hash = 'hash-error' }
     }
     return "$($file.Length)|$($file.LastWriteTimeUtc.Ticks)|$hash"
@@ -56,7 +61,7 @@ function Get-RagMonitoredSnapshot {
     foreach ($t in $tempRoots) {
         if (Test-Path $t) {
             Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue | Where-Object {
-                $_.Name -like 'fastembed*' -or $_.Name -like 'ort*' -or $_.Name -like 'drill-notebook*'
+                $_.Name -like 'fastembed*' -or $_.Name -like 'ort*' -or $_.Name -like 'drill-notebook*' -or $_.Name -like 'tomcat*'
             } | ForEach-Object {
                 if ($_.PSIsContainer) {
                     Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | ForEach-Object {
@@ -95,6 +100,14 @@ $before = Get-ForbiddenSnapshot
 $ragBefore = Get-RagMonitoredSnapshot
 $runExit = 0
 try {
+    if (-not [string]::IsNullOrWhiteSpace($RunScript)) {
+        $scriptPath = [IO.Path]::GetFullPath((Join-Path $workspace $RunScript))
+        if (-not $scriptPath.StartsWith($workspace.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'The audit target must stay inside the workspace.' }
+        if ([IO.Path]::GetExtension($scriptPath) -eq '.mjs') { & node $scriptPath @RunArguments }
+        elseif ([IO.Path]::GetExtension($scriptPath) -eq '.ps1') { & pwsh -NoProfile -File $scriptPath @RunArguments }
+        else { throw 'The audit target must be a local .mjs or .ps1 script.' }
+        $runExit = $LASTEXITCODE
+    }
     if ($RunSmoke) {
         & (Join-Path $PSScriptRoot 'smoke-mvp.ps1') -AppRoot $root
         $runExit = $LASTEXITCODE
@@ -118,20 +131,20 @@ $lines = @(
     "Smoke exit: $runExit",
     "New forbidden files: $($newFiles.Count)"
 )
-if ($newFiles.Count) { $lines += $newFiles }
+if ($newFiles.Count) { $lines += @($newFiles | Select-Object -First 20) }
 $lines | Set-Content -LiteralPath $evidence -Encoding utf8
 
 $ragLines = @(
     "AppRoot: $root",
     "AppRoot allowed runtime data: $($AppRootAllowed -join ', ')",
     "Workspace allowed build artifact: $($WorkspaceAllowed -join ', ')",
-    "RAG monitored roots: %USERPROFILE%\.cache\huggingface, %USERPROFILE%\.cache\fastembed, %USERPROFILE%\.fastembed_cache, %LOCALAPPDATA%\Drill Notebook, %APPDATA%\Drill Notebook, %TEMP%\{fastembed,ort,drill-notebook}*",
+    "RAG monitored roots (metadata only): %USERPROFILE%\.cache\huggingface, %USERPROFILE%\.cache\fastembed, %USERPROFILE%\.fastembed_cache, %LOCALAPPDATA%\Drill Notebook, %APPDATA%\Drill Notebook, %TEMP%\{fastembed,ort,drill-notebook,tomcat}*",
     "Before monitored files: $($ragBefore.Count)",
     "After monitored files: $($ragAfter.Count)",
     "Smoke exit: $runExit",
     "New/changed monitored files outside APP_ROOT: $($ragNewOrChanged.Count)"
 )
-if ($ragNewOrChanged.Count) { $ragLines += $ragNewOrChanged }
+if ($ragNewOrChanged.Count) { $ragLines += @($ragNewOrChanged | Select-Object -First 20) }
 $ragLines | Set-Content -LiteralPath $evidenceRag -Encoding utf8
 
 if ($runExit -ne 0 -or $newFiles.Count -gt 0 -or $ragNewOrChanged.Count -gt 0) { exit 1 }

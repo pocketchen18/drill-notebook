@@ -7,12 +7,22 @@ export interface AutosavePayload {
   content: Record<string, unknown>;
 }
 
+const activeAutosaves = new Set<NoteAutosave>();
+
+/** Update shutdown waits for confirmed writes, including coordinators whose page has already unmounted. */
+export async function saveAllNotesBeforeRestart(): Promise<void> {
+  for (const coordinator of [...activeAutosaves]) await coordinator.flushAndWait();
+}
+
 export class NoteAutosave {
   private pending = new Map<number, AutosavePayload>();
   private server = new Map<number, string>();
   private saving = new Map<number, Set<AutosavePayload>>();
   private failed = new Set<number>();
   private discarded = new Set<number>();
+  private latest = new Map<number, AutosavePayload>();
+  private requests = new Set<Promise<unknown>>();
+  private inFlight = new Map<number, Promise<unknown>>();
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -35,11 +45,14 @@ export class NoteAutosave {
   change(pageId: number, content: Record<string, unknown>): void {
     if (this.discarded.has(pageId)) return;
     const json = JSON.stringify(content);
-    if (this.server.get(pageId) === json) {
+    if (this.server.get(pageId) === json && !this.saving.has(pageId)) {
       this.pending.delete(pageId);
       return;
     }
-    this.pending.set(pageId, { pageId, content });
+    const payload = { pageId, content };
+    this.pending.set(pageId, payload);
+    this.latest.set(pageId, payload);
+    activeAutosaves.add(this);
     this.schedule();
   }
 
@@ -57,22 +70,51 @@ export class NoteAutosave {
   /** 立即发送待保存内容，普通保存和 keepalive 都跟踪到结果，避免刷新覆盖在途草稿。 */
   flush(send = this.send): void {
     for (const payload of this.take()) {
+      activeAutosaves.add(this);
       const saves = this.saving.get(payload.pageId) ?? new Set<AutosavePayload>();
       saves.add(payload);
       this.saving.set(payload.pageId, saves);
       let request: Promise<unknown>;
-      try { request = Promise.resolve(send(payload)); }
+      try {
+        const prior = this.inFlight.get(payload.pageId);
+        request = prior ? prior.catch(() => undefined).then(() => this.discarded.has(payload.pageId) ? undefined : send(payload))
+          : Promise.resolve(send(payload));
+      }
       catch (error) { request = Promise.reject(error); }
-      void request.then(() => {
+      const tracked = request.then(() => {
         if (this.discarded.has(payload.pageId)) return;
         this.server.set(payload.pageId, JSON.stringify(payload.content));
         this.failed.delete(payload.pageId);
-      }, () => { if (!this.discarded.has(payload.pageId)) this.failed.add(payload.pageId); }).finally(() => {
+      }, () => {
+        if (!this.discarded.has(payload.pageId)) {
+          this.failed.add(payload.pageId);
+          if (this.latest.get(payload.pageId) === payload && !this.pending.has(payload.pageId)) this.pending.set(payload.pageId, payload);
+        }
+      }).finally(() => {
         saves.delete(payload);
         if (!saves.size) this.saving.delete(payload.pageId);
+        this.requests.delete(tracked);
+        if (this.inFlight.get(payload.pageId) === tracked) this.inFlight.delete(payload.pageId);
+        this.releaseIfIdle();
         this.onSettled();
       });
+      this.requests.add(tracked);
+      this.inFlight.set(payload.pageId, tracked);
     }
+    this.releaseIfIdle();
+  }
+
+  async flushAndWait(): Promise<void> {
+    do {
+      this.flush();
+      await Promise.all([...this.requests]);
+      if (this.failed.size) throw new Error('笔记尚未保存成功，请检查连接。草稿已保留，保存成功后会继续更新。');
+    } while (this.pending.size || this.requests.size);
+    this.releaseIfIdle();
+  }
+
+  private releaseIfIdle(): void {
+    if (!this.pending.size && !this.requests.size && !this.failed.size) activeAutosaves.delete(this);
   }
 
   /** 页面/笔记本删除后丢弃其待保存草稿，避免向已删除资源发 PUT。 */
@@ -82,6 +124,8 @@ export class NoteAutosave {
     this.failed.delete(pageId);
     this.server.delete(pageId);
     this.saving.delete(pageId);
+    this.latest.delete(pageId);
+    this.releaseIfIdle();
   }
 
   private schedule(): void {

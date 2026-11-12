@@ -133,6 +133,8 @@ public class MemoryMaintenanceWorker {
     });
     private final AtomicBoolean drainQueued = new AtomicBoolean();
     private volatile boolean backgroundDrain = true;
+    @Autowired(required=false)
+    private com.drillnotebook.app.config.PortableUpdateRequestGate updateGate;
 
     @Autowired
     public MemoryMaintenanceWorker(MemoryJobRepository jobs, UsageRepository usage,
@@ -191,7 +193,8 @@ public class MemoryMaintenanceWorker {
         if (!backgroundDrain || !drainQueued.compareAndSet(false, true)) {
             return;
         }
-        executor.submit(this::runDrain);
+        if (updateGate == null) executor.submit(this::runDrain);
+        else if (!updateGate.executeBackground(executor, this::runDrain)) drainQueued.set(false);
     }
 
     /**

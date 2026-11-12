@@ -100,6 +100,15 @@ class SessionDispatchServiceTest {
         release.countDown(); terminal(request(a)); terminal(request(b));
         assertEquals("COMPLETED",dispatch.status(request(a)).get("status"));
     }
+    @Test void portableUpdateWaitsForAnExecutingTaskThenClosesTheIdleDispatcher() throws Exception {
+        var entered = new CountDownLatch(1); var release = block("update-hold", entered);
+        var accepted = dispatch.dispatch(plan, call("update-guard"), null, "update-hold", null);
+        assertTrue(entered.await(3, TimeUnit.SECONDS));
+        assertFalse(dispatch.readyForPortableUpdate()); assertFalse(dispatch.beginPortableUpdateShutdown());
+        release.countDown(); terminal(request(accepted));
+        assertTrue(dispatch.readyForPortableUpdate()); assertTrue(dispatch.beginPortableUpdateShutdown());
+        assertEquals("COMPLETED", dispatch.status(request(accepted)).get("status"));
+    }
     @Test void busyTargetQueuesFifoAndCannotBeDeletedOrCleared() throws Exception {
         var entered=new CountDownLatch(1); var release=block("hold",entered);
         var first=dispatch.dispatch(plan,call("first"),null,"hold",null); long target=target(first);

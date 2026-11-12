@@ -40,6 +40,8 @@ import { isConfirmedToolMutation, refreshToolMutation } from '../lib/toolMutatio
 import { useChatQueue } from '../hooks/useChatQueue';
 import { ChatQueue } from './ai-session/ChatQueue';
 import { splitReply } from '../lib/chatQueue';
+import { parseAssistantDrafts, type AssistantDraftDocument } from '../lib/assistantDrafts';
+import { registerUpdateParticipant } from '../lib/updatePreparation';
 
 const { TextArea } = Input;
 const LS_SIDE_COLLAPSED = 'ai.window.sideCollapsed';
@@ -142,6 +144,13 @@ export function AiAssistant(): JSX.Element {
   draftChoiceRef.current = draftChoice;
 
   const [sessionId, setSessionId] = useState<number>();
+  const draftApi = window.api?.update;
+  const [draftsReady, setDraftsReady] = useState(!draftApi);
+  const [draftsError, setDraftsError] = useState('');
+  const [draftReadAttempt, setDraftReadAttempt] = useState(0);
+  const draftsReadyRef = useRef(draftsReady);
+  draftsReadyRef.current = draftsReady;
+  const pendingAssistantWork = useRef(0);
   const [message, setMessage] = useState('');
   // 选中文本后的「复制 / 引用」小浮层：坐标相对消息流容器，滚动、Esc 或选区消失就收起。
   const [textSelection, setTextSelection] = useState<{ x: number; y: number; text: string; below: boolean } | null>(null);
@@ -223,9 +232,59 @@ export function AiAssistant(): JSX.Element {
     target: typeof turnTargetRef.current; sticky: boolean; scroll: number }>());
   const restoreScrollRef = useRef<number | null>(null);
   const observedStatusRef = useRef(new Map<string, string>());
+  const currentDraftRef = useRef({ sessionId, message, attachments, titleDraft, choice: draftChoice });
+  currentDraftRef.current = { sessionId, message, attachments, titleDraft, choice: draftChoice };
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const draftSaveChain = useRef<Promise<void>>(Promise.resolve());
+  const saveDrafts = (): Promise<void> => {
+    clearTimeout(draftSaveTimer.current);
+    if (!draftApi) return Promise.resolve();
+    if (!draftsReadyRef.current) return Promise.reject(new Error('助手草稿尚未读取成功，请先处理草稿提示。'));
+    const current = currentDraftRef.current;
+    const drafts = [...draftCache.current].filter(([id]) => id !== (current.sessionId ?? 'new'))
+      .map(([id, draft]) => ({ sessionId: id === 'new' ? null : id, message: draft.message, attachments: draft.attachments, scroll: draft.scroll }));
+    drafts.push({ sessionId: current.sessionId ?? null, message: current.message, attachments: current.attachments,
+      scroll: chatContainerRef.current?.scrollTop ?? restoreScrollRef.current ?? 0 });
+    const document: AssistantDraftDocument = { format: 1, selectedSessionId: current.sessionId ?? null,
+      choice: current.choice, titleDraft: current.titleDraft, drafts };
+    // Serialize requests so a late save can never overwrite newer input.
+    const save = draftSaveChain.current.catch(() => undefined).then(() => draftApi.saveAssistantDrafts(document));
+    draftSaveChain.current = save;
+    return save;
+  };
+  const scheduleDraftSave = (): void => {
+    if (!draftsReadyRef.current || !draftApi) return;
+    clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => { void saveDrafts().catch(error => setDraftsError(friendlyMessage(error, '助手草稿未保存，请重试'))); }, 500);
+  };
+  useEffect(() => {
+    if (!draftApi) return;
+    let live = true;
+    void draftApi.readAssistantDrafts().then(raw => {
+      if (!live) return;
+      const saved = parseAssistantDrafts(raw);
+      if (saved) {
+        for (const draft of saved.drafts) draftCache.current.set(draft.sessionId ?? 'new', { ...draft,
+          messages: [], target: null, sticky: draft.scroll === 0 });
+        const selected = draftCache.current.get(saved.selectedSessionId ?? 'new');
+        lastExplicitSessionIdRef.current = saved.selectedSessionId;
+        setSessionId(saved.selectedSessionId ?? undefined);
+        setMessage(selected?.message ?? ''); setAttachments(selected?.attachments ?? []);
+        setDraftChoice(saved.choice); setTitleDraft(saved.titleDraft);
+        stickyBottomRef.current = selected?.sticky ?? true; restoreScrollRef.current = selected?.scroll ?? 0;
+      }
+      setDraftsError(''); setDraftsReady(true);
+    }).catch(error => { if (live) setDraftsError(friendlyMessage(error, '助手草稿读取失败，原文件已保留')); });
+    return () => { live = false; };
+  }, [draftApi, draftReadAttempt]);
+  useEffect(() => { scheduleDraftSave(); }, [sessionId, message, attachments, titleDraft, draftChoice, draftsReady]);
+  useEffect(() => () => {
+    clearTimeout(draftSaveTimer.current);
+    if (draftsReadyRef.current) void saveDrafts().catch(() => undefined);
+  }, []);
   function selectSession(next: number | undefined): void {
     setSideOverlay(false);
-    if (firstSendPendingRef.current || next === sessionId) return;
+    if (!draftsReady || pendingAssistantWork.current > 0 || firstSendPendingRef.current || next === sessionId) return;
     regenerationRef.current = null;
     setRegenerating(null);
     draftCache.current.set(sessionId ?? 'new', { message, attachments, messages, target: turnTargetRef.current,
@@ -259,6 +318,16 @@ export function AiAssistant(): JSX.Element {
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
   const streaming = turn.busy;
   const queue = useChatQueue(sessionId, aiOpen);
+  const prepareAssistantRef = useRef<() => Promise<void>>();
+  prepareAssistantRef.current = async () => {
+    if (turn.busy || turn.reconnecting || turn.runtimes.some(item => ['RUNNING', 'QUEUED'].includes(item.status))
+      || firstSendPendingRef.current || queueSubmittingRef.current || queue.hasUnconfirmedSubmissions()
+      || pendingAssistantWork.current > 0 || exporting || regenerationRef.current) throw new Error('助手仍有提交或文件操作待确认，请先完成当前操作。');
+    await navigation.current?.prepareForRestart();
+    await saveDrafts();
+    setDraftsError('');
+  };
+  useEffect(() => registerUpdateParticipant('assistant-drafts', () => prepareAssistantRef.current?.()), []);
   // 后台会话不会向当前聊天发送事件；按轮次/状态变化同步全局容量，避免每次轮询重读账本。
   const runtimeStorageSignature = turn.runtimes
     .map((item) => `${item.sessionId}:${item.requestId}:${item.status}`).sort().join('|');
@@ -359,7 +428,7 @@ export function AiAssistant(): JSX.Element {
   }, [targetPageId, targetPagesQuery.data]);
 
   useEffect(() => {
-    if (!sessionsQuery.data || lastExplicitSessionIdRef.current === null || firstSendPendingRef.current) return;
+    if (!draftsReady || !sessionsQuery.data || lastExplicitSessionIdRef.current === null || firstSendPendingRef.current) return;
     // 用户最近一次显式选中的会话若仍在列表中（哪怕列表 refetch 重新排过序），不要把它重置到 data[0]。
     if (lastExplicitSessionIdRef.current !== undefined &&
         sessionsQuery.data.some((item) => item.id === lastExplicitSessionIdRef.current)) {
@@ -373,7 +442,7 @@ export function AiAssistant(): JSX.Element {
       setSessionId(next);
       setMessages([]);
     }
-  }, [sessionId, sessionsQuery.data]);
+  }, [sessionId, sessionsQuery.data, draftsReady]);
 
   // 切会话先销毁检查器：它可能正显示上一轮逐条对照出来的正文片段，不能跨会话留着（§4.5、C08）
   useEffect(() => {
@@ -415,6 +484,7 @@ export function AiAssistant(): JSX.Element {
     setAway((value) => (value === nowAway ? value : nowAway));
     if (!nowAway) setUnseen(false);
     lastScrollTopRef.current = el.scrollTop;
+    scheduleDraftSave();
     // 滚到顶部附近就取更早的一页（§7.4：向上滚动可重新加载），并记住当前高度以便补回位移
     if (el.scrollTop < 60) requestOlder();
   };
@@ -536,17 +606,24 @@ export function AiAssistant(): JSX.Element {
   };
   /** 改选只作用于当前会话之后提交的消息；已开始的轮次和已受理的待发消息保持提交时的配置。 */
   const changeModelChoice = async (next: ModelChoice): Promise<void> => {
+    if (!draftsReady) return;
     if (sessionId === undefined) { setDraftChoice(next); return; }
+    pendingAssistantWork.current += 1;
     try {
       updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${sessionId}`, next));
     } catch (error) { Message.error(friendlyMessage(error, '模型选择未保存，请重试')); }
+    finally { pendingAssistantWork.current -= 1; }
   };
   /** 置顶属于会话：每个会话各自记录，置顶的归入会话栏最前的「置顶」分组，先置顶的在上。 */
   const pinSession = async (id: number, pinned: boolean): Promise<void> => {
-    updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { pinned }));
+    pendingAssistantWork.current += 1;
+    try { updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { pinned })); }
+    finally { pendingAssistantWork.current -= 1; }
   };
   const renameSession = async (id: number, title: string): Promise<void> => {
-    updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { title }));
+    pendingAssistantWork.current += 1;
+    try { updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${id}`, { title })); }
+    finally { pendingAssistantWork.current -= 1; }
   };
   const generateSessionTitle = async (session: AiChatSession, overwriteManual: boolean): Promise<void> => {
     updateSessionCache(await post<AiChatSession>(`/api/ai/sessions/${session.id}/title`, {
@@ -560,6 +637,8 @@ export function AiAssistant(): JSX.Element {
       if (selectedSessionRef.current === deletedId) handleNewSession();
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).filter((item) => item.id !== deletedId));
       queryClient.removeQueries({ queryKey: historyQueryKey(deletedId) });
+      draftCache.current.delete(deletedId);
+      scheduleDraftSave();
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
     }
   });
@@ -759,6 +838,7 @@ export function AiAssistant(): JSX.Element {
         attachments: cached.attachments.filter((item) => !submitted.ids.has(item.id)) });
     }
     submittedQueueDrafts.current.delete(id);
+    scheduleDraftSave();
   };
   const retryQueueSubmission = async (): Promise<void> => {
     if (queueSubmittingRef.current || sessionId === undefined) return;
@@ -783,7 +863,7 @@ export function AiAssistant(): JSX.Element {
     else turn.send(input);
   };
   const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
-    if (firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
+    if (!draftsReady || firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
     if (!continuation && !message.trim() && !attachments.length) return;
     if (!configured) {
       Message.warning('请先在设置中配置 API Key');
@@ -920,6 +1000,9 @@ export function AiAssistant(): JSX.Element {
   };
 
   const addAttachments = async (files: File[]): Promise<void> => {
+    if (!draftsReady || pendingAssistantWork.current) return;
+    pendingAssistantWork.current += 1;
+    try {
     // 逐个累积再比较：批量选择时后面的文件要按"已经收下的"重算门限，
     // 不能让每个文件各自拿同一份旧数组去比，否则一次选 10 个就能整批绕过 4 项上限。
     let next = attachments;
@@ -939,6 +1022,7 @@ export function AiAssistant(): JSX.Element {
         Message.error(result.error);
       }
     }
+    } finally { pendingAssistantWork.current -= 1; }
   };
 
   const exportSession = async (targetId: number, format: 'md' | 'html' | 'json'): Promise<void> => {
@@ -1005,19 +1089,23 @@ export function AiAssistant(): JSX.Element {
   };
   const openTitleRename = (): void => {
     window.clearTimeout(titleClickTimer.current);
-    if (!currentSession || createSessionMutation.isPending) return;
+    if (!draftsReady || !currentSession || createSessionMutation.isPending) return;
     titleRenameCancelled.current = false;
     setTitleDraft(currentSession.title);
   };
   /** Enter 或失焦保存，Escape 取消；内容没变或为空都不发请求。 */
   const commitTitleRename = (): void => {
+    if (!draftsReady || !currentSession) return;
     const target = currentSession;
     const next = (titleDraft ?? '').trim();
     const cancelled = titleRenameCancelled.current;
     titleRenameCancelled.current = false;
     setTitleDraft(null);
     if (cancelled || !target || !next || next === target.title) return;
-    void renameSession(target.id, next).catch((error) => Message.error(friendlyMessage(error, '会话名未保存，请重试')));
+    void renameSession(target.id, next).catch((error) => {
+      if (selectedSessionRef.current === target.id) setTitleDraft(next);
+      Message.error(friendlyMessage(error, '会话名未保存，请重试'));
+    });
   };
   const cancelTitleRename = (): void => { titleRenameCancelled.current = true; setTitleDraft(null); };
   /** 浮层坐标相对消息流容器：选区上方优先，贴近顶部时放到选区下方。 */
@@ -1043,6 +1131,7 @@ export function AiAssistant(): JSX.Element {
   };
   /** 引用：把选中的文字作为引用块放进输入框，接着写自己的问题。 */
   const quoteSelected = (): void => {
+    if (!draftsReady) return;
     const text = textSelection?.text;
     setTextSelection(null);
     if (!text) return;
@@ -1096,11 +1185,11 @@ export function AiAssistant(): JSX.Element {
             <span className="ai-window-divider" aria-hidden="true" />
           </> : null}
           {titleDraft === null ? (
-            <button type="button" className="ai-window-title" aria-label="切换会话" disabled={createSessionMutation.isPending}
+            <button type="button" className="ai-window-title" aria-label="切换会话" disabled={!draftsReady || createSessionMutation.isPending}
               title={currentSession ? `${currentSession.title}（双击改名）` : undefined} onClick={onTitleClick} onDoubleClick={openTitleRename}>
               <span>{currentSession?.title ?? (sessionsQuery.isLoading ? '正在加载会话…' : '新会话')}</span></button>
           ) : (
-            <input className="ai-window-title-input" aria-label="会话名称" value={titleDraft} autoFocus maxLength={120}
+            <input className="ai-window-title-input" aria-label="会话名称" value={titleDraft} autoFocus maxLength={120} disabled={!draftsReady || !currentSession}
               onFocus={(event) => event.currentTarget.select()}
               onChange={(event) => setTitleDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -1246,7 +1335,7 @@ export function AiAssistant(): JSX.Element {
                   <p>{sessionId === undefined ? '开始一段新对话' : '当前会话还没有消息。'}</p>
                   <div className="ai-quick-prompts">
                     {quickPrompts.map((item) => (
-                      <button key={item.label} type="button" className="ai-chip" disabled={!configured} onClick={() => { setMessage(item.text); focusCompose(); }}>{item.label}</button>
+                      <button key={item.label} type="button" className="ai-chip" disabled={!draftsReady || !configured} onClick={() => { setMessage(item.text); focusCompose(); }}>{item.label}</button>
                     ))}
                   </div>
                 </div>
@@ -1303,7 +1392,7 @@ export function AiAssistant(): JSX.Element {
           <div ref={composeRef} className={`chat-compose ai-drawer-compose${queue.data?.items?.length || queue.data?.steering?.length ? ' has-queue' : ''}`}>
             <TextArea
               autoSize={{ minRows: 2, maxRows: 6 }}
-              disabled={createSessionMutation.isPending}
+              disabled={!draftsReady || createSessionMutation.isPending}
               value={message}
               onChange={setMessage}
               onKeyDown={(event) => {
@@ -1337,9 +1426,9 @@ export function AiAssistant(): JSX.Element {
               <FileText size={13} /><span>{pageTarget ? pageContext.title : '无当前页面'}</span></button>
             <ContextMeter sessionId={sessionId} estimate={contextEstimate} refreshKey={`${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}`}
               onInspect={(requestId) => { setSessionReference(undefined); setInspectorTarget({ requestId }); }} />
-            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={createSessionMutation.isPending}
+            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
-            <Button type="secondary" icon={<Paperclip size={16} />} disabled={createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
+            <Button type="secondary" icon={<Paperclip size={16} />} disabled={!draftsReady || createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             {streaming && <>
               <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
                 disabled={queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>
@@ -1349,12 +1438,16 @@ export function AiAssistant(): JSX.Element {
               type="primary"
               icon={<Send size={16} />}
               loading={createSessionMutation.isPending || queueSubmitting}
-              disabled={!configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || !!regenerating || (streaming && !message.trim() && !attachments.length)}
+              disabled={!draftsReady || !configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || !!regenerating || (streaming && !message.trim() && !attachments.length)}
               onClick={send}
               aria-label={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
               title={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
             />
           </div>
+          {draftsError ? <div className="ai-drawer-hint" role="alert">{draftsError}<Button size="mini" type="text" onClick={() => {
+            if (!draftsReady) setDraftReadAttempt(value => value + 1);
+            else void saveDrafts().then(() => setDraftsError(''), error => setDraftsError(friendlyMessage(error, '草稿未保存')));
+          }}>重试</Button></div> : !draftsReady ? <p className="ai-drawer-hint" role="status">正在恢复助手草稿…</p> : null}
           {!configured ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
           </div>
