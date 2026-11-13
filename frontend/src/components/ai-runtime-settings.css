@@ -9,4 +9,8 @@
 .ai-runtime-settings .ai-runtime-error { color: var(--danger); }
 .ai-runtime-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
 .ai-runtime-actions > span { margin-right: auto; color: var(--muted); font-size: 12px; }
+.ai-runtime-retry { min-width: 0; margin: 28px 0 0; padding: 20px 0 0; border: 0; border-top: 1px solid var(--line); }
+.ai-runtime-retry legend { padding: 0 12px 0 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.ai-runtime-retry > p { margin-top: 18px; }
+.ai-runtime-field select { max-width: 100%; padding: 9px 12px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--panel-bg); color: var(--text); font: inherit; }
 @media (max-width: 680px) { .ai-runtime-fields { grid-template-columns: 1fr; gap: 20px; } }

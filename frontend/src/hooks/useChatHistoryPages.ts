@@ -13,6 +13,7 @@ import { get } from '../lib/api';
 
 /** 服务端一页里的一条消息（失败轮次与 legacy 都如实带状态，展示资格不等于注入资格）。 */
 export interface ChatHistoryMessage {
+  recovery?: import('../lib/aiRecovery').AiRecovery | null;
   supplements?: import('../lib/chatQueue').ChatSupplement[];
   finishReason?: string;
   toolActivities?: import('../lib/toolActivity').ToolActivity[];

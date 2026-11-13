@@ -425,6 +425,7 @@ public class SessionDispatchService {
             if(e instanceof AiService.StreamFailure sf) {
                 failure.put("persistenceStatus",sf.persistenceStatus()); failure.put("stateDurable",sf.stateDurable());
                 failure.put("toolActivities",sf.toolActivities());
+                failure.put("recovery",sf.recovery());
             }
             synchronized(run) { run.event("error",failure); run.done.completeExceptionally(e); }
         } finally {

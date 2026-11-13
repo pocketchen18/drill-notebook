@@ -172,10 +172,14 @@ class ChatUpstreamDispatchTest {
                 "两条路径只共享一轮");
 
         server.close();
-        streaming.handle((result, error) -> null).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(true, wiring.turnService().cancel(requestId).get("cancelSignalled"),
+                "断流后按恢复策略继续运行，显式停止必须命中同一轮的活跃句柄");
+        AiService.ChatResult stopped = streaming.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals("ABORTED", stopped.status());
         assertEquals(1, server.bodies().size());
-        assertFalse("RUNNING".equals(jdbc.queryForObject(
-                "SELECT status FROM ai_chat_turn WHERE request_id = ?", String.class, requestId)));
+        assertEquals("ABORTED", jdbc.queryForObject(
+                "SELECT status FROM ai_chat_turn WHERE request_id = ?", String.class, requestId));
+        assertFalse(wiring.handles().isActive(requestId), "停止后释放原轮次句柄");
     }
 
     @Test

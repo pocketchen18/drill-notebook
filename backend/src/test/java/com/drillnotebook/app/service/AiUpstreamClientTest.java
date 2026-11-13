@@ -95,7 +95,12 @@ class AiUpstreamClientTest {
         };
         var deadline = idleDeadline();
         try {
-            var result = client.consumeChatCompletionStream(broken, null, null, deadline);
+            var failure = assertThrows(AiUpstreamException.class,
+                    () -> client.consumeChatCompletionStream(broken, null, null, deadline));
+            assertEquals(AiUpstreamException.Kind.STREAM, failure.kind());
+            assertTrue(failure.retryable());
+            assertTrue(failure.getMessage().contains("fixture disconnect"));
+            var result = failure.partial();
             assertEquals("已收到的部分", result.text());
             assertEquals("stream_error", result.finishReason());
             assertFalse(result.terminalObserved());
@@ -184,8 +189,11 @@ class AiUpstreamClientTest {
     @Test
     void chatCompletionsStreamWithoutTerminalFrameIsNotCompleted() throws Exception {
         // 上游断在半路：一个字节都没有再来了，但没有 [DONE] 也没有 finish_reason
-        AiUpstreamClient.Result result = client.consumeChatCompletionStream(
-                sse("{\"choices\":[{\"delta\":{\"content\":\"半句\"}}]}"), null, null, idleDeadline());
+        var failure = assertThrows(AiUpstreamException.class, () -> client.consumeChatCompletionStream(
+                sse("{\"choices\":[{\"delta\":{\"content\":\"半句\"}}]}"), null, null, idleDeadline()));
+        assertEquals(AiUpstreamException.Kind.STREAM, failure.kind());
+        assertTrue(failure.retryable());
+        var result = failure.partial();
         assertEquals("半句", result.text());
         assertFalse(result.terminalObserved(), "没看到终止帧就不能算正常结束（§7.2 第 4 条）");
     }
@@ -202,7 +210,8 @@ class AiUpstreamClientTest {
 
     @Test
     void chatCompletionsStreamDecodesUtf8SplitAcrossReads() throws Exception {
-        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"跨字节中文\"}}]}\n\n";
+        String body = "data: {\"choices\":[{\"delta\":{\"content\":\"跨字节中文\"}}]}\n\n"
+                + "data: [DONE]\n\n";
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         InputStream oneByteAtATime = new InputStream() {
             private int index;
@@ -219,7 +228,8 @@ class AiUpstreamClientTest {
 
     @Test
     void chatCompletionsStreamJoinsMultilineData() throws Exception {
-        String body = "data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"多行\"}}]}\n\n";
+        String body = "data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"多行\"}}]}\n\n"
+                + "data: [DONE]\n\n";
         AiUpstreamClient.Result result = client.consumeChatCompletionStream(
                 new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), null, null, idleDeadline());
         assertEquals("多行", result.text());
@@ -240,7 +250,7 @@ class AiUpstreamClientTest {
         AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
                 "{\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}",
                 "{\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":34,"
-                        + "\"prompt_tokens_details\":{\"cached_tokens\":80}}}"), null, null, idleDeadline());
+                        + "\"prompt_tokens_details\":{\"cached_tokens\":80}}}", "[DONE]"), null, null, idleDeadline());
         assertTrue(result.usage().reported());
         assertEquals("provider", result.usage().source());
         assertEquals(120, result.usage().inputTokens());
@@ -617,10 +627,11 @@ class AiUpstreamClientTest {
 
     @Test
     void chatCompletionStreamDropsToolCallsWithoutTerminalFrame() throws Exception {
-        AiUpstreamClient.Result result = client.consumeChatCompletionStream(sse(
+        var failure = assertThrows(AiUpstreamException.class, () -> client.consumeChatCompletionStream(sse(
                 "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
                         + "\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}"),
-                null, null, idleDeadline());
+                null, null, idleDeadline()));
+        var result = failure.partial();
 
         assertEquals(0, result.toolCalls().size(), "没有终止帧就不能把半截调用交给执行器");
         assertFalse(result.terminalObserved());

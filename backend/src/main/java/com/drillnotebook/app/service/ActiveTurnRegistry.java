@@ -1,6 +1,7 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.model.ToolActivity;
+import com.drillnotebook.app.model.AiRecovery;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -24,6 +25,7 @@ public class ActiveTurnRegistry {
         private final AtomicBoolean cancelRequested = new AtomicBoolean();
         private volatile Runnable abortHook;
         private volatile List<ToolActivity> toolActivities = List.of();
+        private volatile AiRecovery recovery;
 
         Handle(String requestId, long sessionId) {
             this.requestId = requestId;
@@ -45,6 +47,9 @@ public class ActiveTurnRegistry {
         public List<ToolActivity> toolActivities() {
             return toolActivities;
         }
+
+        public AiRecovery recovery() { return recovery; }
+        public void recovery(AiRecovery value) { recovery = value; }
 
         public void toolActivities(List<ToolActivity> activities) {
             toolActivities = List.copyOf(activities);

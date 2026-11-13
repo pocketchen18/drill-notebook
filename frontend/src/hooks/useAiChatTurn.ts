@@ -9,6 +9,8 @@ import { readToolActivities } from '../lib/toolActivity';
 import type { ToolActivity, ToolPhase } from '../lib/toolActivity';
 import type { ChatSupplement } from '../lib/chatQueue';
 import type { PageSnapshot } from '../lib/pageSnapshot';
+import { readRecovery } from '../lib/aiRecovery';
+import type { AiRecovery } from '../lib/aiRecovery';
 
 /**
  * 聊天轮次的唯一出口（执行方案 §12、contracts §4.1/§4.2/§4.5）。
@@ -53,6 +55,7 @@ export interface OriginalTurnInput {
 
 /** GET /turns/{requestId} 的可见事实（§4.5）：界面只能拿这些字段描述这一轮。 */
 export interface TurnStatusView {
+  recovery?: AiRecovery | null;
   supplements?: ChatSupplement[];
   reply?: string;
   reasoning?: string;
@@ -70,6 +73,7 @@ export interface TurnStatusView {
 }
 
 export type TurnEvent =
+  | { type: 'recovery'; requestId: string; recovery: AiRecovery | null }
   | { type: 'supplements'; requestId: string; supplements: ChatSupplement[] }
   | { type: 'snapshot'; requestId: string; status: TurnStatusView }
   | { type: 'activity'; requestId: string; activities: ToolActivity[]; phase: ToolPhase }
@@ -334,6 +338,8 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
         turn.begun = true;
         emit(turn, { type: 'begun', requestId: turn.requestId });
         if (metadata.supplements) emit(turn, { type: 'supplements', requestId: turn.requestId, supplements: metadata.supplements });
+        const recovery = readRecovery(metadata.recovery);
+        if (recovery !== undefined) emit(turn, { type: 'recovery', requestId: turn.requestId, recovery });
       },
       onToolActivity: (event) => {
         if (event.requestId !== turn.requestId) return;
@@ -364,7 +370,8 @@ export function useAiChatTurn({ sessionId, onEvent }: UseAiChatTurnOptions): {
               sessionId: failure.sessionId,
               stateDurable: failure.stateDurable,
               persistenceStatus: failure.persistenceStatus,
-              toolActivities: failure.toolActivities
+              toolActivities: failure.toolActivities,
+              recovery: failure.recovery
             }
           });
           finish(turn);

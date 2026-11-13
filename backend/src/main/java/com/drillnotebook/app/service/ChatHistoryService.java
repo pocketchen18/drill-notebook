@@ -111,8 +111,11 @@ public class ChatHistoryService {
             if (meta.status() == ChatMessageCipher.ReadStatus.DECRYPTED) {
                 item.put("toolActivities", ToolActivity.readMeta(meta.value(), false));
                 try {
-                    String reason = new com.fasterxml.jackson.databind.ObjectMapper().readTree(meta.value()).path("finishReason").asText("");
+                    var decoded = new com.fasterxml.jackson.databind.ObjectMapper().readTree(meta.value());
+                    String reason = decoded.path("finishReason").asText("");
                     if (reason.matches("[a-z_]{1,40}")) item.put("finishReason", reason);
+                    if (decoded.path("recovery").isObject()) item.put("recovery", new com.fasterxml.jackson.databind.ObjectMapper()
+                            .treeToValue(decoded.path("recovery"), com.drillnotebook.app.model.AiRecovery.class));
                 } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { /* 旧或损坏元数据不补造原因。 */ }
             }
         }

@@ -289,7 +289,7 @@ public class AiUpstreamClient {
                 return new Result("", "", handle != null && handle.cancelRequested() ? "aborted" : "deadline",
                         false, false, handle != null && handle.cancelRequested(), Usage.unknown());
             }
-            throw new IllegalArgumentException("AI 服务连接失败：" + (error.getCause() == null ? error.getMessage() : error.getCause().getMessage()));
+            throw AiUpstreamException.transport(error).redacted(upstream.apiKey());
         } catch (InterruptedException error) {
             deadline.expire();
             deadline.cancel();
@@ -297,6 +297,7 @@ public class AiUpstreamClient {
             Thread.currentThread().interrupt();
             return new Result("", "", "aborted", false, false, true, Usage.unknown());
         }
+        long responseReceivedAt = System.currentTimeMillis();
         InputStream body = response.body();
         deadline.attach(body);
         // 等待响应头时由 Future 响应取消；刚取得响应体时若已取消/到期，立即关闭，一字节都不读。
@@ -310,7 +311,7 @@ public class AiUpstreamClient {
         try {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 // 错误体只取到上限就停：不能为了拼一句错误信息而无界读
-                throw new IllegalArgumentException(errorMessage(response.statusCode(), readForError(body)));
+                throw AiUpstreamException.http(response.statusCode(), readForError(body), response.headers(), responseReceivedAt, upstream.apiKey());
             }
             Result result = anthropic
                     ? (stream ? consumeAnthropicStream(body, listener, handle, deadline)
@@ -323,6 +324,8 @@ public class AiUpstreamClient {
                         result.captureLimited(), handle != null && handle.cancelRequested(), result.usage(), List.of());
             }
             return result;
+        } catch (AiUpstreamException error) {
+            throw error.withResponseAdvice(response.headers(), responseReceivedAt).redacted(upstream.apiKey());
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (ResponseTooLargeException error) {
@@ -334,7 +337,7 @@ public class AiUpstreamClient {
                 return new Result("", "", reason(handle, deadline), false, false,
                         handle != null && handle.cancelRequested(), Usage.unknown());
             }
-            throw new IllegalArgumentException("AI 响应读取失败：" + error.getMessage());
+            throw AiUpstreamException.disconnected("AI 响应读取失败：" + error.getMessage(), null).redacted(upstream.apiKey());
         } finally {
             deadline.cancel();
             close(body);
@@ -929,12 +932,19 @@ public class AiUpstreamClient {
         } catch (IOException interrupted) {
             // 到期/取消会关掉响应体，让读流直接失败：已经收到的半句仍要交回，不能当成什么都没发生
             readInterrupted[0] = true;
+            if (!stopped(handle, deadline)) throw AiUpstreamException.disconnected(interrupted.getMessage(),
+                    new Result(capture.text(), capture.reasoning(), "stream_error", false, capture.limited(), false, usage[0]));
+        } catch (AiUpstreamException error) {
+            throw error.withPartial(new Result(capture.text(), capture.reasoning(), "stream_error", false, capture.limited(), false, usage[0]));
         }
         List<ToolCall> toolCalls = terminal[0] && !downstreamGone[0] && !readInterrupted[0]
                 ? toolStream.finish() : List.of();
-        return new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
+        Result result = new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
                 terminal[0] && !readInterrupted[0], capture.limited() || toolStream.limited,
                 downstreamGone[0], usage[0], toolCalls);
+        if (!result.terminalObserved() && !stopped(handle, deadline) && !result.captureLimited() && !result.downstreamGone())
+            throw AiUpstreamException.disconnected(null, result);
+        return result;
     }
 
     /** Anthropic SSE：content_block_delta 的 text_delta / thinking_delta，message_delta 带 stop_reason。 */
@@ -954,12 +964,19 @@ public class AiUpstreamClient {
         } catch (IOException interrupted) {
             // 与 chat_completions 同一口径：到期/取消导致的读失败只中断，不丢掉已经发出的半句
             readInterrupted[0] = true;
+            if (!stopped(handle, deadline)) throw AiUpstreamException.disconnected(interrupted.getMessage(),
+                    new Result(capture.text(), capture.reasoning(), "stream_error", false, capture.limited(), false, usage[0]));
+        } catch (AiUpstreamException error) {
+            throw error.withPartial(new Result(capture.text(), capture.reasoning(), "stream_error", false, capture.limited(), false, usage[0]));
         }
         boolean complete = (terminal[0] || !finish[0].isEmpty()) && !downstreamGone[0] && !readInterrupted[0];
-        return new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
+        Result result = new Result(capture.text(), capture.reasoning(), readInterrupted[0] ? "stream_error" : finish[0],
                 (terminal[0] || !finish[0].isEmpty()) && !readInterrupted[0], capture.limited() || thinking.limited() || toolStream.limited,
                 downstreamGone[0], usage[0],
                 complete && !thinking.limited() ? toolStream.finish() : List.of(), complete ? thinking.finish() : List.of());
+        if (!result.terminalObserved() && !stopped(handle, deadline) && !result.captureLimited() && !result.downstreamGone())
+            throw AiUpstreamException.disconnected(null, result);
+        return result;
     }
 
     private void consumeAnthropicEvents(InputStream body, StreamListener listener,
@@ -1180,8 +1197,7 @@ public class AiUpstreamClient {
     private void throwIfUpstreamError(JsonNode node) {
         JsonNode error = node.path("error");
         if (error.isObject()) {
-            String message = error.path("message").asText(error.path("type").asText("上游返回错误"));
-            throw new IllegalArgumentException("AI 服务返回错误：" + message);
+            throw AiUpstreamException.event(node);
         }
     }
 

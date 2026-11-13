@@ -1,6 +1,8 @@
 import { ApiError } from './api';
 import { readToolActivities } from './toolActivity';
 import type { ToolActivity, ToolPhase } from './toolActivity';
+import { readRecovery } from './aiRecovery';
+import type { AiRecovery } from './aiRecovery';
 
 /** SSE 流式聊天客户端：解析后端 /api/ai/chat/stream 的 text|reasoning|done|error 事件。 */
 
@@ -44,6 +46,7 @@ export interface UsageSnapshot {
 }
 
 export interface ChatResultView {
+  recovery?: AiRecovery | null;
   supplements?: import('./chatQueue').ChatSupplement[];
   finishReason?: string;
   toolActivities?: ToolActivity[];
@@ -76,6 +79,7 @@ export interface StreamMetadata extends ChatResultView {
 }
 
 export interface StreamErrorInfo {
+  recovery?: AiRecovery | null;
   toolActivities?: ToolActivity[];
   message: string;
   requestId?: string;
@@ -119,6 +123,8 @@ function resultView(payload: Record<string, unknown> | null): ChatResultView {
       if (payload[key] !== undefined) view[key] = payload[key];
     }
     if (Array.isArray(payload.toolActivities)) view.toolActivities = readToolActivities(payload.toolActivities);
+    const recovery = readRecovery(payload.recovery);
+    if (recovery !== undefined) view.recovery = recovery;
   }
   return view as ChatResultView;
 }
@@ -218,7 +224,8 @@ export async function streamChat(path: string, body: unknown, callbacks: StreamC
           partial: payload?.partial === true,
           persistenceStatus: view.persistenceStatus,
           stateDurable: view.stateDurable,
-          toolActivities: view.toolActivities
+          toolActivities: view.toolActivities,
+          recovery: view.recovery
         });
       }
     };

@@ -1,5 +1,16 @@
 import { get, put } from './api';
 
+export interface AiRetrySettings {
+  httpRetries: number;
+  streamRetries: number;
+  networkPersistent: boolean;
+  networkRetries: number;
+}
+export const DEFAULT_RETRY_SETTINGS: AiRetrySettings = { httpRetries: 4, streamRetries: 5, networkPersistent: true, networkRetries: 5 };
+export const runtimeRetrySettings = (values: AiRuntimeSettings): AiRetrySettings => values.retry ?? DEFAULT_RETRY_SETTINGS;
+export type RuntimeLimitKey = Exclude<keyof AiRuntimeSettings, 'retry'>;
+export type RuntimeErrorKey = RuntimeLimitKey | 'httpRetries' | 'streamRetries' | 'networkRetries';
+
 export interface AiRuntimeSettings {
   maxToolStages: number;
   maxToolExecutions: number;
@@ -9,13 +20,14 @@ export interface AiRuntimeSettings {
   requestOutputTokens: number;
   finalOutputTokens: number;
   repeatedToolLimit: number;
+  retry?: AiRetrySettings;
 }
 export interface AiRuntimeSettingsView {
   revision: number;
   values: AiRuntimeSettings;
   defaults: AiRuntimeSettings;
 }
-export const runtimeFields: Array<{ key: keyof AiRuntimeSettings; label: string; description: string; min: number; max: number; unit?: string }> = [
+export const runtimeFields: Array<{ key: RuntimeLimitKey; label: string; description: string; min: number; max: number; unit?: string }> = [
   { key: 'maxToolStages', label: '工具阶段上限', description: '模型发出一批工具调用计为一个阶段，最终回答另留一次请求。', min: 1, max: 500, unit: '轮' },
   { key: 'maxToolExecutions', label: '工具执行上限', description: '每个工具计一次，读取与写入共用此额度。', min: 1, max: 1000, unit: '次' },
   { key: 'turnTimeoutMinutes', label: '整轮最长时间', description: '包含模型思考、工具执行和最终回答。', min: 1, max: 240, unit: '分钟' },
@@ -26,8 +38,8 @@ export const runtimeFields: Array<{ key: keyof AiRuntimeSettings; label: string;
   { key: 'repeatedToolLimit', label: '相同调用无新结果时停止', description: '相同参数连续返回相同结果时停止，设为 0 关闭此检查。', min: 0, max: 20, unit: '次' }
 ];
 
-export function validateRuntimeSettings(values: AiRuntimeSettings): Partial<Record<keyof AiRuntimeSettings, string>> {
-  const errors: Partial<Record<keyof AiRuntimeSettings, string>> = {};
+export function validateRuntimeSettings(values: AiRuntimeSettings): Partial<Record<RuntimeErrorKey, string>> {
+  const errors: Partial<Record<RuntimeErrorKey, string>> = {};
   for (const field of runtimeFields) {
     if (!Number.isInteger(values[field.key]) || values[field.key] < field.min || values[field.key] > field.max) {
       errors[field.key] = `请输入 ${field.min}–${field.max} 之间的整数`;
@@ -35,6 +47,10 @@ export function validateRuntimeSettings(values: AiRuntimeSettings): Partial<Reco
   }
   if (values.requestTimeoutMinutes > values.turnTimeoutMinutes) errors.requestTimeoutMinutes = '不能超过整轮最长时间';
   if (values.finalOutputTokens >= values.maxOutputTokens) errors.finalOutputTokens = '须小于整轮输出 Token 上限';
+  const retry = runtimeRetrySettings(values);
+  for (const key of ['httpRetries', 'streamRetries', 'networkRetries'] as const) {
+    if (!Number.isInteger(retry[key]) || retry[key] < 0 || retry[key] > 100) errors[key] = '请输入 0–100 之间的整数';
+  }
   return errors;
 }
 export const getRuntimeSettings = () => get<AiRuntimeSettingsView>('/api/ai/runtime-settings');
