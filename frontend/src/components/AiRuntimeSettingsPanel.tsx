@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Message, Modal } from '@arco-design/web-react';
 import { RotateCcw } from 'lucide-react';
-import { getRuntimeSettings, runtimeFields, saveRuntimeSettings, validateRuntimeSettings } from '../lib/aiRuntimeSettings';
+import { DEFAULT_RETRY_SETTINGS, getRuntimeSettings, runtimeFields, runtimeRetrySettings, saveRuntimeSettings, validateRuntimeSettings } from '../lib/aiRuntimeSettings';
 import type { AiRuntimeSettings, AiRuntimeSettingsView } from '../lib/aiRuntimeSettings';
 import type { SettingsLeaveGuard } from './ai-connections/AiConnectionsPanel';
 import { ConnectionNavigationGuard } from './ai-connections/ConnectionNavigationGuard';
@@ -22,6 +22,7 @@ export function AiRuntimeSettingsPanel({ registerGuard }: { registerGuard?: (gua
   const values = draft ?? current?.values;
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(current?.values);
   const errors = values ? validateRuntimeSettings(values) : {};
+  const retry = values ? runtimeRetrySettings(values) : null;
   const guard = useCallback((go: () => void, stay?: () => void) => {
     if (busy) { stay?.(); return; }
     if (!dirty) { go(); return; }
@@ -69,6 +70,35 @@ export function AiRuntimeSettingsPanel({ registerGuard }: { registerGuard?: (gua
           </div>
           <p id={`runtime-help-${field.key}`} className={errors[field.key] ? 'ai-runtime-error' : ''}>{errors[field.key] ?? field.description}</p>
         </div>)}</div>
+        {retry && <fieldset className="ai-runtime-retry"><legend>失败重连</legend>
+          <div className="ai-runtime-fields">{([
+            ['httpRetries', '请求重试次数', '初始请求之外的重试上限，默认 4 次；设为 0 关闭。'],
+            ['streamRetries', '回答重连次数', '回答中断后的重连上限，默认 5 次；设为 0 关闭。']
+          ] as const).map(([key, label, help]) => <div className="ai-runtime-field" key={key}>
+            <label htmlFor={`runtime-${key}`}>{label}</label>
+            <div className="ai-runtime-input"><input id={`runtime-${key}`} type="number" min={0} max={100} step={1}
+              value={Number.isFinite(retry[key]) ? retry[key] : ''} disabled={busy} aria-invalid={!!errors[key]}
+              aria-describedby={`runtime-help-${key}`} onChange={event => edit({ ...values, retry: { ...retry,
+                [key]: event.target.value === '' ? NaN : Number(event.target.value) } })} /><span>次</span></div>
+            <p id={`runtime-help-${key}`} className={errors[key] ? 'ai-runtime-error' : ''}>{errors[key] ?? help}</p>
+          </div>)}
+          <div className="ai-runtime-field"><label htmlFor="runtime-networkPersistent">断网等待</label>
+            <select id="runtime-networkPersistent" disabled={busy} value={retry.networkPersistent ? 'persistent' : 'limited'}
+              onChange={event => edit({ ...values, retry: { ...retry, networkPersistent: event.target.value === 'persistent',
+                networkRetries: Number.isInteger(retry.networkRetries) && retry.networkRetries >= 0 && retry.networkRetries <= 100
+                  ? retry.networkRetries : DEFAULT_RETRY_SETTINGS.networkRetries } })}>
+              <option value="persistent">持续等待网络恢复</option><option value="limited">按次数上限重试</option>
+            </select><p>默认持续等待，可随时停止；仍受整轮最长时间限制。</p>
+          </div>
+          {!retry.networkPersistent && <div className="ai-runtime-field"><label htmlFor="runtime-networkRetries">断网重试次数</label>
+            <div className="ai-runtime-input"><input id="runtime-networkRetries" type="number" min={0} max={100} step={1}
+              value={Number.isFinite(retry.networkRetries) ? retry.networkRetries : ''} disabled={busy} aria-invalid={!!errors.networkRetries}
+              aria-describedby="runtime-help-networkRetries" onChange={event => edit({ ...values, retry: { ...retry,
+                networkRetries: event.target.value === '' ? NaN : Number(event.target.value) } })} /><span>次</span></div>
+            <p id="runtime-help-networkRetries" className={errors.networkRetries ? 'ai-runtime-error' : ''}>{errors.networkRetries ?? '设为 0 关闭断网重试。'}</p>
+          </div>}</div>
+          <p className="ai-runtime-description">请求与回答重连从 400 毫秒开始翻倍等待；断网按 5、10、20、40、60 秒等待，之后保持 60 秒。供应商的有效等待建议优先。</p>
+        </fieldset>}
         {error && <p role="alert" className="ai-runtime-error">{error} <Button type="text" size="mini" disabled={busy}
           onClick={() => void query.refetch().then(result => { if (result.isSuccess) cancel(); })}>放弃草稿并重新载入</Button></p>}
         <div className="ai-runtime-actions"><span>{dirty ? '有未保存的修改' : '已保存的设置'}</span>

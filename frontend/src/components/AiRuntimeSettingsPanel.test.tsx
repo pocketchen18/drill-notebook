@@ -19,6 +19,34 @@ beforeEach(() => { vi.clearAllMocks(); getSettings.mockResolvedValue(view);
   saveSettings.mockImplementation(async (revision, values) => ({ revision: revision + 1, values, defaults })); });
 
 describe('全局 AI 调用预算', () => {
+  it('切回持续等待后隐藏的无效次数不会锁住保存', async () => {
+    mount();
+    const mode = await screen.findByLabelText('断网等待');
+    fireEvent.change(mode, { target: { value: 'limited' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: '断网重试次数' }), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+    fireEvent.change(mode, { target: { value: 'persistent' } });
+    expect(screen.queryByRole('spinbutton', { name: '断网重试次数' })).toBeNull();
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(4, { ...view.values,
+      retry: { httpRetries: 4, streamRetries: 5, networkPersistent: true, networkRetries: 5 } }));
+  });
+  it('重试默认与 Codex 基线一致，有限上限可禁用且校验后保存', async () => {
+    mount();
+    const request = await screen.findByRole('spinbutton', { name: '请求重试次数' });
+    expect(request).toHaveValue(4); expect(screen.getByRole('spinbutton', { name: '回答重连次数' })).toHaveValue(5);
+    expect(screen.queryByRole('spinbutton', { name: '断网重试次数' })).toBeNull();
+    fireEvent.change(request, { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText('断网等待'), { target: { value: 'limited' } });
+    const network = screen.getByRole('spinbutton', { name: '断网重试次数' });
+    fireEvent.change(network, { target: { value: '1.5' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+    fireEvent.change(network, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(4, { ...view.values,
+      retry: { httpRetries: 0, streamRetries: 5, networkPersistent: false, networkRetries: 8 } }));
+  });
   it('修改独立全局设置，恢复默认只改草稿，保存后才生效', async () => {
     mount();
     const input = await screen.findByRole('spinbutton', { name: '工具阶段上限' });

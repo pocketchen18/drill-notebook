@@ -804,6 +804,7 @@ public class AiService {
         private final String persistenceStatus;
         private final boolean stateDurable;
         private List<ToolActivity> toolActivities = List.of();
+        private com.drillnotebook.app.model.AiRecovery recovery;
 
         StreamFailure(String requestId, long sessionId, String code, String persistenceStatus, boolean stateDurable,
                       RuntimeException cause) {
@@ -838,6 +839,7 @@ public class AiService {
         public List<ToolActivity> toolActivities() {
             return toolActivities;
         }
+        public com.drillnotebook.app.model.AiRecovery recovery() { return recovery; }
     }
 
     /**
@@ -953,6 +955,7 @@ public class AiService {
             // 保存失败时，仍向当前客户端交代内存中已经确认的写入；未结束的操作只报未知。
             failure.toolActivities = lease.handle().toolActivities().stream()
                     .map(item -> "RUNNING".equals(item.state()) ? item.unknown() : item).toList();
+            failure.recovery = lease.handle().recovery();
             throw failure;
         }
     }
@@ -1246,6 +1249,7 @@ public class AiService {
         result.put("replayed", replayed);
         result.put("reply", reply);
         result.put("toolActivities", chatTurns.toolActivities(requestId, masterPassword));
+        result.put("recovery", chatTurns.recovery(requestId, masterPassword).orElse(null));
         if (plan != null) {
             result.put("citations", plan.citations());
             result.put("memoryContext", plan.memoryContext());
@@ -1411,6 +1415,7 @@ public class AiService {
         var steering=execution==null?null:execution.steering;
         List<SessionExecution.Supplement> supplements=List.of();
         String currentUserText=call.userText();
+        AiRetryPolicy retry = new AiRetryPolicy(call.settings().retry());
         while (true) {
             if (call.lease().handle().cancelRequested()) return new AiUpstreamClient.Result(prefix.toString(), prefixReasoning.toString(), "aborted");
             requirePlanStillCurrent(call.dispatch(), call.lease());
@@ -1453,6 +1458,7 @@ public class AiService {
             var acknowledged=new java.util.concurrent.atomic.AtomicBoolean();
             var attemptText=new StringBuilder();var attemptReasoning=new StringBuilder();
             AiUpstreamClient.StreamListener receiver=(type,text)->{
+                if (call.lease().handle().recovery() != null) emitRecovery(call, null);
                 if(steering!=null&&!sending.isEmpty()&&acknowledged.compareAndSet(false,true))steering.received(sending);
                 if(buffer==null){if("text".equals(type))attemptText.append(text);else if("reasoning".equals(type))attemptReasoning.append(text);}
                 var listener=buffer==null?call.listener():buffer;
@@ -1460,9 +1466,6 @@ public class AiService {
             };
             try {
                 AiModelLimits.validate(call.config(), messages, tools, budget);
-                attempt=chatTurns.startUsage(call.lease(),
-                        UsageRepository.targetFingerprint(target.baseUrl(), target.apiFormat(), target.model()),
-                        call.dispatch().planId());
                 if(SessionExecution.CURRENT.get()!=null) {
                     while(!(permit=SessionExecution.UPSTREAM.tryAcquire(100,java.util.concurrent.TimeUnit.MILLISECONDS))) {
                         if(call.lease().handle().cancelRequested() || limits.secondsLeft()<=0) throw new IllegalStateException("会话已停止或超时");
@@ -1470,7 +1473,12 @@ public class AiService {
                     seconds=limits.requestSeconds();
                     if(seconds<=0 || call.lease().handle().cancelRequested()) throw new IllegalStateException("会话已停止或超时");
                 }
+                attempt=chatTurns.startUsage(call.lease(),
+                        UsageRepository.targetFingerprint(target.baseUrl(), target.apiFormat(), target.model()),
+                        call.dispatch().planId());
                 invoked=true;
+                var recovery = retry.starting();
+                if (recovery != null) emitRecovery(call, recovery);
                 if(steering!=null&&!sending.isEmpty())steering.sending(sending);
                 result = upstream().callWithTools(target, messages, tools, call.stream(),
                         receiver, seconds,
@@ -1478,9 +1486,42 @@ public class AiService {
                 if(steering!=null&&!sending.isEmpty()&&(result.terminalObserved()||!result.text().isBlank()||!result.toolCalls().isEmpty())&&acknowledged.compareAndSet(false,true))steering.received(sending);
                 supplements=List.of();
             } catch (RuntimeException error) {
-                if(invoked) limits.consume(null,budget); else limits.release(budget);
-                if(attempt!=null) chatTurns.settleUsage(attempt, null);
-                prefix.append(attemptText);prefixReasoning.append(attemptReasoning);
+                AiUpstreamException upstreamError = error instanceof AiUpstreamException failure ? failure : null;
+                var partial = upstreamError == null ? null : upstreamError.partial();
+                var usage = partial == null ? null : partial.usage();
+                boolean rejected = upstreamError != null && partial == null
+                        && (upstreamError.kind() == AiUpstreamException.Kind.NETWORK || upstreamError.getMessage().startsWith("HTTP "));
+                if (invoked && !rejected) limits.consume(usage, budget); else limits.release(budget);
+                if (attempt != null) chatTurns.settleUsage(attempt, usage);
+                if (buffer != null && partial != null) {
+                    replay(call, buffer, partial);
+                    prefix.append(partial.text()); prefixReasoning.append(partial.reasoning() == null ? "" : partial.reasoning());
+                } else { prefix.append(attemptText); prefixReasoning.append(attemptReasoning); }
+                if (upstreamError != null) {
+                    // 等待时释放全局上游并发槽，其他会话仍能正常请求。
+                    if (permit) { SessionExecution.UPSTREAM.release(); permit = false; }
+                    // 插话交付未确认时不能自动重发同一份补充指令。
+                    if (steering != null && !sending.isEmpty() && !acknowledged.get()) {
+                        emitRecovery(call, retry.view(upstreamError, "failed", null));
+                        throw error;
+                    }
+                    if (retry.canRetry(upstreamError)) {
+                        if (!awaitRetry(call, limits, retry, upstreamError)) {
+                            boolean cancelled = call.lease().handle().cancelRequested();
+                            emitRecovery(call, retry.view(upstreamError, cancelled ? "stopped" : "failed", null));
+                            return combine(prefix, prefixReasoning, new AiUpstreamClient.Result("", "", cancelled ? "aborted" : "budget_time",
+                                    false, false, cancelled, AiUpstreamClient.Usage.unknown()));
+                        }
+                        if (partial != null && !partial.text().isBlank()) {
+                            messages.add(Map.of("role", "assistant", "content", partial.text()));
+                            messages.add(Map.of("role", "user", "content", "上次响应中断。请从已经给出的回答末尾继续，不要重复已有内容。"
+                                    + "沿用当前问题及已确认的工具结果，已经完成的写入不要重复执行；未确认的操作先核对。"));
+                        }
+                        supplements = List.of();
+                        continue;
+                    }
+                    emitRecovery(call, retry.view(upstreamError, "failed", null));
+                }
                 throw error;
             } catch(InterruptedException error) {
                 Thread.currentThread().interrupt(); limits.release(budget);
@@ -1503,6 +1544,8 @@ public class AiService {
             }
             if (result.downstreamGone() || result.captureLimited()) return combine(prefix,prefixReasoning,replay(call, buffer, result));
             if (!result.terminalObserved()) return combine(prefix,prefixReasoning,replay(call, buffer, withFinishReason(result, "stream_error")));
+            retry.complete();
+            if (call.lease().handle().recovery() != null) emitRecovery(call, null);
             if (!toolMode || result.toolCalls().isEmpty()) {
                 if(combine(prefix,prefixReasoning,result).captureLimited())return combine(prefix,prefixReasoning,replay(call,buffer,result));
                 var next=steering==null||stopReason!=null||"length".equals(result.finishReason())?List.<SessionExecution.Supplement>of():steering.take(true,prefix.length()+result.text().length());
@@ -1630,6 +1673,36 @@ public class AiService {
             call.lease().handle().requestCancel();
             throw error;
         }
+    }
+
+    private static void emitRecovery(TurnCall call, com.drillnotebook.app.model.AiRecovery recovery) {
+        call.lease().handle().recovery(recovery);
+        if (call.activitySender() == null) return;
+        var event = new LinkedHashMap<String, Object>();
+        event.put("requestId", call.lease().requestId()); event.put("sessionId", call.lease().sessionId());
+        event.put("recovery", recovery);
+        event.put("phase", recovery == null ? "answer" : "network".equals(recovery.kind()) ? "network" : "reconnecting");
+        try { call.activitySender().accept(event); }
+        catch (RuntimeException failure) { call.lease().handle().requestCancel(); throw failure; }
+    }
+
+    private static boolean awaitRetry(TurnCall call, AiTurnBudget limits, AiRetryPolicy retry, AiUpstreamException error) {
+        long delay = Math.min(retry.delay(error, System.currentTimeMillis()), limits.secondsLeft() * 1000);
+        long until = System.currentTimeMillis() + delay;
+        emitRecovery(call, retry.view(error, "waiting", until));
+        Object wake = new Object();
+        call.lease().handle().bindAbortHook(() -> { synchronized (wake) { wake.notifyAll(); } });
+        try {
+            synchronized (wake) {
+                while (!call.lease().handle().cancelRequested() && limits.secondsLeft() > 0 && System.currentTimeMillis() < until)
+                    wake.wait(Math.min(100, Math.max(1, until - System.currentTimeMillis())));
+            }
+            if (call.lease().handle().cancelRequested() || limits.secondsLeft() <= 0) return false;
+            retry.pending(error);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt(); call.lease().handle().requestCancel(); return false;
+        } finally { call.lease().handle().bindAbortHook(null); }
     }
 
     private boolean chatToolsActive(AiConfigRepository.ConfigRow config, TurnRequest request,

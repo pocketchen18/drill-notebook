@@ -8,6 +8,7 @@ import { ApiError } from '../lib/api';
 import { isUuidV7 } from '../lib/uuidV7';
 import type { StreamCallbacks } from '../lib/aiStream';
 import type { ToolActivity } from '../lib/toolActivity';
+import type { AiRecovery } from '../lib/aiRecovery';
 
 const { apiGet, apiPost, streamChatMock } = vi.hoisted(() => ({
   apiGet: vi.fn(), apiPost: vi.fn(), streamChatMock: vi.fn()
@@ -118,6 +119,55 @@ describe('AiAssistant 流式会话状态', () => {
 
   const activity: ToolActivity = { sequence: 1, toolName: 'create_memory', state: 'FINISHED', outcome: 'CREATED',
     count: 1, startedAt: '2026-11-08T01:00:00.000Z', elapsedMs: 30, availability: null, incomplete: false };
+
+  it('恢复状态在原回答显示一次，成功后清除且始终保留下一条草稿', async () => {
+    renderAssistant(); await send('请求在原轮次恢复');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    const input = screen.getByPlaceholderText('正在回复，可先输入下一条问题');
+    fireEvent.change(input, { target: { value: '恢复过程中写下的草稿' } });
+    const value: AiRecovery = { kind: 'request', state: 'waiting', attempt: 0, limit: 4,
+      error: 'HTTP 503 · server_error\nfixture provider unavailable', nextRetryAt: Date.now() + 10000 };
+    act(() => streamCallbacks!.onMetadata?.({ requestId: turnRequestId(), sessionId: 10, recovery: value }));
+    expect(screen.getByText('请求重试 0/4')).toBeVisible();
+    expect(screen.getAllByText(/fixture provider unavailable/)).toHaveLength(1);
+    expect(screen.queryByText('展开报错')).toBeNull();
+    expect(screen.getByRole('button', { name: '停止' })).toBeEnabled();
+    act(() => streamCallbacks!.onMetadata?.({ requestId: turnRequestId(), recovery: { ...value, state: 'connecting', attempt: 1, nextRetryAt: null } }));
+    expect(screen.getByText('请求重试 1/4')).toBeVisible();
+    act(() => {
+      streamCallbacks!.onMetadata?.({ requestId: turnRequestId(), recovery: null });
+      streamCallbacks!.onText('成功恢复的回答');
+      streamCallbacks!.onDone({ requestId: turnRequestId(), reply: '成功恢复的回答', reasoning: '', status: 'COMPLETED', recovery: null, stateDurable: true });
+    });
+    expect(screen.getByText('成功恢复的回答')).toBeVisible();
+    expect(document.querySelector('.ai-recovery')).toBeNull();
+    expect(input).toHaveValue('恢复过程中写下的草稿');
+    expect(streamChatMock).toHaveBeenCalledOnce();
+  });
+
+  it('没有正文的上游失败也保留报错，历史刷新后显示一次', async () => {
+    renderAssistant(); await send('上游鉴权失败');
+    await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    const value: AiRecovery = { kind: 'request', state: 'failed', attempt: 0, limit: 4,
+      error: 'HTTP 401 · invalid_api_key\nfixture provider exact error' };
+    act(() => streamCallbacks!.onMetadata?.({ requestId: turnRequestId(), sessionId: 10, recovery: value }));
+    serverMessages = [
+      { id: 1, role: 'user', content: '上游鉴权失败', requestId: turnRequestId(), turnStatus: 'FAILED' },
+      { id: 2, role: 'assistant', content: '', requestId: turnRequestId(), turnStatus: 'FAILED', recovery: value }
+    ];
+    act(() => streamCallbacks!.onError({ requestId: turnRequestId(), sessionId: 10,
+      message: value.error, partial: false, persistenceStatus: 'saved', stateDurable: true, recovery: value }));
+    await waitFor(() => expect(document.querySelector('.chat-stream-cursor')).toBeNull());
+    expect(screen.getAllByText(/fixture provider exact error/)).toHaveLength(1);
+    expect(screen.queryByText('这一轮失败，显示的内容可能不完整')).toBeNull();
+    expect(screen.queryByText('展开报错')).toBeNull();
+    await act(async () => { useUiStore.setState({ aiOpen: false }); });
+    await act(async () => { useUiStore.setState({ aiOpen: true }); });
+    await waitFor(() => expect(screen.getAllByText(/fixture provider exact error/)).toHaveLength(1));
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(1);
+    expect(streamChatMock).toHaveBeenCalledOnce();
+    expect(apiPost.mock.calls.some(([url]) => url === '/api/ai/chat')).toBe(false);
+  });
 
   it('回复中 Enter 排队、Ctrl+Enter 插话且不取消当前轮，组合输入不提交', async () => {
     renderAssistant(); await send('第一问');

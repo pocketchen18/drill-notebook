@@ -237,6 +237,7 @@ export interface RetrievalOptions {
 export type TurnResult = ChatResultView & { requestId: string };
 
 export interface ChatMessage {
+  recovery?: import('./aiRecovery').AiRecovery | null;
   supplements?: import('./chatQueue').ChatSupplement[];
   toolActivities?: import('./toolActivity').ToolActivity[];
   toolPhase?: import('./toolActivity').ToolPhase;

@@ -265,13 +265,18 @@ public class ChatTurnService {
      */
     public FinalResult finalizeTurn(Lease lease, UpstreamReply reply, Map<String, Object> audit) {
         String status = classify(lease, reply);
+        var recovery = lease.handle().recovery();
+        if (recovery != null) lease.handle().recovery(ChatTurnRepository.STATUS_COMPLETED.equals(status) ? null
+                : recovery.ended(lease.handle().cancelRequested() || "aborted".equals(reply.finishReason()) ? "stopped" : "failed"));
         try {
-            ChatMessageCipher.Encrypted content = reply.text() == null || reply.text().isEmpty()
-                    ? null : cipher.encrypt(reply.text(), lease.masterPassword());
+            String text = reply.text() == null ? "" : reply.text();
+            // 安全报错需要稳定的助手消息身份，空正文也以密文占位，历史才能读回该轮元数据。
+            ChatMessageCipher.Encrypted content = text.isEmpty() && lease.handle().recovery() == null
+                    ? null : cipher.encrypt(text, lease.masterPassword());
             ChatMessageCipher.Encrypted reasoning = reply.reasoning() == null || reply.reasoning().isEmpty()
                     ? null : cipher.encrypt(reply.reasoning(), lease.masterPassword());
             ChatMessageCipher.Encrypted result = cipher.encrypt(resultMeta(status, reply, audit,
-                            lease.handle().toolActivities()),
+                            lease.handle().toolActivities(), lease.handle().recovery()),
                     lease.masterPassword());
             TerminalOutcome outcome = turns.finalizeTurn(lease.requestId(),
                     new Terminal(status, content == null ? "" : null, content == null ? null : content.cipher(),
@@ -293,8 +298,12 @@ public class ChatTurnService {
         }
     }
 
-    /** 上游调用之前就失败（配置缺失、参数不合法）：轮次不留 RUNNING。 */
+    /** 无正文失败也保存已经取得的安全上游报错；配置/组装失败沿用最小收尾。 */
     public FinalResult abandon(Lease lease, String reason) {
+        if (lease.handle().recovery() != null) {
+            return finalizeTurn(lease, new UpstreamReply("", "", reason, false, false,
+                    lease.handle().cancelRequested(), AiUpstreamClient.Usage.unknown()), Map.of());
+        }
         try {
             TerminalOutcome outcome = turns.failFinalization(lease.requestId(), reason, MemoryTimes.now());
             return new FinalResult(outcome.status(), "failed", true, null, null);
@@ -406,6 +415,7 @@ public class ChatTurnService {
         body.put("reasoningStatus", reasoning.status().name());
         body.put("toolActivities", turn.contentDeletedAt() == null
                 ? toolActivities(requestId, masterPassword) : List.of());
+        body.put("recovery", turn.contentDeletedAt() == null ? recovery(requestId, masterPassword).orElse(null) : null);
         return body;
     }
 
@@ -460,6 +470,19 @@ public class ChatTurnService {
             log.warn("读取轮次上下文审计失败 requestId={}: {}", requestId, error.toString());
             return Optional.empty();
         }
+    }
+
+    public Optional<com.drillnotebook.app.model.AiRecovery> recovery(String requestId, String masterPassword) {
+        var active = registry.find(requestId);
+        if (active.isPresent()) return Optional.ofNullable(active.get().recovery());
+        try {
+            var columns = turns.findResultMeta(requestId);
+            if (columns.isEmpty()) return Optional.empty();
+            var read = cipher.read(columns.get().cipher(), columns.get().crypto(), masterPassword);
+            if (read.status() != ChatMessageCipher.ReadStatus.DECRYPTED) return Optional.empty();
+            var node = mapper.readTree(read.value()).path("recovery");
+            return node.isObject() ? Optional.of(mapper.treeToValue(node, com.drillnotebook.app.model.AiRecovery.class)) : Optional.empty();
+        } catch (SQLException | com.fasterxml.jackson.core.JsonProcessingException ignored) { return Optional.empty(); }
     }
 
     /** 用户停止：置取消标志并关闭上游响应体；正文一个字都没收到时本轮终态是 ABORTED。 */
@@ -757,7 +780,7 @@ public class ChatTurnService {
     }
 
     private String resultMeta(String status, UpstreamReply reply, Map<String, Object> audit,
-                              List<ToolActivity> activities) {
+                              List<ToolActivity> activities, com.drillnotebook.app.model.AiRecovery recovery) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("schemaVersion", 1);
         meta.put("status", status);
@@ -773,6 +796,7 @@ public class ChatTurnService {
                         ? 0 : reply.usage().outputTokens()));
         if (audit != null) meta.put("audit", audit);
         if (!activities.isEmpty()) meta.put("toolActivities", activities);
+        if (recovery != null) meta.put("recovery", recovery);
         return bounded(meta);
     }
 
@@ -885,6 +909,7 @@ public class ChatTurnService {
             minimal.put("finishReason", meta.get("finishReason"));
             minimal.put("truncatedMeta", true);
             if (meta.containsKey("toolActivities")) minimal.put("toolActivities", meta.get("toolActivities"));
+            if (meta.containsKey("recovery")) minimal.put("recovery", meta.get("recovery"));
             return mapper.writeValueAsString(minimal);
         } catch (Exception error) {
             return "{\"truncatedMeta\":true}";
