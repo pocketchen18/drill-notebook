@@ -15,12 +15,12 @@ Keep the resulting `jre/` directory at the repository root while packaging. The 
 From the repository root, the checked-in packaging command validates this directory and creates the portable artifact:
 
 ```powershell
-npm run package:portable -- -Rebuild -Version v0.8.0
+npm run package:portable -- -Rebuild -Version v0.8.1
 ```
 
 The builder copies `jre/` into the packaged resources. The source `jre/` directory is intentionally not committed because it is a generated binary runtime.
 
-Use PowerShell 7 and run the [local quality gates](test/TESTING_GUIDELINES.md) before packaging; the local packaging script does not run tests. `-Rebuild` refreshes existing build outputs. The current default version is `0.8.0`, synchronized with the workflow; `-Version` accepts it with or without the `v` prefix and sets both the application metadata and ZIP filename. Local packaging creates a verification artifact and never publishes a release. The v0.8.0 implementation materials are [archived](archive/v0.8.0/README.md), while [v0.8.1](state/v0.8.1-features.md) is in planning. Release status follows the actual GitHub Release; the [v0.8.0 release notes](release/v0.8.0-release-notes.md) remain in place.
+Use PowerShell 7 and run the [local quality gates](test/TESTING_GUIDELINES.md) before packaging; the local packaging script does not run tests. `-Rebuild` refreshes existing build outputs. The current default version is `0.8.1`, synchronized with the workflow; `-Version` accepts it with or without the `v` prefix and sets both the application metadata and ZIP filename. Local packaging creates a verification artifact and never publishes a release. [v0.8.1](state/v0.8.1-features.md) is implemented, with its release preparation recorded in the [v0.8.1 release notes](release/v0.8.1-release-notes.md). The v0.8.0 implementation materials are [archived](archive/v0.8.0/README.md), and its [release notes](release/v0.8.0-release-notes.md) remain in place. Release status follows the actual GitHub Release.
 
 The GitHub workflow installs locked dependencies with `npm ci`, compiles Electron and its release metadata modules, runs release-configuration tests, builds the frontend and Rust update helper, and compiles/packages the backend with Java 17 and `-DskipTests`. Metadata compilation precedes the configuration tests because their packaging fixtures use those modules; a clean checkout has no `electron-dist/`. Full frontend/backend business tests remain local release gates. Tag pushes publish a **pre-release**; manual runs only upload artifacts unless `publish_release` is enabled.
 

@@ -20,7 +20,7 @@ const defaultVersion = workflow.on.workflow_dispatch.inputs.version.default.repl
 const mavenCommand = 'mvn --batch-mode --show-version --no-transfer-progress -f backend/pom.xml';
 
 test('发布默认值、预发行渠道与 PowerShell 7 入口保持一致', () => {
-  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.8.0');
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.default, 'v0.8.1');
   assert.equal(workflow.on.workflow_dispatch.inputs.publish_release.default, false);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.prerelease, true);
   assert.equal(steps.find(step => step.uses?.startsWith('softprops/action-gh-release@')).with.make_latest, 'false');
@@ -58,6 +58,10 @@ test('干净检出先编译发布模块，配置检查通过后构建发布，�
   const artifact = steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(artifact.if, undefined);
   assert.equal(artifact.with['if-no-files-found'], 'error');
+  const archive = 'dist/Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip';
+  const assets = [archive, `${archive}.sha256`];
+  assert.deepEqual(steps[release].with.files.trim().split(/\r?\n/), assets);
+  assert.deepEqual(artifact.with.path.trim().split(/\r?\n/), assets);
   const notes = steps.findIndex(step => step.id === 'notes');
   assert.ok(notes > steps.findIndex(step => step.id === 'ver') && notes < install);
   assert.equal(steps[notes].if, undefined);
@@ -130,6 +134,17 @@ function runPackage(dir, args = []) {
   return result;
 }
 
+function runArtifactCheck(dir) {
+  const script = join(dir, 'scripts/check-artifacts.ps1');
+  writeFileSync(script, steps.find(step => step.name === '校验产物').run
+    .replaceAll('${{ steps.ver.outputs.version }}', defaultVersion));
+  const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
+    cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
+  });
+  assert.ifError(result.error);
+  return result;
+}
+
 const windowsOnly = { skip: process.platform !== 'win32' };
 test('发布说明按完整版本选择，预发行复用同版正文，缺失或空白立即失败', windowsOnly, t => {
   mkdirSync(fixtureRoot, { recursive: true });
@@ -140,14 +155,14 @@ test('发布说明按完整版本选择，预发行复用同版正文，缺失�
     rmSync(dir, { recursive: true, force: true });
   });
   mkdirSync(join(dir, 'docs/release'), { recursive: true });
-  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.30', 'v0.8.0']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.30', 'v0.8.0', 'v0.8.1']) {
     writeFileSync(join(dir, `docs/release/${tag}-release-notes.md`), `# ${tag} 发布说明\n`);
   }
   writeFileSync(join(dir, 'docs/release/v0.7.4-release-notes.md'), ' \n');
   const script = join(dir, 'select-notes.ps1');
   const output = join(dir, 'notes-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'notes').run);
-  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.3-rc.1', 'v0.7.30', 'v0.8.0', 'v0.8.0-rc.1', 'v0.7.4', 'v0.7.5']) {
+  for (const tag of ['v0.7.1', 'v0.7.2', 'v0.7.3', 'v0.7.3-rc.1', 'v0.7.30', 'v0.8.0', 'v0.8.0-rc.1', 'v0.8.1', 'v0.8.1-rc.1', 'v0.7.4', 'v0.7.5']) {
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RELEASE_TAG: tag, GITHUB_OUTPUT: output },
@@ -169,8 +184,8 @@ test('云端版本校验拒绝路径、命令及多行输入，正常输出发�
   const script = join(dir, 'scripts/validate-version.ps1');
   const output = join(dir, 'version-output.txt');
   writeFileSync(script, steps.find(step => step.id === 'ver').run);
-  for (const version of ['v0.8.0', 'v0.8.0-rc.1', '../outside', 'v0.8.0;echo bad', 'v0.8.0\ntag=other', 'v0.8.0\n', '0.8.0']) {
-    const valid = version === 'v0.8.0' || version === 'v0.8.0-rc.1';
+  for (const version of ['v0.8.1', 'v0.8.1-rc.1', '../outside', 'v0.8.1;echo bad', 'v0.8.1\ntag=other', 'v0.8.1\n', '0.8.1']) {
+    const valid = version === 'v0.8.1' || version === 'v0.8.1-rc.1';
     const result = spawnSync('pwsh', ['-NoProfile', '-File', script], {
       cwd: dir, encoding: 'utf8', timeout: 30000, windowsHide: true,
       env: { ...process.env, RAW: version, GITHUB_OUTPUT: output },
@@ -189,22 +204,30 @@ test('云端版本校验拒绝路径、命令及多行输入，正常输出发�
   }
 });
 
-test('本地默认版本与 CI 一致，注入应用版本并生成同版本 ZIP', windowsOnly, t => {
+test('本地默认版本与 CI 一致，同版本 ZIP 和校验文件通过云端产物检查', windowsOnly, t => {
   const dir = fixture(t);
   const result = runPackage(dir);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const args = readFileSync(join(dir, 'builder-args.txt'), 'utf8');
   assert.ok(args.includes(`--config.extraMetadata.version=${defaultVersion}`));
   assert.ok(args.includes('--publish never'));
-  assert.ok(existsSync(join(dir, `dist/Drill-Notebook-${defaultVersion}-win-x64-portable.zip`)));
+  const archive = join(dir, `dist/Drill-Notebook-${defaultVersion}-win-x64-portable.zip`);
+  assert.ok(existsSync(archive));
+  assert.ok(existsSync(`${archive}.sha256`));
+  const accepted = runArtifactCheck(dir);
+  assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+  rmSync(`${archive}.sha256`);
+  const missingChecksum = runArtifactCheck(dir);
+  assert.notEqual(missingChecksum.status, 0);
+  assert.match(missingChecksum.stderr, /\.zip\.sha256/);
 });
 
 test('自定义版本去除 v 前缀，应用版本与 ZIP 名称一致', windowsOnly, t => {
   const dir = fixture(t);
-  const result = runPackage(dir, ['-Version', 'v0.8.0-rc.1']);
+  const result = runPackage(dir, ['-Version', 'v0.8.1-rc.1']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.8.0-rc.1'));
-  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.8.0-rc.1-win-x64-portable.zip')));
+  assert.ok(readFileSync(join(dir, 'builder-args.txt'), 'utf8').includes('--config.extraMetadata.version=0.8.1-rc.1'));
+  assert.ok(existsSync(join(dir, 'dist/Drill-Notebook-0.8.1-rc.1-win-x64-portable.zip')));
 });
 
 test('非法版本在构建和写入产物前被拒绝', windowsOnly, t => {

@@ -3,7 +3,7 @@ name: Build portable pre-release
 # 用途：在 GitHub 云端 Windows 环境编译「绿色便携版」，并发布为 Pre-release。
 # 发行策略：v1.0 之前均为不保证稳定性的预发行版；正式发行需另行确认渠道，不能仅凭无后缀标签转正。
 # 两种触发方式：
-#   1) 打标签推送：git tag v0.8.0 && git push <remote> v0.8.0  → 自动编译并发布 v0.8.0 预发行版
+#   1) 打标签推送：git tag v0.8.1 && git push <remote> v0.8.1  → 自动编译并发布 v0.8.1 预发行版
 #   2) 网页手动触发（Actions → Run workflow）：填版本号，默认仅上传产物自测（勾选 publish_release 开关后也可发布）
 # 产物：Drill-Notebook-<版本>-win-x64-portable.zip（解压即用的绿色文件夹版，data/logs/runtime 固定在解压目录）。
 # 构建步骤与 scripts/package-portable.ps1 + docs/jlink.md 保持一致。
@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '预发行版本号（含 v 前缀），例如 v0.8.0；v1.0 之前不保证稳定性'
+        description: '预发行版本号（含 v 前缀），例如 v0.8.1；v1.0 之前不保证稳定性'
         required: true
-        default: 'v0.8.0'
+        default: 'v0.8.1'
       publish_release:
         description: '是否发布为 GitHub Pre-release（关闭则仅上传构建产物）'
         type: boolean
@@ -67,7 +67,7 @@ jobs:
       - name: 解析版本号
         id: ver
         env:
-          # 手动触发用输入值；标签推送用 tag 名（如 v0.8.0）
+          # 手动触发用输入值；标签推送用 tag 名（如 v0.8.1）
           RAW: ${{ inputs.version || github.ref_name }}
         run: |
           $tag = $env:RAW
@@ -84,7 +84,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          # v0.8.0-rc.1 与 v0.8.0 共用对应版本说明；必须精确匹配基础版本。
+          # v0.8.1-rc.1 与 v0.8.1 共用对应版本说明；必须精确匹配基础版本。
           $baseTag = ($env:RELEASE_TAG -split '-', 2)[0]
           $notes = "docs/release/$baseTag-release-notes.md"
           if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) { throw "缺少发布说明：$notes" }
@@ -147,9 +147,11 @@ jobs:
 
       - name: 校验产物
         run: |
-          $zip = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Drill-Notebook-*-win-x64-portable.zip' -File)
-          if ($zip.Count -eq 0) { throw '压缩完成但 dist 下没有便携 zip 产物' }
-          $zip | ForEach-Object { Write-Host $_.FullName }
+          $zip = "dist\Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip"
+          foreach ($file in @($zip, "$zip.sha256")) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少本版本发行产物：$file" }
+            Write-Host $file
+          }
 
       # 标签推送时必发；手动触发时按 publish_release 开关（严格匹配布尔）决定是否发预发行版
       - name: 发布 GitHub Release（预发行版）
@@ -165,8 +167,8 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           files: |
-            dist/Drill-Notebook-*-win-x64-portable.zip
-            dist/Drill-Notebook-*-win-x64-portable.zip.sha256
+            dist/Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip
+            dist/Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip.sha256
 
       # 标签发布与手动触发都保留构建产物，便于下载自测和回查。
       - name: 上传构建产物
@@ -174,7 +176,7 @@ jobs:
         with:
           name: Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable
           path: |
-            dist/Drill-Notebook-*-win-x64-portable.zip
-            dist/Drill-Notebook-*-win-x64-portable.zip.sha256
+            dist/Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip
+            dist/Drill-Notebook-${{ steps.ver.outputs.version }}-win-x64-portable.zip.sha256
           if-no-files-found: error
           retention-days: 14
