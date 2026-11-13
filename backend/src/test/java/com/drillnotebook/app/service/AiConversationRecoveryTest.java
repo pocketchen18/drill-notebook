@@ -37,6 +37,8 @@ class AiConversationRecoveryTest {
     private final List<JsonNode> requests = new ArrayList<>();
     private long session;
     private String format = "chat_completions", scenario = "http";
+    private String streamErrorCode = "upstream_error", streamErrorMessage = "upstream_error";
+    private String toolName = "create_material";
     private boolean toolsEnabled;
     private final List<AiRecovery> recovery = new ArrayList<>();
     @BeforeEach void setup() throws Exception {
@@ -52,26 +54,35 @@ class AiConversationRecoveryTest {
             int index = requests.size();
             String payload;
             int status = 200;
-            if (scenario.equals("auth") || scenario.equals("http") && index == 1 || scenario.equals("exhaust")) {
+            if (scenario.equals("auth") || (scenario.equals("http") || scenario.equals("http_event")) && index == 1 || scenario.equals("exhaust")) {
                 status = scenario.equals("auth") ? 401 : 503;
                 payload = "{\"error\":{\"code\":\"" + (status == 401 ? "invalid_api_key" : "server_error") + "\",\"message\":\"upstream exact failure fake-fixture-key\"}}";
                 exchange.getResponseHeaders().set("Retry-After", "0");
-            } else if (scenario.equals("tool") && index == 1) {
+            } else if ((scenario.equals("tool") || scenario.equals("tool_event") || scenario.equals("read_event")) && index == 1) {
                 payload = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"saved-call\",\"type\":\"function\","
-                        + "\"function\":{\"name\":\"create_material\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],"
+                        + "\"function\":{\"name\":\"" + toolName + "\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],"
                         + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n";
             } else if (scenario.equals("busy") && index == 1) {
                 exchange.getResponseHeaders().set("Retry-After", "0");
                 payload = "event: error\ndata: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"fixture service overloaded\"}}\n\n";
-            } else if (format.equals("anthropic")) {
-                payload = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + (index == 1 && scenario.equals("partial") ? "保留前半句。" : "继续后半句。") + "\"}}\n\n";
-                if (!(index == 1 && scenario.equals("partial"))) payload += "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
             } else {
-                boolean interrupted = index == 1 && scenario.equals("partial") || index == 2 && scenario.equals("tool");
+                boolean eventFailure = index == 1 && scenario.equals("event") || index == 2 && (scenario.equals("http_event")
+                        || scenario.equals("tool_event") || scenario.equals("read_event")) || scenario.equals("event_exhaust")
+                        || scenario.equals("event_twice") && index <= 2;
+                boolean interrupted = eventFailure || index == 1 && scenario.equals("partial") || index == 2 && scenario.equals("tool");
                 String text = interrupted ? "保留前半句。" : "继续后半句。";
-                payload = "data: {\"choices\":[{\"delta\":{\"content\":\"" + text + "\"},\"finish_reason\":"
-                        + (interrupted ? "null" : "\"stop\"") + "}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n";
-                if (!interrupted) payload += "data: [DONE]\n\n";
+                if (scenario.equals("event_twice") && index == 2) text = "中间一句。";
+                if (format.equals("anthropic")) {
+                    payload = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + text + "\"}}\n\n";
+                    if (!interrupted) payload += "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+                } else {
+                    payload = "data: {\"choices\":[{\"delta\":{\"content\":\"" + text + "\"},\"finish_reason\":"
+                            + (interrupted ? "null" : "\"stop\"") + "}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n";
+                    if (!interrupted) payload += "data: [DONE]\n\n";
+                }
+                if (scenario.equals("read_event") && index == 2) payload = "";
+                if (eventFailure) payload += "event: error\ndata: " + json.writeValueAsString(Map.of("type", "error",
+                        "error", Map.of("code", streamErrorCode, "message", streamErrorMessage))) + "\n\n";
             }
             byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", status == 200 ? "text/event-stream" : "application/json");
@@ -134,8 +145,9 @@ class AiConversationRecoveryTest {
         var failure = assertThrows(AiService.StreamFailure.class, () -> run(body(), ignored -> {}));
         assertEquals(5, requests.size()); assertEquals(4, failure.recovery().attempt()); assertEquals(4, failure.recovery().limit());
     }
-    @Test void stoppingDuringBackoffDoesNotSendThePendingRetryAndKeepsPartialOutput() {
-        scenario = "partial"; config(); var body = body();
+    @ParameterizedTest @ValueSource(strings = { "partial", "event" })
+    void stoppingDuringBackoffDoesNotSendThePendingRetryAndKeepsPartialOutput(String failureScenario) {
+        scenario = failureScenario; config(); var body = body();
         var result = run(body, value -> { if (value.state().equals("waiting")) wiring.turnService().cancelActive((String) body.get("requestId")); });
         assertEquals(1, requests.size()); assertEquals("ABORTED", result.status()); assertEquals("保留前半句。", result.text());
         assertEquals("stopped", ((AiRecovery) result.resultView().get("recovery")).state());
@@ -196,8 +208,9 @@ class AiConversationRecoveryTest {
         } finally { SessionExecution.CURRENT.remove(); }
     }
 
-    @Test void confirmedWriteToolIsNotReexecutedAndEveryRecoveryRequestSettlesItsOwnUsage() {
-        scenario = "tool"; toolsEnabled = true; config();
+    @ParameterizedTest @ValueSource(strings = { "tool", "tool_event" })
+    void confirmedWriteToolIsNotReexecutedAndEveryRecoveryRequestSettlesItsOwnUsage(String failureScenario) {
+        scenario = failureScenario; toolsEnabled = true; config();
         var writes = new java.util.concurrent.atomic.AtomicInteger();
         ai.setChatTools(List.of(new AiService.ChatTool() {
             public AiUpstreamClient.ToolDefinition definition() {
@@ -216,5 +229,79 @@ class AiConversationRecoveryTest {
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_message WHERE role='user'", Integer.class));
         assertEquals(3, jdbc.queryForObject("SELECT count(*) FROM ai_usage_attempt WHERE state='SETTLED' AND purpose='CHAT'", Integer.class));
         assertEquals(15, jdbc.queryForObject("SELECT sum(output_tokens) FROM ai_usage_attempt WHERE purpose='CHAT'", Integer.class));
+    }
+
+    @ParameterizedTest @ValueSource(strings = { "chat_completions", "anthropic" })
+    void upstreamErrorDuringAnswerResumesTheSameTurnAndKeepsEmittedText(String apiFormat) {
+        scenario = "event"; format = apiFormat; config();
+        var emitted = new StringBuilder();
+        var result = ai.chatStream(body(), (kind, text) -> { if (kind.equals("text")) emitted.append(text); return true; }, event -> {
+            if (event.get("recovery") instanceof AiRecovery value) recovery.add(value);
+        });
+        assertEquals("COMPLETED", result.status()); assertEquals(2, requests.size());
+        assertEquals("保留前半句。继续后半句。", result.text()); assertEquals(result.text(), emitted.toString());
+        assertTrue(requests.get(1).toString().contains("保留前半句。"));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_message WHERE role='user'", Integer.class));
+        assertTrue(recovery.stream().anyMatch(value -> value.kind().equals("stream") && value.state().equals("connecting")
+                && value.attempt() == 1 && value.limit() == 5 && value.error().contains("upstream_error")));
+        assertNull(result.resultView().get("recovery"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = { "chat_completions", "anthropic" })
+    void upstreamErrorAfterAnInitialRequestRetryStillRecoversDuringTheAnswer(String apiFormat) {
+        scenario = "http_event"; format = apiFormat; config(); var result = run(body(), ignored -> {});
+        assertEquals("COMPLETED", result.status()); assertEquals(3, requests.size());
+        assertEquals("保留前半句。继续后半句。", result.text());
+        assertTrue(recovery.stream().anyMatch(value -> value.kind().equals("request") && value.attempt() == 1 && value.limit() == 4));
+        assertTrue(recovery.stream().anyMatch(value -> value.kind().equals("stream") && value.attempt() == 1 && value.limit() == 5));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_turn", Integer.class));
+        assertEquals(3, jdbc.queryForObject("SELECT count(*) FROM ai_usage_attempt WHERE state='SETTLED' AND purpose='CHAT'", Integer.class));
+    }
+
+    @ParameterizedTest @ValueSource(strings = { "chat_completions", "anthropic" })
+    void repeatedUpstreamErrorsKeepEarlierAnswersAndAdvanceTheStreamRetryCounter(String apiFormat) {
+        scenario = "event_twice"; format = apiFormat; config(); var result = run(body(), ignored -> {});
+        assertEquals("COMPLETED", result.status()); assertEquals(3, requests.size());
+        assertEquals("保留前半句。中间一句。继续后半句。", result.text());
+        String continuation = requests.get(2).toString();
+        assertTrue(continuation.contains("保留前半句。")); assertTrue(continuation.contains("中间一句。"));
+        assertEquals(List.of(1, 2), recovery.stream().filter(value -> value.state().equals("connecting")).map(AiRecovery::attempt).toList());
+        assertNull(result.resultView().get("recovery"));
+    }
+
+    @ParameterizedTest @ValueSource(ints = { 0, 2 })
+    void upstreamStreamErrorsRespectTheConfiguredLimitAndPersistTheLastFailure(int retries) {
+        scenario = "event_exhaust"; config(); var repository = new AiRuntimeSettingsRepository(jdbc); ai.setRuntimeSettings(repository);
+        var base = AiRuntimeSettings.DEFAULTS;
+        repository.save(0, new AiRuntimeSettings(base.maxToolStages(), base.maxToolExecutions(), base.turnTimeoutMinutes(), base.requestTimeoutMinutes(),
+                base.maxOutputTokens(), base.requestOutputTokens(), base.finalOutputTokens(), base.repeatedToolLimit(), new AiRetrySettings(4, retries, true, 5)));
+        var body = body(); var result = run(body, ignored -> {});
+        assertEquals("FAILED", result.status()); assertEquals("保留前半句。".repeat(retries + 1), result.text());
+        var failure = (AiRecovery) result.resultView().get("recovery");
+        assertNotNull(failure); assertEquals(retries + 1, requests.size()); assertEquals(retries, failure.attempt());
+        assertEquals(retries, failure.limit()); assertEquals("failed", failure.state());
+        assertTrue(failure.error().contains("upstream_error"));
+        assertEquals(failure, wiring.turnService().recovery((String) body.get("requestId"), "").orElseThrow());
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_message WHERE role='user'", Integer.class));
+    }
+
+    @Test void upstreamErrorAfterReadingThePageRetriesWithTheConfirmedToolResult() {
+        scenario = "read_event"; toolName = "read_current_page"; toolsEnabled = true; config();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        ai.setChatTools(List.of(new AiService.ChatTool() {
+            public AiUpstreamClient.ToolDefinition definition() {
+                return new AiUpstreamClient.ToolDefinition("read_current_page", "fixture page read", Map.of("type", "object", "properties", Map.of()));
+            }
+            public Map<String, Object> execute(ChatContextPlan plan, String arguments, boolean memoryUse, String userText) {
+                reads.incrementAndGet(); return Map.of("status", "OK", "items", List.of(Map.of("kind", "settings", "text", "实际版本 v0.8.1；自动检查开启")));
+            }
+            public String resultKey() { return "items"; }
+        }));
+        var result = run(body(), ignored -> {});
+        assertEquals("COMPLETED", result.status()); assertEquals(3, requests.size()); assertEquals(1, reads.get());
+        assertEquals("继续后半句。", result.text());
+        assertTrue(requests.get(2).toString().contains("实际版本 v0.8.1；自动检查开启"));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_turn", Integer.class));
+        assertTrue(recovery.stream().anyMatch(value -> value.kind().equals("stream") && value.attempt() == 1));
     }
 }
