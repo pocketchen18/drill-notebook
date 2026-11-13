@@ -19,6 +19,7 @@ public class AiConnectionsController {
     @PutMapping("/models/{id}") public Object updateModel(@PathVariable String id, @RequestBody Map<String, Object> body) { return service.saveModels(null, id, body); }
     @DeleteMapping("/models/{id}") public Object deleteModel(@PathVariable String id, @RequestBody Map<String, Object> body) { return service.delete(id, false, body); }
     @PutMapping("/bindings") public Object bind(@RequestBody Map<String, Object> body) { return service.bind(body); }
+    @PutMapping("/chat-model") public Object selectChatModel(@RequestBody Map<String, Object> body) { return service.selectChatModel(body); }
     @PostMapping("/providers/{id}/discover") public Object discover(@PathVariable String id, @RequestBody Map<String, Object> body) { return service.discover(id, body); }
     @PostMapping("/models/{id}/test") public Object test(@PathVariable String id, @RequestBody Map<String, Object> body) { return service.test(id, body); }
     @PostMapping("/tests/{id}/cancel") public Object cancelTest(@PathVariable String id) { return service.cancelTest(id); }

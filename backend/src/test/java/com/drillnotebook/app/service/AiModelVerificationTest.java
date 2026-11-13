@@ -179,7 +179,7 @@ class AiModelVerificationTest {
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS), "all three text probes must overlap");
             service.saveModels(p, null, body("modelId", "manual", "contextWindow", 128000, "maxOutputTokens", 32000));
-            String manual = models(p).get(0).id(); service.bind(body("purpose", "chat", "modelId", manual));
+            String manual = models(p).get(0).id(); service.selectChatModel(body("modelConfigId", manual));
             service.saveProvider(p, body("name", "Renamed", "endpoint", configs.connections().read().provider(p).endpoint(), "apiFormat", "chat_completions", "authMode", "none"));
             release.countDown();
             for (var task : tasks) assertEquals(true, task.get(10, TimeUnit.SECONDS).get("added"));
@@ -217,7 +217,7 @@ class AiModelVerificationTest {
     @Test void changingVerifiedModelIdClearsOnlyProbeResultsAndPreservesSettingsAndBindings() {
         String p = provider("chat_completions"); verify(p, "original");
         var original = models(p).get(0);
-        service.bind(body("purpose", "chat", "modelId", original.id()));
+        service.selectChatModel(body("modelConfigId", original.id()));
         service.bind(body("purpose", "import", "modelId", original.id()));
         var state = configs.connections().read(); var owner = state.provider(p);
         var params = new LinkedHashMap<>(original.params()); params.put("cacheBreakpoints", false);

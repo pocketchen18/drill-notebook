@@ -106,22 +106,31 @@ describe('AI connection workflow', () => {
     await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     expect(request.mock.calls[0][0]).toBe('/api/ai/connections/models/b');
     expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ revision: 1, tools: true, streaming: true, name: '修改名称' });
-    expect(screen.getByText('学习网关 / 通用对话')).toBeInTheDocument();
+    expect(screen.getByText('跟随 AI 助手')).toBeInTheDocument();
   });
-  it('apply waits for server success and a failed switch keeps current binding', async () => {
+  it('settings only select import models; failed saves keep the binding and success can restore following the assistant', async () => {
     request.mockRejectedValue(new Error('保存失败'));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     client.setQueryData(['ai-memory-settings'], { enabled: true, revision: 1 });
     mount(undefined, client);
-    fireEvent.click(await screen.findByRole('button', { name: '应用' }));
+    const choose = await screen.findByRole('button', { name: '用于导入：深度分析' });
+    expect(screen.queryByRole('button', { name: '应用' })).toBeNull();
+    expect(screen.queryByText('主模型')).toBeNull();
+    fireEvent.click(choose);
     await screen.findByText('保存失败');
-    expect(screen.getByText('学习网关 / 通用对话')).toBeInTheDocument();
+    expect(screen.getByText('跟随 AI 助手')).toBeInTheDocument();
     expect(client.getQueryState(['ai-memory-settings'])?.isInvalidated).toBe(false);
-    expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ purpose: 'chat', modelId: 'b' });
-    request.mockResolvedValue({ ...fixture(), revision: 2, chatModelId: 'b' });
-    fireEvent.click(screen.getByRole('button', { name: '应用' }));
+    expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ purpose: 'import', modelId: 'b' });
+    request.mockResolvedValue({ ...fixture(), revision: 2, importModelId: 'b' });
+    fireEvent.click(choose);
     await screen.findByText('学习网关 / 深度分析');
     expect(client.getQueryState(['ai-memory-settings'])?.isInvalidated).toBe(true);
+    expect(client.getQueryData<Connections>(['ai-connections'])?.chatModelId).toBe('a');
+    expect(choose).toBeDisabled();
+    request.mockResolvedValue({ ...fixture(), revision: 3 });
+    fireEvent.click(screen.getByRole('button', { name: '恢复跟随' }));
+    await screen.findByText('跟随 AI 助手');
+    expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toMatchObject({ purpose: 'import', modelId: null, revision: 2 });
   });
   it('dirty supplier switch supports keep editing, failed save and discard', async () => {
     request.mockRejectedValue(new Error('配置已变更'));

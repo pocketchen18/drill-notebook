@@ -1,23 +1,25 @@
 # v0.8.0 软件内更新与关于：实现规格
 
-> 状态：已实现，工程验证通过（2026-11-12），尚未发布。产品规则见[需求](requirements.md)与 [UI/UX](ui-ux.md)，当前范围见 [F09](../../state/v0.8-features.md)，测试与交付边界见[计划](plan.md)。本切片不新增数据库迁移，继续使用 schema 18。
+> 已于 2026-11-12 随 v0.8.0 归档，仅作历史参考；下文的「当前」与待验项均保留施工时口径，归档不新增验证结论。版本收尾与后续调整见 [归档说明](../README.md)。
+
+> 状态：已实现，工程验证通过（2026-11-12），尚未发布。产品规则见[需求](requirements.md)与 [UI/UX](ui-ux.md)，当前范围见 [F09](../features.md)，测试与交付边界见[计划](plan.md)。本切片不新增数据库迁移，继续使用 schema 18。
 
 ## 1. 模块与依赖
 
 | 模块 | 职责 |
 |---|---|
-| [AppUpdater](../../../electron/app-updater.ts) | 单一更新状态、偏好、检查计时、说明范围、下载、校验、保存等待、事务与清理 |
-| [update-feed](../../../electron/update-feed.ts) | 固定公开仓库、语义版本、Release / 平台资产、分页与范围筛选 |
-| [update-archive](../../../electron/update-archive.ts)、[program-manifest](../../../electron/program-manifest.ts) | ZIP 预检、原始文件读写、路径与程序清单、逐文件 SHA-256 |
-| [PortableUpdateHost](../../../electron/update-host.ts)、[java-bridge](../../../electron/java-bridge.ts) | 受信 IPC、两窗口保存握手、后端退出、辅助程序交接、健康确认与恢复 |
-| [Rust helper](../../../updater/src/main.rs) | 等待应用退出、程序 / 数据库备份、替换、重启、回滚与中断恢复；不负责网络检查或下载 |
-| [app-update 组件](../../../frontend/src/components/app-update/) | 关于页、顶部入口、逐版说明、范围菜单、连续进度与启动等待 |
-| [updatePreparation](../../../frontend/src/lib/updatePreparation.ts)、[assistantDrafts](../../../frontend/src/lib/assistantDrafts.ts) | 保存笔记、界面状态、助手草稿；检查业务编辑与待发 / 正在运行任务 |
-| [PortableUpdateRequestGate](../../../backend/src/main/java/com/drillnotebook/app/config/PortableUpdateRequestGate.java) | HTTP 与后台写任务租约，防止最后退出检查后出现新的写入 |
+| [AppUpdater](../../../../electron/app-updater.ts) | 单一更新状态、偏好、检查计时、说明范围、下载、校验、保存等待、事务与清理 |
+| [update-feed](../../../../electron/update-feed.ts) | 固定公开仓库、语义版本、Release / 平台资产、分页与范围筛选 |
+| [update-archive](../../../../electron/update-archive.ts)、[program-manifest](../../../../electron/program-manifest.ts) | ZIP 预检、原始文件读写、路径与程序清单、逐文件 SHA-256 |
+| [PortableUpdateHost](../../../../electron/update-host.ts)、[java-bridge](../../../../electron/java-bridge.ts) | 受信 IPC、两窗口保存握手、后端退出、辅助程序交接、健康确认与恢复 |
+| [Rust helper](../../../../updater/src/main.rs) | 等待应用退出、程序 / 数据库备份、替换、重启、回滚与中断恢复；不负责网络检查或下载 |
+| [app-update 组件](../../../../frontend/src/components/app-update/) | 关于页、顶部入口、逐版说明、范围菜单、连续进度与启动等待 |
+| [updatePreparation](../../../../frontend/src/lib/updatePreparation.ts)、[assistantDrafts](../../../../frontend/src/lib/assistantDrafts.ts) | 保存笔记、界面状态、助手草稿；检查业务编辑与待发 / 正在运行任务 |
+| [PortableUpdateRequestGate](../../../../backend/src/main/java/com/drillnotebook/app/config/PortableUpdateRequestGate.java) | HTTP 与后台写任务租约，防止最后退出检查后出现新的写入 |
 
 复用 npm `semver` 的语义版本比较、`yauzl` 的 ZIP 流读取、已有 Markdown renderer 与 Arco Modal。Rust 辅助程序使用 `serde` / `serde_json`、`sha2`、`semver` 和 Win32 进程等待 API；`yazl` 仅用于测试包。依赖版本由各自锁文件固定。参考软件的布局与流程见 [UI/UX §6](ui-ux.md#6-参考源码与可复用范围)，不复用其安装器或系统配置落点。
 
-Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操作统一经 [update-fs](../../../electron/update-fs.ts)：Electron 中用 `original-fs`，普通 Node 测试中用 `node:fs`，保证 `app.asar` 按原始程序包下载、解压、哈希与替换。
+Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操作统一经 [update-fs](../../../../electron/update-fs.ts)：Electron 中用 `original-fs`，普通 Node 测试中用 `node:fs`，保证 `app.asar` 按原始程序包下载、解压、哈希与替换。
 
 ## 2. 偏好、缓存与运行状态
 
@@ -36,7 +38,7 @@ Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操
 
 配置通过临时文件、fsync 与原子替换落盘。缺失 / 损坏设置回到默认值，自动安装仍默认关闭。间隔仅接受 1–168 整数小时，未知字段与错误类型拒绝；修改设置不重置真实时间。缓存重新校验版本与资产路径，不信任缓存中的任意下载文件名。
 
-完整渲染契约以 [update-types.ts](../../../electron/update-types.ts) 为准：检查状态为 `unchecked / current / available / error`；安装阶段为 `idle / downloading / verifying / preparing / blocked / restarting / failed`；弹窗展示独立以 `presentation:{id,kind,version?}` 控制。关闭只能作用于当前 presentation ID，不能误关闭后续弹窗或停止事务。下载与阅读目标固定，不被后台检查更换。
+完整渲染契约以 [update-types.ts](../../../../electron/update-types.ts) 为准：检查状态为 `unchecked / current / available / error`；安装阶段为 `idle / downloading / verifying / preparing / blocked / restarting / failed`；弹窗展示独立以 `presentation:{id,kind,version?}` 控制。关闭只能作用于当前 presentation ID，不能误关闭后续弹窗或停止事务。下载与阅读目标固定，不被后台检查更换。
 
 成功检查与实际显示新版说明分别计时。运行中计时只在主进程调度，检查失败单独退避；辅助窗口不创建计时器。关于页只读范围读取不推进检查 / 提醒时间。自动更新每次启动都真实检查，忽略自动检查开关和间隔；已跳过与失败目标不自动安装。运行中开启仅保存偏好。
 
@@ -79,12 +81,12 @@ Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操
 
 两渲染进程分别阻止新的交互，排空 `NoteAutosave`，逐个执行注册的保存 participant，检查 React Query mutations、beforeunload 与仍在编辑的业务弹窗，最后刷新界面状态。助手串行保存各会话输入、附件、选择与阅读位置，并校验草稿身份；读取未完成或损坏时不能用空草稿覆盖。正在回复、待发、提交中、交付未知、附件恢复或标题保存未完成会阻止退出。
 
-后端 [PortableUpdateController](../../../backend/src/main/java/com/drillnotebook/app/controller/PortableUpdateController.java) 使用由 Electron 随 JVM 进程生成的退出能力，仅主进程持有，不暴露给 renderer：
+后端 [PortableUpdateController](../../../../backend/src/main/java/com/drillnotebook/app/controller/PortableUpdateController.java) 使用由 Electron 随 JVM 进程生成的退出能力，仅主进程持有，不暴露给 renderer：
 
 - `/api/app/update/ready`：核对 HTTP / 后台写租约、ActiveTurnRegistry 与 SessionDispatch 队列。
 - `/api/app/update/shutdown`：最后原子检查并关闭新写入和派发，忙碌返回 409 并恢复服务；接受后正常关闭 Spring context，等待任务与 SQLite 完成。
 
-标题、嵌入作业 / 模型下载、检索维护、记忆维护等后台写任务均持有 gate 租约，排队任务也计入。退出期间新的业务写请求返回 503 `UPDATE_RESTARTING`。具体接口见[长期契约](../../state/api-contracts.md#4-软件更新与退出协调v080)。
+标题、嵌入作业 / 模型下载、检索维护、记忆维护等后台写任务均持有 gate 租约，排队任务也计入。退出期间新的业务写请求返回 503 `UPDATE_RESTARTING`。具体接口见[长期契约](../../../state/api-contracts.md#4-软件更新与退出协调v080)。
 
 辅助程序确认暂存就绪后才请求 JVM 正常退出，再退出主 / 助手窗口。更新成功路径不调用普通强制终止后端逻辑；保存失败不强杀业务任务。启动更新会先显示启动等待界面，业务路由在后端与主界面就绪后恢复；`backend:get-base-url` 等待后端启动结束，防止提前请求缓存错误端口。
 
@@ -105,6 +107,6 @@ Electron 对 `.asar` 的普通 `node:fs` 有虚拟目录语义。更新文件操
 
 只能清理具有匹配 UUID / 所有权标记的更新材料。下载取消、校验失败及未交接事务清理自身暂存；成功或已回滚且 helper 已退出后清理 ZIP 与工作目录。未完成事务保留可恢复材料，程序 / 数据库备份最多保留最近两份，用户目录不进入清理范围。
 
-[package-portable.ps1](../../../scripts/package-portable.ps1)与[发布工作流](../../../.github/workflows/release-portable.yml)先构建内置 Rust helper，目录打包后生成程序清单，再生成 ZIP 与 `.zip.sha256` 并上传校验材料。实际版本继续由发行参数注入，发布准备已将云端与本地默认同步为 0.8.0。业务全量测试仍是本地发布前门禁，云端先编译发布配置夹具所需的 Electron 模块，再做配置检查与其余编译打包。
+[package-portable.ps1](../../../../scripts/package-portable.ps1)与[发布工作流](../../../../.github/workflows/release-portable.yml)先构建内置 Rust helper，目录打包后生成程序清单，再生成 ZIP 与 `.zip.sha256` 并上传校验材料。实际版本继续由发行参数注入，发布准备已将云端与本地默认同步为 0.8.0。业务全量测试仍是本地发布前门禁，云端先编译发布配置夹具所需的 Electron 模块，再做配置检查与其余编译打包。
 
 完整应用专项只在隔离 `temp/` 包中注入 QA driver，生产打包配置不包含它，并在注入前断言生产 ASAR 没有该入口。测试不会发布 Release、注册系统协议或修改用户安装目录。实现后的全部验证结果与尚未验收范围见[计划](plan.md#2-验证结果)。

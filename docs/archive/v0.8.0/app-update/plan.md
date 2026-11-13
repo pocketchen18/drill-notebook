@@ -1,5 +1,7 @@
 # v0.8.0 软件内更新与关于：实施与验证
 
+> 已于 2026-11-12 随 v0.8.0 归档，仅作历史参考；下文的「当前」与待验项均保留施工时口径，归档不新增验证结论。版本收尾与后续调整见 [归档说明](../README.md)。
+
 > 状态：所有实施项完成，工程验证通过（2026-11-12）；文档在代码与测试完成后统一同步。功能实现已由用户提交，现进入 v0.8.0 发布准备，尚未发布。产品规则见[需求](requirements.md)、[UI/UX](ui-ux.md)，协议见[规格](spec.md)。
 
 ## 1. 已完成切片
@@ -40,7 +42,7 @@
 
 ## 3. 复跑入口
 
-从仓库根目录用 PowerShell 7。前后端全量与 Electron 入口见[测试规范](../../test/TESTING_GUIDELINES.md)，原生与完整应用专项需要 Windows 桌面会话。
+从仓库根目录用 PowerShell 7。前后端全量与 Electron 入口见[测试规范](../../../test/TESTING_GUIDELINES.md)，原生与完整应用专项需要 Windows 桌面会话。
 
 ```powershell
 npm run test:frontend
@@ -51,7 +53,7 @@ npm run test:electron:native
 npm run test:updater:native
 ```
 
-完整应用专项还需本地实际 JAR、根目录 `jre/` 和安装的 Rust 工具链。JRE 配方见 [jlink.md](../../jlink.md)；先构建后端，再执行：
+完整应用专项还需本地实际 JAR、根目录 `jre/` 和安装的 Rust 工具链。JRE 配方见 [jlink.md](../../../jlink.md)；先构建后端，再执行：
 
 ```powershell
 npm run build:backend
@@ -68,14 +70,14 @@ pwsh -NoProfile -File cache/portable-registry-audit.ps1
 
 - v0.8.0 尚未发布；功能实现已由用户提交，发布准备已将云端与本地默认版本同步为 0.8.0。本机完整应用验证使用 Java 21 生成的 JRE，源码继续 target 17，云端仍构建 Java 17 JRE；本轮未执行 GitHub Actions 发行构建。
 - 尚未验证公开新版本资产到用户真实安装目录的升级、真实 UI 人工观感、不同 DPI / 多显示器 / 读屏。UI 行为有组件测试，实际原生更新与回滚闭环已通过；两者不替代人工视觉验收。
-- 保留既有 React / Arco 测试告警及 7 项跳过，未通过屏蔽全局错误获取通过。本轮记忆索引并发用例通过，历史偶发失败根因仍未调查，见 [QA 模块二十六 / 二十八](../../test/QA_CHECKLIST.md#模块二十六上下文反馈与体验完善v08)，不算本切片修复。
+- 保留既有 React / Arco 测试告警及 7 项跳过，未通过屏蔽全局错误获取通过。本轮记忆索引并发用例通过，历史偶发失败根因仍未调查，见 [QA 模块二十六 / 二十八](../../../test/QA_CHECKLIST.md#模块二十六上下文反馈与体验完善v08)，不算本切片修复。
 - 只支持 Windows x64 目录便携 ZIP，不增加强制更新、安装器、差分补丁或系统常驻更新任务。v0.8.1 混合检索规划保持原版本归属。
 
-通用验收场景维护在 [QA 模块三十](../../test/QA_CHECKLIST.md#模块三十软件内更新与关于v080)。单个切片完成不归档；发布及下一个版本开始仍按[文档维护规则](../../README.md)执行。
+通用验收场景维护在 [QA 模块三十](../../../test/QA_CHECKLIST.md#模块三十软件内更新与关于v080)。单个切片完成不归档；发布及下一个版本开始仍按[文档维护规则](../../../README.md)执行。
 
 ## 5. v0.8.0 发布准备（2026-11-12）
 
-[工作流](../../../.github/workflows/release-portable.yml)与[本地打包脚本](../../../scripts/package-portable.ps1)默认版本统一为 v0.8.0，补齐[发行说明](../../release/v0.8.0-release-notes.md)。干净检出中先运行 `npm run build:electron`，生成发布配置夹具所需的清单模块，再运行配置测试和前端构建；Electron 只编译一次。更新助手、程序清单、ZIP 与 SHA-256 仍进入发行产物。
+[工作流](../../../../.github/workflows/release-portable.yml)与[本地打包脚本](../../../../scripts/package-portable.ps1)默认版本统一为 v0.8.0，补齐[发行说明](../../../release/v0.8.0-release-notes.md)。干净检出中先运行 `npm run build:electron`，生成发布配置夹具所需的清单模块，再运行配置测试和前端构建；Electron 只编译一次。更新助手、程序清单、ZIP 与 SHA-256 仍进入发行产物。
 
 本轮 `node --test scripts/test-release-config.mjs` **10 项全部通过、0 跳过**，覆盖 v0.8.0 / rc 版本与说明选择、默认应用版本和 ZIP 命名、缺失依赖及构建失败阻断；`npm run build:electron` 和 `npm run build:frontend` 均通过，前端保留既有分块大小提示。业务全量与完整应用结果沿用上表。
 

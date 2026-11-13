@@ -18,7 +18,7 @@ public class AiConfigRepository {
         this.jdbc = jdbc;
     }
 
-    /** 主模型：对话 / 总结 / 学习计划等。 */
+    /** 助手中全局选择的模型：对话 / 总结 / 学习计划等。 */
     public ConfigRow findChat() {
         return find(PURPOSE_CHAT);
     }
@@ -112,7 +112,7 @@ public class AiConfigRepository {
                             updated.put("cacheBreakpoints", false);
                             return new AiConnectionsStore.Model(m.id(), m.modelId(), m.name(), m.group(), updated);
                         }).toList())).toList();
-                store.save(new AiConnectionsStore.State(state.revision(), providers, state.chatModelId(), state.importModelId()), state.revision());
+                store.save(new AiConnectionsStore.State(state.revision(), providers, state.chatModelId(), state.importModelId(), state.chatReasoningEffort()), state.revision());
             } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
                 throw new IllegalArgumentException("AI 配置无法读取", error);
             }

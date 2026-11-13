@@ -72,7 +72,7 @@ class ChatUpstreamDispatchTest {
     }
 
     @Test
-    void applyingAnotherModelDuringPreparationOnlyAffectsTheNextTurn() throws Exception {
+    void selectingAnotherModelDuringPreparationOnlyAffectsTheNextTurn() throws Exception {
         var configs = new AiConfigRepository(jdbc);
         var connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), new ObjectMapper());
         connections.view();
@@ -88,7 +88,7 @@ class ChatUpstreamDispatchTest {
 
         ai.chatStream(v2("本轮保持原配置"), (type, text) -> true, metadata -> {
             if (!switched.compareAndSet(false, true)) return;
-            connections.bind(Map.of("revision", connections.view().get("revision"), "purpose", "chat", "modelId", next));
+            connections.selectChatModel(Map.of("revision", connections.view().get("revision"), "modelConfigId", next));
             assertEquals("CONFIG_BUSY", assertThrows(ChatTurnRejectException.class, () -> connections.delete(
                     initial.chatModelId(), false, Map.of("revision", connections.view().get("revision")))).code());
         });

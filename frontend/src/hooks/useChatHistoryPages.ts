@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import type { InfiniteData } from '@tanstack/react-query';
 import { get } from '../lib/api';
@@ -14,6 +14,7 @@ import { get } from '../lib/api';
 /** 服务端一页里的一条消息（失败轮次与 legacy 都如实带状态，展示资格不等于注入资格）。 */
 export interface ChatHistoryMessage {
   recovery?: import('../lib/aiRecovery').AiRecovery | null;
+  roundNumber?: number;
   supplements?: import('../lib/chatQueue').ChatSupplement[];
   finishReason?: string;
   toolActivities?: import('../lib/toolActivity').ToolActivity[];
@@ -37,6 +38,9 @@ export interface ChatHistoryMessage {
 }
 
 export interface ChatHistoryPage {
+  totalRounds?: number;
+  firstRound?: number;
+  hasOlder?: boolean;
   sessionId: number;
   messages: ChatHistoryMessage[];
   historyRevision: number;
@@ -53,13 +57,19 @@ export const MAX_RESIDENT_PAGES = Math.floor(MAX_RESIDENT_MESSAGES / HISTORY_PAG
 export const historyQueryKey = (sessionId: number | undefined) =>
   ['ai-session-history', sessionId ?? 'none'] as const;
 
-function pageUrl(sessionId: number, beforeMessageId?: number): string {
+type HistoryCursor = number | { after: number } | undefined;
+function pageUrl(sessionId: number, cursor?: HistoryCursor): string {
   const query = new URLSearchParams({ limit: String(HISTORY_PAGE_SIZE) });
-  if (beforeMessageId !== undefined) query.set('beforeMessageId', String(beforeMessageId));
+  if (typeof cursor === 'number') query.set('beforeMessageId', String(cursor));
+  else if (cursor) query.set('afterMessageId', String(cursor.after));
   return `/api/ai/sessions/${sessionId}/history?${query.toString()}`;
 }
 
 export interface ChatHistoryPages {
+  totalRounds?: number;
+  focused: boolean;
+  focusMessage: (messageId: number) => Promise<void>;
+  returnToLatest: () => Promise<void>;
   /** 按时间升序的已驻留消息（旧页在前，最新页在后），按 message ID 去重。 */
   messages: ChatHistoryMessage[];
   historyRevision: number;
@@ -80,13 +90,21 @@ export interface ChatHistoryPages {
 
 export function useChatHistoryPages(sessionId: number | undefined, enabled = true): ChatHistoryPages {
   const client = useQueryClient();
-  const query = useInfiniteQuery<ChatHistoryPage, Error, InfiniteData<ChatHistoryPage, number | undefined>,
-    ReturnType<typeof historyQueryKey>, number | undefined>({
+  const reading = useRef({ sessionId, sequence: 0, pending: false });
+  if (reading.current.sessionId !== sessionId) {
+    reading.current = { sessionId, sequence: reading.current.sequence + 1, pending: false };
+  }
+  useEffect(() => () => {
+    reading.current.sequence += 1;
+    reading.current.pending = false;
+  }, [sessionId]);
+  const query = useInfiniteQuery<ChatHistoryPage, Error, InfiniteData<ChatHistoryPage, HistoryCursor>,
+    ReturnType<typeof historyQueryKey>, HistoryCursor>({
     queryKey: historyQueryKey(sessionId),
     queryFn: ({ pageParam }) => get<ChatHistoryPage>(pageUrl(sessionId as number, pageParam)),
     initialPageParam: undefined,
     // 每页内部按 ID 升序，所以页首就是这一页最早的一条，正好当下一版的 beforeMessageId
-    getNextPageParam: (last) => (last.hasMore && last.messages.length > 0 ? last.messages[0].id : undefined),
+    getNextPageParam: (last) => ((last.hasOlder ?? last.hasMore) && last.messages.length > 0 ? last.messages[0].id : undefined),
     enabled: enabled && sessionId !== undefined,
     // 切会话必须拿服务端真实内容：留缓存会让"中断时抢在落库前的空结果"被复用（沿用旧查询的口径）
     staleTime: 0
@@ -98,18 +116,21 @@ export function useChatHistoryPages(sessionId: number | undefined, enabled = tru
     const seen = new Set<number>();
     const ordered: ChatHistoryMessage[] = [];
     for (let index = pages.length - 1; index >= 0; index -= 1) {
+      let roundNumber = pages[index].firstRound;
       for (const row of pages[index].messages) {
+        const round = row.role === 'user' && roundNumber !== undefined ? roundNumber++ : row.roundNumber;
         // 最新一页被单独重取过就可能与旧页重叠，按 message ID 收敛
         if (seen.has(row.id)) continue;
         seen.add(row.id);
-        ordered.push(row);
+        ordered.push(round === undefined ? row : { ...row, roundNumber: round });
       }
     }
     return ordered;
   }, [pages]);
 
   const residentCapped = pages.length >= MAX_RESIDENT_PAGES;
-  const hasOlder = pages.length > 0 && pages[pages.length - 1].hasMore;
+  const hasOlder = pages.length > 0 && (pages[pages.length - 1].hasOlder ?? pages[pages.length - 1].hasMore);
+  const focused = typeof query.data?.pageParams[0] === 'object';
 
   const loadOlder = useCallback(() => {
     // 到驻留上限就停：更深的浏览不是靠无限堆内存换的，数据一条都没少
@@ -118,16 +139,53 @@ export function useChatHistoryPages(sessionId: number | undefined, enabled = tru
   }, [hasOlder, residentCapped, isFetchingNextPage, fetchNextPage]);
 
   const refreshLatest = useCallback(async () => {
-    if (sessionId === undefined) return;
-    const cached = client.getQueryData<InfiniteData<ChatHistoryPage, number | undefined>>(
+    if (sessionId === undefined || reading.current.pending) return;
+    const sequence = reading.current.sequence;
+    const cached = client.getQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(
       historyQueryKey(sessionId));
     if (!cached) return; // 还没加载过：交给查询自己的首次取数，不在这里造第一页
+    if (typeof cached.pageParams[0] === 'object') return; // 阅读旧窗口时不被定稿刷新拉回最新。
     const latest = await get<ChatHistoryPage>(pageUrl(sessionId, undefined));
-    client.setQueryData<InfiniteData<ChatHistoryPage, number | undefined>>(historyQueryKey(sessionId),
-      (current) => (current ? { ...current, pages: [latest, ...current.pages.slice(1)] } : current));
+    if (reading.current.sessionId !== sessionId || reading.current.sequence !== sequence) return;
+    client.setQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(historyQueryKey(sessionId),
+      (current) => (current && typeof current.pageParams[0] !== 'object'
+        ? { ...current, pages: [latest, ...current.pages.slice(1)] } : current));
+  }, [sessionId, client]);
+
+  const focusMessage = useCallback(async (messageId: number) => {
+    if (sessionId === undefined || !Number.isSafeInteger(messageId) || messageId <= 0) return;
+    const sequence = ++reading.current.sequence;
+    reading.current.pending = true;
+    const current = () => reading.current.sessionId === sessionId && reading.current.sequence === sequence;
+    const cursor = { after: messageId - 1 };
+    try {
+      await client.cancelQueries({ queryKey: historyQueryKey(sessionId), exact: true });
+      if (!current()) return;
+      const target = await get<ChatHistoryPage>(pageUrl(sessionId, cursor));
+      if (!current()) return;
+      if (!target.messages.some(row => row.id === messageId && row.role === 'user')) throw new Error('这轮对话已清理，请重新选择');
+      client.setQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(historyQueryKey(sessionId), { pages: [target], pageParams: [cursor] });
+    } finally { if (current()) reading.current.pending = false; }
+  }, [sessionId, client]);
+  const returnToLatest = useCallback(async () => {
+    if (sessionId === undefined) return;
+    const sequence = ++reading.current.sequence;
+    reading.current.pending = true;
+    const current = () => reading.current.sessionId === sessionId && reading.current.sequence === sequence;
+    try {
+      await client.cancelQueries({ queryKey: historyQueryKey(sessionId), exact: true });
+      if (!current()) return;
+      const latest = await get<ChatHistoryPage>(pageUrl(sessionId));
+      if (!current()) return;
+      client.setQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(historyQueryKey(sessionId), { pages: [latest], pageParams: [undefined] });
+    } finally { if (current()) reading.current.pending = false; }
   }, [sessionId, client]);
 
   return {
+    totalRounds: pages[0]?.totalRounds,
+    focused,
+    focusMessage,
+    returnToLatest,
     messages,
     historyRevision: pages[0]?.historyRevision ?? 0,
     hasOlder,

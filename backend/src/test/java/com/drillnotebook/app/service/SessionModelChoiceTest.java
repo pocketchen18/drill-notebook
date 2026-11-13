@@ -17,7 +17,7 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-/** 会话级模型与思考档位：选择只影响该会话之后的消息，历史保留每轮实际使用的模型。 */
+/** 助手全局模型与思考档位：跨会话、重启保存，历史保留每轮实际使用的模型。 */
 class SessionModelChoiceTest {
     private final ObjectMapper json = new ObjectMapper();
     private final List<JsonNode> requests = Collections.synchronizedList(new ArrayList<>());
@@ -27,6 +27,7 @@ class SessionModelChoiceTest {
     private ChatContextWiring.Stack stack;
     private AiService ai;
     private AiConfigRepository configs;
+    private AiConnectionsService connections;
     private HttpServer server;
     private long session;
     private String secondModel;
@@ -50,7 +51,7 @@ class SessionModelChoiceTest {
         server.start();
         ai.saveConfig(TestModelLimits.config("provider", "custom", "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
                 "apiKey", "fake-key", "model", "main-model", "apiFormat", "chat_completions", "tools", false, "streaming", false));
-        var connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), json);
+        connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), json);
         connections.view();
         var state = configs.connections().read();
         String provider = state.owner(state.chatModelId()).id();
@@ -71,29 +72,36 @@ class SessionModelChoiceTest {
         assertEquals("COMPLETED", ai.chat(body(id, text)).get("status"));
         return requests.get(requests.size() - 1);
     }
+    private Map<String,Object> choose(String id, String effort) {
+        var choice = new LinkedHashMap<String,Object>();
+        choice.put("revision", connections.view().get("revision"));
+        choice.put("modelConfigId", id); choice.put("reasoningEffort", effort);
+        return connections.selectChatModel(choice);
+    }
     @SuppressWarnings("unchecked") private List<Map<String,Object>> assistantRows(long id) throws Exception {
         return ((List<Map<String,Object>>) stack.history().page(id, null, null, 50).get("messages")).stream()
                 .filter(row -> "assistant".equals(row.get("role"))).toList();
     }
 
-    @Test void aSessionFollowsTheMainModelUntilItChoosesItsOwn() throws Exception {
+    @Test void allSessionsUseTheLastAssistantChoiceAndHistoryKeepsTheActualModel() throws Exception {
         var first = send(session, "第一问");
         assertEquals("main-model", first.path("model").asText()); assertFalse(first.has("reasoning_effort"));
 
-        var updated = ai.updateSession(session, Map.of("modelConfigId", secondModel, "reasoningEffort", "high"));
-        assertEquals(secondModel, updated.get("modelConfigId")); assertEquals("high", updated.get("reasoningEffort"));
+        var updated = choose(secondModel, "high");
+        assertEquals(secondModel, updated.get("chatModelId")); assertEquals("high", updated.get("chatReasoningEffort"));
         var second = send(session, "第二问");
         assertEquals("deep-model", second.path("model").asText()); assertEquals("high", second.path("reasoning_effort").asText());
 
         long other = wiring.sessions().create("会话乙", "main-model");
-        assertEquals("main-model", send(other, "另一个会话").path("model").asText(), "改选只影响这个会话");
-        assertEquals("main-model", configs.connections().read().model(configs.connections().read().chatModelId()).modelId(), "主模型不变");
+        assertEquals("deep-model", send(other, "另一个会话").path("model").asText(), "新旧会话共用最近的选择");
+        assertEquals("high", requests.get(requests.size() - 1).path("reasoning_effort").asText());
+        assertEquals("deep-model", configs.findChat().model());
 
         var rows = assistantRows(session);
         assertTrue(String.valueOf(rows.get(0).get("model")).endsWith("main-model")); assertFalse(rows.get(0).containsKey("reasoningEffort"));
         assertTrue(String.valueOf(rows.get(1).get("model")).endsWith("deep-model")); assertEquals("high", rows.get(1).get("reasoningEffort"));
 
-        ai.updateSession(session, Map.of("reasoningEffort", ""));
+        choose(secondModel, null);
         assertFalse(send(session, "第三问").has("reasoning_effort"), "回到模型默认时不额外指定");
         assertEquals("high", assistantRows(session).get(1).get("reasoningEffort"), "历史不随之后的改选变化");
     }
@@ -107,7 +115,7 @@ class SessionModelChoiceTest {
         assertEquals(10, latest.get("inputTokens")); assertEquals(128000, latest.get("contextWindow"));
         assertTrue(String.valueOf(latest.get("model")).endsWith("main-model"));
 
-        ai.updateSession(session, Map.of("modelConfigId", secondModel));
+        choose(secondModel, null);
         var switched = ai.sessionContextUsage(session);
         assertEquals(64000, switched.get("contextWindow"), "改选后按新模型的窗口解释");
         assertEquals(128000, ((Map<?,?>) switched.get("latest")).get("contextWindow"), "已发生的请求保留当时的窗口");
@@ -118,6 +126,8 @@ class SessionModelChoiceTest {
         assertEquals(1, usage.get("requests")); assertEquals(10L, usage.get("inputTokens")); assertEquals(3L, usage.get("outputTokens"));
 
         jdbc.update("UPDATE ai_chat_session SET model_config_id = 'removed-model' WHERE id = ?", session);
+        assertEquals(64000, ai.sessionContextUsage(session).get("contextWindow"), "旧会话选择不覆盖助手全局模型");
+        jdbc.update("UPDATE ai_connections SET document = json_set(document, '$.chatModelId', 'removed-model') WHERE id = 1");
         var broken = ai.sessionContextUsage(session);
         assertNull(broken.get("contextWindow")); assertNotNull(broken.get("latest"), "模型不可用时仍如实给出已有实测值");
         jdbc.update("UPDATE ai_chat_session SET model_config_id = NULL, context_generation = context_generation + 1 WHERE id = ?", session);
@@ -177,34 +187,65 @@ class SessionModelChoiceTest {
     }
 
     @Test void effortMustBeSupportedAndFallsBackWhenTheModelChanges() {
-        ai.updateSession(session, Map.of("modelConfigId", secondModel, "reasoningEffort", "low"));
-        assertThrows(IllegalArgumentException.class, () -> ai.updateSession(session, Map.of("reasoningEffort", "max")));
-        assertThrows(IllegalArgumentException.class, () -> ai.updateSession(session, Map.of("modelConfigId", "missing-model")));
-        assertEquals("low", ai.updateSession(session, Map.of("title", "只改标题")).get("reasoningEffort"), "无关修改保留选择");
-        var back = ai.updateSession(session, Map.of("modelConfigId", ""));
-        assertNull(back.get("modelConfigId")); assertNull(back.get("reasoningEffort"), "主模型不支持该档位时回到模型默认");
-        assertThrows(IllegalArgumentException.class, () -> ai.updateSession(session, Map.of("reasoningEffort", "low")));
-        assertEquals("main-model", send(session, "跟随主模型").path("model").asText());
+        String original = configs.connections().read().chatModelId();
+        choose(secondModel, "low");
+        assertThrows(IllegalArgumentException.class, () -> choose(secondModel, "max"));
+        assertThrows(ChatTurnRejectException.class, () -> choose("missing-model", null));
+        ai.updateSession(session, Map.of("title", "只改标题"));
+        assertEquals("low", configs.connections().read().chatReasoningEffort(), "无关修改保留选择");
+        var back = connections.selectChatModel(Map.of("revision", connections.view().get("revision"), "modelConfigId", original));
+        assertEquals(original, back.get("chatModelId")); assertNull(back.get("chatReasoningEffort"), "换到不支持的模型时回到模型默认");
+        assertThrows(IllegalArgumentException.class, () -> choose(original, "low"));
+        assertEquals("main-model", send(session, "换回原模型").path("model").asText());
     }
 
-    @Test void newSessionsCanStartWithAChoiceAndInvalidChoicesCreateNothing() {
-        var created = ai.createSession(Map.of("title", "新会话", "modelConfigId", secondModel, "reasoningEffort", "low"));
+    @Test void newSessionsUseTheSavedChoiceAndSessionMetadataCannotSetAnotherModel() {
+        choose(secondModel, "low");
+        var created = ai.createSession(Map.of("title", "新会话"));
         long id = ((Number) created.get("id")).longValue();
-        assertEquals(secondModel, created.get("modelConfigId"));
+        assertNull(created.get("modelConfigId"), "不再给会话保存一份独立选择");
         var request = send(id, "首条消息");
         assertEquals("deep-model", request.path("model").asText()); assertEquals("low", request.path("reasoning_effort").asText());
         int before = jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_session", Integer.class);
         assertThrows(IllegalArgumentException.class, () -> ai.createSession(Map.of("modelConfigId", "missing-model")));
+        assertThrows(IllegalArgumentException.class, () -> ai.updateSession(id, Map.of("modelConfigId", secondModel)));
         assertEquals(before, jdbc.queryForObject("SELECT COUNT(*) FROM ai_chat_session", Integer.class));
     }
 
     @Test void aDeletedChoiceIsReportedInsteadOfSilentlyUsingAnotherModel() {
-        ai.updateSession(session, Map.of("modelConfigId", secondModel));
-        jdbc.update("UPDATE ai_chat_session SET model_config_id = 'removed-model' WHERE id = ?", session);
+        choose(secondModel, null);
+        jdbc.update("UPDATE ai_connections SET document = json_set(document, '$.chatModelId', 'removed-model') WHERE id = 1");
         int sent = requests.size();
         var error = assertThrows(IllegalArgumentException.class, () -> ai.chat(body(session, "还能发吗")));
         assertTrue(error.getMessage().contains("重新选择模型"), error.getMessage());
         assertEquals(sent, requests.size(), "不向其他模型发送");
+    }
+
+    @Test void reopeningTheDatabaseAndServicesRestoresTheChoiceWithoutReadingSessionPreferences() {
+        choose(secondModel, "high");
+        jdbc.update("UPDATE ai_chat_session SET model_config_id = ?, reasoning_effort = 'low' WHERE id = ?", secondModel, session);
+        configs = new AiConfigRepository(new JdbcTemplate(Schema9Fixture.dataSource(root)));
+        connections = new AiConnectionsService(configs, new ApiKeyEncryptor(), json);
+        ai = new AiService(configs, wiring.sessions(), new ApiKeyEncryptor(), json, null, wiring.turnService(), wiring.cipher(), stack.contexts());
+        assertEquals(secondModel, connections.view().get("chatModelId"));
+        assertEquals("high", connections.view().get("chatReasoningEffort"));
+        var request = send(session, "重启之后");
+        assertEquals("deep-model", request.path("model").asText());
+        assertEquals("high", request.path("reasoning_effort").asText(), "旧会话的档位不覆盖全局选择");
+    }
+
+    @Test void acceptedWorkKeepsItsModelAndEffortAfterTheGlobalChoiceChanges() {
+        choose(secondModel, "high");
+        try (var accepted = ai.captureConfig(session, null)) {
+            String original = configs.connections().read().providers().get(0).models().get(0).id();
+            choose(original, null);
+            var result = ai.runAccepted(body(session, "已经受理的消息"), accepted, null, null);
+            assertEquals("COMPLETED", result.status());
+            var request = requests.get(requests.size() - 1);
+            assertEquals("deep-model", request.path("model").asText());
+            assertEquals("high", request.path("reasoning_effort").asText());
+        }
+        assertEquals("main-model", send(session, "之后提交的消息").path("model").asText());
     }
 
     @Test void upgradeFrom17KeepsSessionsFollowingTheMainModel() throws Exception {

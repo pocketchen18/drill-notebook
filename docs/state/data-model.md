@@ -1,6 +1,6 @@
 # 数据模型
 
-当前 schema 版本：**17**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
+当前 schema 版本：**18**。完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；本文只记录已落地表、职责与关键约束，便于快速定位，不复制字段级定义。
 
 ## 1. 通用约定
 
@@ -44,18 +44,18 @@
 
 人工加入错题以该题最后一条真实 answer_record.id 为基线，从未作答为 0，旧题为 NULL。成员须未被人工移出，且曾答错或被人工加入；最近答错 / 人工加入两者较新的基线之后，连续答对未满两次。重复加入当前成员不重置进度，不生成答题记录；统计仍来自真实作答。
 
-## 4. AI 配置、会话、记忆与用量域（schema v9–v17）
+## 4. AI 配置、会话、记忆与用量域（schema v9–v18）
 
 ### 4.1 配置与会话
 
 | 表 | 职责 | 关键约束 |
 |---|---|---|
 | `ai_config` | 旧配置迁移源与其他用途配置 | `purpose` 主键；chat/import 迁移后由集合绑定解析；memory/embedding 仍使用原表 |
-| `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，主模型与可空导入模型绑定不复制配置 |
-| `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；不存在时读取默认值，保存按 revision 检查冲突，不随模型切换 |
+| `ai_connections` | 供应商、模型与用途绑定（v10） | 单行 `id=1`、`revision`、`document` JSON；供应商和模型均为稳定 UUID，密钥保持密文，助手全局对话模型与可空导入模型绑定不复制配置；v0.8.1 在 JSON 中增加可空 `chatReasoningEffort`，旧缺项为 null，模型与档位跨会话 / 重启保留 |
+| `ai_runtime_settings` | 全局对话运行限制（v11） | 单行 `id=1`、`revision`、`document` JSON；v0.8.1 增加嵌套 retry 四项，旧 JSON 缺项补默认，旧客户端不提交时保留原值；保存按 revision 检查冲突，不随模型切换 |
 | `ai_tool_settings` | 全局工具开关（v17） | 单行 `id=1`、revision、document JSON；管理全部 20 个内置工具，只存与默认值不同的选择（非删除默认开，四个删除默认关）；缺项取默认，保存检查版本冲突，坏配置报错 |
-| `ai_chat_session` | 会话 | 标题、归档、模型、标签；v12 增加唯一 `session_ref`、`title_source`、`title_status`、`title_revision`，标题更新不推进聊天活动时间 |
-| `ai_chat_message` | 消息 | 正文与 reasoning 分列密文 |
+| `ai_chat_session` | 会话 | 标题、归档、模型、标签；v12 增加唯一 `session_ref` 与标题元数据；v18 增加 `model_config_id`、`reasoning_effort`、`pinned_at`；v0.8.1 保留前两项作为旧元数据，不参与派发，全局选择取 ai_connections；标题 / 置顶更新不推进聊天活动时间 |
+| `ai_chat_message` | 消息 | 正文与 reasoning 分列密文；安全工具活动及 v0.8.1 失败恢复事实随消息元数据加密保存 |
 | `ai_chat_turn` | 单轮请求 | `request_id` 唯一；同一会话仅一个 `RUNNING`；scope 与时间线约束 |
 | `ai_session_dispatch` | 后台派发收据（v13） | `request_id` 唯一、`source_key` 唯一、递增 `sequence`；保存目标会话、输入指纹与状态/时间，不存消息正文、附件、模型配置或密钥 |
 | `ai_chat_pending` | 人工待发与插话（v14） | `request_id` 引用派发收据，会话级联删除；加密请求体、版本、接收状态、关联运行及正文偏移；原始提交指纹不随编辑改变 |
@@ -66,6 +66,8 @@
 | `ai_material_deletion` | 资料删除 / 错题移出回执（v17） | `(request_id,operation_id)` 主键；session_id 级联删除；fingerprint、material_type、material_id、outcome、created_at；不保存标题或正文 |
 
 资料回执与业务写入、笔记检索条目在同一事务内提交。会话删除只清回执，普通资料继续保留；不对资料 ID 设置级联外键，删除资料后仍保留回执以拒绝重复重建。更新版本来自完整业务字段摘要，不单用更新时间；同请求及显式重试链只复用原结果，不重复追加或覆盖操作后的人工修改。旧配置中的 maxInputTokens 不再参与预算，模型窗口 / 最大输出须显式配置，缺值不通过迁移猜测补齐。
+
+v0.8.1 沿用 schema 18，不新增表或资料副本。retry 使用已有运行设置 JSON；recovery 使用原助手消息的加密元数据，零正文失败也保留加密空消息。自动恢复不新增用户消息，手动重新生成仍追加新问答。会话跳转从现有用户消息按序计数和定位，totalRounds / firstRound 为只读查询结果，不另存导航索引。
 
 v12 会话引用为随机 128 位标识的 32 位小写十六进制表示，改名和重启保持不变。标题来源为 temporary/manual/ai/legacy；状态为 pending/idle/generating/ready/failed。任务认领、结果提交和人工改名按标题 revision 条件更新，人工保存使更早的任务失效；不改变 history_revision。迁移保留已有标题和消息，已有历史的旧会话为 legacy/idle；重启把残留 generating 标为 failed，不重新外发。
 
@@ -85,7 +87,7 @@ v0.7.2 的 `list_sessions/read_session` 直接只读查询现有会话/消息/�
 
 v0.7.3 的六个资料读取工具本身不改变表结构。资料直接读取业务表，笔记正文关键词复用 `retrieval_chunk` 文本；没有第二份资料库或索引。`pageSnapshot` 在直接运行时留在本轮内存，人工排队 / 插话沿用 `ai_chat_pending` 加密请求体，编辑用户正文时保留原快照。明文请求元数据仅含 `pageSnapshotHash`，工具原始正文不进入活动历史；指纹参与请求幂等判断。
 
-`ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随主模型。两张单行设置表各自独立检查 revision。
+`ai_connections.document` 保存各供应商的地址、协议、认证与密钥密文，各模型的上游 ID、名称、分组、容量、流式/工具偏好、预设引用、思考设置与验证记录。上游 ID 可编辑，内部 UUID 与用途绑定不变；修改 ID 清理旧探测记录，但不重套预设或重置用户参数。`importModelId=null` 表示跟随助手全局选择的对话模型。各单行设置表独立检查 revision。
 
 工具活动复用 `ai_chat_turn.result_meta_cipher/result_meta_crypto` 加密保存，最多 1200 项白名单摘要。开始和完成时更新检查点，首条活动建立助手占位，最终回答复用同一消息；检查点不推进历史 revision。活动不保存工具原始参数/结果，历史查询只读取，不重放工具。终止原因保存在 `finish_reason` 及结果元数据。
 

@@ -41,7 +41,9 @@ function harness(sessionId: number | undefined) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) =>
     <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-  const view = renderHook(() => useChatHistoryPages(sessionId), { wrapper });
+  const view = renderHook(({ selected }) => useChatHistoryPages(selected), {
+    wrapper, initialProps: { selected: sessionId }
+  });
   return { ...view, client };
 }
 
@@ -56,6 +58,99 @@ beforeEach(() => {
 });
 
 describe('useChatHistoryPages', () => {
+  it('定位旧轮次使用有界阅读窗口，保留全会话轮数并能继续向前翻页和返回最新', async () => {
+    const latest = { ...page([row(101), row(102)], true), firstRound: 51, totalRounds: 51 };
+    const target = { ...page([row(11), row(12), row(13), row(14)], true), hasOlder: true, firstRound: 6, totalRounds: 51 };
+    apiGet.mockResolvedValueOnce(latest).mockResolvedValueOnce(target)
+      .mockResolvedValueOnce({ ...page([row(7), row(8), row(9), row(10)], false), firstRound: 4, totalRounds: 51 })
+      .mockResolvedValueOnce(latest);
+    const { result } = harness(7);
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    await act(async () => { await result.current.focusMessage(11); });
+    await waitFor(() => expect(result.current.focused).toBe(true));
+    expect(apiGet).toHaveBeenLastCalledWith('/api/ai/sessions/7/history?limit=50&afterMessageId=10');
+    expect(result.current.messages.filter(item => item.role === 'user').map(item => item.roundNumber)).toEqual([6, 7]);
+    expect(result.current.totalRounds).toBe(51);
+    const reads = apiGet.mock.calls.length;
+    await act(async () => { await result.current.refreshLatest(); });
+    expect(apiGet).toHaveBeenCalledTimes(reads);
+    act(() => result.current.loadOlder());
+    await waitFor(() => expect(result.current.messages).toHaveLength(8));
+    expect(apiGet).toHaveBeenLastCalledWith('/api/ai/sessions/7/history?limit=50&beforeMessageId=11');
+    expect(result.current.messages.filter(item => item.role === 'user').map(item => item.roundNumber)).toEqual([4, 5, 6, 7]);
+    await act(async () => { await result.current.returnToLatest(); });
+    await waitFor(() => expect(result.current.focused).toBe(false));
+    expect(result.current.messages.map(item => item.id)).toEqual([101, 102]);
+  });
+
+  it('连续定位时迟到的旧响应不能覆盖最新选择', async () => {
+    let resolveOld!: (value: ChatHistoryPage) => void;
+    apiGet.mockResolvedValueOnce(page([row(101), row(102)], true))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(page([row(21), row(22)], true));
+    const { result, client } = harness(7);
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    let old!: Promise<void>;
+    act(() => { old = result.current.focusMessage(11); });
+    await waitFor(() => expect(resolveOld).toBeDefined());
+    await act(async () => { await result.current.focusMessage(21); });
+    await act(async () => { resolveOld(page([row(11), row(12)], true)); await old; });
+    expect(client.getQueryData<{ pages: ChatHistoryPage[] }>(['ai-session-history', 7])?.pages[0].messages[0].id).toBe(21);
+    await waitFor(() => expect(result.current.messages[0].id).toBe(21));
+  });
+
+  it('回到最新可撤销尚未返回的定位请求', async () => {
+    let resolveOld!: (value: ChatHistoryPage) => void;
+    apiGet.mockResolvedValueOnce(page([row(101), row(102)], true))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(page([row(103), row(104)], true));
+    const { result } = harness(7);
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    let old!: Promise<void>;
+    act(() => { old = result.current.focusMessage(11); });
+    await waitFor(() => expect(resolveOld).toBeDefined());
+    await act(async () => { await result.current.returnToLatest(); });
+    await act(async () => { resolveOld(page([row(11), row(12)], true)); await old; });
+    await waitFor(() => expect(result.current.messages[0].id).toBe(103));
+    expect(result.current.focused).toBe(false);
+  });
+
+  it('迟到的定稿刷新不能把旧阅读窗口拉回最新', async () => {
+    let resolveRefresh!: (value: ChatHistoryPage) => void;
+    apiGet.mockResolvedValueOnce(page([row(101), row(102)], true))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }))
+      .mockResolvedValueOnce(page([row(11), row(12)], true));
+    const { result } = harness(7);
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refreshLatest(); });
+    await waitFor(() => expect(resolveRefresh).toBeDefined());
+    await act(async () => { await result.current.focusMessage(11); });
+    await act(async () => { resolveRefresh(page([row(103), row(104)], true)); await refresh; });
+    await waitFor(() => expect(result.current.messages[0].id).toBe(11));
+    expect(result.current.focused).toBe(true);
+  });
+
+  it('切会话后作废旧定位，目标已清理时保留原阅读窗口', async () => {
+    let resolveOld!: (value: ChatHistoryPage) => void;
+    apiGet.mockResolvedValueOnce(page([row(101), row(102)], true))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce({ ...page([row(201), row(202)], true), sessionId: 8 })
+      .mockResolvedValueOnce({ ...page([row(12)], false), sessionId: 8 });
+    const { result, rerender, client } = harness(7);
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    let old!: Promise<void>;
+    act(() => { old = result.current.focusMessage(11); });
+    await waitFor(() => expect(resolveOld).toBeDefined());
+    rerender({ selected: 8 });
+    await waitFor(() => expect(result.current.messages[0]?.id).toBe(201));
+    await act(async () => { resolveOld(page([row(11), row(12)], true)); await old; });
+    expect(client.getQueryData<{ pages: ChatHistoryPage[] }>(['ai-session-history', 7])?.pages[0].messages[0].id).toBe(101);
+    await act(async () => { await expect(result.current.focusMessage(11)).rejects.toThrow('这轮对话已清理'); });
+    expect(result.current.messages[0].id).toBe(201);
+    expect(result.current.focused).toBe(false);
+  });
+
   it('第一页按 50 条请求 /history，旧的全量 /messages 不再被调用', async () => {
     const { result } = harness(7);
     await waitFor(() => expect(result.current.messages).toHaveLength(2));

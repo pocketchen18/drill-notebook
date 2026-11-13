@@ -90,7 +90,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 | 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
-| AI | 多供应商与模型、主模型/导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
+| AI | 多供应商与模型、助手全局模型选择与导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
 当前 schema 18，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
@@ -127,6 +127,17 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
 - 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)。
 
+### 3.3 失败恢复、会话内定位与模型选择（v0.8.1）
+
+- `AiConnectionsStore.State` 在现有便携数据库 JSON 中保存助手全局模型与档位；`AiConnectionsService.selectChatModel` 使用 revision 和原记忆授权事务，配置编辑与导入绑定保留选择。助手只读数据库选择，旧会话 / 草稿选择不参与派发；受理时冻结模型，后续改选不影响既有任务。
+- `AiRetrySettings` 嵌入全局 `AiRuntimeSettings`，沿用 `ai_runtime_settings` 的 JSON 与 revision；旧文档缺项补默认，旧客户端保存保留已有重试偏好。配置随受理时快照冻结，不新增 schema 或模型专属预算。
+- `AiUpstreamException` 统一 HTTP / SSE / 传输错误及脱敏正文、服务端等待截止时刻；`AiRetryPolicy` 分别管理请求、流式和纯连接失败计数；普通请求和流式恢复从 400ms 起翻倍并抖动，断网保留独立的 5 秒起步策略。`AiService` 在原轮次内等待 / 重发，保持原模型、整轮预算、部分回答与已确认工具上下文；未完整终止的工具调用不执行，交付未知插话不重放。两类协议的断流恢复通过同模型请求续答完成，没有原流续传协议。
+- `AiRecovery` 作为安全状态在 metadata、终态、轮次 / runtime 查询和加密历史之间传递。`RecoveryFeedback` 只在原助手回答处显示真实次数、一次报错和倒计时；停止 / 失败保留事实，成功清除。零正文的恢复失败也保存加密空助手消息，刷新不丢原因。
+- `ChatHistoryRepository` 对已有用户消息计数并查询轮次对应 ID；`ChatHistoryService` 提供有界预览及 history 的 totalRounds / firstRound / hasOlder。`useChatHistoryPages` 按目标加载阅读窗口，50 条一页、最多 500 条驻留，回到最新恢复最新窗口；请求身份和阅读锚点保护会话切换、定稿与迟到响应。
+- `ConversationNavigation` 使用正文右侧单一键盘定位控件，最多 64 个连续刻度，矮窗按高度减少；非 passive 滚轮翻阅窗口并阻止正文滚动。静止短线、悬停邻近刻度渐长；整卡显示轮次 / 时间、两行粗体提问、三行浅色回答及 `...`。预览只读取已有消息，文字复制 / 引用或覆盖详情期间隐藏导航。
+
+本片的工程验证与尚未执行的实机 / 供应商验收见[实施计划](../work/ai-conversation/plan.md)和[测试清单](../test/QA_CHECKLIST.md)，接口见[api-contracts.md](api-contracts.md)。
+
 ## 4. 导入 / 导出
 
 - **导入**：Markdown 解析器、PDF 服务（规则 + AI 兜底）、JSON 等，见 `docs/reference/import-formats.md`；知识点 Markdown 导入见 `docs/reference/knowledge-point-import.md`。  
@@ -140,9 +151,9 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - 生产：`electron/paths.ts` 将 userData/cache/temp 指到可执行文件旁。  
 - 发行包由 `.github/workflows/release-portable.yml` 构建发布，本地 `package-portable.ps1` 可生成不发布的验证包。前后端业务全量测试作为本地发布前门禁；云端检查版本、发布说明和发布配置，进行类型检查、编译并生成内嵌 JRE、更新 helper、应用目录、程序清单、ZIP 与 SHA-256。后端使用 `-DskipTests package`，继续使用 Pre-release。操作见 [README §4.3](../../README.md#43-云端便携发布)，JRE 与更新材料见 [jlink.md](../jlink.md)。
 
-### 5.1 软件内更新（v0.8.0，已实现、尚未发布）
+### 5.1 软件内更新（v0.8.0，已实现）
 
-主进程 `AppUpdater` 唯一管理偏好、公开 Releases、检查 / 提醒时间、跳过版和更新事务；renderer 通过受信 `window.api.update` 观察状态与发起操作，不直接下载或执行程序。关于提供实际版本、GitHub 主页、只读更新内容和 Star；新版说明与安装进度有各自的展示身份，关闭不取消事务。产品规则见[需求](../work/app-update/requirements.md)，实际协议见[规格](../work/app-update/spec.md)。
+主进程 `AppUpdater` 唯一管理偏好、公开 Releases、检查 / 提醒时间、跳过版和更新事务；renderer 通过受信 `window.api.update` 观察状态与发起操作，不直接下载或执行程序。关于提供实际版本、GitHub 主页、只读更新内容和 Star；新版说明与安装进度有各自的展示身份，关闭不取消事务。产品规则见[需求](../archive/v0.8.0/app-update/requirements.md)，实际协议见[规格](../archive/v0.8.0/app-update/spec.md)。
 
 公开 GitHub Releases 按语义版本排序，兼容 v0.x 预发行；匹配 Windows x64 目录 ZIP，校验公开源、大小 / SHA-256、程序清单与逐文件摘要。更新文件使用 Electron `original-fs`，避免 `.asar` 虚拟目录语义；只允许程序路径，用户数据和配置不在清单内。
 
@@ -152,7 +163,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 
 Rust helper 验证事务和 Win32 进程身份，等待 Electron 与 JVM 都退出后备份，完整恢复基线持久化后才替换并重启。新主进程确认实际版本、后端健康和受信主界面就绪，再恢复业务页面；提前请求后端地址会等待启动完成。健康确认是提交点；失败或中断只在相关进程已退出、备份完整时恢复旧程序与停机数据库，保留失败数据副本，阻止同目标自动循环。确认健康后的用户编辑不能被恢复流程覆盖。
 
-真实应用的手动更新、启动自动更新、真实 JAR 启动失败恢复及便携审计已通过；完整范围见[验证记录](../work/app-update/plan.md)。QA driver 仅注入隔离测试 ASAR，生产包不包含它；本轮没有发布 Release。
+真实应用的手动更新、启动自动更新、真实 JAR 启动失败恢复及便携审计已通过；完整范围见[验证记录](../archive/v0.8.0/app-update/plan.md)。QA driver 仅注入隔离测试 ASAR，生产包不包含它；该轮验证没有发布 Release。
 
 ## 6. 测试
 

@@ -1,0 +1,911 @@
+<div id="drill-v081-conversation" aria-label="Drill Notebook v0.8.1 对话设计草图">
+  <style>
+    #drill-v081-conversation {
+      color-scheme: light dark;
+      --drill-page: light-dark(#f4f6fa, #131519);
+      --drill-panel: light-dark(#ffffff, #1b1e24);
+      --drill-side: light-dark(#f6f8fb, #20242b);
+      --drill-hover: light-dark(#eff2f7, #242931);
+      --drill-line: light-dark(#e4e7ee, #2a2f38);
+      --drill-text: light-dark(#1e2433, #e2e6ee);
+      --drill-strong: light-dark(#0f1420, #f7f8fa);
+      --drill-muted: light-dark(#6b7385, #98a2b3);
+      --drill-accent: light-dark(#2f54eb, #8da2ff);
+      --drill-fill: light-dark(#2f54eb, #4b6bf0);
+      --drill-soft: light-dark(#eef2ff, #1f2a4d);
+      --drill-warning: light-dark(#9b6410, #e5b45f);
+      --drill-danger: light-dark(#c43139, #ff7b7b);
+      --drill-white: #ffffff;
+      --drill-shadow: light-dark(0 6px 22px rgb(15 20 32 / 12%), 0 6px 22px rgb(0 0 0 / 30%));
+      --drill-scrim: light-dark(rgb(15 20 32 / 22%), rgb(0 0 0 / 36%));
+      width: 100%;
+      margin: 0 auto;
+      font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--drill-text);
+      container: drill-preview / inline-size;
+    }
+    #drill-v081-conversation * { box-sizing: border-box; }
+    #drill-v081-conversation [hidden] { display: none !important; }
+    #drill-v081-conversation button,
+    #drill-v081-conversation input,
+    #drill-v081-conversation textarea,
+    #drill-v081-conversation select { font: inherit; }
+    #drill-v081-conversation button { color: inherit; }
+    #drill-v081-conversation button:focus-visible,
+    #drill-v081-conversation input:focus-visible,
+    #drill-v081-conversation textarea:focus-visible,
+    #drill-v081-conversation select:focus-visible,
+    #drill-v081-conversation summary:focus-visible { outline: 2px solid var(--drill-accent); outline-offset: 2px; }
+    #drill-v081-conversation .drill-window { position: relative; height: 716px; display: flex; flex-direction: column; overflow: hidden; background: var(--drill-panel); border: 1px solid var(--drill-line); border-radius: 8px; }
+    #drill-v081-conversation .drill-titlebar { height: 30px; flex: none; display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--drill-line); background: var(--drill-side); font-size: 12px; gap: 8px; }
+    #drill-v081-conversation .drill-window-controls { margin-left: auto; display: flex; gap: 24px; padding-right: 96px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-titlebar i { width: 13px; height: 13px; }
+    #drill-v081-conversation .drill-shell { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    #drill-v081-conversation .drill-side { width: min(264px, 45%); flex: none; display: flex; flex-direction: column; min-height: 0; padding: 12px 12px 0; background: var(--drill-side); border-right: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-new { height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--drill-line); border-radius: 6px; background: var(--drill-panel); font-size: 13px; font-weight: 600; }
+    #drill-v081-conversation .drill-search { margin-top: 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--drill-panel); border: 1px solid var(--drill-line); border-radius: 6px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-search input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--drill-text); font-size: 12px; }
+    #drill-v081-conversation .drill-session-list { flex: 1; min-height: 0; overflow: auto; }
+    #drill-v081-conversation .drill-group { margin: 18px 6px 6px; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-session { width: 100%; min-height: 44px; padding: 10px 10px; border: 0; border-radius: 6px; display: flex; align-items: center; gap: 8px; text-align: left; background: transparent; font-size: 13px; }
+    #drill-v081-conversation .drill-session .drill-session-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    #drill-v081-conversation .drill-session small { font-size: 11px; color: var(--drill-muted); white-space: nowrap; }
+    #drill-v081-conversation .drill-session.is-current { color: var(--drill-accent); background: var(--drill-soft); }
+    #drill-v081-conversation .drill-session.is-current small { color: var(--drill-accent); }
+    #drill-v081-conversation .drill-side-footer { margin: 0 -12px; padding: 12px 14px; border-top: 1px solid var(--drill-line); font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-storage { margin: 6px 0 10px; height: 3px; background: var(--drill-line); border-radius: 3px; overflow: hidden; }
+    #drill-v081-conversation .drill-storage span { display: block; height: 100%; width: 12%; background: var(--drill-accent); }
+    #drill-v081-conversation .drill-link { border: 0; padding: 3px 0; background: transparent; color: var(--drill-accent); font-size: 12px; }
+    #drill-v081-conversation .drill-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    #drill-v081-conversation .drill-header { height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-icon { width: 32px; height: 32px; flex: none; border: 0; border-radius: 6px; background: transparent; color: var(--drill-muted); display: inline-flex; align-items: center; justify-content: center; }
+    #drill-v081-conversation .drill-icon:hover { background: var(--drill-hover); color: var(--drill-text); }
+    #drill-v081-conversation i,
+    #drill-v081-conversation .lucide { width: 16px; height: 16px; flex: none; }
+    #drill-v081-conversation .drill-icon.is-on { background: var(--drill-soft); color: var(--drill-accent); }
+    #drill-v081-conversation .drill-divider { width: 1px; height: 18px; background: var(--drill-line); margin: 0 2px; flex: none; }
+    #drill-v081-conversation .drill-conversation-title { min-width: 0; font-size: 14px; font-weight: 600; color: var(--drill-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #drill-v081-conversation .drill-head-status { font-size: 12px; padding: 2px 8px; border-radius: 20px; color: var(--drill-accent); background: var(--drill-soft); white-space: nowrap; }
+    #drill-v081-conversation .drill-header-end { margin-left: auto; }
+    #drill-v081-conversation .drill-stream-wrap { position: relative; flex: 1; min-height: 0; }
+    #drill-v081-conversation .drill-stream { height: 100%; overflow: auto; padding: 20px 56px 24px 24px; scrollbar-width: thin; scrollbar-color: var(--drill-line) transparent; overflow-wrap: anywhere; }
+    #drill-v081-conversation .drill-messages { max-width: 760px; margin: 0 auto; }
+    #drill-v081-conversation .drill-turn { padding-bottom: 32px; scroll-margin-top: 24px; }
+    #drill-v081-conversation .drill-turn.is-target .drill-question { background: var(--drill-soft); box-shadow: 0 0 0 2px var(--drill-accent); }
+    #drill-v081-conversation .drill-question-row { display: flex; justify-content: flex-end; margin: 0 0 18px; }
+    #drill-v081-conversation .drill-question { max-width: 86%; border-radius: 12px 12px 4px 12px; padding: 9px 13px; background: var(--drill-hover); font-size: 14px; line-height: 1.65; }
+    #drill-v081-conversation .drill-model-label { margin: 0 0 10px; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-answer { font-size: 14px; line-height: 1.75; }
+    #drill-v081-conversation .drill-answer p { margin: 0 0 10px; }
+    #drill-v081-conversation .drill-answer h3 { margin: 14px 0 8px; font-size: 14px; font-weight: 600; }
+    #drill-v081-conversation .drill-answer ul { margin: 6px 0 14px; padding-left: 20px; }
+    #drill-v081-conversation .drill-answer code { font-family: Consolas, monospace; padding: 1px 4px; border-radius: 4px; background: var(--drill-side); font-size: 13px; }
+    #drill-v081-conversation .drill-actions { display: flex; align-items: center; gap: 4px; margin: 10px 0 0 -4px; min-height: 28px; }
+    #drill-v081-conversation .drill-message-action { width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--drill-muted); display: inline-flex; align-items: center; justify-content: center; }
+    #drill-v081-conversation .drill-message-action i,
+    #drill-v081-conversation .drill-message-action .lucide { width: 14px; height: 14px; }
+    #drill-v081-conversation .drill-message-action:hover { color: var(--drill-text); background: var(--drill-hover); }
+    #drill-v081-conversation .drill-message-action:disabled { opacity: .4; }
+    #drill-v081-conversation .drill-recovery { margin-top: 16px; padding: 2px 0 2px 12px; border-left: 2px solid var(--drill-warning); }
+    #drill-v081-conversation .drill-recovery.is-failed { border-left-color: var(--drill-danger); }
+    #drill-v081-conversation .drill-recovery.is-stopped { border-left-color: var(--drill-line); }
+    #drill-v081-conversation .drill-recovery-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 32px; font-size: 13px; font-weight: 500; }
+    #drill-v081-conversation .drill-recovery-symbol { color: var(--drill-warning); display: inline-flex; align-items: center; }
+    #drill-v081-conversation .drill-recovery.is-failed .drill-recovery-symbol { color: var(--drill-danger); }
+    #drill-v081-conversation .drill-recovery.is-stopped .drill-recovery-symbol { color: var(--drill-muted); }
+    #drill-v081-conversation .drill-recovery-head button { margin-left: auto; }
+    #drill-v081-conversation .drill-text-button { min-height: 32px; padding: 3px 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-text-button:hover { background: var(--drill-hover); color: var(--drill-text); }
+    #drill-v081-conversation .drill-error-short { margin: 4px 0 0; font-size: 12px; color: var(--drill-muted); white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; }
+    #drill-v081-conversation .drill-recovery-bottom { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-wait { font-variant-numeric: tabular-nums; }
+    #drill-v081-conversation .drill-jump { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 44px; z-index: 4; user-select: none; }
+    #drill-v081-conversation .drill-jump:has(.drill-jump-range:focus-visible) { outline: 2px solid var(--drill-accent); outline-offset: 1px; border-radius: 6px; }
+    #drill-v081-conversation .drill-ticks { position: absolute; inset: 8px 0; pointer-events: none; }
+    #drill-v081-conversation .drill-tick { position: absolute; top: var(--tick-y); left: 50%; transform: translate(-50%, -50%); width: 6px; height: 2px; border-radius: 2px; background: var(--drill-muted); opacity: .4; transition: width 120ms ease-out, opacity 120ms ease-out, background-color 120ms ease-out; }
+    #drill-v081-conversation .drill-tick.is-reading { height: 3px; background: var(--drill-accent); }
+    #drill-v081-conversation .drill-tick.is-hovered { background: var(--drill-text); }
+    #drill-v081-conversation .drill-tick.is-reading.is-hovered { background: var(--drill-accent); }
+    #drill-v081-conversation .drill-jump-range { position: absolute; inset: 0; margin: 0; width: 44px; height: 100%; opacity: 0; writing-mode: vertical-lr; direction: ltr; }
+    #drill-v081-conversation .drill-preview { position: absolute; right: 64px; z-index: 12; width: min(320px, calc(100% - 84px)); padding: 12px; border: 1px solid var(--drill-line); border-radius: 8px; background: var(--drill-panel); box-shadow: var(--drill-shadow); overflow-wrap: anywhere; text-align: left; color: var(--drill-text); font-family: inherit; }
+    #drill-v081-conversation .drill-preview-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 400; color: var(--drill-muted); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+    #drill-v081-conversation .drill-preview-head time { font-size: 11px; }
+    #drill-v081-conversation .drill-preview-text { position: relative; display: block; margin: 0; font-size: 13px; line-height: 1.55; font-weight: 600; color: var(--drill-strong); }
+    #drill-v081-conversation .drill-preview-text > [data-preview-question],
+    #drill-v081-conversation .drill-preview-text > [data-preview-answer] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+    #drill-v081-conversation .drill-preview-answer { margin-top: 6px; font-size: 12px; line-height: 1.65; font-weight: 400; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-preview-answer > [data-preview-answer] { -webkit-line-clamp: 3; }
+    #drill-v081-conversation .drill-preview-measure { position: absolute; inset: 0 0 auto; display: block; visibility: hidden; pointer-events: none; }
+    #drill-v081-conversation .drill-preview-measure::before { display: block; content: attr(data-text); }
+    @media (prefers-reduced-motion: reduce) { #drill-v081-conversation .drill-tick { transition: none; } }
+    #drill-v081-conversation .drill-latest { position: absolute; right: 60px; bottom: 12px; z-index: 5; border: 1px solid var(--drill-line); border-radius: 20px; min-height: 32px; padding: 4px 12px; background: var(--drill-panel); display: inline-flex; align-items: center; gap: 6px; box-shadow: var(--drill-shadow); font-size: 12px; }
+    #drill-v081-conversation .drill-latest-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--drill-fill); }
+    #drill-v081-conversation .drill-foot { flex: none; padding: 0 24px 14px; }
+    #drill-v081-conversation .drill-compose { max-width: 760px; margin: 0 auto; padding: 12px; border: 1px solid var(--drill-line); border-radius: 10px; background: var(--drill-panel); }
+    #drill-v081-conversation .drill-compose:focus-within { border-color: var(--drill-accent); }
+    #drill-v081-conversation .drill-compose textarea { display: block; width: 100%; height: 48px; min-width: 0; padding: 0; border: 0; resize: none; background: transparent; color: var(--drill-text); font-size: 14px; line-height: 1.65; }
+    #drill-v081-conversation .drill-compose-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-top: 8px; }
+    #drill-v081-conversation .drill-page-chip { min-width: 0; margin-right: auto; padding: 3px 8px; border: 0; border-radius: 20px; display: flex; align-items: center; gap: 4px; background: var(--drill-side); color: var(--drill-muted); font-size: 12px; }
+    #drill-v081-conversation .drill-page-chip span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #drill-v081-conversation .drill-context { white-space: nowrap; font-size: 12px; }
+    #drill-v081-conversation .drill-model { min-width: 0; max-width: 132px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #drill-v081-conversation .drill-effort { font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-send { width: 32px; height: 32px; border: 0; border-radius: 8px; display: inline-flex; justify-content: center; align-items: center; background: var(--drill-fill); color: var(--drill-white); }
+    #drill-v081-conversation .drill-detail { width: 320px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--drill-line); background: var(--drill-panel); }
+    #drill-v081-conversation .drill-detail-head { display: flex; align-items: center; padding: 0 12px 0 16px; height: 48px; border-bottom: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-detail-head strong { font-size: 14px; font-weight: 600; margin-right: auto; }
+    #drill-v081-conversation .drill-detail-content { overflow: auto; padding: 18px 16px; font-size: 13px; }
+    #drill-v081-conversation .drill-detail-content h3 { font-size: 13px; font-weight: 600; margin: 20px 0 8px; }
+    #drill-v081-conversation .drill-detail-content p { margin: 0 0 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-scrim { position: absolute; inset: 0; z-index: 24; background: var(--drill-scrim); border: 0; }
+    #drill-v081-conversation .drill-empty { display: grid; place-content: center; min-height: 100%; text-align: center; padding: 24px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-empty h3 { font-size: 16px; font-weight: 500; color: var(--drill-text); margin: 0 0 10px; }
+    #drill-v081-conversation .drill-settings-shell { display: flex; flex: 1; min-height: 0; background: var(--drill-page); }
+    #drill-v081-conversation .drill-app-nav { width: 180px; flex: none; background: var(--drill-side); border-right: 1px solid var(--drill-line); padding: 20px 12px; }
+    #drill-v081-conversation .drill-brand { font-size: 15px; font-weight: 600; margin-bottom: 28px; padding: 0 10px; color: var(--drill-strong); }
+    #drill-v081-conversation .drill-business-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 4px 0; border-radius: 6px; font-size: 13px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-business-row.is-current { background: var(--drill-soft); color: var(--drill-accent); }
+    #drill-v081-conversation .drill-settings-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 20px 24px 0; }
+    #drill-v081-conversation .drill-settings-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 16px; }
+    #drill-v081-conversation .drill-settings-top h2 { font-size: 20px; font-weight: 600; margin: 0 auto 0 0; color: var(--drill-strong); }
+    #drill-v081-conversation .drill-settings-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 18px; }
+    #drill-v081-conversation .drill-settings-tab { padding: 4px 12px; border-radius: 20px; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-settings-tab.is-current { background: var(--drill-panel); color: var(--drill-accent); border: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-settings-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; padding-bottom: 20px; }
+    #drill-v081-conversation .drill-settings-panel { background: var(--drill-panel); border: 1px solid var(--drill-line); border-radius: 12px; overflow: hidden; }
+    #drill-v081-conversation .drill-panel-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-panel-head h3 { margin: 0 auto 0 0; font-size: 15px; font-weight: 600; }
+    #drill-v081-conversation .drill-panel-body { padding: 20px; }
+    #drill-v081-conversation .drill-settings-description { margin: 0 0 20px; font-size: 13px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 28px; }
+    #drill-v081-conversation .drill-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+    #drill-v081-conversation .drill-input-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-field input,
+    #drill-v081-conversation .drill-field select { width: min(200px, 100%); min-width: 0; padding: 8px 10px; border: 1px solid var(--drill-line); border-radius: 6px; background: var(--drill-panel); color: var(--drill-text); font-size: 13px; }
+    #drill-v081-conversation .drill-field p { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-field input[aria-invalid="true"] { border-color: var(--drill-danger); }
+    #drill-v081-conversation .drill-field .drill-field-error { color: var(--drill-danger); }
+    #drill-v081-conversation .drill-network-field { grid-column: 1 / -1; }
+    #drill-v081-conversation .drill-network-limit { margin-top: 16px; }
+    #drill-v081-conversation .drill-retry-heading { border-top: 1px solid var(--drill-line); margin: 24px 0 12px; padding-top: 20px; font-size: 14px; font-weight: 600; scroll-margin-top: 12px; }
+    #drill-v081-conversation .drill-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 20px; margin-top: 24px; border-top: 1px solid var(--drill-line); }
+    #drill-v081-conversation .drill-save-state { font-size: 12px; color: var(--drill-muted); margin-right: auto; }
+    #drill-v081-conversation .drill-secondary,
+    #drill-v081-conversation .drill-primary { min-height: 34px; border: 1px solid var(--drill-line); border-radius: 6px; padding: 5px 14px; font-size: 13px; background: var(--drill-panel); }
+    #drill-v081-conversation .drill-primary { border-color: var(--drill-fill); background: var(--drill-fill); color: var(--drill-white); }
+    #drill-v081-conversation .drill-secondary:disabled,
+    #drill-v081-conversation .drill-primary:disabled { opacity: .45; }
+    #drill-v081-conversation .drill-save-message { margin: 12px 0 0; font-size: 12px; color: var(--drill-accent); }
+    #drill-v081-conversation .drill-leave-layer { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: var(--drill-scrim); }
+    #drill-v081-conversation .drill-leave-dialog { width: min(380px, 100%); padding: 20px; border-radius: 12px; background: var(--drill-panel); box-shadow: var(--drill-shadow); }
+    #drill-v081-conversation .drill-leave-dialog h3 { margin: 0 0 12px; color: var(--drill-strong); font-size: 16px; font-weight: 600; }
+    #drill-v081-conversation .drill-leave-dialog p { margin: 0 0 24px; font-size: 13px; color: var(--drill-muted); }
+    #drill-v081-conversation .drill-leave-buttons { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    @container drill-preview (max-width: 1179px) {
+      #drill-v081-conversation .drill-detail { position: absolute; inset: 0 0 0 auto; z-index: 20; width: min(360px, 100%); box-shadow: var(--drill-shadow); }
+    }
+    @container drill-preview (max-width: 759px) {
+      #drill-v081-conversation .drill-side { position: absolute; inset: 0 auto 0 0; z-index: 25; width: min(300px, 86%); box-shadow: var(--drill-shadow); }
+      #drill-v081-conversation .drill-detail { width: 100%; }
+      #drill-v081-conversation .drill-stream { padding: 16px 52px 20px 16px; }
+      #drill-v081-conversation .drill-foot { padding: 0 12px 12px; }
+      #drill-v081-conversation .drill-jump { right: 4px; }
+      #drill-v081-conversation .drill-preview { right: 52px; width: min(320px, calc(100% - 68px)); }
+      #drill-v081-conversation .drill-latest { right: 52px; }
+      #drill-v081-conversation .drill-app-nav { display: none; }
+      #drill-v081-conversation .drill-settings-main { padding: 16px 12px 0; }
+      #drill-v081-conversation .drill-field-grid { grid-template-columns: 1fr; }
+    }
+    @container drill-preview (max-width: 519px) {
+      #drill-v081-conversation .drill-head-status { display: none; }
+      #drill-v081-conversation .drill-page-chip { flex: 1 1 calc(100% - 80px); max-width: calc(100% - 76px); }
+      #drill-v081-conversation .drill-model { flex: 1; max-width: none; }
+      #drill-v081-conversation .drill-settings-tabs { gap: 3px; padding-bottom: 12px; }
+      #drill-v081-conversation .drill-settings-tab { padding: 4px 8px; }
+      #drill-v081-conversation .drill-panel-head { padding: 12px 14px; }
+      #drill-v081-conversation .drill-panel-body { padding: 16px 14px; }
+      #drill-v081-conversation .drill-window-controls { padding-right: 80px; gap: 18px; }
+    }
+    @media (pointer: coarse) {
+      #drill-v081-conversation .drill-icon,
+      #drill-v081-conversation .drill-text-button,
+      #drill-v081-conversation .drill-primary,
+      #drill-v081-conversation .drill-secondary,
+      #drill-v081-conversation .drill-send { min-width: 44px; min-height: 44px; }
+      #drill-v081-conversation .drill-compose textarea,
+      #drill-v081-conversation .drill-field input,
+      #drill-v081-conversation .drill-field select { font-size: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #drill-v081-conversation * { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+
+  <section class="drill-window" aria-label="Drill Notebook">
+    <div class="drill-titlebar">
+      <i data-lucide="notebook-pen" aria-hidden="true"></i>
+      <span data-titlebar>AI 助手</span>
+      <span class="drill-window-controls" aria-hidden="true"><span>─</span><span>□</span><span>×</span></span>
+    </div>
+    <div class="drill-shell" data-assistant-shell>
+      <aside class="drill-side" aria-label="会话列表">
+        <button type="button" class="drill-new cursor-interaction" data-new><i data-lucide="plus" aria-hidden="true"></i>新建会话</button>
+        <label class="drill-search"><i data-lucide="search" aria-hidden="true"></i><input aria-label="查找会话" placeholder="查找会话…"></label>
+        <div class="drill-session-list">
+          <div class="drill-group">置顶</div>
+          <button type="button" class="drill-session is-current cursor-interaction" data-current-session><i data-lucide="pin" aria-hidden="true"></i><span class="drill-session-name">导数与积分复习</span><small data-session-status>重连中</small></button>
+          <div class="drill-group">今天</div>
+          <div class="drill-session"><span class="drill-session-name">高数错题整理</span><small>10:42</small></div>
+          <div class="drill-session"><span class="drill-session-name">线性代数复习计划</span><small>09:36</small></div>
+          <div class="drill-group">近 7 天</div>
+          <div class="drill-session"><span class="drill-session-name">概率与统计知识点</span><small>周二</small></div>
+        </div>
+        <div class="drill-side-footer">
+          <span>本地存储 <span style="float:right">12%</span></span>
+          <div class="drill-storage"><span></span></div>
+          <button type="button" class="drill-link cursor-interaction" data-open-settings>设置 ↗</button>
+        </div>
+      </aside>
+      <button type="button" class="drill-scrim cursor-interaction" aria-label="关闭会话浮层" data-scrim hidden></button>
+      <main class="drill-main">
+        <header class="drill-header">
+          <button type="button" class="drill-icon cursor-interaction" aria-label="展开或收起会话栏" data-toggle-side><i data-lucide="panel-left" aria-hidden="true"></i></button>
+          <button type="button" class="drill-icon cursor-interaction" aria-label="固定窗口" aria-pressed="false" data-pin><i data-lucide="pin" aria-hidden="true"></i></button>
+          <span class="drill-divider"></span>
+          <span class="drill-conversation-title">导数与积分复习</span>
+          <span class="drill-head-status" data-head-status>正在重连</span>
+          <button type="button" class="drill-icon drill-header-end cursor-interaction" aria-label="会话更多操作"><i data-lucide="ellipsis" aria-hidden="true"></i></button>
+        </header>
+        <div class="drill-stream-wrap">
+          <div class="drill-stream" aria-label="会话消息">
+            <div class="drill-messages"></div>
+            <div class="drill-empty" hidden><h3>开始一段新对话</h3><p>可以从当前笔记中的问题开始。</p></div>
+          </div>
+          <div class="drill-jump" aria-label="会话内对话跳转">
+            <div class="drill-ticks" aria-hidden="true"></div>
+            <input class="drill-jump-range cursor-interaction" type="range" min="1" max="90" step="1" value="90" aria-label="会话内对话跳转" aria-orientation="vertical" aria-valuetext="第 90 / 90 轮">
+          </div>
+          <button type="button" class="drill-preview cursor-interaction" aria-label="对话预览，点击定位" hidden>
+            <span class="drill-preview-head"><span data-preview-count>第 90 / 90 轮</span><time data-preview-time>10:58</time></span>
+            <span class="drill-preview-text"><span data-preview-question></span><span class="drill-preview-measure" aria-hidden="true"></span></span>
+            <span class="drill-preview-text drill-preview-answer"><span data-preview-answer></span><span class="drill-preview-measure" aria-hidden="true"></span></span>
+          </button>
+          <button type="button" class="drill-latest cursor-interaction" data-latest hidden><i data-lucide="arrow-down" aria-hidden="true"></i>回到最新<span class="drill-latest-dot" aria-hidden="true"></span></button>
+        </div>
+        <footer class="drill-foot">
+          <div class="drill-compose">
+            <textarea aria-label="输入消息" placeholder="正在回复，可先输入下一条问题">再用几何意义解释一下第二部分。</textarea>
+            <div class="drill-compose-tools">
+              <span class="drill-icon" aria-hidden="true"><i data-lucide="plus"></i></span>
+              <span class="drill-page-chip"><i data-lucide="file-text" aria-hidden="true"></i><span>微积分基本定理</span></span>
+              <button type="button" class="drill-context drill-text-button cursor-interaction" aria-label="上下文占用，查看本轮上下文" data-show-context>◔ 18%</button>
+              <span class="drill-model">主模型</span><span class="drill-effort">模型默认</span>
+              <button type="button" class="drill-icon cursor-interaction" aria-label="停止回复" data-compose-stop><i data-lucide="square" aria-hidden="true"></i></button>
+              <button type="button" class="drill-send cursor-interaction" aria-label="加入队列" data-send><i data-lucide="arrow-up" aria-hidden="true"></i></button>
+            </div>
+          </div>
+        </footer>
+      </main>
+      <aside class="drill-detail" aria-label="本轮上下文" hidden>
+        <div class="drill-detail-head"><strong>本轮上下文</strong><button type="button" class="drill-icon cursor-interaction" aria-label="关闭详情" data-close-detail><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <div class="drill-detail-content">
+          <p>导数与积分复习 · 当前轮次</p>
+          <div class="drill-detail-row"><span>输入</span><span>23.1k / 128k</span></div>
+          <div class="drill-detail-row"><span>缓存命中</span><span>未回报</span></div>
+          <div class="drill-detail-row"><span>缓存未命中</span><span>未回报</span></div>
+          <div class="drill-detail-row"><span>输出</span><span>未回报</span></div>
+          <h3>引用的当前页面</h3><p>笔记 · 微积分基本定理</p>
+          <h3>会话</h3><p>当前提问与本轮所需的历史内容。</p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="drill-settings-shell" data-settings-shell hidden>
+      <nav class="drill-app-nav" aria-label="主窗口导航">
+        <div class="drill-brand">Drill Notebook</div>
+        <div class="drill-business-row"><i data-lucide="notebook" aria-hidden="true"></i>笔记本</div>
+        <div class="drill-business-row"><i data-lucide="layers" aria-hidden="true"></i>题库</div>
+        <div class="drill-business-row"><i data-lucide="network" aria-hidden="true"></i>知识点</div>
+        <div class="drill-business-row"><i data-lucide="calendar" aria-hidden="true"></i>学习与复习</div>
+        <div class="drill-business-row is-current"><i data-lucide="settings" aria-hidden="true"></i>设置</div>
+      </nav>
+      <main class="drill-settings-main">
+        <header class="drill-settings-top"><h2>设置</h2><button type="button" class="drill-text-button cursor-interaction" data-back-assistant>返回 AI 助手 ↗</button></header>
+        <div class="drill-settings-tabs" aria-label="设置分类"><span class="drill-settings-tab">常规</span><span class="drill-settings-tab">AI 连接</span><span class="drill-settings-tab is-current">AI 对话</span><span class="drill-settings-tab">AI 记忆</span><span class="drill-settings-tab">嵌入与检索</span><span class="drill-settings-tab">关于</span></div>
+        <div class="drill-settings-scroll">
+          <section class="drill-settings-panel" aria-label="AI 对话设置">
+            <div class="drill-panel-head"><h3>运行限制</h3><button type="button" class="drill-text-button cursor-interaction" data-restore><span aria-hidden="true">↺</span> 恢复默认</button></div>
+            <form class="drill-panel-body" data-settings-form>
+              <p class="drill-settings-description">对所有聊天模型生效，保存后从下一轮开始使用。</p>
+              <div class="drill-field-grid" data-existing-fields></div>
+              <h4 class="drill-retry-heading">失败重连</h4>
+              <p class="drill-settings-description">短暂故障会自动重试。等待时间逐步延长，服务端指定等待时间时优先遵守。</p>
+              <div class="drill-field-grid">
+                <div class="drill-field">
+                  <label for="drill-v081-http-limit">请求重试上限</label>
+                  <div class="drill-input-row"><input id="drill-v081-http-limit" type="number" min="0" max="100" step="1" value="4" aria-describedby="drill-v081-http-help"><span>次</span></div>
+                  <p id="drill-v081-http-help">请求暂时失败时最多再试多少次；0 关闭自动重试。</p>
+                </div>
+                <div class="drill-field">
+                  <label for="drill-v081-stream-limit">回答重连上限</label>
+                  <div class="drill-input-row"><input id="drill-v081-stream-limit" type="number" min="0" max="100" step="1" value="5" aria-describedby="drill-v081-stream-help"><span>次</span></div>
+                  <p id="drill-v081-stream-help">回答中途断开时重新连接的上限；0 关闭自动重连。</p>
+                </div>
+                <div class="drill-field drill-network-field">
+                  <label for="drill-v081-network-mode">断网等待</label>
+                  <div class="drill-input-row"><select id="drill-v081-network-mode" aria-describedby="drill-v081-network-help"><option value="persistent">持续重试</option><option value="limited">限制次数</option></select></div>
+                  <p id="drill-v081-network-help">等待网络恢复，直到停止或整轮运行时间用尽。</p>
+                  <div class="drill-network-limit" hidden>
+                    <label for="drill-v081-network-limit">断网重试上限</label>
+                    <div class="drill-input-row"><input id="drill-v081-network-limit" type="number" min="0" max="100" step="1" value="5" aria-describedby="drill-v081-network-limit-help"><span>次</span></div>
+                    <p id="drill-v081-network-limit-help">0 关闭断网自动重试。</p>
+                  </div>
+                </div>
+              </div>
+              <div class="drill-settings-actions">
+                <span class="drill-save-state" aria-live="polite">已保存的设置</span>
+                <button type="button" class="drill-secondary cursor-interaction" data-cancel-settings disabled>取消修改</button>
+                <button type="submit" class="drill-primary cursor-interaction" data-save-settings disabled>保存</button>
+              </div>
+              <p class="drill-save-message" role="status" hidden></p>
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+    <div class="drill-leave-layer" hidden>
+      <div class="drill-leave-dialog" role="dialog" aria-modal="true" aria-labelledby="drill-v081-leave-title">
+        <h3 id="drill-v081-leave-title">有未保存的 AI 对话设置</h3>
+        <p>离开将放弃本次修改。</p>
+        <div class="drill-leave-buttons"><button type="button" class="drill-secondary cursor-interaction" data-leave-cancel>继续编辑</button><button type="button" class="drill-primary cursor-interaction" data-leave-discard>放弃修改并离开</button></div>
+      </div>
+    </div>
+  </section>
+  <div data-announcement aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></div>
+
+  <script>
+    (function () {
+      const root = document.getElementById('drill-v081-conversation');
+      const q = function (selector) { return root.querySelector(selector); };
+      const defaults = { http: 4, stream: 5, networkMode: 'persistent', networkLimit: 5 };
+      const maxVisibleRounds = 64;
+      const tickStep = 10;
+      const railPadding = 8;
+      const maxRailHeight = railPadding * 2 + (maxVisibleRounds - 1) * tickStep;
+      const state = { view: 'assistant', scenario: 'stream', theme: 'system', narrow: false, detail: false };
+      let savedSettings = Object.assign({}, defaults);
+      let turnSettings = Object.assign({}, defaults);
+      let empty = false;
+      let sideDesktop = true;
+      let sideOverlay = false;
+      let active = 90;
+      let candidate = 90;
+      let windowStart = 27;
+      let navigationCapacity = maxVisibleRounds;
+      let wheelRemainder = 0;
+      let previewOpen = false;
+      let previewTimer;
+      let closeTimer;
+      let hoverFrame;
+      let hoverCandidate = 90;
+      const excerptCaches = new WeakMap();
+      let generationTimer;
+      let highlightTimer;
+      let recoveryIsRunning = true;
+      let recoveryWasFailed = false;
+      let stoppedInfo = null;
+      let lastModelSnapshot = '';
+      const stream = q('.drill-stream');
+      const preview = q('.drill-preview');
+      const range = q('.drill-jump-range');
+      const wrap = q('.drill-stream-wrap');
+      const announcement = q('[data-announcement]');
+      const sampleMessages = [
+        ["导数的定义是什么？", "导数描述函数在一点的瞬时变化率。把相邻两点的平均变化率取极限，就得到该点的导数。", "先看变化率，再看极限", "平均变化率是函数值的变化量除以自变量的变化量。当两点越来越接近时，这个比值的极限就是导数。"],
+        ["导数和曲线斜率有什么关系？", "函数在一点的导数等于该点切线的斜率。导数为正表示局部上升，为负表示局部下降。", "切线是局部变化的方向", "割线的斜率表示一段区间内的平均变化；让另一个点趋近当前点，就得到切线及其斜率。"],
+        ["连续一定可导吗？", "不一定。例如绝对值函数在零点连续，但左右导数分别为 −1 和 1，所以在零点不可导。", "可导比连续更强", "可导必然连续，连续却不一定可导。观察尖角、竖直切线和振荡可以帮助找出反例。"],
+        ["乘积的求导法则怎么记？", "两个函数乘积的导数是第一项求导乘第二项，加第一项乘第二项求导。两项都需要保留。", "分别变化，再相加", "如果 u 和 v 都依赖 x，就要同时考虑 u 变化造成的影响和 v 变化造成的影响。"],
+        ["复合函数求导为什么要乘内层导数？", "外层函数先响应中间变量的变化，而中间变量还会随着 x 变化；两段变化率相乘就是链式法则。", "把一条变化链拆成两段", "例如 sin(x²) 的导数是 cos(x²) 乘 2x。先求外层对内层的导数，再乘内层对 x 的导数。"],
+        ["隐函数求导需要注意什么？", "把 y 当成 x 的函数。遇到包含 y 的项需要使用链式法则，最后把含 y′ 的项整理到同一侧。", "不要把 y 当成常量", "对 x²+y²=1 求导，得到 2x+2y·y′=0，因此 y′=−x/y，前提是该点可以把 y 看成 x 的可导函数。"],
+        ["函数单调性怎么用导数判断？", "在一个区间内，导数为正时函数递增，为负时函数递减。临界点附近需要分别判断两侧的导数符号。", "先找临界点，再分区间", "把导数等于零和导数不存在的点作为分界，逐段检查符号。单看某一点的导数为零，并不能判断它是不是极值。"],
+        ["极值和最值的区别是什么？", "极值描述邻域内的大小关系；最值描述整个指定范围内的大小关系。闭区间最值还需要检查端点。", "局部与全局的范围不同", "求闭区间最值时，比较所有临界点与端点的函数值。一个局部极大值未必是整个区间的最大值。"],
+        ["二阶导数说明什么？", "二阶导数说明一阶变化率如何变化，可以帮助判断曲线的凹凸性，但不能单凭二阶导数为零就认定拐点。", "变化率本身也在变化", "判断拐点需要看两侧凹凸性是否改变；二阶导数为零通常只是寻找候选位置的一种方法。"],
+        ["不定积分和原函数是什么关系？", "不定积分表示所有原函数组成的函数族。如果 F 的导数等于 f，那么 F 加任意常数仍是 f 的原函数。", "求导的逆向问题", "写出不定积分时需要带积分常数，因为不同原函数之间可能只相差一个常数。"],
+        ["换元积分什么时候好用？", "当被积式里同时出现复合函数及其内层导数时，换元可以把它化成更熟悉的积分。定积分换元还要更换上下限。", "寻找成对出现的结构", "先确认新变量与微分的关系，再统一替换表达式。不要一部分保留 x，一部分改用新变量。"],
+        ["分部积分怎么选 u？", "通常把求导后更简单的部分作为 u，把容易积分的部分作为 dv，再使用乘积求导公式的逆向形式。", "让下一步变简单", "分部积分的目标是把原来的积分转化为一个更容易处理的积分；如果没有变简单，就需要重新考虑选择。"],
+        ["定积分的几何意义是面积吗？", "定积分表示带符号的面积累积。曲线在横轴上方时为正，下方时为负；求实际面积要分段处理符号。", "注意带符号的累积", "先找函数与横轴的交点，按符号分段积分，求几何面积时把各段的面积取正后相加。"],
+        ["为什么定积分上下限交换会变号？", "积分方向改变后，每一小段累积量的方向都反过来了，因此整个积分也变号。", "方向属于积分的一部分", "从 a 到 b 的累积与从 b 到 a 的累积互为相反数，这也让积分区间的可加性保持一致。"],
+        ["变上限积分函数怎么理解？", "固定下限，把上限 x 看成一个移动端点。它记录从起点到 x 为止累计了多少量。", "移动的终点，累积的结果", "当上限增加一小段时，新增的积分量约等于该处函数值乘区间长度；除以长度取极限，就得到导数。"],
+        ["积分上限是 x² 时怎么求导？", "先对变上限积分使用微积分基本定理，再对上限 x² 使用链式法则，所以还要乘 2x。", "基本定理与链式法则结合", "把积分函数写成 F(x²)，就能清楚地看到：先求 F 对内层的导数，再乘内层对 x 的导数。"],
+        ["牛顿—莱布尼茨公式什么时候可用？", "当 f 在积分区间上连续，且 F 是它的一个原函数时，定积分可由端点的原函数值之差计算。", "用原函数计算累积量", "先找到原函数 F，再代入上限和下限。注意定积分的结果是一个数，不需要再加积分常数。"],
+        ["请总结微积分基本定理的两部分，配一个容易记的例子。", "第一部分说明累积函数的导数回到原函数；第二部分说明定积分可以用原函数在端点的差来计算。", "微积分基本定理的两部分", "第一部分：对连续函数 f，把从固定起点到 x 的积分记为 F(x)，那么 F′(x)=f(x)。第二部分：如果 G′(x)=f(x)，从 a 到 b 的定积分就等于 G(b)−G(a)。"]
+      ];
+      const messages = Array.from({ length: 72 }, function (_, index) {
+        const item = sampleMessages[index % 17];
+        return ['复习第 ' + (index + 1) + ' 轮：' + item[0], item[1], item[2], item[3]];
+      }).concat(sampleMessages);
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"]/g, function (char) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]; });
+      }
+      function safeSettings(value) {
+        if (!value || typeof value !== 'object') return Object.assign({}, defaults);
+        const result = Object.assign({}, defaults);
+        ['http', 'stream', 'networkLimit'].forEach(function (key) {
+          if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 100) result[key] = value[key];
+        });
+        if (value.networkMode === 'persistent' || value.networkMode === 'limited') result.networkMode = value.networkMode;
+        return result;
+      }
+      function restoreState(snapshot) {
+        const data = snapshot && (snapshot.modelContent || snapshot);
+        if (!data || data.kind !== 'drill-v081-conversation') return;
+        if (['assistant', 'settings'].indexOf(data.view) >= 0) state.view = data.view;
+        if (['stream', 'request', 'network', 'success', 'exhausted', 'unrecoverable', 'stopped', 'running'].indexOf(data.scenario) >= 0) state.scenario = data.scenario;
+        if (['system', 'light', 'dark'].indexOf(data.theme) >= 0) state.theme = data.theme;
+        if (typeof data.narrow === 'boolean') state.narrow = data.narrow;
+        if (typeof data.detail === 'boolean') state.detail = data.detail;
+        if (Number.isInteger(data.selectedRound) && data.selectedRound >= 1 && data.selectedRound <= messages.length)
+          active = candidate = data.navigationVersion === 2 ? data.selectedRound : Math.min(messages.length, data.selectedRound + 72);
+        savedSettings = safeSettings(data.settings);
+        turnSettings = Object.assign({}, savedSettings);
+      }
+      restoreState(window.openai && window.openai.widgetState);
+      function remember() {
+        if (window.openai && typeof window.openai.setWidgetState === 'function') {
+          const content = { kind: 'drill-v081-conversation', navigationVersion: 2, view: state.view, scenario: state.scenario, theme: state.theme, narrow: state.narrow, detail: state.detail, selectedRound: active, settings: savedSettings };
+          lastModelSnapshot = JSON.stringify(content);
+          try {
+            Promise.resolve(window.openai.setWidgetState({ modelContent: content, privateContent: null })).catch(function () {});
+          } catch (error) {}
+        }
+      }
+      const roundsHtml = messages.map(function (item, index) {
+        const number = index + 1;
+        const body = '<h3>' + escapeHtml(item[2]) + '</h3><p>' + escapeHtml(item[3]) + '</p>';
+        return '<article class="drill-turn" data-round="' + number + '" aria-label="第 ' + number + ' 轮">'
+          + '<div class="drill-question-row"><div class="drill-question">' + escapeHtml(item[0]) + '</div></div>'
+          + (number === messages.length ? '<div data-previous-answers></div>' : '')
+          + '<div class="drill-model-label">主模型 · 思考：模型默认</div><div class="drill-answer">' + body + '</div>'
+          + (number === messages.length ? '<div class="drill-recovery" data-recovery><div class="drill-recovery-head"><span class="drill-recovery-symbol"><i data-lucide="rotate-cw" aria-hidden="true"></i></span><span data-recovery-title>正在重新连接 2/5</span><button type="button" class="drill-text-button cursor-interaction" data-feedback-stop>停止</button></div><pre class="drill-error-short" data-error-short></pre><div class="drill-recovery-bottom"><span class="drill-wait" data-wait></span></div></div>' : '')
+          + '<div class="drill-actions"><button type="button" class="drill-message-action cursor-interaction" aria-label="复制" data-tooltip="复制" data-copy="' + number + '"><i data-lucide="copy" aria-hidden="true"></i></button><button type="button" class="drill-message-action cursor-interaction" aria-label="插入笔记" data-tooltip="插入笔记" data-insert="' + number + '"><i data-lucide="file-plus-2" aria-hidden="true"></i></button><button type="button" class="drill-message-action cursor-interaction" aria-label="重新生成" data-tooltip="重新生成" data-regenerate="' + number + '"><i data-lucide="rotate-cw" aria-hidden="true"></i></button></div></article>';
+      }).join('');
+      q('.drill-messages').innerHTML = roundsHtml;
+      const lastAnswer = q('[data-round="' + messages.length + '"] .drill-answer');
+      const recovery = q('[data-recovery]');
+      const partialAnswer = '<h3>微积分基本定理的两部分</h3><p>它把“变化率”和“累积量”联系起来，可以分成两个方向记：</p><p><strong>第一部分：先积分，再求导。</strong><br>如果 f 连续，令 F(x) 表示从固定起点到 x 的累积量，那么 F′(x)=f(x)。</p>';
+      const completeAnswer = partialAnswer + '<p><strong>第二部分：用原函数计算定积分。</strong><br>找到满足 G′(x)=f(x) 的原函数后，从 a 到 b 的定积分等于 G(b)−G(a)。</p><p>例如 f(x)=2x，原函数可取 G(x)=x²。区间 0 到 2 的累积量就是 2²−0²=4。</p>';
+      function settingsFieldsHtml() {
+        const fields = [
+          ['工具阶段上限', 30, '轮', '模型发出一批工具调用计为一个阶段。'],
+          ['工具执行上限', 100, '次', '读取与写入共用此额度。'],
+          ['整轮最长时间', 20, '分钟', '包含模型思考、工具执行和最终回答。'],
+          ['单次模型请求最长时间', 5, '分钟', '同时受整轮剩余时间约束。'],
+          ['整轮输出 Token 上限', 65536, '', '累计实际输出与厂商计入的思考量。'],
+          ['单次请求输出上限', 16384, '', '模型容量仍会收紧此值。'],
+          ['最终回答预留', 4096, '', '从整轮额度中留出最终回答。'],
+          ['相同调用无新结果时停止', 3, '次', '设为 0 关闭此检查。']
+        ];
+        return fields.map(function (field, index) {
+          return '<div class="drill-field"><label for="drill-existing-' + index + '">' + field[0] + '</label><div class="drill-input-row"><input id="drill-existing-' + index + '" type="number" value="' + field[1] + '" readonly><span>' + field[2] + '</span></div><p>' + field[3] + '</p></div>';
+        }).join('');
+      }
+      q('[data-existing-fields]').innerHTML = settingsFieldsHtml();
+      function renderRecovery() {
+        const info = {
+          stream: ['正在重新连接 2/' + turnSettings.stream, 'stream disconnected before completion', '0.8 秒后重试', 'stream_disconnected\nstream disconnected before completion: error decoding response body', true, false],
+          request: ['请求重试 2/' + turnSettings.http, 'HTTP 503 · Service Unavailable', '0.8 秒后重试', '供应商：示例供应商\nHTTP 503\ncode: server_error\nmessage: Service Unavailable. Please try again later.', true, false],
+          network: [turnSettings.networkMode === 'persistent' ? '等待网络恢复 · 已重试 2 次' : '等待网络恢复 2/' + turnSettings.networkLimit, 'Connection failed · connect ECONNREFUSED', '20 秒后重试', 'Connection failed\nconnect ECONNREFUSED provider.example.invalid:443', true, false],
+          exhausted: ['重新连接失败 · 已重试 ' + turnSettings.stream + '/' + turnSettings.stream, 'stream disconnected before completion', '', 'stream_disconnected\nstream disconnected before completion: error decoding response body', false, true],
+          unrecoverable: ['无法继续生成', 'HTTP 401 · Invalid API key', '请检查供应商配置后重试。', '供应商：示例供应商\nHTTP 401\ncode: invalid_api_key\nmessage: Invalid API key provided.', false, true],
+          stopped: ['已停止重新连接 · 已重试 2 次', 'stream disconnected before completion', '', 'stream_disconnected\nstream disconnected before completion: error decoding response body', false, false],
+          running: ['正在连接…', '', '', '', true, false],
+          success: ['', '', '', '', false, false]
+        };
+        let current = info[state.scenario] || info.stream;
+        if (state.scenario === 'stopped' && stoppedInfo) current = stoppedInfo;
+        if (state.scenario === 'stream' && turnSettings.stream <= 2) current = [turnSettings.stream === 0 ? '生成中断 · 自动重连已关闭' : '重新连接失败 · 已重试 ' + turnSettings.stream + '/' + turnSettings.stream, 'stream disconnected before completion', '', info.stream[3], false, true];
+        if (state.scenario === 'request' && turnSettings.http <= 2) current = [turnSettings.http === 0 ? '请求失败 · 自动重试已关闭' : '请求失败 · 已重试 ' + turnSettings.http + '/' + turnSettings.http, 'HTTP 503 · Service Unavailable', '', info.request[3], false, true];
+        if (state.scenario === 'network' && turnSettings.networkMode === 'limited' && turnSettings.networkLimit <= 2) current = [turnSettings.networkLimit === 0 ? '网络连接失败 · 自动重试已关闭' : '等待网络恢复失败 · 已重试 ' + turnSettings.networkLimit + '/' + turnSettings.networkLimit, 'Connection failed · connect ECONNREFUSED', '', info.network[3], false, true];
+        recoveryIsRunning = current[4];
+        recoveryWasFailed = current[5];
+        const oldScrollTop = stream.scrollTop;
+        lastAnswer.innerHTML = state.scenario === 'success' ? completeAnswer : partialAnswer;
+        recovery.hidden = state.scenario === 'success' || state.scenario === 'running';
+        recovery.classList.toggle('is-failed', current[5]);
+        recovery.classList.toggle('is-stopped', state.scenario === 'stopped');
+        q('[data-recovery-title]').textContent = current[0];
+        q('[data-error-short]').textContent = current[3] || current[1];
+        q('[data-error-short]').hidden = !(current[3] || current[1]);
+        q('[data-wait]').textContent = current[2];
+        q('[data-feedback-stop]').hidden = !current[4];
+        q('[data-compose-stop]').hidden = !current[4];
+        const generating = current[4];
+        q('textarea').placeholder = generating ? '正在回复，可先输入下一条问题' : '问点什么，Enter 发送';
+        q('[data-send]').setAttribute('aria-label', generating ? '加入队列' : '发送');
+        q('[data-head-status]').hidden = state.scenario === 'success';
+        q('[data-head-status]').textContent = state.scenario === 'network' ? '等待网络' : generating ? state.scenario === 'running' ? '正在回复' : '正在重连' : state.scenario === 'stopped' ? '已停止' : '生成失败';
+        q('[data-session-status]').textContent = state.scenario === 'success' ? '10:58' : state.scenario === 'network' ? '等待网络' : generating ? state.scenario === 'running' ? '回复中' : '重连中' : state.scenario === 'stopped' ? '已停止' : '失败';
+        root.querySelectorAll('[data-regenerate]').forEach(function (button) { button.disabled = generating || Number(button.dataset.regenerate) !== messages.length; });
+        stream.scrollTop = oldScrollTop;
+        renderTicks();
+      }
+      function renderTicks() {
+        const rail = q('.drill-jump');
+        const available = Math.min(maxRailHeight, wrap.clientHeight ? Math.max(0, wrap.clientHeight - 64) : maxRailHeight);
+        navigationCapacity = Math.min(maxVisibleRounds, Math.max(2, Math.floor((available - railPadding * 2) / tickStep) + 1));
+        const count = Math.min(messages.length, navigationCapacity);
+        const height = railPadding * 2 + (count - 1) * tickStep + 'px';
+        if (rail.style.height !== height) rail.style.height = height;
+        windowStart = Math.max(1, Math.min(messages.length - count + 1, windowStart));
+        const ticks = q('.drill-ticks');
+        if (ticks.children.length !== count || Number(ticks.firstElementChild.dataset.tick) !== windowStart) {
+          ticks.innerHTML = Array.from({ length: count }, function (_, index) {
+            return '<span class="drill-tick" data-tick="' + (windowStart + index) + '" style="--tick-y:' + index * tickStep + 'px"></span>';
+          }).join('');
+        }
+        if (rail.dataset.firstRound !== String(windowStart)) rail.dataset.firstRound = windowStart;
+        if (rail.dataset.lastRound !== String(windowStart + count - 1)) rail.dataset.lastRound = windowStart + count - 1;
+        if (rail.dataset.reading !== String(active)) rail.dataset.reading = active;
+        ticks.querySelectorAll('[data-tick]').forEach(function (tick, index) {
+          const number = Number(tick.dataset.tick), distance = Math.abs(number - candidate);
+          tick.classList.toggle('is-reading', number === active);
+          tick.classList.toggle('is-hovered', previewOpen && number === candidate);
+          const width = (previewOpen && distance < 5 ? 24 - distance * 4 : number === active ? 8 : 6) + 'px';
+          const opacity = String(previewOpen && distance < 5 ? 1 - distance * .12 : number === active ? .8 : .4);
+          if (tick.style.width !== width) tick.style.width = width;
+          if (tick.style.opacity !== opacity) tick.style.opacity = opacity;
+        });
+        if (range.max !== String(messages.length)) range.max = messages.length;
+        if (range.value !== String(candidate)) range.value = candidate;
+        const label = '第 ' + candidate + ' / ' + messages.length + ' 轮，' + messages[candidate - 1][0];
+        if (range.getAttribute('aria-valuetext') !== label) range.setAttribute('aria-valuetext', label);
+        q('[data-latest]').hidden = empty || active === messages.length;
+      }
+      function containRound(round) {
+        const count = Math.min(messages.length, navigationCapacity);
+        if (round < windowStart) windowStart = round;
+        else if (round >= windowStart + count) windowStart = round - count + 1;
+        windowStart = Math.max(1, Math.min(messages.length - count + 1, windowStart));
+      }
+      function clipPreview(node, text, lines) {
+        const measure = node.parentElement.querySelector('.drill-preview-measure');
+        const width = measure.getBoundingClientRect().width;
+        if (!width) { if (node.textContent !== text) node.textContent = text; return; }
+        const style = getComputedStyle(measure);
+        const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) || 13) * 1.65;
+        const layout = [width, lines, lineHeight, style.fontFamily, style.fontSize, style.fontWeight, style.letterSpacing].join('|');
+        let cache = excerptCaches.get(node);
+        if (!cache) { cache = new Map(); excerptCaches.set(node, cache); }
+        const cached = cache.get(text);
+        if (cached && cached.layout === layout) { if (node.textContent !== cached.excerpt) node.textContent = cached.excerpt; return; }
+        const fits = function (value) { measure.dataset.text = value; return measure.scrollHeight <= Math.ceil(lineHeight * lines) + 1; };
+        const characters = Array.from(text);
+        let bound = Math.min(128, characters.length);
+        while (bound < characters.length && fits(characters.slice(0, bound).join(''))) bound = Math.min(characters.length, bound * 2);
+        let result = text;
+        if (bound < characters.length || !fits(text)) {
+          let low = 0, high = bound;
+          while (low < high) {
+            const middle = Math.ceil((low + high) / 2);
+            if (fits(characters.slice(0, middle).join('').trimEnd() + '...')) low = middle;
+            else high = middle - 1;
+          }
+          result = characters.slice(0, low).join('').trimEnd() + '...';
+        }
+        cache.delete(text); cache.set(text, { layout: layout, excerpt: result });
+        if (cache.size > 64) cache.delete(cache.keys().next().value);
+        if (node.textContent !== result) node.textContent = result;
+      }
+      function clearPreviewTimers() {
+        clearTimeout(previewTimer); clearTimeout(closeTimer);
+        if (hoverFrame !== undefined) cancelAnimationFrame(hoverFrame);
+        previewTimer = closeTimer = hoverFrame = undefined;
+      }
+      function showPreview(index, force) {
+        clearPreviewTimers();
+        if (empty || q('.drill-jump').hidden) return;
+        const chosen = Math.max(1, Math.min(messages.length, index));
+        if (previewOpen && chosen === candidate && !force) return;
+        candidate = chosen;
+        containRound(candidate);
+        previewOpen = true;
+        const item = messages[candidate - 1];
+        q('[data-preview-count]').textContent = '第 ' + candidate + ' / ' + messages.length + ' 轮';
+        const minutes = 480 + (candidate - 1) * 2;
+        q('[data-preview-time]').textContent = String(Math.floor(minutes / 60) % 24).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+        preview.hidden = false;
+        clipPreview(q('[data-preview-question]'), item[0], 2);
+        clipPreview(q('[data-preview-answer]'), candidate === messages.length ? lastAnswer.textContent : q('[data-round="' + candidate + '"] .drill-answer').textContent, 3);
+        const rail = q('.drill-jump');
+        const height = railPadding * 2 + (Math.min(messages.length, navigationCapacity) - 1) * tickStep;
+        const center = ((wrap.clientHeight || 400) - height) / 2 + railPadding + (candidate - windowStart) * tickStep;
+        preview.style.top = Math.max(8, Math.min(wrap.clientHeight - preview.offsetHeight - 8, center - preview.offsetHeight / 2)) + 'px';
+        renderTicks();
+      }
+      function hidePreview() {
+        clearPreviewTimers();
+        previewOpen = false; preview.hidden = true; candidate = active; renderTicks();
+      }
+      function jumpTo(index, persist) {
+        if (empty) return;
+        active = candidate = Math.max(1, Math.min(messages.length, index));
+        hidePreview();
+        containRound(active);
+        const target = q('[data-round="' + active + '"]');
+        const streamRect = stream.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        stream.scrollTo({ top: Math.max(0, stream.scrollTop + targetRect.top - streamRect.top - 24), behavior: 'auto' });
+        root.querySelectorAll('.drill-turn.is-target').forEach(function (item) { item.classList.remove('is-target'); });
+        target.classList.add('is-target');
+        clearTimeout(highlightTimer);
+        highlightTimer = setTimeout(function () { target.classList.remove('is-target'); }, 900);
+        renderTicks(); announcement.textContent = '已跳到第 ' + active + ' 轮'; if (persist !== false) remember();
+      }
+      function detectReading() {
+        if (empty) return;
+        const bounds = stream.getBoundingClientRect();
+        if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 12) active = messages.length;
+        else {
+          let found = active;
+          root.querySelectorAll('[data-round]').forEach(function (item) {
+            const rect = item.getBoundingClientRect();
+            if (rect.top <= bounds.top + 70 && rect.bottom > bounds.top + 70) found = Number(item.dataset.round);
+          });
+          active = found;
+        }
+        if (!previewOpen) { candidate = active; containRound(active); }
+        renderTicks();
+      }
+      function applyLayout() {
+        root.style.maxWidth = state.narrow ? '460px' : 'none';
+        root.style.colorScheme = state.theme === 'system' ? 'light dark' : state.theme;
+        const width = root.getBoundingClientRect().width;
+        const narrowNow = width < 760;
+        q('.drill-side').hidden = narrowNow ? !sideOverlay : !sideDesktop;
+        q('[data-scrim]').hidden = !(narrowNow && sideOverlay);
+        q('.drill-detail').hidden = !state.detail;
+        q('.drill-jump').hidden = empty || (state.detail && width < 1180) || (narrowNow && sideOverlay);
+        q('[data-assistant-shell]').hidden = state.view !== 'assistant';
+        q('[data-settings-shell]').hidden = state.view !== 'settings';
+        q('[data-titlebar]').textContent = state.view === 'assistant' ? 'AI 助手' : 'Drill Notebook';
+        q('.drill-conversation-title').textContent = empty ? '新会话' : '导数与积分复习';
+        q('.drill-messages').hidden = empty;
+        q('.drill-empty').hidden = !empty;
+        q('[data-head-status]').hidden = empty || state.scenario === 'success';
+        q('[data-compose-stop]').hidden = empty || !recoveryIsRunning;
+        q('textarea').placeholder = !empty && recoveryIsRunning ? '正在回复，可先输入下一条问题' : '问点什么，Enter 发送';
+        q('[data-send]').setAttribute('aria-label', !empty && recoveryIsRunning ? '加入队列' : '发送');
+        if (q('.drill-jump').hidden || state.view !== 'assistant') hidePreview();
+        renderTicks();
+        containRound(previewOpen ? candidate : active);
+        renderTicks();
+        if (previewOpen) showPreview(candidate, true);
+      }
+      function readForm() {
+        return { http: q('#drill-v081-http-limit').value === '' ? NaN : Number(q('#drill-v081-http-limit').value), stream: q('#drill-v081-stream-limit').value === '' ? NaN : Number(q('#drill-v081-stream-limit').value), networkMode: q('#drill-v081-network-mode').value, networkLimit: q('#drill-v081-network-limit').value === '' ? NaN : Number(q('#drill-v081-network-limit').value) };
+      }
+      function validateForm() {
+        const draft = readForm();
+        const dirty = JSON.stringify(draft) !== JSON.stringify(savedSettings);
+        let invalid = false;
+        const fields = [['http', '#drill-v081-http-limit', '#drill-v081-http-help', '请求暂时失败时最多再试多少次；0 关闭自动重试。'], ['stream', '#drill-v081-stream-limit', '#drill-v081-stream-help', '回答中途断开时重新连接的上限；0 关闭自动重连。'], ['networkLimit', '#drill-v081-network-limit', '#drill-v081-network-limit-help', '0 关闭断网自动重试。']];
+        fields.forEach(function (field) {
+          const bad = (field[0] !== 'networkLimit' || draft.networkMode === 'limited') && (!Number.isInteger(draft[field[0]]) || draft[field[0]] < 0 || draft[field[0]] > 100);
+          invalid = invalid || bad;
+          q(field[1]).setAttribute('aria-invalid', String(bad));
+          q(field[2]).classList.toggle('drill-field-error', bad);
+          q(field[2]).textContent = bad ? '请输入 0–100 之间的整数' : field[3];
+          if (bad) q(field[2]).setAttribute('role', 'alert');
+          else q(field[2]).removeAttribute('role');
+        });
+        q('.drill-network-limit').hidden = draft.networkMode !== 'limited';
+        q('#drill-v081-network-help').textContent = draft.networkMode === 'persistent' ? '等待网络恢复，直到停止或整轮运行时间用尽。' : '达到所设上限后停止，仍受整轮运行时间约束。';
+        q('[data-save-settings]').disabled = !dirty || invalid;
+        q('[data-cancel-settings]').disabled = !dirty;
+        q('.drill-save-state').textContent = dirty ? '有未保存的修改' : '已保存的设置';
+        return !invalid;
+      }
+      function fillForm(value) {
+        q('#drill-v081-http-limit').value = value.http;
+        q('#drill-v081-stream-limit').value = value.stream;
+        q('#drill-v081-network-mode').value = value.networkMode;
+        q('#drill-v081-network-limit').value = value.networkLimit;
+        q('.drill-save-message').hidden = true;
+        validateForm();
+      }
+      function openSettings(persist) {
+        state.view = 'settings'; hidePreview(); applyLayout();
+        requestAnimationFrame(function () { q('.drill-settings-scroll').scrollTop = q('.drill-retry-heading').offsetTop - q('.drill-settings-panel').offsetTop - 80; });
+        if (persist !== false) remember();
+      }
+      function stop() {
+        clearTimeout(generationTimer);
+        const stoppedTitle = state.scenario === 'running' ? '已停止生成' : state.scenario === 'network' ? '已停止等待网络 · 已重试 2 次' : state.scenario === 'request' ? '已停止请求重试 · 已重试 2 次' : '已停止重新连接 · 已重试 2 次';
+        const stoppedError = q('[data-error-short]').textContent;
+        stoppedInfo = [stoppedTitle, stoppedError, '', stoppedError, false, false];
+        state.scenario = 'stopped'; renderRecovery(); applyLayout();
+        announcement.textContent = '已停止重新连接，已有内容保留'; remember();
+      }
+      function regenerate() {
+        clearTimeout(generationTimer);
+        const previous = document.createElement('section');
+        previous.style.cssText = 'padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid var(--drill-line)';
+        previous.innerHTML = '<p class="drill-model-label">上一次回答 · ' + (state.scenario === 'stopped' ? '已停止' : state.scenario === 'success' ? '已完成' : '生成中断') + '</p><div class="drill-answer">' + lastAnswer.innerHTML + '</div>'
+          + (recovery.hidden ? '' : '<p class="drill-error-short">' + escapeHtml(q('[data-error-short]').textContent) + '</p>');
+        q('[data-previous-answers]').appendChild(previous);
+        empty = false; state.scenario = 'running'; turnSettings = Object.assign({}, savedSettings);
+        renderRecovery(); applyLayout();
+        stream.scrollTo({ top: stream.scrollHeight, behavior: 'auto' }); active = candidate = messages.length; containRound(active); renderTicks();
+        generationTimer = setTimeout(function () {
+          state.scenario = 'success'; renderRecovery(); announcement.textContent = '回答已完成'; remember();
+        }, 1200);
+        remember();
+      }
+      q('[data-feedback-stop]').addEventListener('click', stop);
+      q('[data-compose-stop]').addEventListener('click', stop);
+      root.querySelectorAll('[data-regenerate]').forEach(function (button) { button.addEventListener('click', regenerate); });
+      root.querySelectorAll('[data-copy]').forEach(function (button) {
+        button.addEventListener('click', function () { announcement.textContent = '已选择复制第 ' + button.dataset.copy + ' 轮回答'; });
+      });
+      root.querySelectorAll('[data-insert]').forEach(function (button) {
+        button.addEventListener('click', function () { announcement.textContent = '已选择将第 ' + button.dataset.insert + ' 轮回答插入笔记'; });
+      });
+      q('[data-open-settings]').addEventListener('click', openSettings);
+      function closeLeaveDialog() {
+        q('.drill-leave-layer').hidden = true;
+        q('[data-settings-shell]').inert = false;
+      }
+      q('[data-back-assistant]').addEventListener('click', function () {
+        if (JSON.stringify(readForm()) !== JSON.stringify(savedSettings)) {
+          q('.drill-leave-layer').hidden = false; q('[data-settings-shell]').inert = true;
+          q('[data-leave-cancel]').focus(); return;
+        }
+        fillForm(savedSettings); state.view = 'assistant'; applyLayout(); remember();
+      });
+      q('[data-leave-cancel]').addEventListener('click', function () { closeLeaveDialog(); q('[data-back-assistant]').focus(); });
+      q('[data-leave-discard]').addEventListener('click', function () { closeLeaveDialog(); fillForm(savedSettings); state.view = 'assistant'; applyLayout(); remember(); });
+      q('[data-show-context]').addEventListener('click', function () { state.detail = true; hidePreview(); applyLayout(); remember(); });
+      q('[data-close-detail]').addEventListener('click', function () { state.detail = false; applyLayout(); remember(); });
+      q('[data-toggle-side]').addEventListener('click', function () { if (root.getBoundingClientRect().width < 760) sideOverlay = !sideOverlay; else sideDesktop = !sideDesktop; hidePreview(); applyLayout(); });
+      q('[data-scrim]').addEventListener('click', function () { sideOverlay = false; applyLayout(); });
+      q('[data-pin]').addEventListener('click', function (event) { const button = event.currentTarget; const on = button.getAttribute('aria-pressed') !== 'true'; button.setAttribute('aria-pressed', String(on)); button.classList.toggle('is-on', on); });
+      q('[data-new]').addEventListener('click', function () { empty = true; sideOverlay = false; applyLayout(); });
+      q('[data-current-session]').addEventListener('click', function () { empty = false; sideOverlay = false; applyLayout(); jumpTo(active); });
+      q('.drill-search input').addEventListener('input', function (event) {
+        const term = event.target.value.trim();
+        root.querySelectorAll('.drill-session').forEach(function (item) { item.hidden = term !== '' && item.textContent.indexOf(term) < 0; });
+      });
+      q('[data-send]').addEventListener('click', function () { announcement.textContent = state.scenario === 'success' ? '草图中的输入保留在输入框' : '草图中的输入草稿保持不变'; });
+      q('[data-settings-form]').addEventListener('input', function () { q('.drill-save-message').hidden = true; validateForm(); });
+      q('[data-settings-form]').addEventListener('change', function () { q('.drill-save-message').hidden = true; validateForm(); });
+      q('[data-settings-form]').addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (!validateForm()) return;
+        savedSettings = safeSettings(readForm()); fillForm(savedSettings);
+        q('.drill-save-message').textContent = '已保存，从下一轮对话开始生效';
+        q('.drill-save-message').hidden = false; remember();
+      });
+      q('[data-cancel-settings]').addEventListener('click', function () { fillForm(savedSettings); });
+      q('[data-restore]').addEventListener('click', function () { fillForm(defaults); });
+      function positionCandidate(event) {
+        const bounds = range.getBoundingClientRect();
+        return windowStart + Math.round(Math.max(0, Math.min(Math.min(messages.length, navigationCapacity) - 1, (event.clientY - bounds.top - railPadding) / tickStep)));
+      }
+      range.addEventListener('pointermove', function (event) {
+        clearTimeout(closeTimer);
+        const selected = positionCandidate(event);
+        hoverCandidate = selected;
+        if (previewOpen) {
+          if (selected === candidate || hoverFrame !== undefined) return;
+          hoverFrame = requestAnimationFrame(function () {
+            hoverFrame = undefined;
+            if (hoverCandidate !== candidate) showPreview(hoverCandidate);
+          });
+        } else if (previewTimer === undefined) {
+          previewTimer = setTimeout(function () { previewTimer = undefined; showPreview(hoverCandidate); }, 150);
+        }
+      });
+      range.addEventListener('pointerdown', function (event) {
+        event.preventDefault(); range.blur();
+        const selected = positionCandidate(event);
+        if (event.pointerType === 'touch') showPreview(selected);
+        else jumpTo(selected);
+      });
+      range.addEventListener('focus', function () { showPreview(candidate); });
+      range.addEventListener('blur', function () { closeTimer = setTimeout(hidePreview, 180); });
+      range.addEventListener('pointerleave', function () {
+        clearTimeout(previewTimer); previewTimer = undefined;
+        if (hoverFrame !== undefined) cancelAnimationFrame(hoverFrame);
+        hoverFrame = undefined; closeTimer = setTimeout(hidePreview, 180);
+      });
+      range.addEventListener('keydown', function (event) {
+        if (['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Home', 'End', 'Enter', ' ', 'Escape'].indexOf(event.key) < 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key === 'Enter' || event.key === ' ') jumpTo(candidate);
+        else if (event.key === 'Escape') hidePreview();
+        else if (event.key === 'Home') showPreview(1);
+        else if (event.key === 'End') showPreview(messages.length);
+        else showPreview(candidate + (event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1));
+      });
+      preview.addEventListener('pointerenter', function () { clearTimeout(closeTimer); });
+      preview.addEventListener('pointerleave', function () { closeTimer = setTimeout(hidePreview, 180); });
+      preview.addEventListener('focusin', function () { clearTimeout(closeTimer); });
+      preview.addEventListener('focusout', function () { closeTimer = setTimeout(hidePreview, 180); });
+      preview.addEventListener('click', function () { jumpTo(candidate); });
+      function scrollNavigation(event) {
+        if (!event.deltaY || messages.length <= navigationCapacity) return;
+        event.preventDefault(); event.stopPropagation();
+        wheelRemainder += event.deltaY * (event.deltaMode === 1 ? 1 : event.deltaMode === 2 ? navigationCapacity : 1 / 32);
+        const steps = Math.trunc(wheelRemainder);
+        if (!steps) return;
+        wheelRemainder -= steps;
+        const previous = windowStart;
+        const next = Math.max(1, Math.min(messages.length - navigationCapacity + 1, previous + steps));
+        if (next === previous) return;
+        const offset = Math.max(0, Math.min(navigationCapacity - 1, candidate - previous));
+        windowStart = next;
+        showPreview(next + offset);
+      }
+      q('.drill-jump').addEventListener('wheel', scrollNavigation, { passive: false });
+      preview.addEventListener('wheel', scrollNavigation, { passive: false });
+      q('[data-latest]').addEventListener('click', function () {
+        hidePreview(); stream.scrollTo({ top: stream.scrollHeight, behavior: 'auto' }); active = candidate = messages.length; containRound(active); renderTicks(); remember();
+      });
+      stream.addEventListener('scroll', function () { detectReading(); if (previewOpen && document.activeElement !== range && !preview.contains(document.activeElement)) hidePreview(); }, { passive: true });
+      root.addEventListener('keydown', function (event) {
+        if (!q('.drill-leave-layer').hidden) {
+          if (event.key === 'Escape') { event.preventDefault(); closeLeaveDialog(); q('[data-back-assistant]').focus(); }
+          else if (event.key === 'Tab') {
+            event.preventDefault();
+            const first = q('[data-leave-cancel]'), last = q('[data-leave-discard]');
+            (document.activeElement === first ? last : first).focus();
+          }
+          return;
+        }
+        if (event.key !== 'Escape') return;
+        if (previewOpen) { hidePreview(); event.stopPropagation(); }
+        else if (state.detail) { state.detail = false; applyLayout(); }
+        else if (sideOverlay) { sideOverlay = false; applyLayout(); }
+      });
+      function renderDesign() {
+        clearTimeout(generationTimer);
+        turnSettings = Object.assign({}, savedSettings);
+        renderRecovery(); applyLayout();
+        if (state.view === 'settings') requestAnimationFrame(function () { q('.drill-settings-scroll').scrollTop = q('.drill-retry-heading').offsetTop - q('.drill-settings-panel').offsetTop - 80; });
+      }
+      fillForm(savedSettings); renderRecovery(); applyLayout();
+      requestAnimationFrame(function () {
+        jumpTo(active, false);
+        if (state.view === 'settings') openSettings(false);
+      });
+      window.addEventListener('openai:set_globals', function (event) {
+        const snapshot = event.detail && event.detail.globals && event.detail.globals.widgetState;
+        const incoming = snapshot && (snapshot.modelContent || snapshot);
+        if (!incoming || incoming.kind !== 'drill-v081-conversation' || JSON.stringify(incoming) === lastModelSnapshot) return;
+        lastModelSnapshot = JSON.stringify(incoming);
+        const dirty = JSON.stringify(readForm()) !== JSON.stringify(savedSettings);
+        restoreState(snapshot);
+        if (!dirty) fillForm(savedSettings);
+        renderRecovery(); applyLayout(); jumpTo(active, false);
+        if (state.view === 'settings') openSettings(false);
+      });
+      if (typeof ResizeObserver === 'function') {
+        const resize = new ResizeObserver(function () { applyLayout(); });
+        resize.observe(root); resize.observe(wrap);
+      }
+      if (globalThis.lucide) lucide.createIcons({ attrs: { width: 16, height: 16 } });
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: renderDesign });
+        tweak.addSelect(state, 'view', { label: '查看界面', options: [{ label: 'AI 助手', value: 'assistant' }, { label: '设置 · AI 对话', value: 'settings' }] });
+        tweak.addSelect(state, 'scenario', { label: '回答状态', options: [{ label: '流式中断重连', value: 'stream' }, { label: '请求重试', value: 'request' }, { label: '等待网络恢复', value: 'network' }, { label: '已停止', value: 'stopped' }, { label: '重新生成中', value: 'running' }, { label: '恢复完成', value: 'success' }, { label: '次数耗尽', value: 'exhausted' }, { label: '不可恢复错误', value: 'unrecoverable' }] });
+        tweak.addSelect(state, 'theme', { label: '主题', options: [{ label: '跟随系统', value: 'system' }, { label: '浅色', value: 'light' }, { label: '深色', value: 'dark' }] });
+        tweak.addToggle(state, 'narrow', { label: '窄窗口' });
+        tweak.addToggle(state, 'detail', { label: '显示详情栏' });
+      }
+    }());
+  </script>
+</div>

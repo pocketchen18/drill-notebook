@@ -41,6 +41,8 @@ export interface Connections {
   revision: number;
   providers: ConnectionProvider[];
   chatModelId: string | null;
+  /** AI 助手中保存的全局思考档位；空值使用模型默认。 */
+  chatReasoningEffort?: string | null;
   importModelId: string | null;
 }
 export interface EditorHandle {

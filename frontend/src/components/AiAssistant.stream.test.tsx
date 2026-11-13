@@ -169,6 +169,53 @@ describe('AiAssistant 流式会话状态', () => {
     expect(apiPost.mock.calls.some(([url]) => url === '/api/ai/chat')).toBe(false);
   });
 
+  it('生成期间跨页定位并返回最新，草稿和原轮次流式回答都保留', async () => {
+    serverMessages = [
+      { id: 1001, role: 'user', content: '最新的历史提问', requestId: 'old-latest' },
+      { id: 1002, role: 'assistant', content: '最新的历史答复', requestId: 'old-latest' }
+    ];
+    const other = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/ai/sessions/10/history?limit=50') return Promise.resolve({ ...historyPage(serverMessages),
+        firstRound: 501, totalRounds: serverMessages.length > 2 ? 502 : 501, hasMore: true });
+      if (url === '/api/ai/sessions/10/navigation/1') return Promise.resolve({ roundNumber: 1, totalRounds: 502,
+        messageId: 1, question: '最早的历史提问', answer: '最早的历史答复', status: 'COMPLETED' });
+      if (url === '/api/ai/sessions/10/history?limit=50&afterMessageId=0') return Promise.resolve({
+        ...historyPage([{ id: 1, role: 'user', content: '最早的历史提问' }, { id: 2, role: 'assistant', content: '最早的历史答复' }]),
+        firstRound: 1, totalRounds: 502, hasOlder: false, hasMore: true });
+      return other(url);
+    });
+    renderAssistant(); await screen.findByText('最新的历史答复');
+    await send('正在生成的这一问'); await waitFor(() => expect(streamCallbacks).toBeTruthy());
+    const input = screen.getByPlaceholderText('正在回复，可先输入下一条问题');
+    fireEvent.change(input, { target: { value: '跳转时保留的草稿' } });
+    act(() => streamCallbacks!.onText('回答的前半段'));
+    const range = screen.getByRole('slider', { name: '会话内对话跳转' });
+    fireEvent.focus(range); fireEvent.keyDown(range, { key: 'Home' });
+    await screen.findByText('最早的历史提问');
+    expect(screen.getByText('最新的历史答复')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /第 1 .*对话预览/ }));
+    await waitFor(() => expect(document.querySelector('[data-conversation-message="1"]')).toHaveClass('is-jump-target'));
+    expect(screen.queryByText('最新的历史答复')).toBeNull();
+    expect(input).toHaveValue('跳转时保留的草稿');
+    expect(screen.queryByText('跳到这轮')).toBeNull();
+    serverMessages = [...serverMessages,
+      { id: 1003, role: 'user', content: '正在生成的这一问', requestId: turnRequestId() },
+      { id: 1004, role: 'assistant', content: '回答的前半段和后半段', requestId: turnRequestId(), turnStatus: 'COMPLETED' }];
+    act(() => {
+      streamCallbacks!.onText('和后半段');
+      streamCallbacks!.onDone({ requestId: turnRequestId(), reply: '回答的前半段和后半段', reasoning: '', status: 'COMPLETED', stateDurable: true });
+    });
+    expect(screen.getByText('最早的历史答复')).toBeVisible();
+    expect(screen.queryByText('回答的前半段和后半段')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /回到最新/ }));
+    await screen.findByText('回答的前半段和后半段');
+    expect(screen.queryByText('最早的历史答复')).toBeNull();
+    expect(input).toHaveValue('跳转时保留的草稿');
+    expect(streamChatMock).toHaveBeenCalledOnce();
+    expect(apiPost.mock.calls.some(([url]) => url === '/api/ai/chat')).toBe(false);
+  });
+
   it('回复中 Enter 排队、Ctrl+Enter 插话且不取消当前轮，组合输入不提交', async () => {
     renderAssistant(); await send('第一问');
     const input = await screen.findByPlaceholderText('正在回复，可先输入下一条问题');

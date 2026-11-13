@@ -4,6 +4,7 @@ import { Message, Modal } from '@arco-design/web-react';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Clock, Copy, Download, Link, LoaderCircle, MoreHorizontal, Pencil, Pin, Plus, Search, Sparkles, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { isSessionRunning, type SessionRuntime } from '../../hooks/useAiChatTurn';
 import type { AiChatSession } from '../../lib/types';
+import { parseChatTimestamp } from '../../lib/chatTimestamp';
 import './session-navigation.css';
 
 interface Props {
@@ -43,14 +44,10 @@ type Edit = { id: number; original: string; draft: string; error?: string };
 const errorText = (error: unknown): string => error instanceof Error ? error.message : '操作失败，请重试';
 const clamp = (value: number, max: number): number => Math.max(8, Math.min(value, max));
 
-const parseTime = (value?: string): number => {
-  if (!value) return NaN;
-  return new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`).getTime();
-};
 /** 会话栏按最近活动分组；组内保持列表原有顺序。 */
 export function sessionGroup(updatedAt: string | undefined, now = Date.now()): '今天' | '近 7 天' | '更早' {
-  const time = parseTime(updatedAt);
-  if (Number.isNaN(time)) return '更早';
+  const time = parseChatTimestamp(updatedAt)?.getTime();
+  if (time === undefined) return '更早';
   const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
   if (time >= startOfToday.getTime()) return '今天';
   return time >= startOfToday.getTime() - 6 * 86400000 ? '近 7 天' : '更早';
@@ -58,8 +55,8 @@ export function sessionGroup(updatedAt: string | undefined, now = Date.now()): '
 
 function recentTime(value?: string): string {
   if (!value) return '尚无对话';
-  const parsed = new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
-  if (Number.isNaN(parsed.getTime())) return '';
+  const parsed = parseChatTimestamp(value);
+  if (!parsed) return '';
   const minutes = (Date.now() - parsed.getTime()) / 60000;
   if (minutes < 1) return '刚刚';
   if (minutes < 60) return `${Math.floor(minutes)} 分钟前`;
