@@ -12,6 +12,7 @@ import {
   memoryValidUntilLabel
 } from '../../lib/memoryLabels';
 import type { MemoryItem, MemoryScopeType, MemoryStatus } from '../../lib/aiMemoryTypes';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 
 /**
  * 记忆列表（§12）：一层平铺展示，状态与作用域只做筛选，不另开审阅区。
@@ -74,6 +75,16 @@ export function MemoryListView(props: MemoryListViewProps): JSX.Element {
   });
 
   const page = listQuery.data;
+  // 此处只提供管理筛选与数量，不借设置页面快照绕过记忆工具的读取策略。
+  usePageContextSection('memory-list', pageContextRows('记忆列表', [
+    ['状态筛选', STATUS_OPTIONS.find(option => option.value === status)?.label],
+    ['作用域筛选', SCOPE_OPTIONS.find(option => option.value === scope)?.label],
+    ['笔记本', scope === 'NOTEBOOK' ? props.notebooks.find(notebook => notebook.value === notebookId)?.label ?? '尚未选择' : undefined],
+    ['当前页', cursorStack.length + 1],
+    ['展示数量', props.enabled && !notebookMissing && page ? page.items.length : undefined],
+    ['列表状态', !props.enabled ? '记忆库未解锁' : notebookMissing ? '请选择笔记本' : listQuery.isPending ? '正在加载…' : listQuery.isError ? '加载失败' : page?.items.length ? '已加载' : '没有匹配的记忆'],
+    ['下一页', page?.hasMore ? '还有更多记忆，可翻页查看' : undefined]
+  ]));
   const resetPaging = (): void => setCursorStack([]);
   // "首次空态"只在没有任何记忆的自然视角（全部状态 + 全局 + 无关键词）下成立，
   // 否则切到"已过期"也会弹那两句引导文案。

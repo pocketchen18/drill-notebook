@@ -14,6 +14,7 @@ import {
 } from '../../lib/aiMemoryApi';
 import { MemoryDetail } from './MemoryDetail';
 import { MemoryListView } from './MemoryListView';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 
 /**
  * 记忆管理面板（§12）：列表、详情编辑、手动新增、删除确认与清空。
@@ -54,6 +55,11 @@ export function MemoryManager(): JSX.Element {
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks') });
   const settings = settingsQuery.data;
   const unlocked = settings?.initialized === true && settings.unlocked === true;
+  usePageContextSection('memory-library', pageContextRows('记忆库', [
+    ['状态', settingsQuery.isPending ? '正在读取记忆状态…' : !settings ? '记忆状态读取失败'
+      : !settings.initialized ? '尚未创建，开启记忆后自动创建' : unlocked ? '已解锁' : '已锁定，解锁后才能查看'],
+    ['操作', unlocked ? '手动添加、查看详情、删除和清空记忆' : undefined]
+  ]));
 
   const [detail, setDetail] = useState<MemoryItem | null>(null);
   const [addVisible, setAddVisible] = useState(false);

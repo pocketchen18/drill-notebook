@@ -195,6 +195,7 @@ v2 请求核心字段：
 
 - `protocolVersion` 必须为 2；v1 仅保留旧客户端兼容路径，不是新功能目标。
 - `pageSnapshot` 可选，只提交到本地后端，模型初始请求只收到页面定位提示，正文经 `read_current_page` 按需取得。快照正文和选区不进入明文 request/result 元数据；请求选项仅含快照指纹，参与幂等校验。新前端不发送 `pageContext` / `retrievalOptions`，不读取旧检索偏好；后端仍接受旧客户端的自动上下文协议。
+- 快照 `kind` 支持 `none / note / knowledge / bank / quiz / wrong / manual / settings / calendar`。设置与日历可不带资料 ID，分别通过 `/settings?tab=...` 与 `/calendar?date=...` 定位；正文依然上限 32,000 码点、选区 2,000 码点，沿用 `isDraft / truncated`。设置只登记当前分区允许读取的选项与状态，密钥 / 密码、连接地址、请求头及记忆正文不进入设置快照；日历登记当前月份、日期、计划与筛选后的学习队列。加载失败须在正文说明，不能伪装成空数据。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
 - 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。直接向聊天接口提交忙碌会话的另一条请求仍返回 `409 SESSION_BUSY`；前端人工排队改走 §3.4.1 队列接口，与工具派发按序接续。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
 - `retryOf` 是 v2 顶层可选字段，指向同一会话中要重新回答的原 requestId；重新生成使用新的 requestId，按受理时的会话模型与本次提交的页面快照生成，并将新问答追加到历史。它不覆盖原回答；已有资料写入工具按显式 retryOf 链复用回执，参数改变仍拒绝冲突。原提问与完整附件可通过 §3.3 的只读接口取得。

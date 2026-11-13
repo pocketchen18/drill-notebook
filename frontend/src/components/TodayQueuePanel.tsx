@@ -15,6 +15,7 @@ import {
   todayYmd
 } from '../lib/studyPlan';
 import { LS_FORCE_ADVANCE, readBoolPref } from '../lib/sessionPrefs';
+import { pageContextRows, usePageContextSection } from './PageContextProvider';
 
 const { Text } = Typography;
 
@@ -276,6 +277,16 @@ export function TodayQueuePanel({
       return o === 'plan' || o === 'both';
     });
   }, [items, sourceFilter]);
+  const queueReady = !!query.data && !query.isPending && !query.isError;
+  usePageContextSection('day-queue', [
+    pageContextRows(`学习队列 · ${date}`, [
+      ['来源筛选', { all: '全部', curve: '记忆曲线', plan: '自主安排' }[sourceFilter]],
+      ['当前展示', queueReady ? visibleItems.length : undefined], ['计划待办', queueReady ? planTodo : undefined],
+      ['到期复习', queueReady ? dueIncluded : undefined], ['超出队列容量的到期项', queueReady ? dueTruncated || undefined : undefined]
+    ]),
+    query.isPending ? '学习队列正在加载…' : query.isError ? '学习队列加载失败'
+      : visibleItems.map(item => `- ${resourceTypeLabel(item.resourceType)}：${item.title || `#${item.resourceId}`}；${originMeta(queueOrigin(item), item).label}${resolveUrgencyKind(item, date, realToday) === 'overdue' ? '；逾期' : ''}${item.groupTitle ? `；计划组：${item.groupTitle}` : ''}`).join('\n') || '当前筛选下没有待学习条目'
+  ].join('\n'), false, queueReady && dueTruncated > 0);
 
   const completeMutation = useMutation({
     mutationFn: completeStudy,

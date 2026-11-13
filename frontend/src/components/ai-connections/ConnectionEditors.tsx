@@ -6,6 +6,7 @@ import { matchPreset, presetFields, reasoningDraft, supportedEfforts, useModelPr
 import { ReasoningSettings } from './ReasoningSettings';
 import { VerificationDetails } from './ModelVerification';
 import { ModelIdInput } from './ModelIdInput';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 
 interface EditorProps {
   provider?: ConnectionProvider;
@@ -26,6 +27,13 @@ export function ProviderEditor({ provider, onState, save, leave, done, busy, imp
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (heading.current) heading.current.focus(); else nameRef.current?.focus(); }, []);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  usePageContextSection('connection-editor', pageContextRows(provider ? '编辑连接' : '添加供应商', [
+    ['供应商名称', draft.name || '未填写'],
+    ['API 格式', draft.apiFormat === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'],
+    ['连接地址', draft.endpoint ? '已填写' : '未填写'], ['认证方式', draft.authMode === 'none' ? '无需密钥' : 'API Key'],
+    ['密钥状态', draft.authMode === 'none' ? undefined : draft.changeKey ? draft.apiKey ? '已输入（未保存）' : '等待输入' : '已配置'],
+    ['保存状态', dirty ? '有未保存的修改' : '未修改']
+  ]), dirty);
   const patch = (value: Partial<typeof draft>) => { setDraft(current => ({ ...current, ...value })); setError(''); };
   const submit = async () => {
     if (!draft.name.trim() || !draft.endpoint.trim()) { setError('请填写供应商名称和 Base URL'); return false; }
@@ -81,6 +89,17 @@ export function ModelEditor({ provider, model, onState, save, leave, done, busy,
   const [error, setError] = useState('');
   const heading = useRef<HTMLHeadingElement>(null);
   const dirty = JSON.stringify(initial) !== JSON.stringify(draft);
+  usePageContextSection('connection-editor', pageContextRows(model ? '编辑模型' : '添加模型', [
+    ['供应商', provider.name], ['模型 ID', draft.modelId || '未填写'], ['模型名称', draft.name || '使用模型 ID'],
+    ['分组名称', draft.group || '未分组'], ['流式输出', draft.streaming], ['允许工具调用', model ? draft.tools : false],
+    ['上下文窗口', /^\d+$/.test(draft.contextWindow) ? draft.contextWindow : '未填写或输入无效'],
+    ['最大输出 Token', /^\d+$/.test(draft.maxOutputTokens) ? draft.maxOutputTokens : '未填写或输入无效'],
+    ['思考控制', draft.reasoningControl],
+    ['可用思考等级', draft.reasoningControl === 'effort' ? draft.reasoningEfforts.join('、') || '未勾选' : undefined],
+    ['默认思考等级', draft.reasoningControl === 'effort' ? draft.defaultReasoningEffort || '沿用服务默认' : undefined],
+    ['思考 Token 预算', draft.reasoningControl === 'budget' ? /^\d+$/.test(draft.thinkingBudgetTokens) ? draft.thinkingBudgetTokens : '未填写或输入无效' : undefined],
+    ['保存状态', dirty ? '有未保存的修改' : '未修改']
+  ]), dirty);
   useEffect(() => { heading.current?.focus(); }, []);
   const patch = (value: Partial<ModelDraft>) => { setDraft(current => ({ ...current, ...value })); setError(''); };
   const selectPreset = (modelId: string, selected: ModelPreset) => {

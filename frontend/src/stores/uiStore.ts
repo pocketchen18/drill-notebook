@@ -11,7 +11,7 @@ const LS_THEME_MODE = 'ui.themeMode';
 const LS_OUTLINE_SIDE = 'ui.outlineSide';
 export const LS_NOTEBOOK_PANELS_SWAPPED = 'ui.notebookPanelsSwapped';
 
-export type AiContextKind = 'none' | 'quiz' | 'wrong' | 'note' | 'knowledge' | 'bank' | 'manual';
+export type AiContextKind = 'none' | 'quiz' | 'wrong' | 'note' | 'knowledge' | 'bank' | 'manual' | 'settings' | 'calendar';
 
 export interface AiPageContext {
   kind: AiContextKind;

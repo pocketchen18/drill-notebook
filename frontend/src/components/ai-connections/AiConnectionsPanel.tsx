@@ -11,6 +11,7 @@ import { ConnectionNavigationGuard } from './ConnectionNavigationGuard';
 import { VerificationDialog } from './ModelVerification';
 import { formatName, modelName, type ConnectionModel, type ConnectionProvider, type Connections, type EditorHandle, type VerificationResponse } from './types';
 import './connections.css';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 
 export type SettingsLeaveGuard = (go: () => void) => void;
 type Editor = { kind: 'provider' | 'model'; providerId?: string; model?: ConnectionModel; revision: number };
@@ -114,6 +115,16 @@ export function AiConnectionsPanel({ registerGuard }: { registerGuard?: (guard: 
     const ok = await save('/bindings', 'PUT', { purpose: 'import', modelId: id }, data?.revision);
     if (ok) Message.success(id ? `导入模型已设为：${label(id)}` : '导入模型已恢复跟随 AI 助手');
   };
+  usePageContextSection('connection-summary', pageContextRows('AI 连接', [
+    ['加载状态', query.isPending ? '正在加载 AI 连接…' : data ? '已加载' : '加载失败'],
+    ['导入模型', data ? data.importModelId ? label(data.importModelId) : '跟随 AI 助手' : undefined],
+    ['供应商', data?.providers.filter(value => `${value.name} ${value.endpoint}`.toLowerCase().includes(providerSearch.toLowerCase()))
+      .map(value => `${value.name}（${value.models.length} 个模型）`).join('、') || (data ? '暂无匹配的供应商' : undefined)],
+    ['当前供应商', provider?.name], ['API 格式', provider ? formatName(provider) : undefined],
+    ['连接地址', provider ? provider.endpoint ? '已配置' : '未填写' : undefined],
+    ['认证', provider ? provider.authMode === 'none' ? '无需密钥' : provider.hasKey ? '密钥已配置' : '未配置密钥' : undefined],
+    ['操作', '添加供应商、编辑连接、添加模型、选择导入模型；对话模型在 AI 助手中选择']
+  ]));
   if (query.isPending) return <div className="connection-empty" role="status"><Spin /> 正在加载 AI 连接…</div>;
   if (!data) return <div className="connection-empty" role="alert"><p>{query.error instanceof Error ? query.error.message : 'AI 连接加载失败'}</p><Button onClick={() => void query.refetch()}>重试</Button></div>;
   return <div className="ai-connections" ref={panel}>

@@ -11,6 +11,7 @@ import { AiToolSettingsPanel } from '../components/AiToolSettingsPanel';
 import { DataManagementPanel } from '../components/DataManagementPanel';
 import { AboutPanel } from '../components/app-update/AboutPanel';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
+import { PageContextProvider, pageContextRows } from '../components/PageContextProvider';
 import { useUiStore, type OutlineSide, type ThemeMode } from '../stores/uiStore';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '../lib/review';
 import type { SpacedRepetitionConfig } from '../lib/review';
@@ -268,7 +269,45 @@ export function SettingsPage(): JSX.Element {
     onError: (error) => Message.error(error instanceof Error ? error.message : '删除失败'),
   });
 
-  return <main className="page">
+  const tabLabel = TABS.find(tab => tab.key === activeTab)!.label;
+  const readableSettings = activeTab === 'general' ? [
+    pageContextRows('界面', [
+      ['主题', { light: '浅色', dark: '深色', system: '跟随系统' }[themeMode]],
+      ['专注模式大纲位置', outlineSide === 'left' ? '左侧' : '右侧'],
+      ['交换笔记本页面与大纲位置', notebookPanelsSwapped],
+      ['记住上次停留位置与各页选择', rememberViewState]
+    ]),
+    pageContextRows('快捷键', SHORTCUT_ACTIONS.map(meta => [
+      `${SHORTCUT_SCOPES.find(scope => scope.id === meta.scope)?.label} · ${meta.label}`,
+      shortcutConfig[meta.id].map(describeAccelerator).join(' / ') || '未设置'
+    ]))
+  ].join('\n\n') : activeTab === 'study' ? [
+    pageContextRows('学习偏好', [
+      ['会话结束默认加入记忆曲线', enrollDefault], ['会话结束默认写入日历', planDefault],
+      ['同日正确重复推进曲线', forceAdvance]
+    ]),
+    pageContextRows('会话内记忆曲线', [
+      ['启用循环背诵与错题重现', curveConfig.enabled], ['循环轮数', curveConfig.loops],
+      ['错题重复策略', { group: '组末复习', tail: '本轮末尾', gap: '延迟重现' }[curveConfig.strategy]],
+      ['每组题数', curveConfig.strategy === 'group' ? curveConfig.groupSize : undefined],
+      ['重现间隔', curveConfig.strategy === 'gap' ? curveConfig.gap : undefined],
+      ['不限制重复次数', curveConfig.maxRepeats === 0],
+      ['最大重复次数', curveConfig.maxRepeats === 0 ? undefined : curveConfig.maxRepeats],
+      ['下一轮顺序', { original: '保持原序', wrongFirst: '错题优先', random: '随机' }[curveConfig.nextRoundOrder]],
+      ['过关后跳过后续轮次', curveConfig.skipPassed]
+    ]),
+    '## 复习方案\n' + (reviewConfigsQuery.isPending ? '正在读取复习方案…' : reviewConfigsQuery.isError ? '复习方案读取失败'
+      : (reviewConfigsQuery.data ?? []).map(config => pageContextRows(config.name, [
+        ['默认方案', config.isDefault ? '是' : '否'], ['每天新学', config.dailyNewLimit], ['每天复习', config.dailyReviewLimit],
+        ['答错后策略', WRONG_STRATEGY_OPTIONS.find(option => option.value === config.wrongStrategy)?.label],
+        ['顺序', PRIORITY_OPTIONS.find(option => option.value === config.priorityMode)?.label],
+        ['间隔', Object.entries(config.intervals).map(([round, days]) => `第${round}次→${days}天`).join('，')],
+        ['初始难度系数 EF', config.initialEf], ['最大间隔天数', config.maxIntervalDays]
+      ])).join('\n\n') || '暂无复习方案，请新建一个')
+  ].join('\n\n') : '';
+
+  return <PageContextProvider context={{ kind: 'settings', title: `设置 · ${tabLabel}`, route: `/settings?tab=${activeTab}`,
+    markdown: `# 设置\n当前分区：${tabLabel}\n可选分区：${TABS.map(tab => tab.label).join('、')}\n${readableSettings}` }}><main className="page">
     <div className="page-heading">
       <div><h1>设置</h1><p>主题、快捷键、AI 连接、记忆、嵌入检索与学习复习偏好。日常对话请用右上角 AI 助手{shortcutConfig.toggleAi[0] ? `或 ${describeAccelerator(shortcutConfig.toggleAi[0])}` : ''}。</p></div>
     </div>
@@ -691,5 +730,5 @@ export function SettingsPage(): JSX.Element {
         </Form.Item>
       </Form>
     </Modal>
-  </main>;
+  </main></PageContextProvider>;
 }

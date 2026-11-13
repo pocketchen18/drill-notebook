@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { Button, Dropdown, Input, Menu, Tag } from '@arco-design/web-react';
 import { ChevronDown, MoreHorizontal, Plus, Settings2 } from 'lucide-react';
 import { incomplete, modelName, type ConnectionModel, type ConnectionProvider, type Connections } from './types';
+import { usePageContextSection } from '../PageContextProvider';
 
 interface Props {
   provider: ConnectionProvider; data: Connections; busy: boolean; disabled: boolean;
@@ -13,6 +14,11 @@ interface Props {
 export function ConnectionModelList({ provider, data, busy, disabled, search, setSearch, edit, test, remove, selectImport, discover, collapsed, setCollapsed }: Props) {
   const models = provider.models.filter(model => `${modelName(model)} ${model.modelId} ${model.group}`.toLowerCase().includes(search.toLowerCase()));
   const groups = [...new Set(models.map(model => model.group || ''))].sort((a, b) => !a ? 1 : !b ? -1 : a.localeCompare(b, 'zh-CN'));
+  usePageContextSection('connection-models', '## 模型列表\n' + (groups.map(group => [
+    `### ${group || '未分组'}（${models.filter(model => (model.group || '') === group).length} 个模型）${!search && collapsed.includes(group) ? ' · 已折叠' : ''}`,
+    ...(!search && collapsed.includes(group) ? [] : models.filter(model => (model.group || '') === group).map(model =>
+      `- ${modelName(model)}（${model.modelId}）${model.streaming ? '；流式' : ''}${model.tools ? '；工具' : ''}${data.importModelId === model.id ? '；已用于导入' : ''}${incomplete(provider, model) ? '；待补全' : ''}`))
+  ].join('\n')).join('\n\n') || (provider.models.length ? '没有匹配的模型' : '暂无模型，可以添加或从供应商获取')));
   return <section className="connection-models" aria-label="模型列表">
     <div className="connection-model-toolbar"><h3>模型 <small>{provider.models.length}</small></h3><Input aria-label="搜索名称或 ID" placeholder="搜索名称、ID 或分组" value={search} onChange={setSearch} allowClear />
       <Button onClick={discover} disabled={disabled || busy || incomplete(provider) || provider.endpoint === 'mock://local'}>获取模型</Button><Button icon={<Plus size={15} />} onClick={() => edit()} disabled={disabled || busy}>添加模型</Button></div>

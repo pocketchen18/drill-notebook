@@ -136,4 +136,21 @@ class MaterialReadToolsTest {
         assertTrue(result.path("items").get(0).path("notice").asText().contains("没有可读取"));
         assertThrows(IllegalArgumentException.class,()->PageSnapshot.from(Map.of("capturedAt","2026-11-09T10:00:00Z")));
     }
+    @Test void settingsAndCalendarSnapshotsAreReadableWithoutMaterialIds() {
+        for (String kind : List.of("settings", "calendar")) {
+            String route = kind.equals("settings") ? "/settings?tab=about" : "/calendar?date=2026-11-14";
+            String markdown = kind.equals("settings") ? "当前版本 v0.8.1；自动检查更新：开启；间隔 24 小时" : "2026-11-14；周末复习；极限知识点待完成";
+            var snapshot = PageSnapshot.from(Map.of("kind", kind, "title", kind, "route", route,
+                    "capturedAt", "2026-11-14T02:00:00Z", "markdown", markdown));
+            var result = page("{}", Map.of("main", snapshot));
+            assertEquals("OK", result.path("status").asText());
+            var item = result.path("items").get(0);
+            assertEquals(kind, item.path("kind").asText());
+            assertEquals(route, item.path("route").asText());
+            assertEquals(markdown, item.path("text").asText());
+            assertTrue(item.path("snapshot").asBoolean());
+            assertFalse(item.has("notice"));
+            assertFalse(snapshot.locator("main", true).contains(markdown));
+        }
+    }
 }

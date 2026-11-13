@@ -7,6 +7,7 @@ import type { AiRuntimeSettings, AiRuntimeSettingsView } from '../lib/aiRuntimeS
 import type { SettingsLeaveGuard } from './ai-connections/AiConnectionsPanel';
 import { ConnectionNavigationGuard } from './ai-connections/ConnectionNavigationGuard';
 import { UNSAFE_DataRouterContext } from 'react-router-dom';
+import { pageContextRows, usePageContextSection } from './PageContextProvider';
 import './ai-runtime-settings.css';
 
 /** 全局设置草稿与模型编辑独立，后台刷新不能覆盖尚未保存的输入。 */
@@ -23,6 +24,19 @@ export function AiRuntimeSettingsPanel({ registerGuard }: { registerGuard?: (gua
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(current?.values);
   const errors = values ? validateRuntimeSettings(values) : {};
   const retry = values ? runtimeRetrySettings(values) : null;
+  usePageContextSection('runtime', [
+    pageContextRows('运行限制', values ? runtimeFields.map(field => [field.label,
+      Number.isFinite(values[field.key]) ? `${values[field.key]}${field.unit ? ` ${field.unit}` : ''}` : '输入无效'
+    ]) : [['状态', query.isPending ? '正在读取 AI 对话设置…' : '读取失败']]),
+    retry ? pageContextRows('失败重连', [
+      ['请求重试次数', Number.isFinite(retry.httpRetries) ? retry.httpRetries : '输入无效'],
+      ['回答重连次数', Number.isFinite(retry.streamRetries) ? retry.streamRetries : '输入无效'],
+      ['断网等待', retry.networkPersistent ? '持续等待网络恢复' : '按次数上限重试'],
+      ['断网重试次数', retry.networkPersistent ? undefined : Number.isFinite(retry.networkRetries) ? retry.networkRetries : '输入无效'],
+      ['等待策略', '请求与回答从 400 毫秒翻倍等待；断网按 5、10、20、40、60 秒等待，之后保持 60 秒。供应商的有效等待建议优先。'],
+      ['保存状态', dirty ? '有未保存的修改' : '已保存；从下一轮对话开始生效']
+    ]) : ''
+  ].filter(Boolean).join('\n\n'), dirty);
   const guard = useCallback((go: () => void, stay?: () => void) => {
     if (busy) { stay?.(); return; }
     if (!dirty) { go(); return; }

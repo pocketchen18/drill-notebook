@@ -121,7 +121,7 @@ function Shell(): JSX.Element {
   }, [configLoaded, theme]);
   useEffect(() => {
     // Leaving a domain page clears stale context unless the page re-registers.
-    if (!['/practice', '/quiz', '/wrong', '/notebooks', '/banks', '/knowledge', '/memorize'].some((prefix) => location.pathname.startsWith(prefix))) {
+    if (!['/practice', '/quiz', '/wrong', '/notebooks', '/banks', '/knowledge', '/memorize', '/settings', '/calendar'].some((prefix) => location.pathname.startsWith(prefix))) {
       clearPageContext();
       useUiStore.getState().setPageContext({ kind: 'none', title, markdown: '', route: location.pathname });
     }

@@ -5,6 +5,7 @@ import { RotateCcw } from 'lucide-react';
 import { toolGroups, TOOL_DESCRIPTIONS, getToolSettings, saveToolSettings } from '../lib/aiToolSettings';
 import type { BuiltinToolName } from '../lib/aiToolSettings';
 import { TOOL_NAMES } from '../lib/toolActivity';
+import { pageContextRows, usePageContextSection } from './PageContextProvider';
 import './ai-tool-settings.css';
 
 /** 即点即存；只有服务端确认后才显示新状态，冲突重新读取后由用户再次选择。 */
@@ -26,6 +27,11 @@ export function AiToolSettingsPanel(): JSX.Element {
     } finally { saving.current = false; setBusy(false); }
   };
   const allDefault = query.data?.tools.every(tool => tool.enabled === tool.defaultEnabled) ?? true;
+  usePageContextSection('tools', '## 工具设置\n选择 AI 可以使用的内置工具，对所有模型和会话生效。\n' + (
+    query.data ? toolGroups.map(group => pageContextRows(group.label, group.tools.map(name => [
+      TOOL_NAMES[name], `${query.data!.tools.find(tool => tool.name === name)?.enabled ? '开启' : '关闭'}；${TOOL_DESCRIPTIONS[name]}`
+    ]))).join('\n\n') : query.isPending ? '正在读取工具设置…' : '工具设置读取失败'
+  ));
   return <section className="panel ai-tool-settings" aria-label="工具设置">
     <div className="panel-header"><h2>工具</h2>
       <Button type="text" size="small" icon={<RotateCcw size={14} />} disabled={busy || allDefault}
