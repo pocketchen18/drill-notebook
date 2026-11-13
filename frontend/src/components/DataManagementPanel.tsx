@@ -5,6 +5,7 @@ import { Download, FolderOpen, Trash2, Upload } from 'lucide-react';
 import { del, get, post, postForm, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { BackupConfig, BackupEntry, BackupStatus } from '../lib/types';
+import { pageContextRows, usePageContextSection } from './PageContextProvider';
 
 const AUTO_OPTIONS = [
   { value: 0, label: '关闭' },
@@ -181,6 +182,19 @@ export function DataManagementPanel(): JSX.Element {
   };
 
   const status = statusQuery.data;
+  usePageContextSection('data', [
+    pageContextRows('备份管理', [
+      ['备份目录', directory || '应用目录/backups'],
+      ['自动备份', autoIntervalHours ? `每 ${autoIntervalHours} 小时` : '关闭'], ['最大保留数量', maxCount],
+      ['备份方式', lite ? '精简（仅数据库）' : '完整（数据库与附件）'],
+      ['最近备份', status ? formatTime(status.lastBackupAt) : undefined],
+      ['备份状态', status?.running ? '正在备份' : statusQuery.isPending ? '正在读取…' : statusQuery.isError ? '读取失败' : '空闲'],
+      ['操作', '立即备份、打开目录、恢复默认目录']
+    ]),
+    '## 备份列表\n' + (listQuery.isPending ? '正在加载…' : listQuery.isError ? '加载失败'
+      : (listQuery.data ?? []).map(entry => `- ${entry.name}：${entry.lite ? '精简' : '完整'}，${formatSize(entry.sizeBytes)}，${formatTime(entry.createdAt)}`).join('\n') || '暂无备份'),
+    '## 导出与导入\n可以导出便携数据包或导入数据包；恢复与导入在重启后生效。'
+  ].join('\n\n'));
 
   return (
     <div className="data-manage">

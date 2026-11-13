@@ -10,7 +10,7 @@ const clip = (text: string, max: number): string => Array.from(text).slice(0, ma
 // 可选所属库在旧 API 中可能返回 null；快照只携带可用定位，不能把 null 传给严格 ID 校验。
 const positiveId = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 
-/** 只复制业务页面注册的内容，不扫描设置/聊天 DOM，不读取浏览器存储。 */
+/** 只复制主窗口页面明确登记的内容，不扫描 DOM 或输入框，不读取浏览器存储。 */
 export function capturePageSnapshot(context: AiPageContext, now = new Date()): PageSnapshot {
   return {
     kind: context.kind, title: clip(context.title, 200), route: context.route,

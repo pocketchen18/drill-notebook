@@ -8,7 +8,7 @@ import java.util.*;
 
 /** 本次提交的业务页面。正文只留在本轮内存或现有加密队列，不进入请求元数据。 */
 public record PageSnapshot(Map<String, Object> data) {
-    private static final Set<String> KINDS = Set.of("none", "note", "knowledge", "bank", "quiz", "wrong", "manual");
+    private static final Set<String> KINDS = Set.of("none", "note", "knowledge", "bank", "quiz", "wrong", "manual", "settings", "calendar");
     private static final Set<String> IDS = Set.of("pageId", "notebookId", "pointId", "bankId", "questionId");
     private static final Set<String> FIELDS = Set.of("kind", "title", "route", "capturedAt", "markdown", "selection",
             "isDraft", "truncated", "selectedIds", "pageId", "notebookId", "pointId", "bankId", "questionId");

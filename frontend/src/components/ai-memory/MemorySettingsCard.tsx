@@ -10,6 +10,7 @@ import {
   unlockMemoryVault,
   updateMemorySettings
 } from '../../lib/aiMemoryApi';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 
 /**
  * 记忆的总开关。首次开启时自动建指纹库、自动授权当前 AI 连接，维护细节不再暴露给用户。
@@ -29,6 +30,12 @@ export function MemorySettingsCard(): JSX.Element {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ['ai-memory-settings'], queryFn: getMemorySettings });
   const settings = settingsQuery.data;
+  usePageContextSection('memory-settings', pageContextRows('记忆', settings ? [
+    ['启用记忆', settings.enabled],
+    ['自动整理对话', settings.enabled ? settings.autoExtract && settings.compressSession : undefined],
+    ['当前 AI 连接', Object.values(settings.consents).some(consent => consent?.target?.configured && consent.target.keyPresent) ? '已配置' : '未配置'],
+    ['存储', '记忆保存在本机，只交给当前配置的 AI 连接']
+  ] : [['状态', settingsQuery.isPending ? '正在读取记忆设置…' : '记忆设置读取失败']]));
   // 同一次页面生命周期里只自动授权一次，失败也不在后台反复重试
   const attemptedGrants = useRef(new Set<string>());
 

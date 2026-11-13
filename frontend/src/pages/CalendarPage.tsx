@@ -31,6 +31,7 @@ import { del, get, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import { completeStudy } from '../lib/study';
 import { TodayQueuePanel } from '../components/TodayQueuePanel';
+import { PageContextProvider, pageContextRows } from '../components/PageContextProvider';
 import { useToday } from '../lib/useToday';
 import { usePersistSlice } from '../hooks/useViewState';
 import { readPageSlice } from '../lib/viewState';
@@ -300,6 +301,7 @@ export function CalendarPage(): JSX.Element {
     : (dayQuery.data?.days?.[0]?.groups ?? []);
 
   const dayLoading = selectedInViewMonth ? monthQuery.isLoading : dayQuery.isLoading;
+  const dayError = selectedInViewMonth ? monthQuery.isError : dayQuery.isError;
 
   const todoByDate = useMemo(() => {
     const map = new Map<string, { todos: number; total: number; srsDue: number; srsOverdue: number }>();
@@ -521,7 +523,25 @@ export function CalendarPage(): JSX.Element {
     return cells;
   }, [viewYear, viewMonth]);
 
+  const calendarMarkdown = [
+    '# 日历',
+    pageContextRows('当前视图', [['月份', monthLabel], ['今天', today], ['选中日期', selectedDate]]),
+    '## 月历标记\n' + (monthQuery.isLoading ? '月历计划正在加载…' : monthQuery.isError ? '月历计划加载失败'
+      : [...todoByDate].filter(([date]) => date >= range.from && date <= range.to).sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, stats]) => `- ${date}：计划 ${stats.total} 项，待完成 ${stats.todos} 项${srsStatsQuery.isPending ? '；复习统计正在加载' : srsStatsQuery.isError ? '；复习统计加载失败' : `；记忆曲线到期 ${stats.srsDue} 项，逾期未复习 ${stats.srsOverdue} 项`}`).join('\n') || '本月暂未显示计划或复习标记'),
+    srsStatsQuery.isPending ? '记忆曲线到期统计正在加载…' : srsStatsQuery.isError ? '记忆曲线到期统计加载失败' : '',
+    `## 自主安排 · ${selectedDate}\n` + (dayLoading ? '当天计划正在加载…'
+      : dayError ? '当天计划加载失败'
+        : groups.length ? groups.map(group => [
+          pageContextRows(group.title || '未命名计划', [
+            ['来源', sourceLabel(group.source)], ['完成情况', `${group.doneCount}/${group.totalCount}`], ['备注', group.note || undefined]
+          ]),
+          ...group.items.map(item => `- ${resourceTypeLabel(item.resourceType)}：${item.title || `#${item.resourceId}`}；${item.resourceMissing ? '资源已失效' : item.status === 'done' ? '已完成' : '待完成'}`)
+        ].join('\n')).join('\n\n') : '这一天还没有自主安排的计划分组')
+  ].filter(Boolean).join('\n\n');
+
   return (
+    <PageContextProvider context={{ kind: 'calendar', title: `日历 · ${selectedDate}`, route: `/calendar?date=${selectedDate}`, markdown: calendarMarkdown }}>
     <main className="page">
       <div className="page-heading">
         <div>
@@ -848,5 +868,6 @@ export function CalendarPage(): JSX.Element {
         </Form>
       </Modal>
     </main>
+    </PageContextProvider>
   );
 }

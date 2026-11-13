@@ -5,6 +5,7 @@ import { Download, RefreshCw, Trash2 } from 'lucide-react';
 import { get } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
 import type { AiConfig, EmbeddingCatalogModel, RetrievalStatus } from '../lib/types';
+import { pageContextRows, usePageContextSection } from './PageContextProvider';
 import {
   activateEmbeddingModel,
   cancelEmbeddingDownload,
@@ -170,6 +171,21 @@ export function EmbeddingSettingsCard(): JSX.Element {
 
   const busy = downloadMutation.isPending || cancelMutation.isPending || activateMutation.isPending
     || disableMutation.isPending || uninstallMutation.isPending;
+  usePageContextSection('embedding', [
+    pageContextRows('Embedding（向量索引）', [
+      ['Provider', PROVIDER_OPTIONS.find(option => option.value === provider)?.label],
+      ['远程模型', remote ? model || '未填写' : undefined], ['维度', remote ? dimensions : undefined],
+      ['密钥状态', remote ? apiKey ? '已输入新密钥（未保存）' : embedding?.hasKey ? '已配置' : '未配置' : undefined],
+      ['远程内容授权', remote ? consent : undefined],
+      ['配置状态', configQuery.isPending ? '正在读取…' : configQuery.isError ? '读取失败' : '已读取']
+    ]),
+    '## 本地模型\n' + (catalogQuery.isPending ? '模型目录正在加载…' : catalogQuery.isError ? '模型目录加载失败'
+      : (catalogQuery.data?.models ?? []).map(item => `- ${item.displayName}：${item.dimensions} 维，${formatModelSize(item.inventorySizeBytes)}，${item.installationState}${item.installationState === 'DOWNLOADING' ? `，${downloadPercent(item)}%` : ''}`).join('\n') || '暂无可用模型'),
+    pageContextRows('向量索引状态', status ? [
+      ['状态', status.indexState], ['总页数', status.totalPages], ['总片段', status.totalChunks],
+      ['已索引', status.indexedChunks], ['待更新', status.staleChunks], ['排队任务', status.queuedJobs], ['失败任务', status.failedJobs]
+    ] : [['状态', statusQuery.isPending ? '正在读取…' : '读取失败']])
+  ].join('\n\n'), !!embedding && (provider !== embedding.provider || (remote && (model !== embedding.model || dimensions !== embedding.dimensions || !!apiKey))));
 
   return (
     <section className="panel settings-ai-panel">

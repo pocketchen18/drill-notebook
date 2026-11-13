@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Input, Select, Switch, Tag } from '@arco-design/web-react';
 import { FileText, Github, RotateCw, Star } from 'lucide-react';
 import { BrandMark } from '../BrandMark';
+import { pageContextRows, usePageContextSection } from '../PageContextProvider';
 import { updateAction, useAppUpdate } from './AppUpdateProvider';
 import type { UpdateSettings } from '../../../../electron/update-types';
 
@@ -40,6 +41,24 @@ export function AboutPanel(): JSX.Element {
     : state?.checkStatus === 'error' ? state.checkError
       : state?.target ? `发现新版本 v${state.target.version}${state.skippedVersion === state.target.version ? '，已跳过此版本' : ''}`
         : state?.checkStatus === 'current' ? '当前已是最新版本' : '尚未检查更新';
+  const intervalDraft = custom && hours !== String(settings?.intervalHours ?? 24);
+  usePageContextSection('about', [
+    pageContextRows('Drill Notebook', [
+      ['当前版本', state ? `v${state.currentVersion}` : api ? '正在读取版本…' : '开发预览'],
+      ['运行模式', state?.development ? '开发模式' : undefined],
+      ['更新检查', error ?? status],
+      ['上次成功检查', state?.lastCheckAt ? new Date(state.lastCheckAt).toLocaleString('zh-CN', { hour12: false }) : undefined],
+      ['GitHub 主页', PROJECT_URL], ['操作', '检查更新、更新内容']
+    ]),
+    pageContextRows('更新设置', [
+      ['自动更新', settings?.automaticUpdate ?? false], ['自动检查更新', settings?.automaticCheck ?? true],
+      ['检查与提醒间隔', intervalDraft ? /^\d+$/.test(hours) ? `${hours} 小时（未保存）` : '自定义输入无效（未保存）' : `${settings?.intervalHours ?? 24} 小时`],
+      ['启动时更新提醒', settings?.startupReminder ?? true],
+      ['已跳过版本', state?.skippedVersion ? `v${state.skippedVersion}` : undefined],
+      ['设置状态', disabled ? '当前不可修改' : '可以修改']
+    ]),
+    '## 支持项目\n如果 Drill Notebook 对你有帮助，欢迎在 GitHub 点个 Star。'
+  ].join('\n\n'), intervalDraft);
   return <div className="settings-tab-stack app-about" role="tabpanel" aria-label="关于">
     <section className="panel">
       <div className="panel-body about-product">
