@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { SessionNavigation } from './SessionNavigation';
+import { SessionNavigation, sessionGroup } from './SessionNavigation';
 import type { AiChatSession } from '../../lib/types';
 
 const sessions: AiChatSession[] = [
   { id: 1, title: '当前讨论', titleSource: 'ai', titleStatus: 'ready', titleRevision: 2, canGenerateTitle: true, messageCount: 4, sessionLink: 'drill-notebook://session/aaa' },
   { id: 2, title: '积分换元', titleSource: 'manual', titleStatus: 'idle', titleRevision: 3, canGenerateTitle: true, messageCount: 2, sessionLink: 'drill-notebook://session/bbb' }
 ];
+afterEach(() => vi.restoreAllMocks());
 const setup = (overrides = {}) => {
   const props = { visible: true, sessions, currentId: 1, loading: false, error: false, creating: false, exporting: false,
     onRetry: vi.fn(), onCreate: vi.fn(), onSelect: vi.fn(), onRename: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +22,28 @@ const openTarget = async () => {
 };
 
 describe('会话导航', () => {
+  it('会话活动时间与提问预览共用 UTC 规则，不随数据库字符串格式变化', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-13T08:00:00+08:00'));
+    setup({ docked: true, sessions: [
+      { ...sessions[0], updatedAt: '2026-11-12 21:54:00' },
+      { ...sessions[1], updatedAt: '2026-11-12T21:54:00' }
+    ] });
+    const expected = new Date('2026-11-12T21:54:00Z').toLocaleString('zh-CN',
+      { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    expect(screen.getByRole('button', { name: /当前讨论 4 条消息/ })).toHaveTextContent(expected);
+    expect(screen.getByRole('button', { name: /积分换元 2 条消息/ })).toHaveTextContent(expected);
+  });
+
+  it('跨 UTC 日期的活动仍按本地午夜分组', () => {
+    const now = new Date(2026, 10, 13, 0, 15).getTime();
+    const today = new Date(2026, 10, 13, 0, 5).toISOString();
+    const yesterday = new Date(2026, 10, 12, 23, 55).toISOString();
+    expect(sessionGroup(today.replace('T', ' ').replace('Z', ''), now)).toBe('今天');
+    expect(sessionGroup(today.replace('Z', ''), now)).toBe('今天');
+    expect(sessionGroup(yesterday.replace('T', ' ').replace('Z', ''), now)).toBe('近 7 天');
+    expect(sessionGroup(undefined, now)).toBe('更早');
+  });
+
   it('多会话状态独立，忙碌目标可停止但不可删除，标题生成不冒充聊天运行', async () => {
     const onStop = vi.fn().mockResolvedValue(undefined);
     const view = setup({ onStop, runtimes: [{ sessionId: 2, requestId: 'b', status: 'RUNNING', phase: 'tools', queueCount: 2 }],

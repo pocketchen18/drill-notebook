@@ -117,7 +117,7 @@
 | POST | `/ai/models/test` | 测试连接 |
 | POST | `/ai/summarize` | 知识点 / Markdown 总结 |
 
-当前 AI 连接管理统一使用 `/ai/connections`，响应返回 `{revision, providers, chatModelId, importModelId}`，密钥不回传。修改携带 revision，冲突返回 409；保存与应用绑定独立。
+当前 AI 连接管理统一使用 `/ai/connections`，响应返回 `{revision, providers, chatModelId, chatReasoningEffort, importModelId}`，密钥不回传。修改携带 revision，冲突返回 409；配置编辑、助手模型选择和导入绑定分别操作，助手选择全局持久化。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -129,14 +129,15 @@
 | POST | `/ai/connections/providers/{id}/models` | 直接新增模型配置 |
 | POST | `/ai/connections/providers/{id}/verify-add` | 验证候选并按文本结果添加 |
 | PUT / DELETE | `/ai/connections/models/{id}` | 更新 / 删除模型；路径 ID 为稳定 UUID |
-| PUT | `/ai/connections/bindings` | `{revision, purpose:chat|import, modelId}`；import 的 null 恢复跟随 |
+| PUT | `/ai/connections/bindings` | `{revision, purpose:import, modelId}`；null 恢复跟随助手模型，其他用途拒绝 |
+| PUT | `/ai/connections/chat-model` | 助手输入区保存全局 `{revision, modelConfigId, reasoningEffort}`；成功返回新集合 |
 | POST | `/ai/connections/models/{id}/test` | 短连接测试，不带聊天历史 |
 | POST | `/ai/connections/tests/{requestId}/cancel` | 取消连接测试或新增验证，支持提前取消 |
 
 - 供应商视图包含 `connectionVersion`；`verify-add` 接收 `revision`、`connectionVersion`、`requestId`、`model`、可选 `masterPassword`。UI 最多 3 个模型并发验证；同连接的结果合入最新集合，不因其他模型刚保存而相互覆盖。连接身份变更时拒绝迟到结果。
-- 文本返回有效正文才添加；图片/工具验证各自返回 status/message/elapsedMs，附 `added`、`modelId`、`connections`。工具验证成功才自动开启工具偏好；已存在同 ID 模型不重复验证或改写。添加不自动应用。
+- 文本返回有效正文才添加；图片/工具验证各自返回 status/message/elapsedMs，附 `added`、`modelId`、`connections`。工具验证成功才自动开启工具偏好；已存在同 ID 模型不重复验证或改写。添加不改变助手或导入模型的选择。
 - 更新上游 `modelId` 保留内部 ID、用途绑定与用户参数，只清理旧验证/探测记录；字段缺省继承，明确空值不重新补填预设。模型 ID 输入只修改 ID，点击/回车选择预设才应用参考参数。
-- 模型必须填写 `contextWindow/maxOutputTokens`：均为 1–2147483647 的整数，输出不得超过窗口。预设可填入真实容量，旧缺值模型保留原配置与绑定并提示补全；保存、应用、测试、对话及后台维护缺值时拒绝执行，不再使用缺省保守窗口或发出 WINDOW_UNSET。`maxInputTokens` 已取消，旧值忽略、再次保存时移除；输入与输出共用窗口，正常安全余量及全局任务预算继续生效。每轮冻结配置，切换应用从下一轮生效；被用途绑定或运行中请求引用的对象不能删除。
+- 模型必须填写 `contextWindow/maxOutputTokens`：均为 1–2147483647 的整数，输出不得超过窗口。预设可填入真实容量，旧缺值模型保留原配置与绑定并提示补全；保存、选择、测试、对话及后台维护缺值时拒绝执行，不再使用缺省保守窗口或发出 WINDOW_UNSET。`maxInputTokens` 已取消，旧值忽略、再次保存时移除；输入与输出共用窗口，正常安全余量及全局任务预算继续生效。每轮冻结配置，改选模型从下一次受理生效，已受理的轮次和待发消息保留原配置；被用途绑定或运行中请求引用的对象不能删除。
 - `reasoningControl` 默认为 effort；`reasoningEfforts` 可选 `none/minimal/low/medium/high/xhigh/max`，拒绝 ultra，默认档位必须属于集合。Anthropic 不接受 none/minimal；预算方式仅用于 Anthropic。服务默认不发送思考参数；协议映射为 Chat Completions 的 `reasoning_effort`、Anthropic 的 `output_config.effort` 或 `thinking` 预算。
 
 #### 3.1.1 全局对话运行限制
@@ -153,6 +154,12 @@
 | `requestOutputTokens` | 16384 | 256–131072 |
 | `finalOutputTokens` | 8192 | 256–65536，必须小于整轮输出上限 |
 | `repeatedToolLimit` | 3 | 0–20；0 关闭检查 |
+| `retry.httpRetries` | 4 | 0–100；0 关闭请求重试 |
+| `retry.streamRetries` | 5 | 0–100；0 关闭回答重连 |
+| `retry.networkPersistent` | true | 布尔；持续等待网络，仍受整轮时间和停止约束 |
+| `retry.networkRetries` | 5 | 0–100；仅有限断网模式使用，0 关闭断网重试 |
+
+v0.8.1 将上述四项嵌套在 `values.retry` / `defaults.retry`。旧持久化 JSON 缺少 retry 时补默认值；旧客户端 PUT 未提交 retry 时保留当前已保存配置。显式提交时须提供完整四项并严格校验类型 / 范围，原 revision 冲突规则继续生效；不新增 schema 或改变已有预算。
 
 输出预算按各请求实际 output usage 累计，缺少 usage 时仅在执行预算中保守扣除分配额度。工具阶段/执行/输出达限后撤工具，并保留一次最终回答请求；接近总期限提前收口。相同工具名、规范化参数和相同结果连续达到阈值才判无进展；模型上下文容量仍可提前收紧执行。
 
@@ -198,10 +205,10 @@ SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 |---|---|---|
 | `text` | `{ text }` | 回答增量；身份由本连接 metadata 确认 |
 | `reasoning` | `{ text }` | 思考增量 |
-| `metadata` | 含 `requestId`、`planId` 等 | 本轮计划状态；前端据此登记请求 ID |
+| `metadata` | 含 `requestId`、`planId`、`recovery?` 等 | 本轮计划与恢复状态；前端据此登记请求 ID |
 | `tool_activity` | `{requestId, sessionId, toolActivities, phase}` | 有界活动快照；phase 为 tools / answer，精确读取等待期间可为 waiting |
-| `done` | 普通 chat 响应字段，额外含 reasoning | 顶层含 requestId/sessionId/status/persistenceStatus/stateDurable、finishReason、toolActivities 及上下文/用量字段 |
-| `error` | `{message, partial, requestId?, sessionId?, code?, persistenceStatus?, stateDurable?, toolActivities?}` | 如实保留身份、保存状态与已确认活动 |
+| `done` | 普通 chat 响应字段，额外含 reasoning | 顶层含 requestId/sessionId/status/persistenceStatus/stateDurable、finishReason、toolActivities、recovery? 及上下文/用量字段 |
+| `error` | `{message, partial, requestId?, sessionId?, code?, persistenceStatus?, stateDurable?, toolActivities?, recovery?}` | 如实保留身份、保存状态、恢复原因与已确认活动 |
 
 若流在没有 `done` / `error` 的情况下 EOF，客户端必须用 `requestId` 查询轮次状态，不能把占位内容当作完成。
 
@@ -365,6 +372,27 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 按本轮可用工具生成系统指引；全局关闭与派发任务的删除限制分别说明，不能用清空 / 修改冒充删除。联网搜索配置尚未开放。
 
+#### 3.2.8 自动失败恢复（v0.8.1）
+
+普通 / 流式对话、SSE metadata / done / error、轮次状态、runtime.current 及历史助手消息共用可选 `recovery`：
+
+```json
+{
+  "kind": "stream",
+  "state": "waiting",
+  "attempt": 2,
+  "limit": 5,
+  "error": "stream_disconnected\nerror decoding response body",
+  "nextRetryAt": 1794535200800
+}
+```
+
+- kind 为 request / stream / network；state 为 waiting / connecting / failed / stopped。attempt 为实际发起的恢复请求数，初始请求另计；等待不提前增加计数。持续断网的 limit 为 null，有限模式包含 0。nextRetryAt 为 Unix 毫秒截止时刻，停止 / 失败时清除；成功时 recovery 为 null，清除临时反馈。缺字段兼容旧响应。
+- 配置在受理时冻结。普通请求与流式恢复从 400ms 起按翻倍退避，约 ±10% 抖动，首轮约 `[360, 440)` ms；纯连接失败等待 5 / 10 / 20 / 40 / 60 秒后保持 60 秒。合法服务端等待建议优先，按接收响应时建立的截止时刻等待，不因读取错误体或显示反馈重新延长。具体分类与默认值见[当前版本清单](v0.8.1-features.md)。
+- 自动恢复沿用原 requestId、模型、上下文与整轮预算，各类计数在取得完整模型步骤响应后重置。Chat Completions / Anthropic 无原流续传：保留部分回答前缀与已确认工具结果，再请求同一模型继续；未完整结束的工具调用不执行，不重放交付未知的插话。
+- 每次实际上游请求独立结算 usage；缺失用量不造数。鉴权、额度、参数、路径和 TLS 配置等不可恢复错误不重试。等待与重发仍受原整轮时间、输出和停止约束。
+- error 只含脱敏状态码 / 错误代码 / 正文，不含密钥、请求头或工具原始数据。失败 / 停止事实随原助手消息元数据加密保存；只有恢复错误、没有正文的失败也创建加密空助手消息，以便历史恢复原因。成功不保存常驻重连横幅。
+
 ### 3.3 轮次状态与上下文
 
 | 方法 | 路径 | 用途 |
@@ -375,7 +403,7 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 | GET | `/ai/turns/{requestId}/context` | 读取上下文审计详情 |
 | POST | `/ai/turns/{requestId}/context/preview` | 预览上下文计划 |
 
-v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 active/status/phase 和内存 reply/reasoning/toolActivities；只有已经开始的项才带 userText。终态优先读取现有轮次记录；未开始就取消的收据只返回真实状态，不伪造聊天正文。取消旧 requestId 不得结束同目标后来的新轮。
+v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 active/status/phase 和内存 reply/reasoning/toolActivities/recovery；只有已经开始的项才带 userText。终态优先读取现有轮次记录，并在有恢复事实时返回 recovery；未开始就取消的收据只返回真实状态，不伪造聊天正文。取消旧 requestId 不得结束同目标后来的新轮。
 
 原输入接口返回 `{requestId,sessionId,input:{role:"user",userText,attachments?}}`，成功响应带 `Cache-Control: no-store`。附件条目为 `{clientId,kind,name,mimeType,text?,dataBase64?}`：文本返回正文，图片返回 base64；无附件时省略 attachments。接口不调用模型、不重新提取记忆、不写历史或修改资料，前端只在点击重新生成时读取，不存入浏览器存储。
 
@@ -393,11 +421,18 @@ v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 a
 | GET | `/ai/sessions/{id}/messages` | 消息列表（解密） |
 | GET | `/ai/messages` | 全局消息查询 |
 | GET | `/ai/sessions/{id}/history` | 历史查询 |
+| GET | `/ai/sessions/{id}/navigation/{roundNumber}` | v0.8.1 当前会话逐轮定位与有界预览 |
 | GET / PUT | `/ai/history/storage` | 历史容量配置 / 状态 |
 | POST | `/ai/history/cleanup/preview` / `cleanup` | 清理预览 / 执行 |
 | GET | `/ai/sessions/{id}/export` | 导出会话 |
 
-轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
+轮次状态和历史助手消息返回 `toolActivities` 与 `finishReason`，有失败 / 停止恢复事实时附 `recovery`；旧消息缺少活动时返回空列表。删除会话或清理历史仅断开相应来源证据，保留已保存长期记忆及原来源类型；删除笔记本的 NOTEBOOK scope 清理仍独立执行。
+
+v0.8.1 历史与定位契约：
+
+- history 使用 beforeMessageId 向旧页翻阅，或 afterMessageId 正向读取目标之后的页；返回 `{sessionId,messages,historyRevision,hasMore,limit,totalRounds,firstRound?,hasOlder?}`。limit 默认 / 最大 50；totalRounds 为当前保留的用户提问数量，firstRound 为本页首条用户提问的全会话轮次，没有用户消息时省略。正向页额外返回 hasOlder，表示页首之前仍有消息；hasMore 继续表示当前方向还有页。
+- navigation 返回 `{roundNumber,totalRounds,messageId,question,answer,createdAt,status,historyRevision}`。roundNumber 从 1 开始，以现有用户消息顺序定位；question / answer 最多 240 / 600 Unicode 码点，正文仍可通过历史页读取。缺少回答返回空字符串，保留真实状态；会话缺失为 404 SESSION_NOT_FOUND，轮次不存在 / 已清理为 404 CONVERSATION_ROUND_NOT_FOUND。
+- 两接口只读现有加密历史，不调用模型、不创建会话或建立全量正文索引。前端对超出驻留区的目标加载有界阅读窗口，最多 500 条消息；回到最新恢复最新窗口。迟到页、定稿和新输出不得覆盖旧阅读位置，草稿、附件、运行与队列保持。
 
 runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCount}],current?}`。QUEUED/RUNNING 表示未结束，PAUSED 表示暂停保留；phase 可表达 running/thinking/tools/answer/waiting/stopping。queueCount 不包含正在执行的队头；人工待发与插话详情由队列接口读取。该查询不外发模型请求、不改变会话排序或选择；停止返回 STOPPING 后仍等服务端终态。有运行/排队项时删除、归档与历史清理被拒绝。
 
@@ -405,13 +440,13 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 
 会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议。可复制到新会话，由 `read_session` 读取；回复引用可打开只读预览。复制成功不等同于模型已经读取。
 
-标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少应用模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
+标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少助手所选模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
 
-新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用当前应用模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
+新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用助手当前全局所选模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
 
-- v0.8 起会话可保存自己的模型与思考档位：`POST /ai/sessions`、`PUT /ai/sessions/{id}` 接受可选 `modelConfigId`、`reasoningEffort`（空串 / null 清除），会话视图返回二者，null 表示跟随主模型 / 模型默认。模型须存在，档位须为该模型声明支持的 effort；只换模型且旧档位不适用时回到模型默认。发送时按受理瞬间的会话选择冻结配置，所选模型已删除、缺密钥或缺容量时拒绝，不换用其他模型。历史分页的助手消息在有记录时返回该轮实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
+- v0.8.1 起模型与思考档位统一由助手输入区全局选择，使用 `/ai/connections/chat-model` 保存，跨会话和重启共用。模型须存在且连接 / 容量完整，显式档位须属于目标模型支持的 effort；只换模型且旧档位不适用时回到模型默认。`POST /ai/sessions`、`PUT /ai/sessions/{id}` 不再接受独立的 modelConfigId/reasoningEffort；旧会话视图中的这两项只保留兼容元数据，不参与派发。受理时冻结全局选择，已受理队列和自动重连不被之后改选覆盖。模型不可用时拒绝外发，历史仍返回当时实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
 
-- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按会话当前所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
+- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按助手当前全局所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
 
 - 会话置顶（v0.8）：`PUT /ai/sessions/{id}` 接受布尔 `pinned`，会话视图返回 `pinnedAt`（ISO 时刻或 null）。重复置顶保留最初的时刻，置顶不改变 `updatedAt`；列表接口的顺序不变，置顶分组与排序由前端按 `pinnedAt` 升序处理。
 - 上下文占用（v0.8）：`GET /ai/sessions/{id}/context-usage` 的 `latest` 增加 `cacheReadTokens` 与 `outputTokens`，均为供应商回报的数字或 null（未回报不补 0）。`inputTokens` 仍是这次请求送入的总长度（含命中的缓存），未命中部分由前端按 `inputTokens - cacheReadTokens` 得出。
@@ -497,4 +532,4 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 | `rendererReady()` | 只以受信主窗口完成启动握手，结合真实后端健康确认提交；辅助窗口不能替代 |
 | `readAssistantDrafts / saveAssistantDrafts` | 目录内加密草稿；读取返回 unknown 由前端严格校验，损坏 / 超限拒绝，不以空值覆盖原文件 |
 
-`backend.getBaseUrl()` 在后端启动完成或明确失败前保持等待，避免启动更新期间的提前请求缓存备用地址。程序清单、事务、健康提交点、恢复边界与 APP_ROOT 路径见[更新规格](../work/app-update/spec.md)。本切片不新增 schema。
+`backend.getBaseUrl()` 在后端启动完成或明确失败前保持等待，避免启动更新期间的提前请求缓存备用地址。程序清单、事务、健康提交点、恢复边界与 APP_ROOT 路径见[更新规格](../archive/v0.8.0/app-update/spec.md)。本切片不新增 schema。

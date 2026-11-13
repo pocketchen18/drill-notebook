@@ -317,6 +317,11 @@ public class AiController {
         return history.page(id, beforeMessageId, afterMessageId, limit);
     }
 
+    @GetMapping("/sessions/{id}/navigation/{roundNumber}")
+    public Map<String, Object> conversationNavigation(@PathVariable long id, @PathVariable int roundNumber) throws SQLException {
+        return history.navigation(id, roundNumber);
+    }
+
     /**
      * 只读容量快照（contracts §2.7、§3）：逻辑落库字节、预留、可配额度与 80% 预警。
      * 不把物理 DB 大小冒充逻辑计数，也不在读取时重建账本。

@@ -30,6 +30,22 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 绝不把密文或猜测的正文端出去。</p>
  */
 class ChatHistoryReadTest {
+    @Test void navigationReachesBeyondRecentFiveHundredMessagesWithoutWritingOrReadingAllBodies() throws Exception {
+        for (int round = 1; round <= 320; round++) {
+            jdbc.update("INSERT INTO ai_chat_message(session_id,role,content) VALUES(?,'user',?)", sessionId, "提问 " + round);
+            jdbc.update("INSERT INTO ai_chat_message(session_id,role,content) VALUES(?,'assistant',?)", sessionId, "回答 " + round);
+        }
+        int before = jdbc.queryForObject("SELECT count(*) FROM ai_chat_message", Integer.class);
+        var preview = stack.history().navigation(sessionId, 2);
+        assertEquals(320L, preview.get("totalRounds")); assertEquals("提问 2", preview.get("question")); assertEquals("回答 2", preview.get("answer"));
+        long target = ((Number) preview.get("messageId")).longValue();
+        var window = stack.history().page(sessionId, null, target - 1, 50);
+        assertEquals(50, ((List<?>) window.get("messages")).size()); assertEquals(2L, window.get("firstRound"));
+        assertEquals(true, window.get("hasOlder"));
+        assertEquals(before, jdbc.queryForObject("SELECT count(*) FROM ai_chat_message", Integer.class));
+        assertThrows(ChatTurnRejectException.class, () -> stack.history().navigation(sessionId, 321));
+        assertThrows(ChatTurnRejectException.class, () -> stack.history().navigation(sessionId + 999, 1));
+    }
     private static final Map<String, Object> MOCK_CONFIG = Map.of(
             "provider", "mock", "endpoint", "mock://local", "model", "local-demo", "apiKey", "demo-key");
 

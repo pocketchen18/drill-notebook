@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from 'react';
 import { PanelResizer } from './ai-session/PanelResizer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Message, Select, Space, Typography } from '@arco-design/web-react';
 import { ArrowDown, Copy, Download, FilePlus2, FileText, MoreHorizontal, PanelLeft, Paperclip, Pin, RotateCw, Send, Sparkles, Square, X } from 'lucide-react';
 import { SessionNavigation, type SessionNavigationHandle } from './ai-session/SessionNavigation';
 import { RecoveryFeedback } from './ai-session/RecoveryFeedback';
+import { ConversationNavigation } from './ai-session/ConversationNavigation';
+import { getRoundPreview } from '../lib/conversationNavigation';
+import type { RoundPreview } from '../lib/conversationNavigation';
 import type { AiRecovery } from '../lib/aiRecovery';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
@@ -139,11 +142,16 @@ export function AiAssistant(): JSX.Element {
     enabled: aiOpen
   });
 
-  const connectionsQuery = useQuery({ queryKey: ['ai-connections'], queryFn: () => get<Connections>('/api/ai/connections'), enabled: aiOpen });
-  // 新会话页还没有数据库记录：选择先留在本地，首条消息创建会话时一并提交。
-  const [draftChoice, setDraftChoice] = useState<ModelChoice>({ modelConfigId: null, reasoningEffort: null });
-  const draftChoiceRef = useRef(draftChoice);
-  draftChoiceRef.current = draftChoice;
+  const connectionsQuery = useQuery({ queryKey: ['ai-connections'], queryFn: async () => {
+    const value = await get<Connections>('/api/ai/connections');
+    const current = queryClient.getQueryData<Connections>(['ai-connections']);
+    return current && current.revision > value.revision ? current : value;
+  }, enabled: aiOpen });
+  // 模型选择以便携数据库为准，切会话和恢复草稿都不覆盖它。
+  const modelChoice: ModelChoice = { modelConfigId: connectionsQuery.data?.chatModelId ?? null,
+    reasoningEffort: connectionsQuery.data?.chatReasoningEffort ?? null };
+  const [modelSaving, setModelSaving] = useState(false);
+  const modelSavingRef = useRef(false);
 
   const [sessionId, setSessionId] = useState<number>();
   const draftApi = window.api?.update;
@@ -186,6 +194,7 @@ export function AiAssistant(): JSX.Element {
   const navigation = useRef<SessionNavigationHandle>(null);
   const composeRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_WIDTH);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [sideCollapsed, setSideCollapsed] = useState(readSideCollapsed);
   const [sideOverlay, setSideOverlay] = useState(false);
   const [sideWidth, setSideWidth] = useState(() => readPanelWidth('side'));
@@ -198,7 +207,7 @@ export function AiAssistant(): JSX.Element {
   };
   const focusCompose = (): void => { composeRef.current?.querySelector('textarea')?.focus(); };
   useEffect(() => {
-    const onResize = (): void => setNarrow(window.innerWidth < NARROW_WIDTH);
+    const onResize = (): void => { setNarrow(window.innerWidth < NARROW_WIDTH); setWindowWidth(window.innerWidth); };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -234,8 +243,8 @@ export function AiAssistant(): JSX.Element {
     target: typeof turnTargetRef.current; sticky: boolean; scroll: number }>());
   const restoreScrollRef = useRef<number | null>(null);
   const observedStatusRef = useRef(new Map<string, string>());
-  const currentDraftRef = useRef({ sessionId, message, attachments, titleDraft, choice: draftChoice });
-  currentDraftRef.current = { sessionId, message, attachments, titleDraft, choice: draftChoice };
+  const currentDraftRef = useRef({ sessionId, message, attachments, titleDraft, choice: modelChoice });
+  currentDraftRef.current = { sessionId, message, attachments, titleDraft, choice: modelChoice };
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout>>();
   const draftSaveChain = useRef<Promise<void>>(Promise.resolve());
   const saveDrafts = (): Promise<void> => {
@@ -272,14 +281,14 @@ export function AiAssistant(): JSX.Element {
         lastExplicitSessionIdRef.current = saved.selectedSessionId;
         setSessionId(saved.selectedSessionId ?? undefined);
         setMessage(selected?.message ?? ''); setAttachments(selected?.attachments ?? []);
-        setDraftChoice(saved.choice); setTitleDraft(saved.titleDraft);
+        setTitleDraft(saved.titleDraft);
         stickyBottomRef.current = selected?.sticky ?? true; restoreScrollRef.current = selected?.scroll ?? 0;
       }
       setDraftsError(''); setDraftsReady(true);
     }).catch(error => { if (live) setDraftsError(friendlyMessage(error, '助手草稿读取失败，原文件已保留')); });
     return () => { live = false; };
   }, [draftApi, draftReadAttempt]);
-  useEffect(() => { scheduleDraftSave(); }, [sessionId, message, attachments, titleDraft, draftChoice, draftsReady]);
+  useEffect(() => { scheduleDraftSave(); }, [sessionId, message, attachments, titleDraft, modelChoice.modelConfigId, modelChoice.reasoningEffort, draftsReady]);
   useEffect(() => () => {
     clearTimeout(draftSaveTimer.current);
     if (draftsReadyRef.current) void saveDrafts().catch(() => undefined);
@@ -299,11 +308,8 @@ export function AiAssistant(): JSX.Element {
     olderAnchorRef.current = null; setPendingInsert(undefined);
   }
 
-  const sessionChoice = sessionsQuery.data?.find((item) => item.id === sessionId);
-  const modelChoice: ModelChoice = sessionId === undefined ? draftChoice
-    : { modelConfigId: sessionChoice?.modelConfigId ?? null, reasoningEffort: sessionChoice?.reasoningEffort ?? null };
   const activeModel = (() => {
-    const id = modelChoice.modelConfigId ?? connectionsQuery.data?.chatModelId ?? null;
+    const id = modelChoice.modelConfigId;
     for (const provider of connectionsQuery.data?.providers ?? []) {
       const model = provider.models.find((item) => item.id === id);
       if (model) return { provider, model };
@@ -312,11 +318,12 @@ export function AiAssistant(): JSX.Element {
   })();
   const activeEffort = modelChoice.reasoningEffort && (activeModel?.model.reasoningEfforts ?? []).includes(modelChoice.reasoningEffort)
     ? modelChoice.reasoningEffort : activeModel?.model.defaultReasoningEffort ?? null;
-  // 会话自己选了模型时，以那个供应商是否可用为准；否则沿用主模型的配置状态。
-  const configured = modelChoice.modelConfigId && activeModel
-    ? activeModel.provider.hasKey || activeModel.provider.authMode === 'none'
+  const configured = connectionsQuery.data?.providers
+    ? !!activeModel && !!activeModel.model.contextWindow && !!activeModel.model.maxOutputTokens
+      && (activeModel.provider.hasKey || activeModel.provider.authMode === 'none')
     : !!(configQuery.data?.hasKey || configQuery.data?.authMode === 'none');
-  const streamEnabled = (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
+  const streamEnabled = activeModel ? activeModel.model.streaming !== false
+    : (configQuery.data?.chat ?? configQuery.data)?.streaming !== false;
   const turn = useAiChatTurn({ sessionId, streamEnabled, onEvent: onTurnEvent });
   const streaming = turn.busy;
   const queue = useChatQueue(sessionId, aiOpen);
@@ -376,6 +383,11 @@ export function AiAssistant(): JSX.Element {
   });
 
   const history = useChatHistoryPages(sessionId, aiOpen);
+  const [readingRound, setReadingRound] = useState(1);
+  const [jumpTarget, setJumpTarget] = useState<RoundPreview | null>(null);
+  const [highlightedMessage, setHighlightedMessage] = useState<number>();
+  const jumpIdentity = useRef(0);
+  useEffect(() => { jumpIdentity.current++; setJumpTarget(null); setHighlightedMessage(undefined); }, [sessionId]);
 
   /** 本轮的引用、降级提示与 done 快照只存在于本地，服务端历史行按 requestId 把它们认领回去。 */
   const visibleMessages = useMemo<ChatMessage[]>(() => {
@@ -394,6 +406,7 @@ export function AiAssistant(): JSX.Element {
         model: row.model ?? mirror?.model,
         reasoningEffort: row.reasoningEffort ?? mirror?.reasoningEffort,
         usage: row.usage,
+        roundNumber: row.roundNumber,
         recovery: mirror?.streaming ? mirror.recovery : row.recovery ?? mirror?.recovery,
         page: row.page ?? snapshots.get(`user:${row.requestId}`)?.page,
         content: mirror?.streaming || !row.content ? mirror?.content ?? row.content : row.content,
@@ -412,9 +425,73 @@ export function AiAssistant(): JSX.Element {
       };
     });
     // 本地只留还没被服务端历史覆盖的那几条（正在跑的一轮、以及刚定稿还没重取回来的一轮）
-    const local = messages.filter((item) => !(item.requestId && covered.has(`${item.role}:${item.requestId}`)));
+    let localRound = history.totalRounds ?? server.filter(item => item.role === 'user').length;
+    const local = history.focused ? [] : messages.filter((item) => !(item.requestId && covered.has(`${item.role}:${item.requestId}`)))
+      .map(item => item.role === 'user' ? { ...item, roundNumber: ++localRound } : item);
     return [...server, ...local];
-  }, [history.messages, messages]);
+  }, [history.messages, history.focused, history.totalRounds, messages]);
+  const totalRounds = Math.max(history.totalRounds ?? 0, ...visibleMessages.filter(item => item.role === 'user').map(item => item.roundNumber ?? 0));
+  const detectReadingRound = (): void => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const top = container.getBoundingClientRect().top;
+    const rows = container.querySelectorAll<HTMLElement>('[data-conversation-round]');
+    let reading = Number(rows[0]?.dataset.conversationRound ?? 1);
+    for (const row of rows) {
+      if (row.getBoundingClientRect().top > top + 32) break;
+      reading = Number(row.dataset.conversationRound);
+    }
+    if (Number.isFinite(reading)) setReadingRound(reading);
+  };
+  useLayoutEffect(() => {
+    const container = chatContainerRef.current;
+    if (jumpTarget && container) {
+      const row = jumpTarget.messageId ? container.querySelector<HTMLElement>(`[data-conversation-message="${jumpTarget.messageId}"]`)
+        : container.querySelector<HTMLElement>(`[data-conversation-round="${jumpTarget.roundNumber}"]`);
+      if (row) {
+        stickyBottomRef.current = false; restoreScrollRef.current = null; olderAnchorRef.current = null;
+        container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - 24;
+        lastScrollTopRef.current = container.scrollTop;
+        setAway(true); setReadingRound(jumpTarget.roundNumber); setHighlightedMessage(jumpTarget.messageId);
+        setJumpTarget(null);
+      }
+    } else detectReadingRound();
+  }, [visibleMessages, jumpTarget]);
+  useEffect(() => {
+    if (highlightedMessage === undefined) return;
+    const timer = window.setTimeout(() => setHighlightedMessage(undefined), 1200);
+    return () => window.clearTimeout(timer);
+  }, [highlightedMessage]);
+  const previewRound = async (round: number): Promise<RoundPreview> => {
+    const index = visibleMessages.findIndex(item => item.role === 'user' && item.roundNumber === round);
+    if (index >= 0) {
+      const question = visibleMessages[index];
+      let answer: ChatMessage | undefined;
+      for (let at = index + 1; at < visibleMessages.length && visibleMessages[at].role !== 'user'; at++) {
+        if (visibleMessages[at].role === 'assistant') answer = visibleMessages[at];
+      }
+      return { roundNumber: round, totalRounds, messageId: question.id,
+        question: contentText(question.content, question.displayContent).slice(0, 240),
+        answer: answer ? contentText(answer.content, answer.displayContent).slice(0, 600) : '', createdAt: question.createdAt,
+        status: answer?.streaming ? 'RUNNING' : answer?.turn?.status ?? (answer?.recovery?.state === 'failed' ? 'FAILED' : answer ? 'COMPLETED' : undefined) };
+    }
+    if (sessionId === undefined) throw new Error('会话尚未保存');
+    return queryClient.fetchQuery({ queryKey: ['ai-round-preview', sessionId, history.historyRevision, round],
+      queryFn: () => getRoundPreview(sessionId, round), staleTime: 30_000, gcTime: 60_000 });
+  };
+  const jumpToRound = async (preview: RoundPreview): Promise<void> => {
+    const selectedSession = sessionId;
+    const identity = ++jumpIdentity.current;
+    try {
+      if (preview.messageId && !visibleMessages.some(item => item.id === preview.messageId)) await history.focusMessage(preview.messageId);
+      if (identity !== jumpIdentity.current || selectedSessionRef.current !== selectedSession) return;
+      stickyBottomRef.current = false; restoreScrollRef.current = null;
+      setJumpTarget(preview);
+    } catch (failure) {
+      if (identity === jumpIdentity.current && selectedSessionRef.current === selectedSession)
+        Message.error(friendlyMessage(failure, '这轮对话暂时无法读取'));
+    }
+  };
 
   useEffect(() => {
     if (!aiOpen) return;
@@ -473,6 +550,7 @@ export function AiAssistant(): JSX.Element {
 
   // 聊天列表自动滚动：仅当用户接近底部时粘底；用户上滑阅读时尊重其位置。
   const onChatScroll = (event: UIEvent<HTMLDivElement>): void => {
+    detectReadingRound();
     const el = event.currentTarget;
     setTextSelection(null);   // 浮层按屏幕坐标定位，滚动后不再对应选区
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
@@ -578,8 +656,7 @@ export function AiAssistant(): JSX.Element {
   };
 
   const createSessionMutation = useMutation({
-    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话',
-      ...(draftChoiceRef.current.modelConfigId || draftChoiceRef.current.reasoningEffort ? draftChoiceRef.current : {}) }),
+    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
     onSuccess: (session) => {
       // 只在首条消息发送时创建；先写缓存和选择，下一次渲染后再启动首轮。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
@@ -589,7 +666,6 @@ export function AiAssistant(): JSX.Element {
       });
       void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
       lastExplicitSessionIdRef.current = session.id;
-      setDraftChoice({ modelConfigId: null, reasoningEffort: null });
       draftCache.current.delete('new');
       setSessionId(session.id);
     }
@@ -607,15 +683,23 @@ export function AiAssistant(): JSX.Element {
       item.id === session.id && (session.titleRevision ?? 0) >= (item.titleRevision ?? 0) ? session : item));
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
   };
-  /** 改选只作用于当前会话之后提交的消息；已开始的轮次和已受理的待发消息保持提交时的配置。 */
+  /** 改选全局保存后生效；已开始的轮次和已受理的待发消息保持提交时的配置。 */
   const changeModelChoice = async (next: ModelChoice): Promise<void> => {
-    if (!draftsReady) return;
-    if (sessionId === undefined) { setDraftChoice(next); return; }
+    if (!draftsReady || modelSavingRef.current || !connectionsQuery.data || !next.modelConfigId
+      || next.modelConfigId === modelChoice.modelConfigId && next.reasoningEffort === modelChoice.reasoningEffort) return;
+    modelSavingRef.current = true; setModelSaving(true);
     pendingAssistantWork.current += 1;
     try {
-      updateSessionCache(await put<AiChatSession>(`/api/ai/sessions/${sessionId}`, next));
-    } catch (error) { Message.error(friendlyMessage(error, '模型选择未保存，请重试')); }
-    finally { pendingAssistantWork.current -= 1; }
+      const value = await put<Connections>('/api/ai/connections/chat-model', { ...next,
+        revision: queryClient.getQueryData<Connections>(['ai-connections'])?.revision ?? connectionsQuery.data.revision });
+      queryClient.setQueryData<Connections>(['ai-connections'], current => current && current.revision > value.revision ? current : value);
+      const keys = [['ai-config'], ['ai-memory-settings'], ['ai-context-usage']];
+      for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
+      publish({ type: 'invalidate', keys: [['ai-connections'], ...keys] });
+    } catch (error) {
+      Message.error(friendlyMessage(error, '模型选择未保存，请重试'));
+      void connectionsQuery.refetch();
+    } finally { pendingAssistantWork.current -= 1; modelSavingRef.current = false; setModelSaving(false); }
   };
   /** 置顶属于会话：每个会话各自记录，置顶的归入会话栏最前的「置顶」分组，先置顶的在上。 */
   const pinSession = async (id: number, pinned: boolean): Promise<void> => {
@@ -874,10 +958,10 @@ export function AiAssistant(): JSX.Element {
     else turn.send(input);
   };
   const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
-    if (!draftsReady || firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
+    if (!draftsReady || modelSavingRef.current || firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
     if (!continuation && !message.trim() && !attachments.length) return;
     if (!configured) {
-      Message.warning('请先在设置中配置 API Key');
+      Message.warning('请先配置 AI 连接，并在输入框下方选择模型');
       return;
     }
     const text = continuation ?? (message.trim() || '请分析附件内容');
@@ -934,7 +1018,7 @@ export function AiAssistant(): JSX.Element {
   const regenerateBlocked = regenerating ? '正在准备重新生成' : regenerationUnavailable;
   /** 原输入按需读取，retryOf 沿用工具回执；新回答追加，输入草稿保持原样。 */
   const regenerate = async (requestId: string): Promise<void> => {
-    if (regenerationRef.current || regenerationUnavailable || sessionId === undefined) return;
+    if (regenerationRef.current || modelSavingRef.current || regenerationUnavailable || sessionId === undefined) return;
     const target = { requestId, sessionId };
     regenerationRef.current = target;
     setRegenerating(requestId);
@@ -1082,13 +1166,29 @@ export function AiAssistant(): JSX.Element {
     return null;
   })();
   const detailOpen = !!inspectorTarget || !!sessionReference;
-  const jumpToLatest = (): void => {
+  const jumpToLatest = async (): Promise<void> => {
     const el = chatContainerRef.current;
     if (!el) return;
-    stickyBottomRef.current = true;
-    el.scrollTop = el.scrollHeight;
-    lastScrollTopRef.current = el.scrollTop;
-    setAway(false); setUnseen(false);
+    const selectedSession = sessionId;
+    const identity = ++jumpIdentity.current;
+    setJumpTarget(null);
+    const showLatest = (): void => {
+      restoreScrollRef.current = null; olderAnchorRef.current = null;
+      stickyBottomRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      lastScrollTopRef.current = el.scrollTop;
+      setAway(false); setUnseen(false);
+    };
+    // 最新阅读窗口可以立即滚动；后台刷新同时撤销尚未返回的旧定位。
+    if (!history.focused) showLatest();
+    try { await history.returnToLatest(); }
+    catch (failure) {
+      if (identity === jumpIdentity.current && selectedSessionRef.current === selectedSession)
+        Message.error(friendlyMessage(failure, '最新消息暂时无法读取'));
+      return;
+    }
+    if (identity !== jumpIdentity.current || selectedSessionRef.current !== selectedSession) return;
+    showLatest();
   };
   const copyReply = async (value: string): Promise<void> => {
     try { await navigator.clipboard.writeText(value); Message.success('已复制回复'); }
@@ -1156,7 +1256,7 @@ export function AiAssistant(): JSX.Element {
   const closeDetail = (): void => { setInspectorTarget(null); setSessionReference(undefined); };
 
   return (
-    <div className={`ai-window ai-assistant${sideOpen ? '' : ' is-side-closed'}${narrow ? ' is-narrow' : ''}${detailOpen ? ' has-detail' : ''}`}
+    <div className={`ai-window ai-assistant${sideOpen ? '' : ' is-side-closed'}${narrow ? ' is-narrow' : ''}${detailOpen ? ' has-detail' : ''}${totalRounds > 1 && !(detailOpen && windowWidth < 1180 || narrow && sideOpen) ? ' has-conversation-navigation' : ''}`}
       style={{ '--ai-side-width': `${sideWidth}px`, '--ai-detail-width': `${detailWidth}px` } as CSSProperties}>
       <nav className="ai-window-side" aria-label="会话" hidden={!sideOpen}>
         {narrow ? null : <PanelResizer label="调整会话栏宽度" edge="right" value={sideWidth} min={PANELS.side.min} max={PANELS.side.max}
@@ -1251,7 +1351,9 @@ export function AiAssistant(): JSX.Element {
               const turnSnapshot = item.turn?.requestId ? item.turn : null;
               const turnId = item.requestId ?? turnSnapshot?.requestId ?? null;
               return (
-                <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} className={`chat-message ${item.role}${isAssistant && item._key === lastAssistantKey ? ' is-latest' : ''}`}>
+                <div key={item._key ?? `${item.role}-${item.id ?? 'x'}`} data-conversation-message={item.id}
+                  data-conversation-round={item.role === 'user' ? item.roundNumber : undefined}
+                  className={`chat-message ${item.role}${isAssistant && item._key === lastAssistantKey ? ' is-latest' : ''}${item.id !== undefined && item.id === highlightedMessage ? ' is-jump-target' : ''}`}>
                   {isAssistant && item.model ? <p className="chat-turn-model">{item.model}{item.reasoningEffort ? ` · 思考 ${item.reasoningEffort}` : ''}</p> : null}
                   {isAssistant && item.reasoning ? (
                     <details className="chat-reasoning" open={item.streaming}>
@@ -1358,6 +1460,9 @@ export function AiAssistant(): JSX.Element {
             </>)}
             </div>
           </div>
+          <ConversationNavigation key={sessionId ?? 'new'} total={totalRounds} reading={readingRound}
+            hidden={detailOpen && windowWidth < 1180 || narrow && sideOpen || textSelection !== null}
+            getPreview={previewRound} onJump={jumpToRound} />
           {textSelection ? (
             <div className={`ai-selection-pop${textSelection.below ? ' is-below' : ''}`} role="toolbar" aria-label="选中文本操作"
               style={{ left: `${textSelection.x}px`, top: `${textSelection.y}px` }} onMouseDown={(event) => event.preventDefault()}>
@@ -1365,7 +1470,7 @@ export function AiAssistant(): JSX.Element {
               <button type="button" onClick={quoteSelected}>引用</button>
             </div>
           ) : null}
-          {away ? <button type="button" className="ai-window-latest" onClick={jumpToLatest} aria-label={unseen ? '回到最新，有新内容' : '回到最新'}>
+          {away || history.focused ? <button type="button" className="ai-window-latest" onClick={() => void jumpToLatest()} aria-label={unseen ? '回到最新，有新内容' : '回到最新'}>
             <ArrowDown size={14} />回到最新{unseen ? <span className="ai-window-latest-dot" aria-hidden="true" /> : null}</button> : null}
           </div>
 
@@ -1440,19 +1545,19 @@ export function AiAssistant(): JSX.Element {
               <FileText size={13} /><span>{pageTarget ? pageContext.title : '无当前页面'}</span></button>
             <ContextMeter sessionId={sessionId} estimate={contextEstimate} refreshKey={`${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}`}
               onInspect={(requestId) => { setSessionReference(undefined); setInspectorTarget({ requestId }); }} />
-            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || createSessionMutation.isPending}
+            <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || modelSaving || connectionsQuery.isPending || createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={!draftsReady || createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
             {streaming && <>
               <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
-                disabled={queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>
+                disabled={modelSaving || queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>
               <Button type="secondary" icon={<Square size={14} />} aria-label="中断生成" title="停止回复" onClick={stopGeneration} />
             </>}
             <Button
               type="primary"
               icon={<Send size={16} />}
               loading={createSessionMutation.isPending || queueSubmitting}
-              disabled={!draftsReady || !configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || !!regenerating || (streaming && !message.trim() && !attachments.length)}
+              disabled={!draftsReady || modelSaving || !configured || createSessionMutation.isPending || queueSubmitting || queue.unconfirmed || !!regenerating || (streaming && !message.trim() && !attachments.length)}
               onClick={send}
               aria-label={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
               title={streaming || queue.data?.items?.length ? '加入队列' : '发送'}
@@ -1462,7 +1567,7 @@ export function AiAssistant(): JSX.Element {
             if (!draftsReady) setDraftReadAttempt(value => value + 1);
             else void saveDrafts().then(() => setDraftsError(''), error => setDraftsError(friendlyMessage(error, '草稿未保存')));
           }}>重试</Button></div> : !draftsReady ? <p className="ai-drawer-hint" role="status">正在恢复助手草稿…</p> : null}
-          {!configured ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中配置供应商并应用模型后即可使用。</Typography.Text> : null}
+          {!configured ? <Typography.Text type="secondary" className="ai-drawer-hint">在「设置 → AI 连接」中添加模型，再在这里选择。</Typography.Text> : null}
           {exporting ? <Typography.Text type="secondary" className="ai-drawer-hint"><Download size={12} style={{ marginRight: 4 }} />正在导出会话…</Typography.Text> : null}
           </div>
         </footer>

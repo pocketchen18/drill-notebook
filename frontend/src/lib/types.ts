@@ -190,9 +190,9 @@ export interface AiChatSession {
   model?: string;
   /** 置顶时刻；null 表示未置顶。先置顶的排在前面。 */
   pinnedAt?: string | null;
-  /** 会话自己选择的模型配置；null 表示跟随主模型。 */
+  /** 旧会话的模型选择元数据；v0.8.1 起不再参与派发，全局选择见 Connections。 */
   modelConfigId?: string | null;
-  /** 会话自己选择的思考档位；null 表示模型默认。 */
+  /** 旧会话的思考档位元数据；v0.8.1 起不再参与派发。 */
   reasoningEffort?: string | null;
   tags?: string;
   createdAt?: string;
@@ -238,6 +238,7 @@ export type TurnResult = ChatResultView & { requestId: string };
 
 export interface ChatMessage {
   recovery?: import('./aiRecovery').AiRecovery | null;
+  roundNumber?: number;
   supplements?: import('./chatQueue').ChatSupplement[];
   toolActivities?: import('./toolActivity').ToolActivity[];
   toolPhase?: import('./toolActivity').ToolPhase;

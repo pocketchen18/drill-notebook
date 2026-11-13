@@ -27,16 +27,15 @@ const usable = (model: ConnectionModel): boolean => !!model.contextWindow && !!m
 const effortsOf = (model?: ConnectionModel): string[] =>
   model && (model.reasoningControl ?? 'effort') === 'effort' ? model.reasoningEfforts ?? [] : [];
 
-/** 输入区的模型与思考档位：选择属于当前会话，不改主模型，也不影响其他会话。 */
+/** 输入区的模型与思考档位：全局保存，跨会话和重启共用。 */
 export function ModelPicker({ connections, value, busy, disabled, onChange, onManage }: Props): JSX.Element {
   const [open, setOpen] = useState<'model' | 'effort' | null>(null);
   const [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const main = find(connections, connections?.chatModelId ?? null);
   const chosen = find(connections, value.modelConfigId);
   const missing = value.modelConfigId !== null && !chosen && !!connections;
-  const active = chosen ?? main;
+  const active = chosen;
   const efforts = effortsOf(active?.model);
   const effort = value.reasoningEffort && efforts.includes(value.reasoningEffort) ? value.reasoningEffort : null;
   const needle = query.trim().toLowerCase();
@@ -58,19 +57,19 @@ export function ModelPicker({ connections, value, busy, disabled, onChange, onMa
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape, true); };
   }, [open]);
 
-  const pick = (modelConfigId: string | null): void => {
-    const target = find(connections, modelConfigId ?? connections?.chatModelId ?? null)?.model;
+  const pick = (modelConfigId: string): void => {
+    const target = find(connections, modelConfigId)?.model;
     // 换到不支持当前档位的模型时回到模型默认。
     const keep = value.reasoningEffort && effortsOf(target).includes(value.reasoningEffort) ? value.reasoningEffort : null;
     onChange({ modelConfigId, reasoningEffort: keep });
     setOpen(null); setQuery('');
   };
-  const label = missing ? '模型已删除' : active ? active.model.modelId : '未配置模型';
+  const label = missing ? '模型已删除' : active ? active.model.modelId : '选择模型';
 
   return <div className="model-picker" ref={root}>
     <button type="button" className={`model-picker-trigger${missing ? ' is-warning' : ''}`} data-trigger="model" disabled={disabled}
       aria-haspopup="dialog" aria-expanded={open === 'model'} aria-label={`模型：${label}`}
-      title={active ? `${active.provider.name} · ${active.model.modelId}${chosen ? '' : '（跟随主模型）'}` : undefined}
+      title={active ? `${active.provider.name} · ${active.model.modelId}` : undefined}
       onClick={() => setOpen(open === 'model' ? null : 'model')}><span>{label}</span><ChevronDown size={13} /></button>
     {efforts.length ? <button type="button" className="model-picker-trigger" data-trigger="effort" disabled={disabled}
       aria-haspopup="menu" aria-expanded={open === 'effort'} aria-label={`思考档位：${effort ?? '模型默认'}`}
@@ -80,10 +79,6 @@ export function ModelPicker({ connections, value, busy, disabled, onChange, onMa
       <label className="model-picker-search"><Search size={14} aria-hidden="true" />
         <input ref={search} value={query} placeholder="查找模型或供应商" aria-label="查找模型" onChange={(event) => setQuery(event.target.value)} /></label>
       <div className="model-picker-list">
-        {!needle ? <button type="button" role="menuitemradio" aria-checked={value.modelConfigId === null} className="model-picker-option" onClick={() => pick(null)}>
-          <span className="model-picker-mark">{value.modelConfigId === null ? <Check size={14} /> : null}</span>
-          <span className="model-picker-name">跟随主模型{main ? `（${main.provider.name} · ${main.model.modelId}）` : '（尚未应用主模型）'}</span>
-        </button> : null}
         {groups.map(({ provider, models }) => <div key={provider.id} role="group" aria-label={provider.name}>
           <div className="model-picker-group">{provider.name}</div>
           {models.map((model) => <button type="button" key={model.id} role="menuitemradio" aria-checked={value.modelConfigId === model.id}
@@ -95,7 +90,7 @@ export function ModelPicker({ connections, value, busy, disabled, onChange, onMa
         </div>)}
         {needle && !groups.length ? <p className="model-picker-empty">没有匹配的模型</p> : null}
       </div>
-      <div className="model-picker-foot"><span>{busy ? '从下一条消息开始使用' : '仅对当前会话生效'}</span>
+      <div className="model-picker-foot"><span>{busy ? '从下一条消息开始使用' : '跨会话自动保存'}</span>
         <button type="button" className="model-picker-link" onClick={() => { setOpen(null); onManage(); }}>管理 AI 连接 ↗</button></div>
     </div> : null}
 

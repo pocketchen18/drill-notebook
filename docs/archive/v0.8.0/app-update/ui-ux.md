@@ -1,10 +1,12 @@
 # v0.8.0 软件内更新与关于：UI/UX
 
-> 状态：已实现，工程验证通过（2026-11-12），尚未发布。需求见 [requirements.md](requirements.md)，协议与验证见[规格](spec.md)和[计划](plan.md)，版本状态见[当前 F09](../../state/v0.8-features.md)。`app-update-preview.html` 保留为确认设计的示例，实际功能来自 React 与 Electron；本轮尚未做真实界面人工观感、缩放和读屏验收。
+> 已于 2026-11-12 随 v0.8.0 归档，仅作历史参考；下文的「当前」与待验项均保留施工时口径，归档不新增验证结论。版本收尾与后续调整见 [归档说明](../README.md)。
+
+> 状态：已实现，工程验证通过（2026-11-12），尚未发布。需求见 [requirements.md](requirements.md)，协议与验证见[规格](spec.md)和[计划](plan.md)，版本状态见[当前 F09](../features.md)。`app-update-preview.html` 保留为确认设计的示例，实际功能来自 React 与 Electron；本轮尚未做真实界面人工观感、缩放和读屏验收。
 
 ## 1. 页面与入口
 
-沿用现有主窗口侧栏、顶栏与设置横向 pill 标签，在末尾加「关于」。不额外增加第二列设置导航。颜色、字体、间距、按钮与表单继承[全局设计规范](../../DESIGN.md)及现有设置面板；支持明暗主题和窄窗口。
+沿用现有主窗口侧栏、顶栏与设置横向 pill 标签，在末尾加「关于」。不额外增加第二列设置导航。颜色、字体、间距、按钮与表单继承[全局设计规范](../../../DESIGN.md)及现有设置面板；支持明暗主题和窄窗口。
 
 顶部更新入口位于主窗口右上角，与 AI 助手入口相邻：使用 32px 图标按钮和 Lucide `circle-arrow-up`，有新版时采用柔和的成功色，悬停 / 聚焦说明「发现新版本 v…，查看更新内容」。常驻表示有可用新版，不闪烁、不循环动画。
 
@@ -144,4 +146,4 @@ GitHub 主页旁的「更新内容」与 Magpie 一样，可在默认范围阅�
 | ai-toolbox：[下载与安装事件](https://github.com/coulsontl/ai-toolbox/blob/dd329568361f1e2482414ff12c596cd13cf66d3b/tauri/src/update.rs#L359)、[共享进度弹窗](https://github.com/coulsontl/ai-toolbox/blob/dd329568361f1e2482414ff12c596cd13cf66d3b/web/components/common/UpdateProgressModal.tsx#L35)、[全局更新协调](https://github.com/coulsontl/ai-toolbox/blob/dd329568361f1e2482414ff12c596cd13cf66d3b/web/app/providers.tsx#L101) | 固定提交可核对共享进度弹窗及下载 / 安装阶段、大小、百分比与速度事件；用户实际使用体验为一次点击后全自动下载、安装并重启 | 采用一次操作与连续进度，不增加正常成功后的重启确认；启动自动更新按本项目规则每次立即检查。Tauri updater 需适配为本项目 Electron 便携 ZIP 事务，配置与材料全部经便携路径落在 APP_ROOT |
 | Cockpit Tools：[提醒策略](https://github.com/jlcodes99/cockpit-tools/blob/main/src/utils/updatePromptPolicy.ts)、[检查设置](https://github.com/jlcodes99/cockpit-tools/blob/main/src-tauri/src/modules/update_checker.rs)、[更新弹窗](https://github.com/jlcodes99/cockpit-tools/blob/main/src/components/UpdateNotification.tsx) | 本地提醒偏好、每版提示去重、检查间隔 / 跳过记录、关闭 / 跳过 / 下载 / 重启状态 | 借鉴状态拆分；本项目还需持久化共享间隔的提醒冷却，不能只靠一次启动的内存去重 |
 
-项目的真实打包边界来自 [便携打包脚本](../../../scripts/package-portable.ps1)、[发布工作流](../../../.github/workflows/release-portable.yml)与 [Electron 路径](../../../electron/paths.ts)：`--win dir` 后生成 ZIP，当前不是安装器或单文件 portable launcher。关于页、Release 说明和便携替换应按这个事实设计。
+项目的真实打包边界来自 [便携打包脚本](../../../../scripts/package-portable.ps1)、[发布工作流](../../../../.github/workflows/release-portable.yml)与 [Electron 路径](../../../../electron/paths.ts)：`--win dir` 后生成 ZIP，当前不是安装器或单文件 portable launcher。关于页、Release 说明和便携替换应按这个事实设计。

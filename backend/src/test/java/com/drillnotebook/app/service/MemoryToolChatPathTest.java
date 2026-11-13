@@ -429,7 +429,7 @@ class MemoryToolChatPathTest {
                     "tools", true, "streaming", true, "contextWindow", 128000, "maxOutputTokens", 32000));
             state = configs.connections().read();
             var models = state.provider(providerId).models();
-            connections.bind(Map.of("revision", state.revision(), "purpose", "chat", "modelId", models.get(models.size() - 1).id()));
+            connections.selectChatModel(Map.of("revision", state.revision(), "modelConfigId", models.get(models.size() - 1).id()));
             assertEquals(executionSettings, new AiRuntimeSettingsRepository(jdbc).read().values(), "切供应商或模型不得影响全局预算");
 
             assertTrue(stack.policy().current().enabled());

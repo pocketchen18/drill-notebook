@@ -547,6 +547,34 @@ public class ChatHistoryRepository {
         }
     }
 
+    /** 轮次导航只查用户消息身份，正文始终按目标有界读取。 */
+    public long questionCount(long sessionId, Long throughMessageId) throws SQLException {
+        String sql = "SELECT count(*) FROM ai_chat_message WHERE session_id = ? AND role = 'user'"
+                + (throughMessageId == null ? "" : " AND id <= ?");
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, sessionId);
+            if (throughMessageId != null) statement.setLong(2, throughMessageId);
+            try (var result = statement.executeQuery()) { return result.next() ? result.getLong(1) : 0; }
+        }
+    }
+
+    public Optional<Long> questionIdAt(long sessionId, int roundNumber) throws SQLException {
+        if (roundNumber < 1) return Optional.empty();
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(
+                "SELECT id FROM ai_chat_message WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 1 OFFSET ?")) {
+            statement.setLong(1, sessionId); statement.setInt(2, roundNumber - 1);
+            try (var result = statement.executeQuery()) { return result.next() ? Optional.of(result.getLong(1)) : Optional.empty(); }
+        }
+    }
+
+    public boolean hasMessageBefore(long sessionId, long messageId) throws SQLException {
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(
+                "SELECT 1 FROM ai_chat_message WHERE session_id = ? AND id < ? LIMIT 1")) {
+            statement.setLong(1, sessionId); statement.setLong(2, messageId);
+            try (var result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
     /**
      * 清理范围里的一条消息（含 legacy 行）。字节按 {@link ChatStorageSizer#MESSAGE_BYTES_SQL} 现算，
      * 轮次归属留在行上：执行前要逐条核它还在不在原位，被改写就不许继续删。

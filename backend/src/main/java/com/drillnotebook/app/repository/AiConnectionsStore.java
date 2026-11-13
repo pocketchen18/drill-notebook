@@ -19,7 +19,11 @@ public class AiConnectionsStore {
     public record Model(String id, String modelId, String name, String group, Map<String, Object> params) { }
     public record Provider(String id, String name, String apiFormat, String endpoint, String authMode,
                            String encryptedKey, String keyMeta, List<Model> models) { }
-    public record State(long revision, List<Provider> providers, String chatModelId, String importModelId) {
+    public record State(long revision, List<Provider> providers, String chatModelId, String importModelId,
+                        String chatReasoningEffort) {
+        public State(long revision, List<Provider> providers, String chatModelId, String importModelId) {
+            this(revision, providers, chatModelId, importModelId, null);
+        }
         public Model model(String id) {
             return providers.stream().flatMap(p -> p.models().stream())
                     .filter(m -> m.id().equals(id)).findFirst().orElse(null);
@@ -39,7 +43,7 @@ public class AiConnectionsStore {
         List<State> rows = jdbc.query("SELECT revision, document FROM ai_connections WHERE id = 1", (rs, index) -> {
             try {
                 State state = mapper.readValue(rs.getString("document"), State.class);
-                return new State(rs.getLong("revision"), state.providers(), state.chatModelId(), state.importModelId());
+                return new State(rs.getLong("revision"), state.providers(), state.chatModelId(), state.importModelId(), state.chatReasoningEffort());
             } catch (Exception error) { throw new IllegalStateException("AI 连接配置无法读取，原数据已保留", error); }
         });
         return rows.isEmpty() ? null : rows.get(0);
@@ -61,10 +65,10 @@ public class AiConnectionsStore {
         int updated = jdbc.update("UPDATE ai_connections SET document = ?, revision = revision + 1 WHERE id = 1 AND revision = ?",
                 json(state), expected);
         if (updated != 1) throw conflict();
-        return new State(expected + 1, state.providers(), state.chatModelId(), state.importModelId());
+        return new State(expected + 1, state.providers(), state.chatModelId(), state.importModelId(), state.chatReasoningEffort());
     }
 
-    /** 应用主模型与同步已开启的记忆授权一起提交；授权写入失败时配置也回滚。 */
+    /** 保存助手模型选择与同步已开启的记忆授权一起提交；授权写入失败时配置也回滚。 */
     public State saveWithMemoryConsent(State state, long expected, String useFingerprint, String maintenanceFingerprint) {
         return new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource())).execute(status -> {
             State saved = save(state, expected);
@@ -91,8 +95,13 @@ public class AiConnectionsStore {
         if (id == null) return null;
         Provider provider = state.owner(id);
         Model model = state.model(id);
-        if (provider == null || model == null) throw new IllegalStateException("AI 用途绑定损坏，请检查设置");
+        if (provider == null || model == null) throw new IllegalArgumentException("所选模型已不存在，请重新选择模型");
         Map<String, Object> params = new LinkedHashMap<>(model.params());
+        if ("chat".equals(purpose) && state.chatReasoningEffort() != null
+                && "effort".equals(params.getOrDefault("reasoningControl", "effort"))
+                && params.get("reasoningEfforts") instanceof List<?> efforts && efforts.contains(state.chatReasoningEffort())) {
+            params.put("defaultReasoningEffort", state.chatReasoningEffort());
+        }
         params.put("apiFormat", provider.apiFormat());
         params.put("authMode", provider.authMode());
         params.put("connectionId", provider.id());

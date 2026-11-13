@@ -86,7 +86,7 @@ class AiConnectionsServiceTest {
     @Test void modelIdEditsPreserveSettingsAndIdentityAndRejectDuplicatesAtomically() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String original = model(p, "old", true), other = model(p, "duplicate", false);
-        service.bind(body("purpose", "chat", "modelId", original));
+        service.selectChatModel(body("modelConfigId", original));
         service.bind(body("purpose", "import", "modelId", original));
         service.saveModels(null, original, body("modelId", "old", "name", "自定义名称", "group", "常用", "contextWindow", 12000, "maxInputTokens", 800, "maxOutputTokens", 2000,
                 "reasoningEfforts", List.of("high"), "defaultReasoningEffort", "high"));
@@ -170,16 +170,16 @@ class AiConnectionsServiceTest {
         assertEquals("pong（本地演示）", service.test(state().chatModelId(), Map.of("prompt", "ping")).get("reply"));
         assertThrows(IllegalArgumentException.class, () -> service.bind(body("purpose", "import", "modelId", state().importModelId())));
     }
-    @Test void saveApplyFollowAndPreferencesStayIndependentAcrossProviders() {
+    @Test void saveSelectFollowAndPreferencesStayIndependentAcrossProviders() {
         String a = provider("A", "http://localhost:9999/v1"), b = provider("B", "http://localhost:9998/v1");
         String one = model(a, "same", true), two = model(b, "same", false);
         assertNull(configs.findChat());
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         service.bind(body("purpose", "import", "modelId", two));
         var snapshot = configs.findChat();
         service.saveModels(null, two, body("modelId", "same", "name", "Second", "tools", false, "streaming", true));
         assertEquals(one, state().chatModelId());
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertEquals("http://localhost:9999/v1", snapshot.endpoint());
         assertEquals(true, AiModelLimits.params(snapshot).get("tools"));
         assertEquals(false, AiModelLimits.params(configs.findChat()).get("tools"));
@@ -190,15 +190,15 @@ class AiConnectionsServiceTest {
     @Test void staleWriteAndReferencedOrRunningDeleteNeverChangeState() {
         String a = provider("A", "http://localhost:9999/v1");
         String one = model(a, "one", false), two = model(a, "two", false);
-        service.bind(body("purpose", "chat", "modelId", one));
-        var stale = body("purpose", "chat", "modelId", two);
+        service.selectChatModel(body("modelConfigId", one));
+        var stale = body("modelConfigId", two);
         assertEquals(409, assertThrows(ChatTurnRejectException.class, () -> service.delete(one, false, body())).status());
         var snapshot = configs.findChat();
         try (var usage = AiConnectionUsage.acquire(snapshot)) {
-            service.bind(body("purpose", "chat", "modelId", two));
+            service.selectChatModel(body("modelConfigId", two));
             assertEquals("CONFIG_BUSY", assertThrows(ChatTurnRejectException.class, () -> service.delete(one, false, body())).code());
         }
-        assertEquals("CONFIG_CHANGED", assertThrows(ChatTurnRejectException.class, () -> service.bind(stale)).code());
+        assertEquals("CONFIG_CHANGED", assertThrows(ChatTurnRejectException.class, () -> service.selectChatModel(stale)).code());
         assertEquals(two, state().chatModelId());
         service.delete(one, false, body());
         assertNull(state().model(one));
@@ -225,12 +225,12 @@ class AiConnectionsServiceTest {
                 saved.get("maintenance_consent_fingerprint"));
     }
 
-    @Test void applyingChatPersistsBothConsentsAndReapplyingRepairsOldStaleState() {
+    @Test void selectingChatPersistsBothConsentsAndReselectingRepairsOldStaleState() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true), two = model(p, "two", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(true, "chat");
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertCurrentMemoryConsent();
         var saved = memorySettings();
         assertEquals(2, ((Number) saved.get("revision")).intValue());
@@ -240,17 +240,17 @@ class AiConnectionsServiceTest {
         // 重新建立服务实例后仍然有效，读取配置和重复应用不反复推进记忆版本。
         service = new AiConnectionsService(new AiConfigRepository(jdbc), new ApiKeyEncryptor(), mapper);
         service.view();
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertEquals(saved, memorySettings());
         jdbc.update("UPDATE ai_memory_settings SET use_consent_fingerprint = 'stale'");
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertCurrentMemoryConsent();
     }
 
-    @Test void changingAppliedProviderEndpointAndProtocolRefreshesConsents() {
+    @Test void changingSelectedProviderEndpointAndProtocolRefreshesConsents() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(true, "chat");
         service.saveProvider(p, body("name", "Gateway", "endpoint", "https://new.invalid/v1",
                 "apiFormat", "anthropic", "authMode", "none"));
@@ -260,10 +260,10 @@ class AiConnectionsServiceTest {
     @Test void disabledMemoryAndUnrelatedConnectionChangesDoNotGrantConsent() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true), two = model(p, "two", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(false, "chat");
         var disabled = memorySettings();
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertEquals(disabled, memorySettings());
         jdbc.update("UPDATE ai_memory_settings SET enabled = 1");
         var enabled = memorySettings();
@@ -276,9 +276,9 @@ class AiConnectionsServiceTest {
     @Test void dedicatedMaintenanceConsentSurvivesChatSwitch() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true), two = model(p, "two", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(true, "dedicated");
-        service.bind(body("purpose", "chat", "modelId", two));
+        service.selectChatModel(body("modelConfigId", two));
         assertNotEquals("old-use", memorySettings().get("use_consent_fingerprint"));
         assertEquals("old-maintenance", memorySettings().get("maintenance_consent_fingerprint"));
     }
@@ -286,14 +286,14 @@ class AiConnectionsServiceTest {
     @Test void failedConsentWriteRollsBackModelSwitchAndConnectionEdits() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true), two = model(p, "two", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(true, "chat");
         var before = state();
         var memoryBefore = memorySettings();
         jdbc.execute("CREATE TRIGGER fail_consent BEFORE UPDATE ON ai_memory_settings"
                 + " BEGIN SELECT RAISE(ABORT, 'test consent write failure'); END");
         assertThrows(org.springframework.dao.DataAccessException.class,
-                () -> service.bind(body("purpose", "chat", "modelId", two)));
+                () -> service.selectChatModel(body("modelConfigId", two)));
         assertEquals(before, state());
         assertEquals(memoryBefore, memorySettings());
         assertThrows(org.springframework.dao.DataAccessException.class,
@@ -303,17 +303,59 @@ class AiConnectionsServiceTest {
         assertEquals(memoryBefore, memorySettings());
     }
 
-    @Test void staleApplyDoesNotUpdateMemoryConsent() {
+    @Test void staleSelectionDoesNotUpdateMemoryConsent() {
         String p = provider("Gateway", "https://example.invalid/v1");
         String one = model(p, "one", true), two = model(p, "two", true);
-        service.bind(body("purpose", "chat", "modelId", one));
+        service.selectChatModel(body("modelConfigId", one));
         memorySettings(true, "chat");
-        var stale = body("purpose", "chat", "modelId", two);
+        var stale = body("modelConfigId", two);
         service.saveModels(null, two, body("modelId", "two", "name", "Changed"));
         var before = memorySettings();
-        assertEquals("CONFIG_CHANGED", assertThrows(ChatTurnRejectException.class, () -> service.bind(stale)).code());
+        assertEquals("CONFIG_CHANGED", assertThrows(ChatTurnRejectException.class, () -> service.selectChatModel(stale)).code());
         assertEquals(before, memorySettings());
         assertEquals(one, state().chatModelId());
+    }
+
+    @Test void assistantChoiceSurvivesEditsImportSelectionAndCapabilityWriteback() throws Exception {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String selected = model(p, "deep", true), imported = model(p, "imported", false);
+        service.saveModels(null, selected, body("modelId", "deep", "reasoningEfforts", List.of("low", "high"), "defaultReasoningEffort", "low"));
+        service.selectChatModel(body("modelConfigId", selected, "reasoningEffort", "high"));
+        service.bind(body("purpose", "import", "modelId", imported));
+        service.saveModels(null, imported, body("modelId", "imported", "name", "导入模型"));
+        service.saveProvider(p, body("name", "Renamed", "endpoint", "https://example.invalid/v1", "apiFormat", "chat_completions", "authMode", "none"));
+        var snapshot = configs.findChat();
+        var params = new LinkedHashMap<>(AiModelLimits.params(snapshot)); params.put("cacheBreakpoints", false);
+        configs.updateParamsIfCurrent(snapshot, mapper.writeValueAsString(params));
+        service = new AiConnectionsService(new AiConfigRepository(jdbc), new ApiKeyEncryptor(), mapper);
+        assertEquals(selected, service.view().get("chatModelId"));
+        assertEquals("high", service.view().get("chatReasoningEffort"));
+        assertEquals("high", AiReasoningSettings.from(configs.findChat()).defaultEffort());
+        assertEquals("low", state().model(selected).params().get("defaultReasoningEffort"), "助手的档位不改模型默认值");
+        assertEquals(imported, state().importModelId());
+        assertEquals("imported", configs.findImport().model());
+        assertEquals("", AiReasoningSettings.from(configs.findImport()).defaultEffort(), "导入绑定不继承助手档位");
+    }
+
+    @Test void removingSupportedEffortResetsTheGlobalOverrideAndKeepsTheModel() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String selected = model(p, "deep", true);
+        service.saveModels(null, selected, body("modelId", "deep", "reasoningEfforts", List.of("low", "high")));
+        service.selectChatModel(body("modelConfigId", selected, "reasoningEffort", "high"));
+        service.saveModels(null, selected, body("modelId", "deep", "reasoningEfforts", List.of("low"), "defaultReasoningEffort", "low"));
+        assertEquals(selected, state().chatModelId()); assertNull(state().chatReasoningEffort());
+        assertEquals("low", AiReasoningSettings.from(configs.findChat()).defaultEffort());
+    }
+
+    @Test void settingsBindingsCannotSelectAChatModelAndRejectedChoicesAreAtomic() {
+        String p = provider("Gateway", "https://example.invalid/v1");
+        String selected = model(p, "deep", true);
+        var before = state();
+        assertThrows(IllegalArgumentException.class, () -> service.bind(body("purpose", "chat", "modelId", selected)));
+        assertEquals(before, state());
+        assertThrows(IllegalArgumentException.class, () -> service.selectChatModel(body("modelConfigId", selected, "reasoningEffort", "high")));
+        assertThrows(IllegalArgumentException.class, () -> service.selectChatModel(body("modelConfigId", null)));
+        assertEquals(before, state());
     }
 
     @Test void keyChangeIsExplicitEncryptedAndNoAuthClearsIt() throws Exception {

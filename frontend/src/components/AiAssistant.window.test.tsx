@@ -10,6 +10,7 @@ import type { AiChatSession } from '../lib/types';
 import { ApiError } from '../lib/api';
 import type { OriginalTurnInput } from '../hooks/useAiChatTurn';
 import type { AssistantDraftDocument } from '../lib/assistantDrafts';
+import type { Connections } from './ai-connections/types';
 import { prepareForRestart } from '../lib/updatePreparation';
 
 /** v0.8 助手窗口框架：会话栏、绑定页面、实际模型与用量、回到最新、窗口快捷键与详情栏。 */
@@ -25,7 +26,7 @@ const sessions: AiChatSession[] = [
   { id: 11, title: '积分换元法', updatedAt: iso(3 * day), messageCount: 2, sessionLink: 'drill-notebook://session/' + 'b'.repeat(32) },
   { id: 12, title: '英语长难句', updatedAt: iso(40 * day), messageCount: 6, sessionLink: 'drill-notebook://session/' + 'c'.repeat(32) }
 ];
-const history = { sessionId: 10, historyRevision: 3, hasMore: false, limit: 50, messages: [
+const history = { sessionId: 10, historyRevision: 3, hasMore: false, limit: 50, totalRounds: 2, firstRound: 1, messages: [
   { id: 1, role: 'user', content: '讲解当前这页', requestId: 'r1', readable: true, turnStatus: 'COMPLETED', page: { title: '笔记 · 导数的定义', link: 'drill-notebook://material/note/7' } },
   { id: 2, role: 'assistant', content: '可导一定连续。', requestId: 'r1', readable: true, turnStatus: 'COMPLETED',
     model: 'DeepSeek · deepseek-reasoner', reasoningEffort: 'high', usage: { requests: 3, inputTokens: 18400, outputTokens: 1200 } },
@@ -33,14 +34,20 @@ const history = { sessionId: 10, historyRevision: 3, hasMore: false, limit: 50, 
   { id: 4, role: 'assistant', content: '例如绝对值函数。', requestId: 'r2', readable: true, turnStatus: 'COMPLETED' }
 ] };
 
+const connections = (): Connections => ({ revision: 1, chatModelId: 'm1', chatReasoningEffort: null, importModelId: null, providers: [{ id: 'p', name: 'DeepSeek',
+  apiFormat: 'chat_completions', endpoint: 'x', authMode: 'api_key', hasKey: true, needsPassword: false, models: [
+    { id: 'm1', modelId: 'deepseek-chat', name: '', group: '', streaming: false, tools: true, contextWindow: 128000, maxOutputTokens: 8000 },
+    { id: 'm2', modelId: 'deepseek-reasoner', name: '', group: '', streaming: true, tools: true, contextWindow: 128000, maxOutputTokens: 8000, reasoningEfforts: ['low', 'high'] }] }] });
+
 function Location(): JSX.Element { const location = useLocation(); return <span data-testid="loc">{location.pathname + location.search}</span>; }
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}><MemoryRouter><AiAssistant /><Location /></MemoryRouter></QueryClientProvider>);
 }
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void } {
   let resolve!: (value: T) => void;
-  return { promise: new Promise<T>(next => { resolve = next; }), resolve: value => resolve(value) };
+  let reject!: (error: Error) => void;
+  return { promise: new Promise<T>((next, fail) => { resolve = next; reject = fail; }), resolve: value => resolve(value), reject: error => reject(error) };
 }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear();
@@ -58,10 +65,7 @@ beforeEach(() => {
     if (url === '/api/ai/sessions/10/context-usage') return Promise.resolve({ sessionId: 10, model: 'm', contextWindow: 128000, outputReserve: 8192,
       latest: { requestId: 'r2', inputTokens: 1200, contextWindow: 128000, model: 'm' } });
     if (url === '/api/ai/sessions/runtime?sessionId=10' || url === '/api/ai/sessions/runtime') return Promise.resolve({ sessions: [] });
-    if (url === '/api/ai/connections') return Promise.resolve({ revision: 1, chatModelId: 'm1', importModelId: null, providers: [{ id: 'p', name: 'DeepSeek',
-      apiFormat: 'chat_completions', endpoint: 'x', authMode: 'api_key', hasKey: true, needsPassword: false, models: [
-        { id: 'm1', modelId: 'deepseek-chat', name: '', group: '', streaming: true, tools: true, contextWindow: 128000, maxOutputTokens: 8000 },
-        { id: 'm2', modelId: 'deepseek-reasoner', name: '', group: '', streaming: true, tools: true, contextWindow: 128000, maxOutputTokens: 8000, reasoningEfforts: ['low', 'high'] }] }] });
+    if (url === '/api/ai/connections') return Promise.resolve(connections());
     return Promise.resolve({});
   });
 });
@@ -106,11 +110,11 @@ describe('更新时的便携助手草稿', () => {
     ]) });
   });
 
-  it('未保存的新会话恢复模型选择，切换会话保留各自草稿，更新前保存全部', async () => {
+  it('恢复草稿不覆盖数据库中的模型选择，切换会话保留各自草稿，更新前保存全部', async () => {
     readDrafts.mockResolvedValue(saved()); mount();
     const input = composeInput();
     await waitFor(() => expect(input).toHaveValue('新会话未发送的内容'));
-    expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '模型：deepseek-chat' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('新会话');
     expect(screen.getByText('问题.txt')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^导数与连续性 4 条消息/ }));
@@ -119,7 +123,7 @@ describe('更新时的便携助手草稿', () => {
     fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
     await waitFor(() => expect(input).toHaveValue('新会话未发送的内容'));
     await prepareForRestart(() => 0);
-    expect(saveDrafts.mock.calls.at(-1)?.[0]).toMatchObject({ selectedSessionId: null, choice: { modelConfigId: 'm2', reasoningEffort: 'high' },
+    expect(saveDrafts.mock.calls.at(-1)?.[0]).toMatchObject({ selectedSessionId: null, choice: { modelConfigId: 'm1', reasoningEffort: null },
       drafts: expect.arrayContaining([expect.objectContaining({ sessionId: 10, message: '继续写的导数草稿' }),
         expect.objectContaining({ sessionId: null, message: '新会话未发送的内容', attachments: saved().drafts[0].attachments })]) });
     expect(apiPost).not.toHaveBeenCalledWith('/api/ai/sessions', expect.anything());
@@ -276,19 +280,60 @@ describe('助手窗口框架', () => {
     await waitFor(() => expect(hiddenSide()).not.toBeVisible());
   });
 
-  it('在输入区为当前会话改选模型，只提交该会话的选择', async () => {
-    // 保存后服务端的会话列表也带上新的选择。
-    let saved = sessions;
+  it('输入区选择全局保存，切换会话、新建会话和重启后仍使用同一模型与档位', async () => {
+    let saved = connections();
     const base = apiGet.getMockImplementation()!;
-    apiGet.mockImplementation((url: string) => url === '/api/ai/sessions' ? Promise.resolve(saved) : base(url));
-    apiPut.mockImplementation(async () => { saved = [{ ...sessions[0], modelConfigId: 'm2', reasoningEffort: null }, ...sessions.slice(1)]; return saved[0]; });
-    mount();
+    apiGet.mockImplementation((url: string) => url === '/api/ai/connections' ? Promise.resolve(saved) : base(url));
+    apiPut.mockImplementation(async (_url: string, choice: { modelConfigId: string; reasoningEffort: string | null }) => {
+      saved = { ...saved, revision: saved.revision + 1, chatModelId: choice.modelConfigId, chatReasoningEffort: choice.reasoningEffort };
+      return saved;
+    });
+    const view = mount();
     await screen.findByText('可导一定连续。');
     fireEvent.click(await screen.findByRole('button', { name: '模型：deepseek-chat' }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: /deepseek-reasoner/ }));
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/sessions/10', { modelConfigId: 'm2', reasoningEffort: null }));
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/connections/chat-model', { modelConfigId: 'm2', reasoningEffort: null, revision: 1 }));
     expect(await screen.findByRole('button', { name: '模型：deepseek-reasoner' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '思考档位：模型默认' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法'));
+    expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('新会话'));
+    fireEvent.click(screen.getByRole('button', { name: '思考档位：模型默认' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'high' }));
+    await waitFor(() => expect(apiPut).toHaveBeenLastCalledWith('/api/ai/connections/chat-model', { modelConfigId: 'm2', reasoningEffort: 'high', revision: 2 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '思考档位：high' })).toBeEnabled());
+    expect(apiPut.mock.calls.every(call => call[0] === '/api/ai/connections/chat-model')).toBe(true);
+    expect(apiPost).not.toHaveBeenCalledWith('/api/ai/sessions', expect.anything());
+    view.unmount(); mount();
+    expect(await screen.findByRole('button', { name: '模型：deepseek-reasoner' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '思考档位：high' })).toBeInTheDocument();
+  });
+
+  it('选择保存期间不提交消息，失败保留原模型和输入，重试成功后再生效', async () => {
+    let saved = connections();
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/connections' ? Promise.resolve(saved) : base(url));
+    const pending = deferred<Connections>(); apiPut.mockReturnValueOnce(pending.promise);
+    mount(); await screen.findByText('可导一定连续。');
+    const input = document.querySelector<HTMLTextAreaElement>('.ai-drawer-compose textarea')!;
+    fireEvent.change(input, { target: { value: '还没发送的提问' } });
+    fireEvent.click(screen.getByRole('button', { name: '模型：deepseek-chat' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /deepseek-reasoner/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: '模型：deepseek-chat' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    expect(apiPost).not.toHaveBeenCalled();
+    // 由服务端返回保存失败，模型不先行改变。
+    await act(async () => pending.reject(new Error('模型选择未保存')));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：deepseek-chat' })).toBeEnabled());
+    expect(input).toHaveValue('还没发送的提问');
+    saved = { ...saved, revision: 2, chatModelId: 'm2' }; apiPut.mockResolvedValue(saved);
+    fireEvent.click(screen.getByRole('button', { name: '模型：deepseek-chat' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /deepseek-reasoner/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled());
+    expect(input).toHaveValue('还没发送的提问');
   });
 
   it('置顶的会话归入最前的置顶分组，先置顶的在上；图钉与菜单都能置顶和取消', async () => {
@@ -590,12 +635,17 @@ describe('固定、改名与引用', () => {
       selection.removeAllRanges(); selection.addRange(range);
     };
     expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    fireEvent.focus(screen.getByRole('slider', { name: '会话内对话跳转' }));
+    await screen.findByRole('button', { name: /对话预览/ });
     select(reply, 0, 4);
     fireEvent.mouseUp(stream);
     const bar = screen.getByRole('toolbar', { name: '选中文本操作' });
+    expect(screen.queryByRole('button', { name: /对话预览/ })).toBeNull();
+    expect(screen.queryByRole('slider', { name: '会话内对话跳转' })).toBeNull();
     fireEvent.click(within(bar).getByRole('button', { name: '复制' }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('可导一定');
     expect(screen.queryByRole('toolbar', { name: '选中文本操作' })).toBeNull();
+    expect(screen.getByRole('slider', { name: '会话内对话跳转' })).toBeVisible();
 
     const input = screen.getByPlaceholderText(/提问…/) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: '已有草稿' } });

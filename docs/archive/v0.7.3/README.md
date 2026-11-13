@@ -15,4 +15,4 @@
 
 长期架构、数据模型与接口继续在 `docs/state/` 原位维护；[发布说明](../../release/v0.7.3-release-notes.md)留在 `docs/release/`，[测试记录](../../test/QA_CHECKLIST.md)留在 `docs/test/`，不另建副本。截图继续只留本地，不纳入 Git。
 
-下一版从 [v0.8 功能清单](../../state/v0.8-features.md)开始，本轮仅确定范围，尚未开展 UI/UX 或代码实现。
+进入 v0.8 时编写的[功能清单](../v0.8.0/features.md)现已随该版[归档](../v0.8.0/README.md)；当前需求从 [v0.8.1 功能清单](../../state/v0.8.1-features.md)读取。

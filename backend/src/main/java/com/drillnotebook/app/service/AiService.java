@@ -205,10 +205,10 @@ public class AiService {
 
     AcceptedConfig captureConfig(String password) { return captureConfig(null, password); }
 
-    /** 受理时冻结目标会话当时的模型与档位；之后改选不影响已受理的消息。 */
+    /** 受理时冻结助手全局选择的模型与档位；之后改选不影响已受理的消息。 */
     AcceptedConfig captureConfig(Long sessionId, String password) {
         synchronized (AiConnectionUsage.LOCK) {
-            var row = chatConfigFor(sessionId);
+            var row = requireChatConfig();
             decryptedChatUpstream(row, password);
             return new AcceptedConfig(row, AiConnectionUsage.acquire(row));
         }
@@ -462,93 +462,32 @@ public class AiService {
     }
 
     public Map<String, Object> createSession(Map<String, Object> body) {
+        rejectSessionModelChoice(body);
         String title = string(body, "title", "新会话");
         AiConfigRepository.ConfigRow config = configs.findChat();
         String model = body.containsKey("model")
                 ? nullBlankToNull(string(body, "model", ""))
                 : (config == null ? null : nullBlankToNull(config.model()));
-        // 先校验再建会话：选择无效时不留下空会话。
-        String[] choice = modelChoice(new AiChatSessionRepository.ModelChoice(null, null), body);
         long id = sessions.create(title.isBlank() ? "新会话" : title, model);
-        if (choice != null) sessions.setModelChoice(id, choice[0], choice[1]);
         return sessions.find(id);
     }
 
     public Map<String, Object> updateSession(long id, Map<String, Object> body) {
         requireSession(id);
+        rejectSessionModelChoice(body);
         String title = body.containsKey("title") ? string(body, "title", "") : null;
         Boolean archived = body.containsKey("archived") ? Boolean.valueOf(String.valueOf(body.get("archived"))) : null;
         String model = body.containsKey("model") ? string(body, "model", "") : null;
         if (title != null && title.isBlank()) throw new IllegalArgumentException("会话标题不能为空");
-        String[] choice = modelChoice(sessions.modelChoice(id), body);
         if (body.containsKey("pinned") && !(body.get("pinned") instanceof Boolean)) throw new IllegalArgumentException("置顶状态须为布尔值");
         sessions.update(id, title, archived, model);
         if (body.get("pinned") instanceof Boolean pinned) sessions.setPinned(id, pinned);
-        if (choice != null) sessions.setModelChoice(id, choice[0], choice[1]);
         return sessions.find(id);
     }
 
-    /**
-     * 会话级模型与思考档位。空值表示跟随主模型 / 模型默认；只影响之后提交的消息。
-     * 档位必须是目标模型声明支持的；只换模型而旧档位不再适用时回到模型默认。
-     *
-     * @return {modelConfigId, effort}；请求没有涉及这两项时返回 null
-     */
-    private String[] modelChoice(AiChatSessionRepository.ModelChoice current, Map<String, Object> body) {
-        boolean setsModel = body.containsKey("modelConfigId"), setsEffort = body.containsKey("reasoningEffort");
-        if (!setsModel && !setsEffort) return null;
-        String model = setsModel ? nullBlankToNull(body.get("modelConfigId") == null ? "" : String.valueOf(body.get("modelConfigId"))) : current.modelConfigId();
-        String effort = setsEffort ? nullBlankToNull(body.get("reasoningEffort") == null ? "" : String.valueOf(body.get("reasoningEffort"))) : current.effort();
-        var state = configs.connections().read();
-        if (model != null && (state == null || state.model(model) == null)) throw new IllegalArgumentException("所选模型不存在，请重新选择");
-        if (effort != null && !supportsEffort(state, model != null ? model : state == null ? null : state.chatModelId(), effort)) {
-            if (setsEffort) throw new IllegalArgumentException("该模型不支持所选思考档位");
-            effort = null;
-        }
-        return new String[] { model, effort };
-    }
-
-    private static boolean supportsEffort(com.drillnotebook.app.repository.AiConnectionsStore.State state, String modelId, String effort) {
-        if (state == null || modelId == null || state.model(modelId) == null) return false;
-        try {
-            AiReasoningSettings settings = AiReasoningSettings.read(state.model(modelId).params(), state.owner(modelId).apiFormat());
-            return "effort".equals(settings.control()) && settings.efforts().contains(effort);
-        } catch (IllegalArgumentException error) {
-            return false;
-        }
-    }
-
-    /**
-     * 这个会话发消息时使用的配置：会话选了模型就用它，否则跟随主模型；档位不适用于当前模型时使用模型默认。
-     * 会话选择的模型已被删除时明确报错，不静默换用别的模型。
-     */
-    private AiConfigRepository.ConfigRow chatConfigFor(Long sessionId) {
-        AiChatSessionRepository.ModelChoice choice = sessionId == null ? null : sessions.modelChoice(sessionId);
-        if (choice == null || (choice.modelConfigId() == null && choice.effort() == null)) return requireChatConfig();
-        var store = configs.connections();
-        var state = store.read();
-        AiConfigRepository.ConfigRow row;
-        if (choice.modelConfigId() == null) row = requireChatConfig();
-        else {
-            if (state == null || state.model(choice.modelConfigId()) == null)
-                throw new IllegalArgumentException("此会话选择的模型已被删除，请在输入框下方重新选择模型");
-            row = store.resolve(new com.drillnotebook.app.repository.AiConnectionsStore.State(state.revision(), state.providers(),
-                    choice.modelConfigId(), state.importModelId()), AiConfigRepository.PURPOSE_CHAT);
-            if (!AiModelLimits.noKey(row) && (row.encryptedKey() == null || row.encryptedKey().isBlank()))
-                throw new IllegalArgumentException("此会话选择的模型尚未配置 API Key，请检查 AI 连接");
-            if (row.endpoint() == null || row.endpoint().isBlank()) throw new IllegalArgumentException("此会话选择的模型缺少 Base URL，请检查 AI 连接");
-            AiModelLimits.requireConfigured(paramsOf(row));
-        }
-        if (choice.effort() == null) return row;
-        AiReasoningSettings settings = AiReasoningSettings.from(row);
-        if (!"effort".equals(settings.control()) || !settings.efforts().contains(choice.effort())) return row;
-        Map<String, Object> params = new LinkedHashMap<>(paramsOf(row));
-        params.put("defaultReasoningEffort", choice.effort());
-        try {
-            return new AiConfigRepository.ConfigRow(row.purpose(), row.provider(), row.endpoint(), row.model(), row.encryptedKey(),
-                    row.keyMeta(), mapper.writeValueAsString(params));
-        } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
-            throw new IllegalArgumentException("AI 配置无法读取", error);
+    private static void rejectSessionModelChoice(Map<String, Object> body) {
+        if (body.containsKey("modelConfigId") || body.containsKey("reasoningEffort")) {
+            throw new IllegalArgumentException("模型与思考档位统一在 AI 助手中选择，不再按会话设置");
         }
     }
 
@@ -598,7 +537,7 @@ public class AiService {
         result.put("sessionId", sessionId);
         result.put("latest", sessions.latestContext(sessionId));
         try {
-            AiConfigRepository.ConfigRow config = chatConfigFor(sessionId);
+            AiConfigRepository.ConfigRow config = requireChatConfig();
             result.put("model", config.model());
             result.put("contextWindow", AiModelLimits.contextWindow(config));
             result.put("outputReserve", AiModelLimits.output(config, runtimeSettings().requestOutputTokens()));
@@ -716,7 +655,7 @@ public class AiService {
         AiConfigRepository.ConfigRow config;
         AiConnectionUsage usage;
         synchronized (AiConnectionUsage.LOCK) {
-            config = chatConfigFor(sessionIdOf(body));
+            config = requireChatConfig();
             usage = AiConnectionUsage.acquire(config);
         }
         try (usage) { return chatWithConfig(body, config); }
@@ -859,7 +798,7 @@ public class AiService {
         AiConfigRepository.ConfigRow config;
         AiConnectionUsage usage;
         synchronized (AiConnectionUsage.LOCK) {
-            config = chatConfigFor(sessionIdOf(body));
+            config = requireChatConfig();
             usage = AiConnectionUsage.acquire(config);
         }
         try (usage) { return chatStreamWithConfig(body, listener, metadataSender, config); }
@@ -2561,13 +2500,14 @@ public class AiService {
     }
 
     private AiConfigRepository.ConfigRow requireChatConfig() {
-        return requireConfig(AiConfigRepository.PURPOSE_CHAT, "请先在设置中配置「主模型」AI API Key", "请先在设置中配置「主模型」Base URL");
+        if (configs.findChat() == null) throw new IllegalArgumentException("请在 AI 助手输入框下方选择模型");
+        return requireConfig(AiConfigRepository.PURPOSE_CHAT, "所选模型尚未配置 API Key，请到设置 → AI 连接补全", "所选模型缺少 Base URL，请到设置 → AI 连接补全");
     }
 
     private AiConfigRepository.ConfigRow requireImportConfig() {
         AiConfigRepository.ConfigRow importConfig = configs.find(AiConfigRepository.PURPOSE_IMPORT);
         if (importConfig == null) return requireChatConfig();
-        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "请先在设置中配置「主模型」或「导入兜底」AI API Key", "请先在设置中配置「主模型」或「导入兜底」Base URL");
+        return requireConfig(AiConfigRepository.PURPOSE_IMPORT, "导入模型尚未配置 API Key，请到设置 → AI 连接补全", "导入模型缺少 Base URL，请到设置 → AI 连接补全");
     }
 
     private AiConfigRepository.ConfigRow requireConfig(String purpose, String missingKeyMsg, String missingEndpointMsg) {
