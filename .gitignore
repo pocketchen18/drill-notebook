@@ -17,6 +17,9 @@ backend/target/
 dist/
 release/
 out/
+# Portable release assets copied to the repository root are generated files.
+/Drill-Notebook-*-win-x64-portable.zip
+/Drill-Notebook-*-win-x64-portable.zip.sha256
 electron-builder-cache/
 .mvn/wrapper/dists/
 *.tsbuildinfo
@@ -76,6 +79,7 @@ credentials/
 # Application data, user profiles and portable runtime state
 # Anchor to repo root so source packages like backend/.../config are not ignored.
 /data/
+/backups/
 /cache/
 /logs/
 /runtime/
