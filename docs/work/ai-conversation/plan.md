@@ -118,3 +118,72 @@ SessionModelChoiceTest,AiSessionTitleServiceTest,DatabaseInitializerTest,Schema9
 第三组由 `scripts/portable-audit.ps1 -RunScript temp/run-conversation-portable-tests.ps1` 包裹执行；静态扫描使用 `cache/portable-registry-audit.ps1`。后端打包用同目录脚本的 `-Package`，再由 `verify-isolated-build.ps1 -SyncJar` 核对并同步开发包。测试报告、便携证据与汇总脚本只在根 temp/，不入 Git。
 
 本轮未执行前后端全量、真实供应商或 Electron 实机验收；不把重新生成描述成供应商原流续传，未专门验收全部写工具跨多次手动重试的去重。已验证范围如上，前次全量保留为历史基线。当前接口、数据模型、功能清单与 UI/UX 已同步；未暂存、提交、推送、修改发布版本或工作流。开发运行需完全退出后重新打开以加载新后端。
+
+## 上下文统计与逐请求详情（2026-11-15）
+
+当前圆环 / 卡片顶部使用全局保留上下文占用，下方为累计输入总量、缓存命中、未命中和输出；模型名在左下与详情入口同一行。「查看上下文详情」打开「上下文」，顶部为当前会话卡片，其下提供按请求选择、分类展开与前次请求增减对比；底部本轮累计块已移除。参考 [dsh-context](https://github.com/bowenliang123/dsh-context/tree/eadff0dd29cd2312e33501ffc9f6075e0b529eae) 的组成浏览方式，本项目保留中日韩加权估算器，分项标 `≈`，实测用量独立，不复制费用仪表盘或插件代码。阈值触发压缩和统一上下文策略一起规划在 [v0.8.3](../../state/v0.8.3-features.md)；当前发送仍采用既有有界投影与输入预算。
+
+以下为全局占用修正前的累计与逐请求详情验证基线；现行全局占用和本次复验结果见本节末。
+
+| 检查 | 结果与范围 |
+|---|---|
+| 后端相关回归 | 19 类 / 213 项通过，0 失败、0 错误、0 跳过；只汇总本次执行类的最终报告，未将隔离目录里其它任务的报告计入 |
+| 累计与旧库 | SessionContextUsage 12 项：多轮 / 工具 / 原生请求关联、旧重试回执去重、OpenAI / Anthropic 缓存、null / 零 / 下界、Long、301 轮及 600 条消息、清理 / 重开、schema 20 → 21 快照与保守迁移 |
+| 请求组成 | RequestContextAnalyzer 7 项：最终 Chat Completions / Anthropic / Responses 请求分类、工具定义 / 参数 / 结果、图片预留、较长工具名 / 701 个结果的数量与字节上限、不保存正文以及无效数值摘要拒绝 |
+| 自动与手动重试 | 原地重试 4、自动恢复 22、真实派发 11 项通过；部分回答续接及已完成工具结果在每次请求摘要中保留，实测分别累计，已受理模型快照与同会话下一轮改选分别正确 |
+| 前端相关回归 | 5 文件 / 77 项通过，0 失败、0 跳过；ContextMeter、RequestContextBrowser、ChatContextInspector 及助手窗口 / 上下文，覆盖估算与实测独立、移除分类对比、分页 / 去重、旧请求不随刷新丢失、跨轮迟到正文与本轮累计优先 |
+| 构建与开发包 | TypeScript / Vite 生产构建与后端隔离打包通过，688 个应用 class 与同轮编译逐一一致，开发 JAR 已同步；SHA-256 `8376F74F51AED5986DA79A74D66A051BED70942D95DEE589355B396ECBC568D0` |
+| 便携审计 | 静态扫描 760 文件，仅既有构建脚本合法的 Process 环境恢复；模型 / 派发 16 项、自动恢复 22 项分别在落盘审计内通过，应用外受监控新增 / 改写为 0，JVM 临时目录在工作区 temp/ |
+
+后端在本地隔离 POM 中用正式源码 / 同依赖重新编译 260 个生产文件和 188 个测试文件；广泛回归 186 项之后，将旧选模夹具改为显式选择当前会话，派发与会话选模 16 项、补充的自动恢复 22 项复验通过。前端分页验证先发现刷新丢掉旧请求的缺口，修正保留策略后最终 77 项与生产构建通过。
+
+后端本地复跑用 `pwsh -NoProfile -File temp/web-search-review/run-backend-web-tests.ps1 -TestSelection`，本次选择为：
+
+```text
+SessionContextUsageTest,RequestContextAnalyzerTest,ChatInPlaceRetryTest,ChatHistoryReadTest,ChatTurnServiceLifecycleTest,TokenEstimatorTest,AiUpstreamClientTest,AiUpstreamClientCacheTest,ChatContextBudgetTest,ChatContextPayloadGoldenTest,ChatContextServiceTest,WebToolChatPathTest,NativeWebClientTest,DatabaseInitializerTest,ChatUpstreamDispatchTest,AiRetryPolicyTest,SessionModelChoiceTest,AiConversationRecoveryTest
+```
+
+前端在 frontend 目录运行 `npm test -- --run src/components/ai-memory/RequestContextBrowser.test.tsx src/components/ai-memory/ChatContextInspector.test.tsx src/components/ai-session/ContextMeter.test.tsx src/components/AiAssistant.window.test.tsx src/components/AiAssistant.context.test.tsx` 和 `npm run build`。落盘审计分别包裹 `temp/context-usage-review/run-context-focused.ps1` 与 `run-context-recovery.ps1`；静态扫描用 `cache/portable-registry-audit.ps1`。打包 / 逐 class 校验继续使用上述隔离构建脚本的 `-Package` 和 `verify-isolated-build.ps1 -SyncJar`。临时脚本、报告与参考材料仅在根 temp/，不入 Git。
+
+旧请求未保存的组成明细不可恢复，旧缓存口径无法核实时仍为未知；分项估算不能当作精确账单。真实供应商 Token 对账、Electron 实机、前后端全量及完整发行验收本轮未执行。用户数据库未读取或修改，数据库验证使用工作区隔离夹具；开发 JAR 已同步，完全退出软件再打开即可加载。当前功能清单、UI/UX、接口、数据模型与 QA 已同步，未暂存、提交、推送或改发布配置。
+
+### 全局占用与卡片布局修正（2026-11-15）
+
+`SessionContextOccupancyService` 逐行读取当前代未清理的全部正文与 RECEIVED 插话，不受历史驻留或单请求预算限制。有效摘要按 coverage 替换旧原文，最近两轮与缺口保留；固定前缀、当前轮额外组成及尚未落库的回复各计一份。新加密元数据保存版本化数值，旧密文按需解密、只缓存数字；当前占用无法完整估算时保留下界。发送仍使用原有投影 / 输入预算，v0.8.3 再加入按设置阈值触发的压缩。
+
+| 检查 | 本次结果 |
+|---|---|
+| 后端相关回归 | 14 类 / 169 项通过，0 失败、0 错误、0 跳过；采用所选类最终报告并去重，未使用隔离目录其它旧报告的总数 |
+| 全局与额外组成 | 占用 8、额外组成 4 项：600 条 / 300 轮、超窗仍保留数值、清理 / 换代、旧回答原地替换、实时输出与终态去重、旧数据下界、RECEIVED 插话、原生子请求不顶替主工作集、图片固定预留 |
+| 加密与估算 | 加密 8、估算器 7 项：数值元数据锁定可读、旧加密数值缓存、无效 / 未来口径保持未知、Long 全局加法、分帧余数与跨帧 emoji |
+| 既有路径回归 | 累计 13、投影 20、自动恢复 23、原地重试 4、真实派发 11、人工队列 / 插话 19、请求组成 7、生命周期 27、附件 13、容量 5 项通过；摘要缺口 / 最近两轮和旧检查点只读边界、计费及容量事务保持 |
+| 前端相关回归 | 5 文件 / 80 项通过；圆环与累计 / 最新请求独立、关闭卡片仍更新、窗口变化与超限、会话迟到响应、输入总量和模型位置、请求详情 / 分页及助手窗口回归 |
+| 构建与开发包 | TypeScript / Vite 构建与后端隔离打包通过；695 个应用 class 与编译逐一一致，开发 JAR 已同步，SHA-256 `52EC17B8C0B6A1C5607737B48806CEC0FE0A1401C94E4B91EAEBEB0823600BD2`；124 个前端输出文件与已验证构建逐一同哈希，已同步 frontend/dist 启动目录 |
+| 便携审计 | 全局占用 / 投影 / 生命周期 / 附件 / 容量 73 项在落盘审计内通过，应用外受监控新增 / 改写为 0；静态扫描 764 个文件，仅既有合法 Process 环境恢复 |
+
+后端复跑仍使用 `temp/web-search-review/run-backend-web-tests.ps1 -TestSelection`，本次去重选择如下：
+
+```text
+SessionContextOccupancyTest,SessionContextExtrasTest,TokenEstimatorTest,ChatMessageCipherTest,SessionContextUsageTest,ConversationProjectionTest,AiConversationRecoveryTest,ChatInPlaceRetryTest,ChatUpstreamDispatchTest,SessionDispatchServiceTest,RequestContextAnalyzerTest,ChatTurnServiceLifecycleTest,ChatTurnAttachmentTest,ChatStorageCapacityTest
+```
+
+前端在 frontend 目录使用前述五个文件的测试命令；生产构建为 `npm run build -- --outDir ../temp/context-occupancy-review/frontend-build`，再由同目录 `sync-context-frontend.ps1` 按文件哈希同步到启动目录。落盘审计用 `scripts/portable-audit.ps1 -AppRoot temp/context-occupancy-review -RunScript temp/context-occupancy-review/run-context-portable.ps1`，本次选择报告由同目录 `report-context-tests.ps1` 汇总。打包与逐 class 同步沿用 `-Package` / `verify-isolated-build.ps1 -SyncJar`；UTF-8 与文档链接校验脚本也仅保留在根 temp/。
+
+当前占用是本地估算，累计用量继续使用供应商回报；旧内容无法读取时为已知下界。用户数据库未读取或修改，真实供应商 Token 对账、Electron 实机、前后端全量及发行验收未执行。功能清单、UI/UX、规格、接口、数据模型和 QA 已同步；当前仍为 v0.8.2，压缩仅规划在 v0.8.3，未暂存、提交、推送或改发布配置。开发运行需完全退出软件再打开以加载新后端。
+
+### 当前卡片与名称调整（2026-11-15）
+
+按用户确认的设计，标题统一为「上下文」、入口为「查看上下文详情」；移除原底部「本轮累计用量」，在上下文浏览器上方加入当前会话卡片。占用总量、分类及流式快照来自同一次计数，当前卡片与圆环共享会话查询，不随历史请求选择变化。未保存有效分类的旧额外内容归入 OTHER，累计用量继续在输入区小卡片与现有账本保留。
+
+pi、Codex、OpenCode 和 Claude Code 的调查结果、当前发送 / 占用差异及统一方向已写入 [v0.8.3 规划](../../state/v0.8.3-features.md)，与阈值压缩一起实现。本次不改外发历史预算或压缩策略。
+
+| 检查 | 本次结果 |
+|---|---|
+| 后端回归 | 14 类 / 172 项全部通过，0 失败、0 错误、0 跳过；从新建隔离目录编译正式源码和同版本依赖。新增当前分类与历史实测独立、旧分类无效回退、流式 / 终态分类一致，保留累计、摘要、恢复、原地重试和容量回归 |
+| 前端回归 | 7 文件 / 96 项全部通过；覆盖当前卡片与圆环共享、历史账本缺失仍显示、上下顺序、名称与累计块移除、空值 / 下界 / 超窗、会话迟到响应及现有请求浏览器 / 助手交互 |
+| 构建与同步 | TypeScript / Vite、后端隔离打包通过；124 个前端文件逐一核对哈希并同步，697 个应用 class 与隔离编译一致，开发 JAR 已同步，SHA-256 为 `E10D7A7271C291140B6570EF2C6FFB18C0B4C391917F97B927B7F252DEE307C4` |
+| 便携审计 | 数值元数据 / 占用 / 生命周期 / 容量 51 项在落盘审计内通过；外部受监控新增 / 改写为 0。静态扫描 767 个文件，仅既有合法 Process 环境恢复，无新增系统目录、注册表或持久化环境变量写入 |
+
+本次后端复跑：`pwsh -NoProfile -File temp/context-inspector-20261115/run-validation.ps1`；打包追加 `-Package`，同步用同目录 `sync-artifacts.ps1 -Backend` / `-Frontend`。前端从根目录执行 `npm --workspace frontend run test -- src/components/ai-memory/CurrentContextCard.test.tsx src/components/ai-memory/ChatContextInspector.test.tsx src/components/ai-memory/RequestContextBrowser.test.tsx src/components/ai-memory/MemoryUsageBadge.test.tsx src/components/ai-session/ContextMeter.test.tsx src/components/AiAssistant.context.test.tsx src/components/AiAssistant.window.test.tsx`，构建输出在新建根 temp/ 下。落盘审计使用 `scripts/portable-audit.ps1 -AppRoot temp/context-inspector-20261115 -RunScript temp/context-inspector-20261115/run-portable.ps1`，静态扫描沿用 `cache/portable-registry-audit.ps1`。
+
+当前清单、接口、数据模型、规格、UI/UX 和 QA 已同步，v0.8.3 仍为规划。真实供应商 Token 对账、浏览器视觉 / Electron 实机和完整发行验收未执行；没有修改用户数据库、暂存、提交或发布。

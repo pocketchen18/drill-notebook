@@ -74,6 +74,10 @@ public class ContextInspector {
 
     /** {@code GET /turns/{requestId}/context}：已保存的有界审计，没有快照就明确说没有。 */
     public Map<String, Object> audit(String requestId) throws SQLException {
+        return audit(requestId, null);
+    }
+
+    public Map<String, Object> audit(String requestId, String beforeAttemptId) throws SQLException {
         TurnRow turn = requireTurn(requestId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("requestId", turn.requestId());
@@ -123,6 +127,9 @@ public class ContextInspector {
         body.put("dispatchState", audit.path("dispatchState").asText(null));
         body.put("audit", mapper.convertValue(audit, new TypeReference<LinkedHashMap<String, Object>>() {
         }));
+        body.put("requestContexts", history.requestContextPage(turn.sessionId(), turn.requestId(), beforeAttemptId));
+        Map<String, Object> facts = history.turnFacts(turn.sessionId(), List.of(turn.requestId())).get(turn.requestId());
+        if (facts != null && facts.get("usage") != null) body.put("usage", facts.get("usage"));
         return body;
     }
 

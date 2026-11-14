@@ -269,8 +269,8 @@ describe('助手窗口框架', () => {
     expect(side).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText('查找会话')).toHaveFocus());
     fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
-    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
-    expect(screen.getByRole('complementary', { name: '本轮上下文' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看上下文详情' }));
+    expect(screen.getByRole('complementary', { name: '上下文' })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('complementary')).toBeNull();
     fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
@@ -588,7 +588,7 @@ describe('面板宽度', () => {
 
     expect(screen.queryByRole('separator', { name: '调整详情栏宽度' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
-    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看上下文详情' }));
     const detail = screen.getByRole('separator', { name: '调整详情栏宽度' });
     // 详情栏的分隔条在左侧：向左是变宽
     fireEvent.keyDown(detail, { key: 'ArrowLeft' });

@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 20;
+    private static final int SCHEMA_VERSION = 21;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -142,6 +142,11 @@ public class DatabaseInitializer {
             // 最近一次请求里缓存命中的部分与输出长度：界面按「输入（命中 / 未命中）+ 输出」展示。
             ensureColumn(connection, "ai_chat_turn", "cache_read_tokens", "INTEGER");
             ensureColumn(connection, "ai_chat_turn", "output_tokens", "INTEGER");
+            // 逐次用量保留供应商的缓存桶口径，会话与轮次累计使用同一份归一化输入。
+            ensureColumn(connection, "ai_usage_attempt", "cache_read_included_in_input",
+                    "INTEGER CHECK (cache_read_included_in_input IN (0, 1))");
+            ensureColumn(connection, "ai_usage_attempt", "context_breakdown", "TEXT");
+            if (current != null && current < 21) UsageInputMigration.backfill(connection);
             // 提交时绑定的业务页面：只留标题与本地定位，正文仍只在本轮内存与加密队列里。
             ensureColumn(connection, "ai_chat_turn", "page_title", "TEXT");
             ensureColumn(connection, "ai_chat_turn", "page_link", "TEXT");

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -58,8 +59,9 @@ public class ChatTurnController {
 
     /** 本轮实际发给模型的有界审计；没有快照时明确 unavailable。 */
     @GetMapping("/{requestId}/context")
-    public Map<String, Object> context(@PathVariable String requestId) throws SQLException {
-        return inspector.audit(requestId);
+    public Map<String, Object> context(@PathVariable String requestId,
+                                       @RequestParam(required = false) String beforeAttemptId) throws SQLException {
+        return beforeAttemptId == null ? inspector.audit(requestId) : inspector.audit(requestId, beforeAttemptId);
     }
 
     /** 最多 5 个"本轮真发过且现在仍合法"的来源片段，各 ≤160 码点；不触发任何模型调用。 */

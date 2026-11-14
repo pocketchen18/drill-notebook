@@ -374,10 +374,22 @@ public class ConversationProjection {
      */
     private SummaryView readSummary(Request request, Optional<SessionContextRepository.Checkpoint> row,
                                     ContextAudit.Builder audit, List<String> notices) throws SQLException {
+        return readSummary(request, row, audit, notices, false);
+    }
+
+    /** 当前窗口统计只复用检查点资格判断，不建计划、不扫描尾部或修复旧检查点。 */
+    public SummaryView currentSummary(long sessionId, long contextGeneration) throws SQLException {
+        return readSummary(new Request(sessionId, Long.MAX_VALUE, contextGeneration, null, 0),
+                checkpoints.read(sessionId), new ContextAudit.Builder("occupancy", TokenEstimator.VERSION),
+                new ArrayList<>(), true);
+    }
+
+    private SummaryView readSummary(Request request, Optional<SessionContextRepository.Checkpoint> row,
+                                    ContextAudit.Builder audit, List<String> notices, boolean readOnly) throws SQLException {
         if (row.isEmpty()) return null;
         SessionContextRepository.Checkpoint checkpoint = row.get();
         if (checkpoint.schemaVersion() != 2) {
-            checkpoints.delete(request.sessionId());
+            if (!readOnly) checkpoints.delete(request.sessionId());
             return unavailable(audit, notices, ContextAudit.Omission.SOURCE_CHANGED, 1);
         }
         if (checkpoint.contextGeneration() != request.contextGeneration()) {

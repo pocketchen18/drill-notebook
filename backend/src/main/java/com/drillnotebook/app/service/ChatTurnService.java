@@ -288,6 +288,8 @@ public class ChatTurnService {
             ChatMessageCipher.Encrypted result = cipher.encrypt(resultMeta(status, reply, audit,
                             lease.handle().toolActivities(), lease.handle().recovery()),
                     lease.masterPassword());
+            var contextTokens = lease.handle().contextTokens();
+            result = cipher.withContextExtraTokens(result, contextTokens.extraTokens(), contextTokens.extraCategories());
             TerminalOutcome outcome = turns.finalizeTurn(lease.requestId(),
                     new Terminal(status, content == null ? "" : null, content == null ? null : content.cipher(),
                             content == null ? null : content.meta(),
@@ -353,6 +355,20 @@ public class ChatTurnService {
     /** 上游返回后按 attempt 幂等结算：正文保存失败不撤销已发生的用量，写失败也不回滚回复。 */
     public void settleUsage(String attemptId, AiUpstreamClient.Usage observed) {
         settle(attemptId, actual(observed));
+    }
+
+    public void recordUsageContext(String attemptId, com.drillnotebook.app.model.RequestContextAudit context) {
+        if (attemptId == null) return;
+        try {
+            usage.recordContextBreakdown(attemptId, mapper.writeValueAsString(context));
+        } catch (SQLException | com.fasterxml.jackson.core.JsonProcessingException | IllegalArgumentException error) {
+            log.warn("请求上下文摘要未保存 attemptId={}，{}", attemptId, error.getClass().getSimpleName());
+        }
+    }
+
+    /** 只读活跃轮次的数值快照；终态正文由历史存储提供，避免重复计算。 */
+    public ActiveTurnRegistry.ContextTokens currentContextTokens(String requestId) {
+        return registry.find(requestId).map(ActiveTurnRegistry.Handle::contextTokens).orElse(null);
     }
 
     private void settle(String attemptId, ActualUsage actual) {

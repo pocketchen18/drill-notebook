@@ -34,10 +34,19 @@ public class ChatMessageCipher {
 
     private final ApiKeyEncryptor encryptor;
     private final ObjectMapper mapper;
+    private final TokenEstimator estimator;
+    /** 只缓存旧密文的数值估算，不缓存正文、密码或密钥。 */
+    private final Map<String, Integer> tokenEstimates = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(128, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, Integer> entry) {
+                    return size() > 4096;
+                }
+            });
 
     public ChatMessageCipher(ApiKeyEncryptor encryptor, ObjectMapper mapper) {
         this.encryptor = encryptor;
         this.mapper = mapper;
+        this.estimator = new TokenEstimator(mapper);
     }
 
     /** 加密一段文本；{@code masterPassword} 为空时走设备指纹模式。 */
@@ -46,7 +55,7 @@ public class ChatMessageCipher {
         String mode = mode(masterPassword);
         try {
             ApiKeyEncryptor.EncryptedValue value = encryptor.encrypt(plaintext, material(mode, masterPassword), mode);
-            return new Encrypted(value.encrypted(), meta(value));
+            return new Encrypted(value.encrypted(), meta(value, estimator.estimateText(plaintext)));
         } catch (Exception error) {
             throw new ChatCryptoException("聊天内容加密失败，未写入任何明文", error);
         }
@@ -70,8 +79,10 @@ public class ChatMessageCipher {
         }
         try {
             Map<String, Object> meta = readMeta(metaJson);
-            return new Read(ReadStatus.DECRYPTED, encryptor.decrypt(cipher, String.valueOf(meta.get("salt")),
-                    String.valueOf(meta.get("iv")), material));
+            String value = encryptor.decrypt(cipher, String.valueOf(meta.get("salt")),
+                    String.valueOf(meta.get("iv")), material);
+            tokenEstimates.put(estimateKey(cipher, metaJson), estimator.estimateText(value));
+            return new Read(ReadStatus.DECRYPTED, value);
         } catch (Exception error) {
             return new Read(ReadStatus.UNREADABLE, null);
         }
@@ -82,6 +93,64 @@ public class ChatMessageCipher {
         Read read = read(cipher, metaJson, masterPassword);
         if (read.status() == ReadStatus.EMPTY) return new Read(ReadStatus.DECRYPTED, plaintext == null ? "" : plaintext);
         return read;
+    }
+
+    /**
+     * 当前保留文本的 Token 估算。新消息直接读数值元数据，旧消息只在必要时解密；
+     * 无法读取时返回 null，绝不把密文长度、占位文案或供应商累计用量当作正文长度。
+     */
+    public Integer estimateStoredText(String plaintext, String cipher, String metaJson) {
+        if (cipher == null || cipher.isBlank()) return plaintext == null ? null : estimator.estimateText(plaintext);
+        try {
+            var meta = mapper.readTree(metaJson);
+            var count = meta.path("textTokens");
+            if (TokenEstimator.VERSION.equals(meta.path("tokenEstimatorVersion").asText())
+                    && count.isIntegralNumber() && count.canConvertToInt() && count.intValue() >= 0)
+                return count.intValue();
+        } catch (Exception ignored) { }
+        Integer cached = tokenEstimates.get(estimateKey(cipher, metaJson));
+        if (cached != null) return cached;
+        Read value = read(cipher, metaJson, null);
+        return value.status() == ReadStatus.DECRYPTED ? estimator.estimateText(value.value()) : null;
+    }
+
+    static String estimateKey(String cipher, String meta) {
+        try {
+            byte[] bytes = (cipher + '\n' + meta).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException error) { throw new IllegalStateException(error); }
+    }
+
+    /** 数值附记沿现有加密材料落库，容量账本仍按最终元数据字节计量。 */
+    public Encrypted withContextExtraTokens(Encrypted value, Long tokens) {
+        return withTokenCount(value, "contextExtraTokens", tokens);
+    }
+
+    public Encrypted withContextExtraTokens(Encrypted value, Long tokens,
+                                           Map<com.drillnotebook.app.model.RequestContextAudit.Kind, Long> categories) {
+        Encrypted counted = withContextExtraTokens(value, tokens);
+        if (tokens == null || categories.isEmpty()) return counted;
+        var breakdown = new ContextTokenBreakdown(categories);
+        if (breakdown.tokens() != tokens) throw new ChatCryptoException("上下文分类与总量不一致");
+        try {
+            Map<String, Object> meta = new LinkedHashMap<>(readMeta(counted.meta()));
+            meta.put("contextExtraCategories", breakdown.categories());
+            return new Encrypted(counted.cipher(), mapper.writeValueAsString(meta));
+        } catch (Exception error) { throw new ChatCryptoException("上下文分类无法保存", error); }
+    }
+
+    public Encrypted withSupplementTextTokens(Encrypted value, long tokens) {
+        return withTokenCount(value, "supplementTextTokens", tokens);
+    }
+
+    private Encrypted withTokenCount(Encrypted value, String key, Long tokens) {
+        if (tokens == null) return value;
+        if (tokens < 0) throw new ChatCryptoException("上下文数值无效");
+        try {
+            Map<String, Object> meta = new LinkedHashMap<>(readMeta(value.meta()));
+            meta.put(key, tokens);
+            return new Encrypted(value.cipher(), mapper.writeValueAsString(meta));
+        } catch (Exception error) { throw new ChatCryptoException("上下文数值无法保存", error); }
     }
 
     /** 这份密文用的是哪种材料，供"要不要问密码"的判定。 */
@@ -99,7 +168,7 @@ public class ChatMessageCipher {
         });
     }
 
-    private String meta(ApiKeyEncryptor.EncryptedValue value) throws Exception {
+    private String meta(ApiKeyEncryptor.EncryptedValue value, int textTokens) throws Exception {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("salt", value.salt());
         meta.put("iv", value.iv());
@@ -107,6 +176,8 @@ public class ChatMessageCipher {
         meta.put("algorithm", "AES-256-GCM");
         meta.put("mode", value.mode());
         meta.put("version", 1);
+        meta.put("tokenEstimatorVersion", TokenEstimator.VERSION);
+        meta.put("textTokens", textTokens);
         return mapper.writeValueAsString(meta);
     }
 

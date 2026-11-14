@@ -88,7 +88,8 @@ class ChatUpstreamDispatchTest {
 
         ai.chatStream(v2("本轮保持原配置"), (type, text) -> true, metadata -> {
             if (!switched.compareAndSet(false, true)) return;
-            connections.selectChatModel(Map.of("revision", connections.view().get("revision"), "modelConfigId", next));
+            connections.selectChatModel(Map.of("revision", connections.view().get("revision"), "modelConfigId", next,
+                    "sessionId", sessionId));
             assertEquals("CONFIG_BUSY", assertThrows(ChatTurnRejectException.class, () -> connections.delete(
                     initial.chatModelId(), false, Map.of("revision", connections.view().get("revision")))).code());
         });
@@ -102,6 +103,11 @@ class ChatUpstreamDispatchTest {
         assertEquals("next-model", mapper.readTree(server.bodies().get(1)).path("model").asText());
         assertEquals(300, mapper.readTree(server.bodies().get(1)).path("max_tokens").asInt());
         assertFalse(mapper.readTree(server.bodies().get(1)).has("reasoning_effort"));
+        List<String> summaries = jdbc.queryForList("SELECT context_breakdown FROM ai_usage_attempt"
+                + " WHERE context_breakdown IS NOT NULL ORDER BY created_at, id", String.class);
+        assertEquals(2, summaries.size());
+        assertEquals("stub-model", mapper.readTree(summaries.get(0)).path("model").asText());
+        assertEquals("next-model", mapper.readTree(summaries.get(1)).path("model").asText());
         connections.delete(initial.chatModelId(), false, Map.of("revision", connections.view().get("revision")));
     }
 

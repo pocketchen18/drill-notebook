@@ -119,6 +119,16 @@ public class UsageRepository {
         });
     }
 
+    /** 已发请求的组成摘要只写一次；摘要只有数字与工具名，不保存任何正文。 */
+    public boolean recordContextBreakdown(String attemptId, String json) throws SQLException {
+        if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                > com.drillnotebook.app.model.RequestContextAudit.MAX_BYTES)
+            throw new IllegalArgumentException("请求上下文摘要过大");
+        return immediate.execute(connection -> update(connection,
+                "UPDATE ai_usage_attempt SET context_breakdown = ? WHERE id = ? AND state = 'SENT' AND context_breakdown IS NULL",
+                json, attemptId) == 1);
+    }
+
     /**
      * 按实际用量结算：仍处在 RESERVED/SENT 的那一次才会成功，成功后释放预留并写进 daily。
      *
@@ -132,10 +142,12 @@ public class UsageRepository {
             if (update(connection, """
                     UPDATE ai_usage_attempt
                        SET state = 'SETTLED', usage_source = ?, input_tokens = ?, output_tokens = ?,
-                           cache_read_tokens = ?, cache_write_tokens = ?, reserved_tokens = 0, settled_at = ?
+                           cache_read_tokens = ?, cache_write_tokens = ?, cache_read_included_in_input = ?,
+                           reserved_tokens = 0, settled_at = ?
                      WHERE id = ? AND state IN ('RESERVED','SENT')
                     """, actual.reported() ? "provider" : actual.usageSource(), actual.inputTokens(),
-                    actual.outputTokens(), actual.cacheReadTokens(), actual.cacheWriteTokens(), settledAt,
+                    actual.outputTokens(), actual.cacheReadTokens(), actual.cacheWriteTokens(),
+                    actual.reported() ? (actual.cacheReadIncludedInInput() ? 1 : 0) : null, settledAt,
                     attemptId) != 1) {
                 return false;
             }

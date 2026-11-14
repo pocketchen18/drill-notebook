@@ -148,7 +148,16 @@ public class SessionDispatchService {
         }catch(Exception e){throw reject("QUEUE_UNREADABLE","待发内容无法读取");}
     }
     private ChatMessageCipher.Encrypted encryptPayload(Map<String,Object> value,String password) {
-        try{return cipher.encrypt(json.writeValueAsString(value),password);}catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new IllegalArgumentException("待发内容无法保存",e);}
+        try {
+            var encrypted = cipher.encrypt(json.writeValueAsString(value), password);
+            if (value.get("body") instanceof Map<?, ?> body) {
+                String text = body.get("input") instanceof Map<?, ?> input
+                        ? Objects.toString(input.get("userText"), "") : "";
+                encrypted = cipher.withSupplementTextTokens(encrypted,
+                        new TokenEstimator(json).estimateText(text));
+            }
+            return encrypted;
+        } catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new IllegalArgumentException("待发内容无法保存",e);}
     }
     @SuppressWarnings("unchecked") private Map<String,Object> pendingBody(ChatPendingRepository.Pending row) {return (Map<String,Object>)payload(row).get("body");}
     private void ensureRestored(long session) {

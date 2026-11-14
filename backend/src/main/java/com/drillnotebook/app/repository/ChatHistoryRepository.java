@@ -747,27 +747,15 @@ public class ChatHistoryRepository {
                     }
                 }
             }
-            // 一轮可能有多次模型请求：这里是各次实测值的累计，不是一次请求的上下文长度。
-            try (PreparedStatement statement = connection.prepareStatement("SELECT t.request_id, COUNT(*), SUM(a.input_tokens), SUM(a.output_tokens)"
-                    + " FROM ai_chat_turn t JOIN (SELECT request_id, id AS turn_id FROM ai_chat_turn"
-                    + " UNION ALL SELECT request_id, turn_id FROM ai_chat_retry_receipt) r ON r.turn_id = t.id"
-                    + " JOIN ai_usage_attempt a ON a.operation_id = r.request_id"
-                    + " WHERE t.session_id = ? AND a.purpose = 'CHAT' AND a.usage_source = 'provider' AND a.state = 'SETTLED'"
-                    + " AND t.request_id IN (" + marks + ") GROUP BY t.request_id")) {
-                statement.setLong(1, sessionId);
-                int index = 2;
-                for (String id : requestIds) statement.setString(index++, id);
-                try (ResultSet rows = statement.executeQuery()) {
-                    while (rows.next()) {
-                        java.util.Map<String, Object> usage = new java.util.LinkedHashMap<>();
-                        usage.put("requests", rows.getInt(2));
-                        usage.put("inputTokens", rows.getLong(3));
-                        usage.put("outputTokens", rows.getLong(4));
-                        result.computeIfAbsent(rows.getString(1), key -> new java.util.LinkedHashMap<>()).put("usage", usage);
-                    }
-                }
-            }
+            // 与会话累计共用归一化和旧重试回执，缓存读写不重复计入输入。
+            new ChatUsageRepository(dataSource).turns(connection, sessionId, requestIds).forEach((requestId, usage) ->
+                    result.computeIfAbsent(requestId, key -> new java.util.LinkedHashMap<>()).put("usage", usage));
         }
         return result;
+    }
+
+    public java.util.Map<String, Object> requestContextPage(long sessionId, String requestId, String beforeAttemptId)
+            throws SQLException {
+        return new ChatUsageRepository(dataSource).requestPage(sessionId, requestId, beforeAttemptId);
     }
 }

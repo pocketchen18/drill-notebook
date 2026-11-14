@@ -2,6 +2,8 @@ package com.drillnotebook.app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -64,5 +66,62 @@ class ChatMessageCipherTest {
 
         ChatCryptoException error = assertThrows(ChatCryptoException.class, () -> broken.encrypt("原话", ""));
         assertTrue(error.getMessage().contains("未写入任何明文"));
+    }
+
+    @Test
+    void newEncryptedTextCarriesOnlyNumericEstimatesAndCountsEvenWhenLocked() throws Exception {
+        String text = "锁定正文abcd";
+        var written = cipher.encrypt(text, "test-password");
+        var mapper = new ObjectMapper();
+        var meta = mapper.readTree(written.meta());
+        assertEquals(TokenEstimator.VERSION, meta.path("tokenEstimatorVersion").asText());
+        assertEquals(new TokenEstimator(mapper).estimateText(text), meta.path("textTokens").intValue());
+        assertFalse(written.meta().contains(text));
+        assertFalse(written.meta().contains("test-password"));
+        assertEquals(ChatMessageCipher.ReadStatus.NEEDS_PASSWORD, cipher.read(written.cipher(), written.meta(), null).status());
+        assertEquals(meta.path("textTokens").intValue(), cipher.estimateStoredText(null, written.cipher(), written.meta()));
+        var extras = cipher.withContextExtraTokens(written, 123L);
+        assertEquals(123L, mapper.readTree(extras.meta()).path("contextExtraTokens").longValue());
+        assertEquals(text, cipher.read(extras.cipher(), extras.meta(), "test-password").value());
+        assertEquals(12L, mapper.readTree(cipher.withSupplementTextTokens(written, 12).meta()).path("supplementTextTokens").longValue());
+        assertThrows(ChatCryptoException.class, () -> cipher.withContextExtraTokens(written, -1L));
+        var classified = cipher.withContextExtraTokens(written, 123L,
+                java.util.Map.of(com.drillnotebook.app.model.RequestContextAudit.Kind.TOOL_RESULTS, 123L));
+        assertEquals(123L, mapper.readTree(classified.meta()).path("contextExtraCategories").path("TOOL_RESULTS").longValue());
+        assertFalse(classified.meta().contains(text));
+        assertEquals(written.cipher(), classified.cipher(), "分类只存数字，不重写受保护正文");
+        assertThrows(ChatCryptoException.class, () -> cipher.withContextExtraTokens(written, 124L,
+                java.util.Map.of(com.drillnotebook.app.model.RequestContextAudit.Kind.TOOL_RESULTS, 123L)));
+    }
+
+    @Test
+    void oldCiphertextUsesNumericCacheAfterDecryptAndUnknownIsNeverAZero() throws Exception {
+        var mapper = new ObjectMapper();
+        var written = cipher.encrypt("abcd汉字", "test-password");
+        var meta = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(written.meta());
+        meta.remove("textTokens"); meta.remove("tokenEstimatorVersion");
+        String oldMeta = mapper.writeValueAsString(meta);
+        assertNull(cipher.estimateStoredText(null, written.cipher(), oldMeta));
+        assertEquals("abcd汉字", cipher.read(written.cipher(), oldMeta, "test-password").value());
+        assertEquals(4, cipher.estimateStoredText(null, written.cipher(), oldMeta));
+        assertEquals(4, cipher.estimateStoredText(null, written.cipher(), oldMeta));
+        assertNull(cipher.estimateStoredText(null, "AAAA", "not-json"));
+        assertNull(cipher.estimateStoredText(null, null, null));
+        assertEquals(0, cipher.estimateStoredText("", null, null));
+        assertEquals(4, cipher.estimateStoredText("abcd汉字", null, null));
+    }
+
+    @Test
+    void incompatibleOrInvalidNumericMetadataDoesNotPretendToBeKnown() throws Exception {
+        var mapper = new ObjectMapper();
+        var written = cipher.encrypt("private", "test-password");
+        for (Object count : java.util.List.of(-1, 1.5, "12", (long) Integer.MAX_VALUE + 1)) {
+            var meta = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(written.meta());
+            meta.set("textTokens", mapper.valueToTree(count));
+            assertNull(cipher.estimateStoredText(null, written.cipher(), mapper.writeValueAsString(meta)));
+        }
+        var meta = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(written.meta());
+        meta.put("tokenEstimatorVersion", "future-version");
+        assertNull(cipher.estimateStoredText(null, written.cipher(), mapper.writeValueAsString(meta)));
     }
 }

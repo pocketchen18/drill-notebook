@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '../../lib/api';
+import type { ContextTokenTotals } from '../../lib/aiContextApi';
 import './context-meter.css';
 
 export interface SessionContextUsage {
   sessionId: number;
+  current: { tokens: number; estimated: boolean; complete: boolean; requestId: string | null;
+    contextGeneration: number; historyRevision: number; active: boolean; estimatorVersion: string;
+    summaryRevision: number | null; categories?: { kind: string; tokens: number }[] } | null;
   latest: { requestId: string; inputTokens: number; contextWindow: number; model: string | null;
     cacheReadTokens: number | null; outputTokens: number | null } | null;
+  cumulative?: ContextTokenTotals;
   model: string | null;
   contextWindow: number | null;
   outputReserve: number | null;
@@ -14,8 +19,8 @@ export interface SessionContextUsage {
 
 interface Props {
   sessionId?: number;
-  /** 供应商没有回报用量时退而使用的本地估算（来自最近一轮的上下文计划）。 */
-  estimate?: { tokens: number; requestId?: string } | null;
+  /** 回复增长时即使小卡片未打开，也刷新当前会话窗口占用。 */
+  streaming?: boolean;
   /** 轮次状态变化时重新读取。 */
   refreshKey?: string;
   onInspect: (requestId: string) => void;
@@ -23,22 +28,29 @@ interface Props {
 
 export const contextUsageKey = (sessionId?: number) => ['ai-context-usage', sessionId ?? 'new'] as const;
 export const formatTokens = (value: number): string => value >= 1000 ? `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}k` : String(value);
+/** 缺失不是 0；部分回报的累计只表示已知下界。 */
+export const formatMeasuredTokens = (value: number | null | undefined, complete?: boolean): string =>
+  value == null ? '未回报' : `${complete === false ? '≥ ' : ''}${formatTokens(value)}`;
 
 /**
- * 当前会话送入模型的上下文占用。只讲三件事：输入（缓存命中 / 未命中）、输出、窗口占比；
+ * 当前会话保留的全局上下文用于窗口占用，输入 / 命中 / 未命中与输出使用会话累计的实测用量；
  * 窗口大小已经在第一行和进度条里，输出预留、分项估算、摘要与省略原因都不在这里重复，
- * 需要时去「查看本轮上下文」看。
+ * 需要时去「查看上下文详情」看。
  */
-export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Props): JSX.Element | null {
+export function ContextMeter({ sessionId, streaming = false, refreshKey, onInspect }: Props): JSX.Element | null {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const usage = useQuery({ queryKey: [...contextUsageKey(sessionId), refreshKey ?? ''],
-    queryFn: () => get<SessionContextUsage>(`/api/ai/sessions/${sessionId}/context-usage`), enabled: sessionId !== undefined, staleTime: 0 });
+    queryFn: () => get<SessionContextUsage>(`/api/ai/sessions/${sessionId}/context-usage`), enabled: sessionId !== undefined,
+    staleTime: 0, refetchInterval: open || streaming ? 1500 : false });
   const data = sessionId === undefined ? undefined : usage.data;
-  const measured = data?.latest ?? null;
-  const tokens = measured?.inputTokens ?? estimate?.tokens ?? null;
-  const window = data?.contextWindow ?? measured?.contextWindow ?? null;
-  const requestId = measured?.requestId ?? estimate?.requestId;
+  const current = data?.current;
+  const tokens = current && Number.isFinite(current.tokens) && current.tokens >= 0 ? current.tokens : null;
+  const window = data?.contextWindow ?? null;
+  const requestId = current?.requestId ?? data?.latest?.requestId;
+  const cumulative = data?.cumulative;
+
+  useEffect(() => { setOpen(false); }, [sessionId]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,43 +66,46 @@ export function ContextMeter({ sessionId, estimate, refreshKey, onInspect }: Pro
   }, [open]);
 
   if (sessionId === undefined || !window) return null;
-  const ratio = tokens === null ? 0 : Math.min(1, tokens / window);
+  const ratio = tokens === null ? 0 : tokens / window;
   const percent = tokens === null ? null : Math.round(ratio * 100);
+  const barPercent = Math.min(100, percent ?? 0);
   const high = ratio >= 0.8;
-  const source = measured ? '实测' : '估算';
-  // 命中是供应商回报的缓存读取量：它已经包含在输入长度里，未命中就是剩下的部分。
-  const hit = measured?.cacheReadTokens == null ? null : Math.min(measured.cacheReadTokens, measured.inputTokens);
-  const miss = hit === null || tokens === null ? null : Math.max(0, tokens - hit);
-  const output = measured?.outputTokens ?? null;
-  const hitShare = hit === null || !tokens ? null : Math.round((hit / tokens) * 100);
-  const label = percent === null ? '上下文占用：尚无数据' : `上下文占用 ${percent}%（${source}）`;
+  const source = current?.estimated === false ? '实测' : '估算';
+  const incomplete = current?.complete === false;
+  // 累计命中率的分母是累计输入，不能拿最新请求长度或上下文窗口来除。
+  const hit = cumulative?.cacheReadTokens ?? null;
+  const miss = cumulative?.cacheMissTokens ?? null;
+  const output = cumulative?.outputTokens ?? null;
+  const hitShare = hit === null || !cumulative?.inputTokens || !cumulative.inputComplete || !cumulative.cacheReadComplete
+    ? null : Math.round((hit / cumulative.inputTokens) * 100);
+  const label = percent === null ? '上下文占用：尚无数据' : `上下文占用${incomplete ? '至少' : ''} ${percent}%（${source}）`;
 
   return <div className="context-meter" ref={root}>
     <button type="button" className={`context-meter-trigger${high ? ' is-high' : ''}`} aria-haspopup="dialog" aria-expanded={open}
-      aria-label={label} title={label} onClick={() => setOpen(!open)}>
+      aria-label={label} title={label} onClick={() => { if (!open) void usage.refetch(); setOpen(!open); }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" className="context-meter-track" />
-        <circle cx="12" cy="12" r="9" className="context-meter-value" strokeDasharray={`${ratio * 2 * Math.PI * 9} ${2 * Math.PI * 9}`} /></svg>
-      <span>{percent === null ? '—' : `${percent}%`}</span>
+        <circle cx="12" cy="12" r="9" className="context-meter-value" strokeDasharray={`${Math.min(1, ratio) * 2 * Math.PI * 9} ${2 * Math.PI * 9}`} /></svg>
+      <span>{percent === null ? '—' : `${incomplete ? '≥' : ''}${percent}%`}</span>
     </button>
     {open ? <div className="context-meter-pop" role="dialog" aria-label="上下文占用">
       <div className="context-meter-body">
         {tokens === null ? <strong>还没有可用的占用数据</strong> : <>
-          <strong className="context-meter-headline">{measured ? '输入' : '输入（估算）'} {formatTokens(tokens)}<i> / {formatTokens(window)}</i></strong>
-          <div className="context-meter-bar" aria-hidden="true"><span className={high ? 'is-high' : undefined} style={{ width: `${percent ?? 0}%` }} /></div>
-          <dl className="context-meter-rows">
-            <div><dt>缓存命中</dt><dd>{hit === null ? '未回报' : <>{formatTokens(hit)}{hitShare === null ? null : <i> · 占输入 {hitShare}%</i>}</>}</dd></div>
-            <div><dt>缓存未命中</dt><dd>{miss === null ? '未回报' : formatTokens(miss)}</dd></div>
-            <div><dt>输出</dt><dd>{output === null ? '未回报' : formatTokens(output)}</dd></div>
-          </dl>
+          <strong className="context-meter-headline">上下文总量 {incomplete ? '≥ ' : ''}{formatTokens(tokens)}<i> / {formatTokens(window)}</i></strong>
+          <div className="context-meter-bar" aria-hidden="true"><span className={high ? 'is-high' : undefined} style={{ width: `${barPercent}%` }} /></div>
         </>}
-        {data?.model ? <p className="context-meter-meta">{data.model}</p> : null}
-        {tokens === null ? <p>发送第一条消息后，这里显示供应商回报的实际长度。</p> : null}
-        {measured && measured.contextWindow !== window ? <p>该请求发出时使用的模型窗口为 {formatTokens(measured.contextWindow)}，现按当前模型的窗口计算。</p> : null}
-        {!measured && tokens !== null ? <p>供应商没有回报用量，这是发送前的本地估算，不含工具定义与工具结果。</p> : null}
-        {high ? <p className="context-meter-warn">已接近模型窗口上限，较早的对话可能被摘要或省略。</p> : null}
+        {tokens !== null || (cumulative?.requests ?? 0) > 0 ? <dl className="context-meter-rows"
+          title={`会话累计输入 ${formatMeasuredTokens(cumulative?.inputTokens, cumulative?.inputComplete)} · 总 Token ${formatMeasuredTokens(cumulative?.totalTokens, cumulative?.totalComplete)}`}>
+          <div><dt>输入总量</dt><dd>{formatMeasuredTokens(cumulative?.inputTokens, cumulative?.inputComplete)}</dd></div>
+          <div><dt>缓存命中</dt><dd>{formatMeasuredTokens(hit, cumulative?.cacheReadComplete)}{hitShare === null ? null : <i> · 命中率 {hitShare}%</i>}</dd></div>
+          <div><dt>缓存未命中</dt><dd>{formatMeasuredTokens(miss, cumulative?.cacheMissComplete)}</dd></div>
+          <div><dt>输出</dt><dd>{formatMeasuredTokens(output, cumulative?.outputComplete)}</dd></div>
+        </dl> : null}
+        {incomplete ? <p>部分旧内容无法估算，显示已知占用下界。</p> : null}
+        {high ? <p className="context-meter-warn">已接近模型窗口上限。</p> : null}
       </div>
-      <div className="context-meter-foot"><span>不含多次工具往返的累计用量</span>
-        {requestId ? <button type="button" onClick={() => { setOpen(false); onInspect(requestId); }}>查看本轮上下文</button> : null}</div>
+      <div className="context-meter-foot">
+        {data?.model ? <span className="context-meter-meta" title={data.model}>{data.model}</span> : null}
+        {requestId ? <button type="button" onClick={() => { setOpen(false); onInspect(requestId); }}>查看上下文详情</button> : null}</div>
     </div> : null}
   </div>;
 }

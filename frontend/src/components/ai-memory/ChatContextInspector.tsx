@@ -11,12 +11,13 @@ import {
   sourceKindLabel,
   turnStatusText
 } from '../../lib/aiTurnText';
-import type { ContextOmission, ContextSource, SourcePreview, TurnContextAudit } from '../../lib/aiContextApi';
+import type { ContextOmission, ContextSource, RequestContextPage, SourcePreview, TurnContextAudit } from '../../lib/aiContextApi';
 import type { TurnResult } from '../../lib/types';
+import { RequestContextBrowser } from './RequestContextBrowser';
+import { CurrentContextCard } from './CurrentContextCard';
 
 /**
- * 本轮上下文检查器（执行方案 §12、contracts §4.5、§9.4）：只读已保存的审计账本，
- * 列出实际提供给模型的发送范围、区域估算、摘要缺口、省略原因与用量。
+ * 上下文检查器：上方展示当前会话占用，下方只读所选轮次的请求组成与来源账本。
  *
  * <p>打开它不会新建计划、不会触发检索/维护/重放，也不会发一轮新聊天；正文预览必须逐条显式点，
  * 面板关闭即随组件销毁，不留上一次的解密结果。它描述的是"提供给模型什么"，不是模型内部注意力。</p>
@@ -24,51 +25,63 @@ import type { TurnResult } from '../../lib/types';
 export interface ChatContextInspectorProps {
   sessionId?: number;
   requestId: string;
-  /** 本轮 done 的统一结果快照：账本里没有的 usage 只能从它取。 */
+  /** 兼容旧调用方的轮次快照；当前占用不从它取。 */
   turn?: TurnResult;
+  refreshKey?: string;
   open: boolean;
   onClose: () => void;
   /** 助手窗口的详情栏里直接铺开，不再套弹窗。 */
   embedded?: boolean;
 }
 
-export function ChatContextInspector({ sessionId, requestId, turn, open, onClose, embedded }: ChatContextInspectorProps) {
-  if (embedded) return open ? <InspectorBody sessionId={sessionId} requestId={requestId} turn={turn} /> : null;
+export function ChatContextInspector({ sessionId, requestId, refreshKey, open, onClose, embedded }: ChatContextInspectorProps) {
+  if (embedded) return open ? <InspectorBody sessionId={sessionId} requestId={requestId} refreshKey={refreshKey} /> : null;
   return (
-    <Modal title="本轮上下文" visible={open} footer={null} onCancel={onClose} autoFocus={false} unmountOnExit style={{ width: 660 }}>
-      {open ? <InspectorBody sessionId={sessionId} requestId={requestId} turn={turn} /> : null}
+    <Modal title="上下文" visible={open} footer={null} onCancel={onClose} autoFocus={false} unmountOnExit style={{ width: 660 }}>
+      {open ? <InspectorBody sessionId={sessionId} requestId={requestId} refreshKey={refreshKey} /> : null}
     </Modal>
   );
 }
 
-function InspectorBody({ sessionId, requestId, turn }: { sessionId?: number; requestId: string; turn?: TurnResult }) {
+function InspectorBody({ sessionId, requestId, refreshKey }: { sessionId?: number; requestId: string; refreshKey?: string }) {
   const audit = useTurnContextAudit(sessionId, requestId, true);
   const previews = useSourcePreview(requestId);
 
+  let body;
   if (audit.isError) {
-    return (
+    body = (
       <p className="ai-inspector-empty">
-        {audit.error instanceof ApiError ? friendlyMessage(audit.error, '本轮上下文记录读取失败') : '本轮上下文记录读取失败'}
+        {audit.error instanceof ApiError ? friendlyMessage(audit.error, '上下文记录读取失败') : '上下文记录读取失败'}
       </p>
     );
+  } else if (audit.isPending) {
+    body = <p className="ai-inspector-empty">正在读取请求账本…</p>;
+  } else {
+    const read = audit.data;
+    body = !read?.available || !read.audit
+      ? <p className="ai-inspector-empty">{auditReasonText(read?.reason)}</p>
+      : <AuditView audit={read.audit} previews={previews} requestId={requestId} requests={read.requestContexts} />;
   }
-  if (audit.isPending) return <p className="ai-inspector-empty">正在读取本轮账本…</p>;
-
-  const read = audit.data;
-  if (!read?.available || !read.audit) {
-    return <p className="ai-inspector-empty">{auditReasonText(read?.reason)}</p>;
-  }
-  return <AuditView audit={read.audit} turn={turn} previews={previews} />;
+  return <div className="ai-inspector">
+    <CurrentContextCard sessionId={sessionId} refreshKey={refreshKey} />
+    {body}
+  </div>;
 }
 
-function AuditView({ audit, turn, previews }: {
+function AuditView({ audit, previews, requestId, requests }: {
   audit: TurnContextAudit;
-  turn?: TurnResult;
   previews: ReturnType<typeof useSourcePreview>;
+  requestId: string;
+  requests?: RequestContextPage;
 }) {
+  const hasRequests = Boolean(requests?.items.length);
   return (
-    <div className="ai-inspector">
-      <p className="ai-inspector-note">这里是本轮提供给模型的上下文清单，不表示模型内部的注意力。</p>
+    <>
+      {hasRequests && requests ? <RequestContextBrowser key={requestId} requestId={requestId} page={requests} />
+        : <p className="ai-inspector-note">这里是本轮提供给模型的上下文清单，不表示模型内部的注意力。</p>}
+
+      <details className="ai-inspector-plan" open={hasRequests ? undefined : true}>
+        <summary>来源与省略</summary>
 
       <section className="ai-inspector-block">
         <Typography.Text bold>计划与发送态</Typography.Text>
@@ -79,7 +92,7 @@ function AuditView({ audit, turn, previews }: {
         <p className="ai-inspector-line">{`估算 ${audit.estimatedInputTokens} / 预算 ${audit.inputBudget} tokens`}</p>
         <p className="ai-inspector-muted">{`估算器 ${audit.estimatorVersion}，非厂商计数`}</p>
         {audit.auditTruncated ? <p className="ai-inspector-muted">账本过长，部分诊断明细未保存。</p> : null}
-        <p className="ai-inspector-muted">只保存最后一次尝试的计划；更早尝试的完整提示词未保留。</p>
+        {!hasRequests ? <p className="ai-inspector-muted">只保存最后一次尝试的计划；更早尝试的完整提示词未保留。</p> : null}
       </section>
 
       <section className="ai-inspector-block">
@@ -103,7 +116,7 @@ function AuditView({ audit, turn, previews }: {
         ) : null}
       </section>
 
-      <section className="ai-inspector-block">
+      {!hasRequests ? <section className="ai-inspector-block">
         <Typography.Text bold>区域估算</Typography.Text>
         <table className="ai-inspector-table">
           <thead><tr><th>区域</th><th>条数</th><th>估算 tokens</th></tr></thead>
@@ -117,7 +130,7 @@ function AuditView({ audit, turn, previews }: {
             ))}
           </tbody>
         </table>
-      </section>
+      </section> : null}
 
       <section className="ai-inspector-block">
         <Typography.Text bold>{`提供的来源（${audit.selected.length}）`}</Typography.Text>
@@ -140,8 +153,8 @@ function AuditView({ audit, turn, previews }: {
         ) : <p className="ai-inspector-line">本轮没有省略记录。</p>}
       </section>
 
-      <UsageLine turn={turn} />
-    </div>
+      </details>
+    </>
   );
 }
 
@@ -205,24 +218,5 @@ function OmissionRow({ omission }: { omission: ContextOmission }) {
         {omission.count == null ? '数量未知（更早未扫描）' : `${omission.count} 项`}
       </span>
     </li>
-  );
-}
-
-function UsageLine({ turn }: { turn?: TurnResult }) {
-  const usage = turn?.usage;
-  if (!usage) return null;
-  const token = (value: number | null | undefined) => (value == null ? '未知' : String(value));
-  return (
-    <section className="ai-inspector-block">
-      <Typography.Text bold>用量</Typography.Text>
-      <p className="ai-inspector-usage">
-        <span>{`来源 ${usage.source ?? 'unknown'}`}</span>
-        <span>{`输入 ${token(usage.inputTokens)}`}</span>
-        <span>{`输出 ${token(usage.outputTokens)}`}</span>
-        <span>{`缓存读 ${token(usage.cacheReadTokens)}`}</span>
-        <span>{`缓存写 ${token(usage.cacheWriteTokens)}`}</span>
-      </p>
-      <p className="ai-inspector-muted">缺字段就是上游没给，不按估算冒充当过的计数。</p>
-    </section>
   );
 }

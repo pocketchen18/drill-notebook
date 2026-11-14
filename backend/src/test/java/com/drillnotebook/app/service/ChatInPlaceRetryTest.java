@@ -139,6 +139,21 @@ class ChatInPlaceRetryTest {
         assertEquals(3L, ((Number) usage.get("requests")).longValue());
         assertEquals(21L, ((Number) usage.get("inputTokens")).longValue());
         assertEquals(6L, ((Number) usage.get("outputTokens")).longValue());
+        var cumulative = (Map<?, ?>) ai.sessionContextUsage(sessionId).get("cumulative");
+        assertEquals(3L, cumulative.get("requests"));
+        assertEquals(21L, cumulative.get("inputTokens"));
+        assertEquals(6L, cumulative.get("outputTokens"));
+        assertEquals(27L, cumulative.get("totalTokens"));
+        var inspected = contexts.inspector().audit(currentId);
+        var requestPage = (Map<?, ?>) inspected.get("requestContexts");
+        assertEquals(3L, requestPage.get("totalRequests"));
+        assertEquals(3, ((List<?>) requestPage.get("items")).size());
+        for (Object item : (List<?>) requestPage.get("items")) {
+            var context = ((Map<?, ?>) item).get("context");
+            assertNotNull(context, "原地重试的每次请求都有独立的组成摘要");
+            assertFalse(json.writeValueAsString(context).contains("唯一附件全文"));
+        }
+        assertEquals(cumulative, inspected.get("usage"));
         assertTrue(wiring.ledger().reconcile().consistent());
     }
 

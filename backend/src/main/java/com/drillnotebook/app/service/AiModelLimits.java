@@ -53,20 +53,6 @@ public final class AiModelLimits {
         }
     }
     private static int estimate(Object value) {
-        int[] images = {0};
-        return ESTIMATOR.estimateSerialized(countable(value, images)) + images[0] * TokenEstimator.IMAGE_UNKNOWN_ESTIMATED_TOKENS;
-    }
-    private static Object countable(Object value, int[] images) {
-        if (value instanceof List<?> list) return list.stream().map(item -> countable(item, images)).toList();
-        if (value instanceof Map<?, ?> map) {
-            if ("image_url".equals(map.get("type")) || "image".equals(map.get("type"))) {
-                images[0]++;
-                return Map.of("type", "image");
-            }
-            Map<String, Object> copy = new LinkedHashMap<>();
-            map.forEach((key, item) -> copy.put(String.valueOf(key), countable(item, images)));
-            return copy;
-        }
-        return value;
+        return ESTIMATOR.estimateInput(value);
     }
 }

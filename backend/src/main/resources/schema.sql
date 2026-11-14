@@ -635,11 +635,15 @@ CREATE TABLE IF NOT EXISTS ai_usage_attempt (
     output_tokens INTEGER,
     cache_read_tokens INTEGER,
     cache_write_tokens INTEGER,
+    cache_read_included_in_input INTEGER CHECK (cache_read_included_in_input IN (0, 1)),
+    context_breakdown TEXT,
     usage_source TEXT NOT NULL CHECK (usage_source IN ('provider', 'estimate', 'unknown')),
     state TEXT NOT NULL CHECK (state IN ('RESERVED', 'SENT', 'SETTLED', 'UNKNOWN', 'RELEASED')),
     created_at TEXT NOT NULL,
     settled_at TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_operation ON ai_usage_attempt(operation_id, purpose);
 
 CREATE TABLE IF NOT EXISTS ai_usage_daily (
     budget_date TEXT NOT NULL,

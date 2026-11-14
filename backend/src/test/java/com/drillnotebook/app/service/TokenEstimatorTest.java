@@ -58,4 +58,25 @@ class TokenEstimatorTest {
         assertEquals(3, "汉".getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
         assertEquals(10, estimator.serializedBytes(List.of("汉字")), "字节数是客观量，不参与预算判定");
     }
+
+    @Test
+    void streamingChunksKeepFractionalTokensInsteadOfRoundingEachDelta() {
+        var counter = new TokenEstimator.Counter();
+        for (String delta : List.of("a", "b", "c", "d")) counter.append(delta);
+        assertEquals(1, counter.tokens(), "四个单字符帧不是四个 Token");
+        counter.append("汉"); counter.append("字"); counter.append(null); counter.append("");
+        assertEquals(estimator.estimateText("abcd汉字"), counter.tokens());
+    }
+
+    @Test
+    void streamingCounterJoinsEmojiSurrogatesAcrossFramesAndKeepsUnpairedOnes() {
+        String text = "a😀汉👨‍👩‍👧b";
+        var counter = new TokenEstimator.Counter();
+        for (int index = 0; index < text.length(); index++) counter.append(text.substring(index, index + 1));
+        assertEquals(estimator.estimateText(text), counter.tokens());
+        counter.append("\uD83D");
+        assertEquals(estimator.estimateText(text + "\uD83D"), counter.tokens());
+        counter.append("c");
+        assertEquals(estimator.estimateText(text + "\uD83Dc"), counter.tokens());
+    }
 }

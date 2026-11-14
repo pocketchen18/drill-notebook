@@ -196,6 +196,11 @@ public class AiChatSessionRepository {
         }, sessionId).stream().findFirst().orElse(null);
     }
 
+    /** 会话已发生的实测用量，不按当前上下文代数或可见消息数量截断。 */
+    public Map<String, Object> cumulativeUsage(long sessionId) {
+        return new ChatUsageRepository(jdbc.getDataSource()).session(sessionId);
+    }
+
     /** 供应商没回报的字段保持 NULL，界面按「未回报」显示而不是 0。 */
     private static Integer integerOrNull(ResultSet row, int index) throws SQLException {
         int value = row.getInt(index);
