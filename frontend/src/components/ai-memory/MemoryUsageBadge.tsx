@@ -90,7 +90,7 @@ export function MemoryUsageBadge({ sessionId, requestId, provided, onOpenInspect
           {audit.isPending && !readError ? <p className="ai-memory-badge-note">正在读取本轮账本…</p> : null}
           {onOpenInspector ? (
             <button type="button" className="ai-memory-badge-inspector" onClick={onOpenInspector}>
-              查看本轮上下文
+              查看上下文详情
             </button>
           ) : null}
         </div>

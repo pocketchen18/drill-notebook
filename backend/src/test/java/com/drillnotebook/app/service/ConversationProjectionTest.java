@@ -136,6 +136,48 @@ class ConversationProjectionTest {
     }
 
     @Test
+    void globalOccupancyCountsValidSummaryOnceKeepsCoverageGapsAndTheNewestTwoTurns() throws Exception {
+        seedTurns(20); createVault(); enableSummaryAuthorization();
+        checkpoint(1L, 20L, 1L, List.of(new long[]{1, 10}, new long[]{12, 20}));
+        var storageBefore = wiring.ledger().read();
+        var occupancy = new SessionContextOccupancyService(dataSource, wiring.cipher(), projection,
+                wiring.turnService(), new ObjectMapper());
+        Map<String, Object> value = occupancy.read(sessionId, 0);
+        var estimator = new TokenEstimator(new ObjectMapper());
+        long expected = estimator.estimateText("用户在准备雅思，偏好先给例子再讲原理。") + TokenEstimator.MESSAGE_OVERHEAD_TOKENS
+                + 3L * (estimator.estimateText(USER_TEXT) + estimator.estimateText(REPLY_TEXT)
+                        + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS);
+        assertEquals(expected, value.get("tokens"), "缺口第 11 轮、最近第 19 / 20 轮仍用原文，其余只用一份摘要");
+        assertEquals(1L, value.get("summaryRevision"));
+        assertEquals(storageBefore, wiring.ledger().read());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM ai_session_context", Integer.class));
+    }
+
+    @Test
+    void readingGlobalOccupancyNeverDeletesAnInvalidOldCheckpoint() throws Exception {
+        seedTurns(20); createVault(); enableSummaryAuthorization();
+        checkpoint(1L, 20L, 1L, coverage(1, 20));
+        // 当前表 CHECK 只允许 v2；旧 v1 读取结果通过仓储边界注入，不放宽生产约束。
+        var oldCheckpoints = org.mockito.Mockito.mock(SessionContextRepository.class);
+        org.mockito.Mockito.when(oldCheckpoints.read(sessionId)).thenReturn(java.util.Optional.of(
+                new SessionContextRepository.Checkpoint(sessionId, 1L, 20L, 1L, 0L,
+                        null, null, 40L, "2026-10-12T00:00:00.000Z", 1)));
+        var oldProjection = new ConversationProjection(new ChatHistoryRepository(dataSource), oldCheckpoints,
+                wiring.metadata(), wiring.cipher(), wiring.memory(), crypto, vault, policy,
+                new TokenEstimator(new ObjectMapper()), new ObjectMapper());
+        var occupancy = new SessionContextOccupancyService(dataSource, wiring.cipher(), oldProjection,
+                wiring.turnService(), new ObjectMapper());
+        var value = occupancy.read(sessionId, 0);
+        assertNull(value.get("summaryRevision"));
+        var estimator = new TokenEstimator(new ObjectMapper());
+        assertEquals(20L * (estimator.estimateText(USER_TEXT) + estimator.estimateText(REPLY_TEXT)
+                + 2 * TokenEstimator.MESSAGE_OVERHEAD_TOKENS), value.get("tokens"));
+        org.mockito.Mockito.verify(oldCheckpoints, org.mockito.Mockito.never()).delete(sessionId);
+        assertEquals(2, jdbc.queryForObject("SELECT schema_version FROM ai_session_context WHERE session_id = ?", Integer.class, sessionId),
+                "只读统计不调用发送路径的旧摘要修复 / 删除逻辑");
+    }
+
+    @Test
     void v1SummaryCheckpointIsNotUsedAsV2() throws Exception {
         seedTurns(20);
         long current = insertRunningTurn();

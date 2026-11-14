@@ -2,6 +2,9 @@ package com.drillnotebook.app.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /**
@@ -35,7 +38,7 @@ public class TokenEstimator {
     /** 一段文本的估算 Token。空串为 0，序列化失败按 UTF-8 字节数兜底（宁高不低）。 */
     public int estimateText(String value) {
         if (value == null || value.isEmpty()) return 0;
-        int units = 0;
+        long units = 0;
         int index = 0;
         while (index < value.length()) {
             int codePoint = value.codePointAt(index);
@@ -45,9 +48,57 @@ public class TokenEstimator {
         return ceilQuarters(units);
     }
 
+    /** 流式文本保留四分之一 Token 的余数及跨帧代理对，不能逐帧向上取整后相加。 */
+    public static final class Counter {
+        private long units;
+        private char pendingHigh;
+
+        public void append(String text) {
+            if (text == null || text.isEmpty()) return;
+            int index = 0;
+            if (pendingHigh != 0) {
+                if (Character.isLowSurrogate(text.charAt(0))) {
+                    units += unitsFor(Character.toCodePoint(pendingHigh, text.charAt(0))); index++;
+                } else units += unitsFor(pendingHigh);
+                pendingHigh = 0;
+            }
+            while (index < text.length()) {
+                char value = text.charAt(index);
+                if (Character.isHighSurrogate(value) && index + 1 == text.length()) {
+                    pendingHigh = value; break;
+                }
+                int point = text.codePointAt(index);
+                units += unitsFor(point); index += Character.charCount(point);
+            }
+        }
+
+        public long tokens() { return (units + (pendingHigh == 0 ? 0 : unitsFor(pendingHigh)) + 3) / 4; }
+    }
+
     /** 对最终要发出去的形态整体估算：JSON 的结构字符是 ASCII，个人内容保持自己的字符类权重。 */
     public int estimateSerialized(Object body) {
         return estimateText(serialize(body));
+    }
+
+    /** 图像用固定预留估算，不能把 base64 字符数当成模型输入或计费 Token。 */
+    public int estimateInput(Object body) {
+        int[] images = {0};
+        return (int) Math.min(Integer.MAX_VALUE,
+                (long) estimateSerialized(countable(body, images)) + (long) images[0] * IMAGE_UNKNOWN_ESTIMATED_TOKENS);
+    }
+
+    private static Object countable(Object value, int[] images) {
+        if (value instanceof List<?> list) return list.stream().map(item -> countable(item, images)).toList();
+        if (value instanceof Map<?, ?> map) {
+            if ("image_url".equals(map.get("type")) || "image".equals(map.get("type"))) {
+                images[0]++;
+                return Map.of("type", "image");
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, item) -> copy.put(String.valueOf(key), countable(item, images)));
+            return copy;
+        }
+        return value;
     }
 
     /** 序列化后的实际 UTF-8 字节数：审计与调试都用得上的客观量，不参与预算判定。 */
@@ -92,7 +143,7 @@ public class TokenEstimator {
                 || (codePoint >= 0x2600 && codePoint <= 0x27BF);
     }
 
-    private static int ceilQuarters(int units) {
-        return (units + 3) / 4;
+    private static int ceilQuarters(long units) {
+        return (int) Math.min(Integer.MAX_VALUE, (units + 3) / 4);
     }
 }

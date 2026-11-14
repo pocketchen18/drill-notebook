@@ -1,0 +1,19 @@
+.current-context-card { container-type: inline-size; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-bg); font-size: 12px; }
+.current-context-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.current-context-heading strong { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.current-context-heading > span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.current-context-total { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.current-context-total > span { display: flex; align-items: baseline; gap: 3px; }
+.current-context-total strong { font-size: 20px; font-weight: 600; color: var(--text-strong, var(--text)); }
+.current-context-total small { color: var(--muted); font-size: 11px; }
+.current-context-percent strong { font-size: 16px; }
+.current-context-bar { display: flex; height: 10px; overflow: hidden; border-radius: 4px; background: var(--line); }
+.current-context-bar > span { flex-shrink: 0; }
+.current-context-categories { display: grid; grid-template-columns: 1fr; gap: 7px 12px; min-width: 0; margin: 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+.current-context-categories > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.current-context-categories dt { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.current-context-categories dt i { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+.current-context-categories dd { display: flex; align-items: center; gap: 5px; margin: 0; flex-shrink: 0; color: var(--muted); }
+.current-context-categories dd span { min-width: 24px; text-align: right; }
+.current-context-empty { margin: 0; color: var(--muted); font-size: 11px; }
+@container (min-width: 390px) { .current-context-categories { grid-template-columns: 1fr 1fr; } }

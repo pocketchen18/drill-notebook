@@ -14,7 +14,7 @@ import './ai-window.css';
 import { ModelPicker, type ModelChoice } from './ai-session/ModelPicker';
 import { WebSearchButton } from './ai-session/WebSearchButton';
 import type { Connections } from './ai-connections/types';
-import { ContextMeter, formatTokens } from './ai-session/ContextMeter';
+import { ContextMeter, formatMeasuredTokens } from './ai-session/ContextMeter';
 import { useNavigate } from 'react-router-dom';
 import { del, get, post, put } from '../lib/api';
 import { friendlyMessage } from '../lib/errors';
@@ -1224,15 +1224,8 @@ export function AiAssistant(): JSX.Element {
     : runtime?.paused && runtime.queueCount ? `待发 ${runtime.queueCount} · 已暂停`
       : runtime?.queueCount ? `待发 ${runtime.queueCount}` : '';
   const pageTarget = pageContext.kind !== 'none' && !!pageContext.title;
-  // 供应商不回报用量时的退路：最近一轮上下文计划的本地估算。
-  const contextEstimate = (() => {
-    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
-      const tokens = visibleMessages[index].turn?.contextUsage?.estimatedInputTokens;
-      if (typeof tokens === 'number' && tokens > 0) return { tokens, requestId: visibleMessages[index].requestId };
-    }
-    return null;
-  })();
   const detailOpen = !!inspectorTarget || !!sessionReference;
+  const contextRefreshKey = `${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}:${history.historyRevision}:${connectionsQuery.data?.revision ?? ''}`;
   const jumpToLatest = async (): Promise<void> => {
     const el = chatContainerRef.current;
     if (!el) return;
@@ -1505,7 +1498,7 @@ export function AiAssistant(): JSX.Element {
                             title={regenerateBlocked || '重新生成'} onClick={() => void regenerate(turnId)} />
                         ) : null}
                         {item.usage ? <span className="chat-turn-usage" title={item.usage.requests > 1 ? `本轮 ${item.usage.requests} 次模型请求的累计实测用量` : '本轮实测用量'}>
-                          输入 {formatTokens(item.usage.inputTokens)} · 输出 {formatTokens(item.usage.outputTokens)}</span> : null}
+                          输入 {formatMeasuredTokens(item.usage.inputTokens, item.usage.inputComplete)} · 输出 {formatMeasuredTokens(item.usage.outputTokens, item.usage.outputComplete)}</span> : null}
                       </div>
                     </>
                   ) : null}
@@ -1610,7 +1603,8 @@ export function AiAssistant(): JSX.Element {
               title={pageTarget ? '主窗口当前页面，点击在主窗口查看' : '主窗口没有可读取的业务页面'}
               onClick={() => goToMain(pageRoute(pageContext))}>
               <FileText size={13} /><span>{pageTarget ? pageContext.title : '无当前页面'}</span></button>
-            <ContextMeter sessionId={sessionId} estimate={contextEstimate} refreshKey={`${turn.requestId ?? ''}:${streaming}:${modelChoice.modelConfigId ?? ''}`}
+            <ContextMeter sessionId={sessionId} streaming={streaming}
+              refreshKey={contextRefreshKey}
               onInspect={(requestId) => { setSessionReference(undefined); setInspectorTarget({ requestId }); }} />
             <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || modelSaving || connectionsQuery.isPending || createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
@@ -1642,18 +1636,18 @@ export function AiAssistant(): JSX.Element {
       </main>
 
       {detailOpen ? (
-        <aside className="ai-window-detail" aria-label={sessionReference ? '会话记录' : '本轮上下文'}>
+        <aside className="ai-window-detail" aria-label={sessionReference ? '会话记录' : '上下文'}>
           {narrow ? null : <PanelResizer label="调整详情栏宽度" edge="left" value={detailWidth} min={PANELS.detail.min} max={PANELS.detail.max}
             maxRatio={PANELS.detail.ratio} defaultValue={PANELS.detail.base} onChange={setDetailWidth} onCommit={(width) => savePanelWidth('detail', width)} />}
           <header className="ai-window-detail-head">
-            <strong>{sessionReference ? referenceTitle || '会话记录' : '本轮上下文'}</strong>
+            <strong>{sessionReference ? referenceTitle || '会话记录' : '上下文'}</strong>
             <button type="button" className="ai-window-icon" aria-label="关闭详情" onClick={closeDetail}><X size={16} /></button>
           </header>
           <div className="ai-window-detail-body">
             {sessionReference ? <SessionReferencePreview key={sessionReference} link={sessionReference} embedded onTitle={setReferenceTitle}
               onClose={() => setSessionReference(undefined)} onSessionLink={setSessionReference} />
               : inspectorTarget ? <ChatContextInspector sessionId={sessionId} requestId={inspectorTarget.requestId}
-                turn={inspectorTarget.snapshot} open embedded onClose={() => setInspectorTarget(null)} /> : null}
+                turn={inspectorTarget.snapshot} refreshKey={contextRefreshKey} open embedded onClose={() => setInspectorTarget(null)} /> : null}
           </div>
         </aside>
       ) : null}

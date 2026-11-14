@@ -156,8 +156,8 @@ describe('MemoryUsageBadge', () => {
     const onOpenInspector = vi.fn();
     renderBadge({ onOpenInspector });
     fireEvent.click(screen.getByRole('button', { name: '本轮提供 2 条记忆' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '查看本轮上下文' })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '查看上下文详情' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '查看上下文详情' }));
     expect(onOpenInspector).toHaveBeenCalledTimes(1);
     for (const call of [...apiGet.mock.calls, ...apiPost.mock.calls]) {
       expect(String(call[0])).toContain('/context');

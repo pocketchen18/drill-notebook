@@ -2,7 +2,7 @@ import { get, post } from './api';
 
 /**
  * 本轮上下文检查器的只读出口（contracts §4.5）：读已保存的审计账本、按来源键取短片段。
- * 两者都不建计划、不触发检索/维护/重放，也不在新聊天里出现——只有用户点开才发一次 GET。
+ * 两者都不建计划、不触发检索/维护/重放；面板打开后只读取已有记录。
  */
 
 const BASE = '/api/ai/turns';
@@ -79,6 +79,63 @@ export interface TurnContextRead {
   planId?: string;
   dispatchState?: string;
   audit?: TurnContextAudit;
+  requestContexts?: RequestContextPage;
+  usage?: ContextTokenTotals;
+}
+
+export interface ContextTokenTotals {
+  requests: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheMissTokens: number | null;
+  totalTokens: number | null;
+  inputComplete: boolean;
+  outputComplete: boolean;
+  cacheReadComplete: boolean;
+  cacheMissComplete: boolean;
+  totalComplete: boolean;
+}
+
+export interface RequestContextSnapshot {
+  schemaVersion: number;
+  estimatorVersion: string;
+  model: string;
+  kind: 'CHAT' | 'NATIVE_WEB';
+  estimatedInputTokens: number;
+  contextWindow: number;
+  categories: { kind: string; estimatedTokens: number; itemCount: number;
+    items: { key: string; name: string | null; estimatedTokens: number }[] }[];
+  detailsTruncated: boolean;
+}
+
+export interface RequestContextEntry {
+  attemptId: string;
+  operationId: string;
+  ordinal: number;
+  createdAt: string;
+  settledAt: string | null;
+  state: 'SENT' | 'SETTLED' | 'UNKNOWN';
+  usageSource: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheMissTokens: number | null;
+  totalTokens: number | null;
+  inputComplete: boolean;
+  outputComplete: boolean;
+  cacheReadComplete: boolean;
+  cacheMissComplete: boolean;
+  totalComplete: boolean;
+  context: RequestContextSnapshot | null;
+}
+
+export interface RequestContextPage {
+  items: RequestContextEntry[];
+  totalRequests: number;
+  hasMore: boolean;
+  nextBeforeAttemptId: string | null;
+  limit: number;
 }
 
 /** 预览结果：`available=false` 时只有 `reason` 占位，绝不带正文。 */
@@ -97,8 +154,8 @@ export interface SourcePreview {
 /** 一次最多 5 个来源、每个 ≤160 码点（服务端常量 MAX_PREVIEW_KEYS / MAX_PREVIEW_CODEPOINTS）。 */
 export const MAX_PREVIEW_KEYS = 5;
 
-export const readTurnContext = (requestId: string) =>
-  get<TurnContextRead>(`${BASE}/${encodeURIComponent(requestId)}/context`);
+export const readTurnContext = (requestId: string, beforeAttemptId?: string) =>
+  get<TurnContextRead>(`${BASE}/${encodeURIComponent(requestId)}/context${beforeAttemptId ? `?beforeAttemptId=${encodeURIComponent(beforeAttemptId)}` : ''}`);
 
 export const previewTurnSources = (requestId: string, sourceKeys: string[]) =>
   post<SourcePreview[]>(`${BASE}/${encodeURIComponent(requestId)}/context/preview`, { sourceKeys });

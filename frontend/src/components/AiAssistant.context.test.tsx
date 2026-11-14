@@ -86,7 +86,7 @@ const sendOnce = async (): Promise<void> => {
 
 const openBadgeInspector = async (): Promise<void> => {
   fireEvent.click(screen.getByRole('button', { name: /本轮提供/ }));
-  fireEvent.click(await screen.findByRole('button', { name: '查看本轮上下文' }));
+  fireEvent.click(await screen.findByRole('button', { name: '查看上下文详情' }));
 };
 
 beforeEach(() => {
@@ -232,7 +232,7 @@ describe('AiAssistant 记忆徽标与上下文检查器', () => {
     // D156 结清：/history 现在给 requestId，重开抽屉后的旧回答也能追回本轮账本
     expect(screen.queryByRole('button', { name: /本轮提供/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /上下文占用/ }));
-    fireEvent.click(screen.getByRole('button', { name: '查看本轮上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看上下文详情' }));
     await waitFor(() => expect(apiGet).toHaveBeenCalledWith(`/api/ai/turns/${historyTurn}/context`));
     await waitFor(() => expect(screen.getByText('已发送给模型')).toBeTruthy());
     // 没有轮次身份的 legacy 行不该出现入口

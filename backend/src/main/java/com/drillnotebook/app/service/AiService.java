@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -106,6 +107,10 @@ public class AiService {
     private volatile AiRuntimeSettingsRepository runtimeSettings;
     private com.drillnotebook.app.service.web.NativeWebClient nativeWebClient;
     private AiSessionTitleService sessionTitles;
+    private SessionContextOccupancyService contextOccupancy;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setContextOccupancy(SessionContextOccupancyService service) { this.contextOccupancy = service; }
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setSessionTitles(AiSessionTitleService service) { this.sessionTitles = service; }
@@ -543,7 +548,7 @@ public class AiService {
 
     /**
      * 记下这次请求实际送入模型的长度（含缓存命中的部分）、缓存命中数与输出长度，只在供应商回报时记录。
-     * 同一轮有多次请求时覆盖为最近一次：上下文占用说的是一次请求的长度，不是累计用量。
+     * 同一轮有多次请求时覆盖为最近一次：这是请求实测，独立于当前会话全局上下文占用。
      */
     private void recordTurnContext(TurnCall call, AiUpstreamClient.Usage usage) {
         if (usage == null || !usage.reported() || usage.inputTokens() == null) return;
@@ -559,17 +564,31 @@ public class AiService {
         }
     }
 
+    private void recordRequestContext(String attempt, Map<String, Object> wire, TurnCall call, String kind,
+                                      java.util.Set<String> toolNames) {
+        if (attempt == null) return;
+        try {
+            chatTurns.recordUsageContext(attempt, new RequestContextAnalyzer(mapper)
+                    .analyze(wire, AiModelLimits.contextWindow(call.config()), kind, toolNames));
+        } catch (RuntimeException error) {
+            log.warn("请求上下文组成未记录: {}", error.getClass().getSimpleName());
+        }
+    }
+
     /**
-     * 会话的上下文占用：最近一次请求的实测长度，以及当前所选模型的窗口与输出预留。
-     * 没有实测值时 latest 为 null，由界面如实显示尚无数据；模型不可用时窗口为 null。
+     * 当前全局上下文、最近请求实测和会话累计各自独立。窗口占用使用 current；
+     * latest 保留给请求对账，逐次请求账本用于累计，模型不可用时窗口为 null。
      */
     public Map<String, Object> sessionContextUsage(long sessionId) {
         requireSession(sessionId);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessionId", sessionId);
         result.put("latest", sessions.latestContext(sessionId));
+        result.put("cumulative", sessions.cumulativeUsage(sessionId));
+        result.put("current", null);
+        AiConfigRepository.ConfigRow config;
         try {
-            AiConfigRepository.ConfigRow config = requireChatConfig(sessionId);
+            config = requireChatConfig(sessionId);
             result.put("model", config.model());
             result.put("contextWindow", AiModelLimits.contextWindow(config));
             result.put("outputReserve", AiModelLimits.output(config, runtimeSettings().requestOutputTokens()));
@@ -577,8 +596,40 @@ public class AiService {
             result.put("model", null);
             result.put("contextWindow", null);
             result.put("outputReserve", null);
+            return result;
+        }
+        try {
+            if (contextOccupancy != null) result.put("current", contextOccupancy.read(sessionId, currentContextPrefix(config)));
+        } catch (RuntimeException error) {
+            // 统计暂时不可用时仍保留当前模型窗口与累计实测，不能让一个读失败抹掉其它口径。
+            log.warn("当前会话上下文暂未统计 sessionId={}，{}", sessionId, error.getClass().getSimpleName());
         }
         return result;
+    }
+
+    /** 固定规则和当前模型实际支持、全局已开启的工具定义只计一次，不随会话轮数相加。 */
+    private ContextTokenBreakdown currentContextPrefix(AiConfigRepository.ConfigRow config) {
+        Map<String, ChatTool> available = new LinkedHashMap<>();
+        List<String> withheld = new ArrayList<>();
+        if (chatToolsEnabled(config)) {
+            AiToolSettings switches = toolSettings();
+            for (ChatTool tool : chatTools) {
+                String name = tool.definition().name();
+                if (switches.enabled(name)) available.put(name, tool); else withheld.add(name);
+            }
+        }
+        List<Map<String, Object>> prefix = List.of(Map.of("role", "system", "content", ChatContextAssembler.SYSTEM_PREFIX));
+        if (!available.isEmpty() || !withheld.isEmpty()) prefix = withToolInstructions(prefix, available, withheld, false);
+        var definitions = available.values().stream().map(ChatTool::definition).toList();
+        var estimator = new TokenEstimator(mapper);
+        long total = estimator.estimateInput(Map.of("messages", prefix, "tools", definitions));
+        long system = estimator.estimateInput(prefix);
+        long tools = definitions.isEmpty() ? 0 : estimator.estimateInput(definitions);
+        var breakdown = new ContextTokenBreakdown.Builder();
+        breakdown.add(com.drillnotebook.app.model.RequestContextAudit.Kind.SYSTEM, system);
+        breakdown.add(com.drillnotebook.app.model.RequestContextAudit.Kind.TOOL_DEFINITIONS, tools);
+        breakdown.add(com.drillnotebook.app.model.RequestContextAudit.Kind.OTHER, total - system - tools);
+        return breakdown.build();
     }
 
     private static Long sessionIdOf(Map<String, Object> body) {
@@ -1377,6 +1428,8 @@ public class AiService {
             messages.add(Math.max(0, messages.size()-1), Map.of("role", "user", "content",
                     call.pageSnapshot().locator(call.lease().requestId(), toolsByName.containsKey("read_current_page"))));
         }
+        int initialMessages = messages.size();
+        Set<Map<String, Object>> contextSupplements = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         DeltaBuffer buffer = toolMode ? new DeltaBuffer() : null;
         AiTurnBudget limits = SessionExecution.CURRENT.get() == null ? new AiTurnBudget(call.settings())
                 : SessionExecution.CURRENT.get().budget;
@@ -1398,7 +1451,9 @@ public class AiService {
                     PageSnapshot snapshot = PageSnapshot.from(supplement.body().get("pageSnapshot"));
                     String supplementId = string(supplement.body(), "requestId", "");
                     if (snapshot != null) pageSnapshots.put(supplementId, snapshot);
-                    messages.addAll(supplementMessages(supplement.body(), toolsByName.containsKey("read_current_page")));
+                    var added = supplementMessages(supplement.body(), toolsByName.containsKey("read_current_page"));
+                    contextSupplements.addAll(added);
+                    messages.addAll(added);
                     currentUserText+="\n\n"+string(mapValue(supplement.body().get("input")),"userText","");
                 }
             }
@@ -1412,6 +1467,7 @@ public class AiService {
                         "本轮工具已停止（" + stopReason + "）。请依据已有结果回答并说明尚未完成的任务，不要继续调用工具。"
                                 + "只有已确认成功的写入才能说已保存或已更新，结果未知的操作不要假设成功。"));
             }
+            call.lease().handle().contextExtras(SessionContextExtras.breakdown(messages, initialMessages, contextSupplements, mapper));
             if (!activities.isEmpty()) emitToolActivity(call, activities, "answer");
             int seconds = limits.requestSeconds();
             if (seconds <= 0) return combine(prefix,prefixReasoning,budgetStopped("budget_time"));
@@ -1430,7 +1486,14 @@ public class AiService {
             final var sending=supplements;
             var acknowledged=new java.util.concurrent.atomic.AtomicBoolean();
             var attemptText=new StringBuilder();var attemptReasoning=new StringBuilder();
+            var contextOutput = new TokenEstimator.Counter();
+            contextOutput.append(prefix.toString());
+            call.lease().handle().contextOutputTokens(contextOutput.tokens());
             AiUpstreamClient.StreamListener receiver=(type,text)->{
+                if ("text".equals(type)) {
+                    contextOutput.append(text);
+                    call.lease().handle().contextOutputTokens(contextOutput.tokens());
+                }
                 if (call.lease().handle().recovery() != null) emitRecovery(call, null);
                 if(steering!=null&&!sending.isEmpty()&&acknowledged.compareAndSet(false,true))steering.received(sending);
                 if(buffer==null){if("text".equals(type))attemptText.append(text);else if("reasoning".equals(type))attemptReasoning.append(text);}
@@ -1449,6 +1512,9 @@ public class AiService {
                 attempt=chatTurns.startUsage(call.lease(),
                         UsageRepository.targetFingerprint(target.baseUrl(), target.apiFormat(), target.model()),
                         call.dispatch().planId());
+                recordRequestContext(attempt, target.anthropic()
+                        ? upstream().buildAnthropicRequest(target, messages, call.stream(), tools)
+                        : upstream().buildChatCompletionRequest(target, messages, call.stream(), tools), call, "CHAT", toolsByName.keySet());
                 invoked=true;
                 var recovery = retry.starting();
                 if (recovery != null) emitRecovery(call, recovery);
@@ -1466,6 +1532,7 @@ public class AiService {
                         && (upstreamError.kind() == AiUpstreamException.Kind.NETWORK || upstreamError.getMessage().startsWith("HTTP "));
                 if (invoked && !rejected) limits.consume(usage, budget); else limits.release(budget);
                 if (attempt != null) chatTurns.settleUsage(attempt, usage);
+                recordTurnContext(call, usage);
                 if (buffer != null && partial != null) {
                     replay(call, buffer, partial);
                     prefix.append(partial.text()); prefixReasoning.append(partial.reasoning() == null ? "" : partial.reasoning());
@@ -1506,6 +1573,10 @@ public class AiService {
             limits.consume(result.usage(), budget);
             chatTurns.settleUsage(attempt, result.usage());
             recordTurnContext(call, result.usage());
+            if (!call.stream()) {
+                contextOutput.append(result.text());
+                call.lease().handle().contextOutputTokens(contextOutput.tokens());
+            }
             log.info("AI 请求：耗时 {}ms textLen={} reasoningLen={} finish={} terminal={} captureLimited={}",
                     System.currentTimeMillis() - start,
                     result.text() == null ? 0 : result.text().length(),
@@ -1547,6 +1618,8 @@ public class AiService {
             }
             if(!limits.tryStage()) { limits.stop("budget_stages"); continue; }
             messages.add(assistantToolMessage(result));
+            call.lease().handle().contextTokens(new TokenEstimator(mapper).estimateText(prefix.toString()),
+                    SessionContextExtras.breakdown(messages, initialMessages, contextSupplements, mapper));
             for (AiUpstreamClient.ToolCall toolCall : result.toolCalls()) {
                 if (call.lease().handle().cancelRequested()) return new AiUpstreamClient.Result(prefix.toString(), prefixReasoning.toString(), "aborted");
                 ChatTool selected = toolsByName.get(toolCall.name());
@@ -1600,6 +1673,7 @@ public class AiService {
                     call.dispatch().refreshPlan(contexts.refreshAfterMemoryForget(call.dispatch().plan()));
                 }
                 messages.add(toolResultMessage(toolCall.id(), payload.json()));
+                call.lease().handle().contextExtras(SessionContextExtras.breakdown(messages, initialMessages, contextSupplements, mapper));
             }
         }
     }
@@ -1640,6 +1714,9 @@ public class AiService {
                     context.check();
                     attempt = chatTurns.startUsage(call.lease(), UsageRepository.targetFingerprint(call.target().baseUrl(),
                             caps.protocol(), call.target().model()), call.dispatch().planId());
+                    recordRequestContext(attempt, com.drillnotebook.app.service.web.NativeWebClient.request(call.target().model(),
+                            "anthropic_messages".equals(caps.protocol()), fetch, query, urls, allocation), call,
+                            "NATIVE_WEB", java.util.Set.of("web_search", "web_fetch"));
                     invoked = true;
                     var response = nativeWebClient.call(call.target(), fetch, query, urls, count, allocation, context);
                     usage = response.usage();

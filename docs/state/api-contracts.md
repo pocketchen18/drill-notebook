@@ -437,7 +437,7 @@ v2、模型有效 tools=true 且对应全局权限开启时提供；不依赖记
 | GET | `/ai/turns/{requestId}` | 查询轮次终态（reply / reasoning / 状态） |
 | POST | `/ai/turns/{requestId}/cancel` | 取消运行中的轮次 |
 | GET | `/ai/turns/{requestId}/input` | 只读原提问与完整附件，供重新生成使用 |
-| GET | `/ai/turns/{requestId}/context` | 读取上下文审计详情 |
+| GET | `/ai/turns/{requestId}/context` | 读取上下文审计、逐请求组成及本轮累计；可选 beforeAttemptId 向前分页 |
 | POST | `/ai/turns/{requestId}/context/preview` | 预览上下文计划 |
 
 v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 active/status/phase 和内存 reply/reasoning/toolActivities/recovery；只有已经开始的项才带 userText。终态优先读取现有轮次记录，并在有恢复事实时返回 recovery；未开始就取消的收据只返回真实状态，不伪造聊天正文。取消旧 requestId 不得结束同目标后来的新轮。
@@ -447,6 +447,16 @@ v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 a
 无效 ID 返回 400 `RETRY_ID_INVALID`；原轮次不存在返回 404 `TURN_NOT_FOUND`；正文已清理返回 410 `TURN_CONTENT_DELETED`；原轮次运行中返回 409 `RETRY_TARGET_ACTIVE`；受保护正文未解锁返回 423 `CHAT_PASSWORD_REQUIRED`；原提问、加密元数据或附件无法完整恢复返回 409 `RETRY_INPUT_UNAVAILABLE`。恢复的附件数量必须与保存的原输入一致，不能丢失部分附件后继续发送。
 
 原地重试受理另校验：原提问或附件 origin / digest 不一致返回 `409 RETRY_INPUT_CHANGED`；会话上下文代数变化返回 `409 RETRY_CONTEXT_CHANGED`；原轮未保存助手消息位置且已经有后续消息时返回 `409 RETRY_TARGET_INCOMPLETE`。原轮没有输出但仍是最新轮次时允许重试。已替换的 requestId 在执行、轮次读取及原输入读取中返回 `409 TURN_SUPERSEDED`，指向最新 replacementRequestId；容量不足时不替换原内容或修改原账本。
+
+#### 3.3.1 上下文详情（v0.8.2）
+
+有可读的已保存审计时，`GET /ai/turns/{requestId}/context` 在原响应 / audit 上增加 `requestContexts` 和 `usage`。沿用原记录存在、清理和解锁检查，读取不建计划、不重放工具、不调用模型；来源正文仍通过现有 preview 接口显式读取。
+
+- `requestContexts:{items,totalRequests,hasMore,nextBeforeAttemptId,limit}`，limit 固定 50。默认最新 50 条 SENT / SETTLED / UNKNOWN 的对应 CHAT 请求，页内升序；`?beforeAttemptId=<本轮 attempt ID>` 读取更早页。关联当前 requestId 及旧原地重试回执，totalRequests 不受分页限制；错误 / 跨轮游标返回 400 `CONTEXT_REQUEST_CURSOR_INVALID`。
+- 每项包含 `attemptId,operationId,ordinal,createdAt,settledAt,state,usageSource`、归一化的 `inputTokens,outputTokens,cacheReadTokens,cacheMissTokens,totalTokens` 及各字段的 `*Complete` 标志，以及 `context`。SENT 未结算时实测字段为 null；部分回报只代表已知下界。
+- `context` 为版本 1 的 `RequestContextAudit` 或 null，字段为 `schemaVersion,estimatorVersion,model,kind,estimatedInputTokens,contextWindow,categories,detailsTruncated`，kind 为 CHAT / NATIVE_WEB。每分类包含 `kind,estimatedTokens,itemCount,items:[{key,name,estimatedTokens}]`；固定类别为 SYSTEM / TOOL_DEFINITIONS / USER / INJECTED_CONTEXT / ASSISTANT / TOOL_CALLS / TOOL_RESULTS / IMAGE / OTHER。
+- 组成是最终请求体的本地估算，明细最多 256 项 / 32 KiB，只含数字、位置与允许的工具名；分类总数 / 合计不因截明细而减少。分项在 UI 标 `≈`，不按实测总量缩放或用来填补缺失实测。旧记录或无法读取的组成返回 null。
+- `usage` 为本轮所有已结算 / UNKNOWN 请求的累计，字段口径与下面的 `cumulative` 相同，包含工具、自动恢复、原生联网及旧原地重试尝试。正在发送的 SENT 请求只进入请求列表，未结算用量不造数；累计不取最后一次 done 的快照代替。
 
 ### 3.4 会话与历史
 
@@ -486,10 +496,17 @@ runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCo
 - v0.8.2 起模型与思考档位由助手输入区按会话选择。`/ai/connections/chat-model` 有 sessionId 时仅改该会话并更新新会话继承默认；无 sessionId 时保存新草稿的继承默认，不覆盖已有会话。额外响应 `sessionChoice` 为 `{sessionId, modelConfigId, reasoningEffort, revision}`；会话视图返回独立的 modelChoiceRevision，标题版本与模型版本分别合并，迟到响应不能覆盖更新选择。
 - `POST /ai/sessions` 可显式携带 modelConfigId / reasoningEffort，未提供时继承最近默认并固定；`PUT /ai/sessions/{id}` 可更新该会话的独立选择。模型须存在且连接 / 容量完整，显式档位须属于目标模型支持的 effort；助手只换模型且旧档位不适用时回到模型默认。旧空选择优先恢复最近实际模型，无法唯一匹配时只继承一次默认；已有选择不持续跟随全局。受理、排队与自动恢复冻结目标会话配置，其它会话改选不影响运行。模型不可用时拒绝外发，历史仍返回当时实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
 
-- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按目标会话自己的模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`（包括旧原地重试尝试），为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
+- `GET /ai/sessions/{id}/context-usage`（只读）返回 `{sessionId,current,latest,cumulative,model,contextWindow,outputReserve}`。后三项使用目标会话自己的当前模型，模型不可用时为 null；占用读取暂时失败只令 current=null，保留有效模型窗口与累计实测。
+- `current:{tokens,categories,estimated,complete,estimatorVersion,contextGeneration,historyRevision,requestId,active,summaryRevision}` 是当前会话保留的全局上下文。tokens 为 Long、本地估算；complete 表示已知组成是否完整，缺失旧内容时保留已知下界。当前代、未清理的提问 / 回答与 RECEIVED 插话逐份计一次，初始代包含 legacy；不受 500 条驻留、32 轮扫描或单请求预算截断。有效摘要按 coverage 替代旧原文，最近两轮和缺口保留；尚未落库的回复读活跃数值，终态使用正文，二者不叠加。
+- `current.categories:[{kind,tokens}]` 只含正数分类，kind 沿用 SYSTEM / TOOL_DEFINITIONS / USER / INJECTED_CONTEXT / ASSISTANT / TOOL_CALLS / TOOL_RESULTS / IMAGE / OTHER，tokens 为 Long。分类与总量来自同一次计数，合计等于 current.tokens；缺失或合计无效的旧额外分类归入 OTHER，已知总量保持。该列表不来自所选历史请求或累计计费，不保存正文 / 工具原始数据。
+- current 包含一份固定规则 / 当前模型可用工具定义和一份当前轮保留的工具、注入资料、图片及续接指令；图片用固定估算，独立思考列按正常历史重放规则不计。requestId 指向当前工作集对应轮次，活跃轮优先，较早轮原地重试完成后使用该次结果；只读刷新不触发检索、维护、压缩或模型调用。
+- `latest:{requestId,inputTokens,contextWindow,model,cacheReadTokens,outputTokens}` 保留当前代里最近一次回报输入的请求实测或 null，用于请求对账。圆环和顶部只使用 `current.tokens / 当前 contextWindow`；最近请求输入和累计输入均不能顶替全局占用。图形封顶 100%，总量及实际百分比允许超过窗口。
+- v0.8.2 的 `cumulative:{requests,inputTokens,outputTokens,cacheReadTokens,cacheMissTokens,totalTokens,inputComplete,outputComplete,cacheReadComplete,cacheMissComplete,totalComplete}` 来自持久化账本，包含该会话所有对应 CHAT 的已结算 / UNKNOWN 请求及旧重试回执，排除标题、维护、其它会话和未发送预留。输入归一化后包括缓存读写，total 为输入加输出；OpenAI 包含桶不再相加，Anthropic 独立桶加回。原始计费账本保持。
+- 缺失数字为 null，部分回报仍返回已知 subtotal 并令对应 Complete=false，前端显示 `≥`；没有请求也不造全零。只有累计输入与命中都完整且输入大于 0 才计算命中率。旧缓存口径无法从独立日账本核实时保持未知；上下文换代 / 正文清理不改变已发生的累计，500 条驻留限制不截断统计。聚合使用 Long。
+- 历史助手消息的 `usage` 使用同一份本轮累计和完整性字段，包含旧原地重试尝试；用户消息的 `page:{title,link?}` 保留提交时的业务页面。没有对应请求 / 页面记录时不返回，不补估算。
 
 - 会话置顶（v0.8）：`PUT /ai/sessions/{id}` 接受布尔 `pinned`，会话视图返回 `pinnedAt`（ISO 时刻或 null）。重复置顶保留最初的时刻，置顶不改变 `updatedAt`；列表接口的顺序不变，置顶分组与排序由前端按 `pinnedAt` 升序处理。
-- 上下文占用（v0.8）：`GET /ai/sessions/{id}/context-usage` 的 `latest` 增加 `cacheReadTokens` 与 `outputTokens`，均为供应商回报的数字或 null（未回报不补 0）。`inputTokens` 仍是这次请求送入的总长度（含命中的缓存），未命中部分由前端按 `inputTokens - cacheReadTokens` 得出。
+- v0.8.2 小卡片顶部显示当前全局「上下文总量」与窗口进度，圆环悬停提示保留「估算」；下方为 cumulative 的输入总量、缓存命中、未命中及输出。缓存命中率使用累计命中 / 累计输入，独立于圆环的窗口占用率；模型名在左下与「查看上下文详情」入口同一行。详情标题为「上下文」，顶部「当前上下文」复用 current / model / contextWindow，位于逐请求浏览器上方；移除底部累计块，接口的本轮 usage 仍保留供现有历史 / 对账使用。
 - 上下文占用响应里的顶层 `model` 与 `latest.model` 只返回模型 ID，不加供应商前缀；历史助手消息的实际模型显示仍为「供应商 · 模型」。
 - 窗口固定（v0.8，Electron IPC）：`assistant:set-fixed` 接受布尔值开关助手窗口的 `alwaysOnTop`；助手窗口状态 `assistant:get-state` / `assistant:state` 增加 `fixed` 字段。
 

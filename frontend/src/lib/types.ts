@@ -253,7 +253,8 @@ export interface ChatMessage {
   model?: string;
   reasoningEffort?: string;
   /** 供应商回报的本轮累计用量（可能包含多次模型请求）；未回报时没有。 */
-  usage?: { requests: number; inputTokens: number; outputTokens: number };
+  usage?: { requests: number; inputTokens: number | null; outputTokens: number | null;
+    inputComplete?: boolean; outputComplete?: boolean };
   createdAt?: string;
   citations?: ChatCitation[];
   /** 检索降级/状态轻量提示（Task 14）；仅随当前会话 response 保留，不持久化。 */

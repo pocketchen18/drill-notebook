@@ -7,6 +7,7 @@ import com.drillnotebook.app.model.AiRecovery;
 import com.drillnotebook.app.model.AiRetrySettings;
 import com.drillnotebook.app.model.AiRuntimeSettings;
 import com.drillnotebook.app.model.ChatContextPlan;
+import com.drillnotebook.app.model.RequestContextAudit;
 import com.drillnotebook.app.model.UuidV7;
 import com.drillnotebook.app.repository.AiConfigRepository;
 import com.drillnotebook.app.repository.AiRuntimeSettingsRepository;
@@ -48,6 +49,8 @@ class AiConversationRecoveryTest {
         session = wiring.sessions().create("恢复验收", "stub");
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(), json, null,
                 wiring.turnService(), wiring.cipher(), stack.contexts());
+        ai.setContextOccupancy(new SessionContextOccupancyService(ds, wiring.cipher(), stack.projection(),
+                wiring.turnService(), json));
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             JsonNode request = json.readTree(exchange.getRequestBody()); requests.add(request);
@@ -101,6 +104,15 @@ class AiConversationRecoveryTest {
             if (event.get("recovery") instanceof AiRecovery value) { recovery.add(value); action.accept(value); }
         });
     }
+    private List<RequestContextAudit> recordedContexts() throws Exception {
+        var contexts = new ArrayList<RequestContextAudit>();
+        for (String saved : jdbc.queryForList("SELECT context_breakdown FROM ai_usage_attempt"
+                + " WHERE purpose='CHAT' ORDER BY created_at, id", String.class)) {
+            assertNotNull(saved, "每次自动恢复请求都保存自己的组成摘要");
+            contexts.add(json.readValue(saved, RequestContextAudit.class));
+        }
+        return contexts;
+    }
     @Test void httpFailureRecoversWithinOneTurnAndKeepsRealAttemptCounts() {
         config(); var body = body(); var result = run(body, ignored -> {});
         assertEquals("COMPLETED", result.status()); assertEquals(2, requests.size());
@@ -112,8 +124,29 @@ class AiConversationRecoveryTest {
         assertTrue(recovery.stream().noneMatch(value -> value.state().equals("failed")));
         assertFalse(recovery.toString().contains("fake-fixture-key"));
     }
+
+    @Test void streamRecoveryKeepsLiveAndStoredGlobalOccupancyConsistent() {
+        scenario = "partial"; config(); var request = body();
+        var live = new ArrayList<Long>();
+        var result = ai.chatStream(request, (kind, text) -> {
+            if (kind.equals("text")) {
+                var current = (Map<?, ?>) ai.sessionContextUsage(session).get("current");
+                assertEquals(true, current.get("active"));
+                live.add(((Number) current.get("tokens")).longValue());
+            }
+            return true;
+        }, event -> {});
+        assertEquals("保留前半句。继续后半句。", result.text());
+        assertEquals(2, live.size());
+        assertTrue(live.get(1) > live.get(0));
+        var stored = (Map<?, ?>) ai.sessionContextUsage(session).get("current");
+        assertEquals(false, stored.get("active"));
+        assertEquals(live.get(1), stored.get("tokens"), "落库后不重复加入还在注册表的输出数值");
+        assertEquals(true, stored.get("complete"));
+        assertEquals(2, requests.size(), "统计不会多发供应商请求");
+    }
     @ParameterizedTest @ValueSource(strings = { "chat_completions", "anthropic" })
-    void partialStreamContinuesWithoutDroppingTextOrDuplicatingTheQuestion(String apiFormat) {
+    void partialStreamContinuesWithoutDroppingTextOrDuplicatingTheQuestion(String apiFormat) throws Exception {
         scenario = "partial"; format = apiFormat; config(); var body = body(); var result = run(body, ignored -> {});
         assertEquals("COMPLETED", result.status()); assertEquals("保留前半句。继续后半句。", result.text());
         assertEquals(2, requests.size()); assertTrue(requests.get(1).toString().contains("保留前半句。"));
@@ -124,6 +157,14 @@ class AiConversationRecoveryTest {
             assertEquals(20, jdbc.queryForObject("SELECT sum(input_tokens) FROM ai_usage_attempt WHERE purpose='CHAT'", Integer.class));
             assertEquals(10, jdbc.queryForObject("SELECT sum(output_tokens) FROM ai_usage_attempt WHERE purpose='CHAT'", Integer.class));
         }
+        var contexts = recordedContexts();
+        assertEquals(2, contexts.size());
+        assertTrue(contexts.get(1).categories().stream().anyMatch(category -> category.kind() == RequestContextAudit.Kind.ASSISTANT
+                && category.estimatedTokens() > 0), "恢复请求的组成包含前次保留的回答");
+        var cumulative = (Map<?, ?>) ai.sessionContextUsage(session).get("cumulative");
+        assertEquals(2L, cumulative.get("requests"));
+        if (apiFormat.equals("chat_completions")) assertEquals(30L, cumulative.get("totalTokens"));
+        else assertNull(cumulative.get("totalTokens"), "未回报用量不能用估算组成填充");
     }
     @Test void authFailureNeverRetriesAndPersistsExactRedactedError() throws Exception {
         scenario = "auth"; config(); var body = body();
@@ -209,7 +250,7 @@ class AiConversationRecoveryTest {
     }
 
     @ParameterizedTest @ValueSource(strings = { "tool", "tool_event" })
-    void confirmedWriteToolIsNotReexecutedAndEveryRecoveryRequestSettlesItsOwnUsage(String failureScenario) {
+    void confirmedWriteToolIsNotReexecutedAndEveryRecoveryRequestSettlesItsOwnUsage(String failureScenario) throws Exception {
         scenario = failureScenario; toolsEnabled = true; config();
         var writes = new java.util.concurrent.atomic.AtomicInteger();
         ai.setChatTools(List.of(new AiService.ChatTool() {
@@ -229,6 +270,18 @@ class AiConversationRecoveryTest {
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM ai_chat_message WHERE role='user'", Integer.class));
         assertEquals(3, jdbc.queryForObject("SELECT count(*) FROM ai_usage_attempt WHERE state='SETTLED' AND purpose='CHAT'", Integer.class));
         assertEquals(15, jdbc.queryForObject("SELECT sum(output_tokens) FROM ai_usage_attempt WHERE purpose='CHAT'", Integer.class));
+        var contexts = recordedContexts();
+        assertEquals(3, contexts.size());
+        for (var context : contexts.subList(1, 3)) {
+            var results = context.categories().stream().filter(category -> category.kind() == RequestContextAudit.Kind.TOOL_RESULTS)
+                    .findFirst().orElseThrow();
+            assertEquals(1, results.itemCount());
+            assertEquals("create_material", results.items().get(0).name());
+        }
+        var cumulative = (Map<?, ?>) ai.sessionContextUsage(session).get("cumulative");
+        assertEquals(3L, cumulative.get("requests"));
+        assertEquals(45L, cumulative.get("totalTokens"));
+        assertFalse(jdbc.queryForList("SELECT context_breakdown FROM ai_usage_attempt").toString().contains("fixture-saved"));
     }
 
     @ParameterizedTest @ValueSource(strings = { "chat_completions", "anthropic" })

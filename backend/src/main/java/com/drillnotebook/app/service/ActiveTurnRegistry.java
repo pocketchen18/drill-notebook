@@ -18,6 +18,13 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class ActiveTurnRegistry {
+    /** 同一时刻的数值快照，避免回复正文转入工具工作集时读到两份。 */
+    public record ContextTokens(long outputTokens, Long extraTokens,
+                                Map<com.drillnotebook.app.model.RequestContextAudit.Kind, Long> extraCategories) {
+        public ContextTokens { extraCategories = Map.copyOf(extraCategories); }
+        public ContextTokens(long outputTokens, Long extraTokens) { this(outputTokens, extraTokens, Map.of()); }
+    }
+
     /** 一个进行中的轮次；{@code abortHook} 由上游客户端绑定（关闭响应体），取消时立刻执行。 */
     public static final class Handle {
         private final String requestId;
@@ -26,6 +33,8 @@ public class ActiveTurnRegistry {
         private volatile Runnable abortHook;
         private volatile List<ToolActivity> toolActivities = List.of();
         private volatile AiRecovery recovery;
+        /** 当前轮尚未落库的回复长度；只保存数值，不保留流式正文。 */
+        private volatile ContextTokens contextTokens = new ContextTokens(0, null);
 
         Handle(String requestId, long sessionId) {
             this.requestId = requestId;
@@ -50,6 +59,25 @@ public class ActiveTurnRegistry {
 
         public AiRecovery recovery() { return recovery; }
         public void recovery(AiRecovery value) { recovery = value; }
+
+        public ContextTokens contextTokens() { return contextTokens; }
+        public long contextOutputTokens() { return contextTokens.outputTokens(); }
+        public synchronized void contextOutputTokens(long value) {
+            contextTokens = new ContextTokens(Math.max(0, value), contextTokens.extraTokens(), contextTokens.extraCategories());
+        }
+        public Long contextExtraTokens() { return contextTokens.extraTokens(); }
+        public synchronized void contextExtraTokens(long value) {
+            contextTokens = new ContextTokens(contextTokens.outputTokens(), Math.max(0, value));
+        }
+        public synchronized void contextExtras(ContextTokenBreakdown value) {
+            contextTokens = new ContextTokens(contextTokens.outputTokens(), value.tokens(), value.categories());
+        }
+        public synchronized void contextTokens(long output, long extra) {
+            contextTokens = new ContextTokens(Math.max(0, output), Math.max(0, extra));
+        }
+        public synchronized void contextTokens(long output, ContextTokenBreakdown extra) {
+            contextTokens = new ContextTokens(Math.max(0, output), extra.tokens(), extra.categories());
+        }
 
         public void toolActivities(List<ToolActivity> activities) {
             toolActivities = List.copyOf(activities);

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ChatContextInspector } from './ChatContextInspector';
 import { ApiError } from '../../lib/api';
 import type { ContextSource, TurnContextAudit, TurnContextRead } from '../../lib/aiContextApi';
 import type { TurnResult } from '../../lib/types';
+import type { SessionContextUsage } from '../ai-session/ContextMeter';
 
 /**
  * 上下文检查器（contracts §4.5、执行方案 §9.4）：只读已保存账本，
@@ -55,11 +56,18 @@ const TURN: TurnResult = {
   usage: { source: 'upstream', inputTokens: 1500, outputTokens: null, cacheReadTokens: 0, cacheWriteTokens: 0 }
 };
 
-function frame(props: { open: boolean; turn?: TurnResult; onClose?: () => void }): ReactNode {
+const CURRENT: SessionContextUsage = {
+  sessionId: 7, model: 'current-model', contextWindow: 32000, outputReserve: 4096, latest: null,
+  current: { tokens: 8000, requestId: 'latest-turn', estimated: true, complete: true, contextGeneration: 1,
+    historyRevision: 3, active: false, estimatorVersion: 'context-estimate-v1', summaryRevision: null,
+    categories: [{ kind: 'SYSTEM', tokens: 1000 }, { kind: 'USER', tokens: 3000 }, { kind: 'ASSISTANT', tokens: 4000 }] }
+};
+
+function frame(props: { open: boolean; turn?: TurnResult; onClose?: () => void; requestId?: string }): ReactNode {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
     <QueryClientProvider client={client}>
-      <ChatContextInspector sessionId={7} requestId="v7-1" turn={props.turn ?? TURN}
+      <ChatContextInspector sessionId={7} requestId={props.requestId ?? 'v7-1'} turn={props.turn ?? TURN}
                             open={props.open} onClose={props.onClose ?? (() => undefined)} />
     </QueryClientProvider>
   );
@@ -94,10 +102,11 @@ describe('ChatContextInspector', () => {
     expect(screen.queryByText('HISTORY')).toBeNull();
   });
 
-  it('打开只读一次账本，不碰聊天也不自动预览', async () => {
+  it('打开只读会话占用和请求账本，不碰聊天也不自动预览', async () => {
     renderInspector();
-    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));
-    expect(apiGet.mock.calls[0][0]).toBe('/api/ai/turns/v7-1/context');
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+    expect(apiGet).toHaveBeenCalledWith('/api/ai/turns/v7-1/context');
+    expect(apiGet).toHaveBeenCalledWith('/api/ai/sessions/7/context-usage');
     expect(apiPost).not.toHaveBeenCalled();
   });
 
@@ -124,6 +133,17 @@ describe('ChatContextInspector', () => {
     renderInspector();
     await waitFor(() => expect(screen.getByText('本轮未保存上下文记录（这一轮早于上下文账本）')).toBeTruthy());
     expect(screen.queryByText('区域估算')).toBeNull();
+  });
+
+  it('历史账本不可用时仍展示当前会话卡片，弹窗标题是上下文', async () => {
+    apiGet.mockImplementation((path: string) => Promise.resolve(path.endsWith('/context-usage')
+      ? CURRENT : read(null, 'LEGACY_TURN_WITHOUT_CONTEXT_PLAN')));
+    renderInspector();
+    const card = screen.getByRole('region', { name: '当前上下文' });
+    await waitFor(() => expect(within(card).getByText('8.0k')).toBeTruthy());
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('上下文');
+    expect(screen.queryByText('本轮上下文')).toBeNull();
+    expect(screen.getByText('本轮未保存上下文记录（这一轮早于上下文账本）')).toBeTruthy();
   });
 
   it('需要解锁的 423 与"没有记录"是两句话', async () => {
@@ -209,11 +229,13 @@ describe('ChatContextInspector', () => {
     await waitFor(() => expect(screen.getByText('图片不提供文字预览')).toBeTruthy());
   });
 
-  it('用量取自 done：上游没给的字段写未知，不拿估算顶替', async () => {
+  it('不再展示旧 done 的单次用量或本轮累计块', async () => {
     renderInspector();
-    await waitFor(() => expect(screen.getByText('来源 upstream')).toBeTruthy());
-    expect(screen.getByText('输入 1500')).toBeTruthy();
-    expect(screen.getByText('输出 未知')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('计划与发送态')).toBeTruthy());
+    expect(screen.queryByText('来源 upstream')).toBeNull();
+    expect(screen.queryByText('输入 1500')).toBeNull();
+    expect(screen.queryByText('本轮累计用量')).toBeNull();
+    expect(screen.getByRole('region', { name: '当前上下文' })).toBeTruthy();
   });
 
   it('没有用量快照时整段不出现', async () => {
@@ -252,5 +274,50 @@ describe('ChatContextInspector', () => {
     renderInspector();
     await waitFor(() => expect(screen.getByText('账本过长，部分诊断明细未保存。')).toBeTruthy());
     expect(screen.getAllByRole('button', { name: '对照来源' })).toHaveLength(3);
+  });
+
+  it('当前卡片位于请求浏览器上方，历史用量不顶替当前占用也不重复显示累计', async () => {
+    const history = {
+      ...read(audit()), usage: {
+      requests: 2, inputTokens: 300, outputTokens: 50, cacheReadTokens: 150, cacheMissTokens: 150,
+      totalTokens: 350, inputComplete: true, outputComplete: true, cacheReadComplete: true,
+      cacheMissComplete: true, totalComplete: true
+    }, requestContexts: { totalRequests: 2, hasMore: false, nextBeforeAttemptId: null, limit: 50, items: [{
+      attemptId: 'attempt-2', operationId: 'v7-1', ordinal: 2, createdAt: '2026-11-15T12:00:00Z',
+      settledAt: null, state: 'SETTLED', usageSource: 'provider', inputTokens: 200, outputTokens: 30,
+      cacheReadTokens: 120, cacheMissTokens: 80, totalTokens: 230, inputComplete: true, outputComplete: true,
+      cacheReadComplete: true, cacheMissComplete: true, totalComplete: true, context: null
+    }] } };
+    apiGet.mockImplementation((path: string) => Promise.resolve(path.endsWith('/context-usage') ? CURRENT : history));
+    renderInspector();
+    await waitFor(() => expect(screen.getByRole('region', { name: '上下文浏览器' })).toBeTruthy());
+    const current = screen.getByRole('region', { name: '当前上下文' });
+    await waitFor(() => expect(within(current).getByText('8.0k')).toBeTruthy());
+    expect(within(current).getByText('25%')).toBeTruthy();
+    const regions = screen.getAllByRole('region');
+    expect(regions.indexOf(current)).toBeLessThan(regions.indexOf(screen.getByRole('region', { name: '上下文浏览器' })));
+    expect(screen.queryByText('本轮累计用量')).toBeNull();
+    expect(screen.queryByText('总 Token 350')).toBeNull();
+    expect(screen.queryByText('输入 300')).toBeNull();
+    expect(screen.queryByText('输入 1500')).toBeNull();
+    expect(screen.queryByText('区域估算')).toBeNull();
+    expect(screen.getByText('来源与省略').closest('details')?.hasAttribute('open')).toBe(false);
+    expect(apiGet).toHaveBeenCalledTimes(2);
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('切换轮次后忽略旧来源预览的迟到正文', async () => {
+    let resolve!: (value: unknown) => void;
+    apiPost.mockReturnValue(new Promise(done => { resolve = done; }));
+    const view = renderInspector();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '对照来源' })).toHaveLength(3));
+    fireEvent.click(screen.getAllByRole('button', { name: '对照来源' })[0]);
+    apiGet.mockResolvedValue({ ...read(audit()), requestId: 'v7-2' });
+    view.rerender(frame({ open: true, requestId: 'v7-2' }));
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/ai/turns/v7-2/context'));
+    await act(async () => resolve([{ sourceKey: 'mem:a@2', kind: 'MEMORY', id: 'mem-a', version: '2',
+      available: true, text: '旧轮迟到的正文' }]));
+    expect(screen.queryByText('旧轮迟到的正文')).toBeNull();
+    expect(screen.queryByText('对照中…')).toBeNull();
   });
 });
