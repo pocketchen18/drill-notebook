@@ -80,6 +80,7 @@ public class SessionDispatchService {
             view.put("phase",cancelled ? "stopping" : phase);
             view.put("reply",text.toString()); view.put("reasoning",reasoning.toString());
             if(started) view.put("userText",inputText(body));
+            if(body.get("retryOf") instanceof String retryOf) view.put("retryOf", retryOf);
             return view;
         }
     }

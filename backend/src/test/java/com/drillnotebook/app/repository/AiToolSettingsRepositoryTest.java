@@ -38,15 +38,15 @@ class AiToolSettingsRepositoryTest {
         return result;
     }
 
-    @Test void allTwentyToolsAreGroupedWithSixteenOnAndFourDeletionsOff() {
+    @Test void allTwentyTwoToolsAreGroupedWithEighteenOnAndFourDeletionsOff() {
         var view = controller.get();
         assertEquals(0L, view.get("revision"));
-        assertEquals(20, enabled(view).size());
-        assertEquals(16L, enabled(view).values().stream().filter(Boolean::booleanValue).count());
+        assertEquals(22, enabled(view).size());
+        assertEquals(18L, enabled(view).values().stream().filter(Boolean::booleanValue).count());
         for (String name : AiToolSettings.DELETE_TOOLS) assertFalse(enabled(view).get(name), name);
         assertTrue(AiToolSettings.managed("update_material"));
         @SuppressWarnings("unchecked") var rows = (List<Map<String,Object>>) view.get("tools");
-        assertEquals(Map.of("material", 8L, "memory", 4L, "session", 4L, "delete", 4L), rows.stream()
+        assertEquals(Map.of("web", 2L, "material", 8L, "memory", 4L, "session", 4L, "delete", 4L), rows.stream()
                 .collect(java.util.stream.Collectors.groupingBy(row -> (String) row.get("group"), java.util.stream.Collectors.counting())));
     }
     @Test void partialUpdatesKeepOtherSwitchesAndStoreOnlyExplicitChoices() throws Exception {

@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button, Switch } from '@arco-design/web-react';
 import { RotateCcw } from 'lucide-react';
-import { toolGroups, TOOL_DESCRIPTIONS, getToolSettings, saveToolSettings } from '../lib/aiToolSettings';
+import { toolGroups, TOOL_DESCRIPTIONS, saveToolSettings } from '../lib/aiToolSettings';
+import { useAiToolSettings } from '../hooks/useAiToolSettings';
+import { WebSearchSettingsPanel } from './WebSearchSettingsPanel';
 import type { BuiltinToolName } from '../lib/aiToolSettings';
 import { TOOL_NAMES } from '../lib/toolActivity';
 import { pageContextRows, usePageContextSection } from './PageContextProvider';
@@ -11,7 +13,7 @@ import './ai-tool-settings.css';
 /** 即点即存；只有服务端确认后才显示新状态，冲突重新读取后由用户再次选择。 */
 export function AiToolSettingsPanel(): JSX.Element {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: ['ai-tool-settings'], queryFn: getToolSettings });
+  const query = useAiToolSettings();
   const saving = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -51,6 +53,7 @@ export function AiToolSettingsPanel(): JSX.Element {
                 checked={value?.enabled ?? false} disabled={busy || !value} onChange={enabled => void save({ [name]: enabled })} />
             </div>;
           })}
+          {group.id === 'web' && <WebSearchSettingsPanel />}
         </section>)}
         <p className="ai-tool-settings-description">开启从下一轮对话生效；关闭会阻止尚未执行的调用。</p>
       </>}

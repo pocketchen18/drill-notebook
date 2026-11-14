@@ -2,6 +2,8 @@
 
 > 2026-11-13，三项实现及工程验证完成，尚未发布。最终交互采用用户确认的 [UI/UX](ui-ux.md) 和 [规格](spec.md)。
 
+以下保留各阶段实施记录；现行模型选择与手动重试已按 v0.8.2 修正，见[最新验证](#原地重试与会话独立选模修正2026-11-14)。
+
 1. 已完成：去掉重复跳转与报错展开，采用粗体提问 / 浅色回答，保留轮次和时间；最多 64 个固定间距、整组居中的连续刻度，滚轮、三行回答 `...` 与悬停动态效果同步到代码和草图。
 2. 已完成：全局重试设置、旧 JSON / 旧客户端兼容、上游错误分类、服务端等待建议、原轮次续答及加密历史。
 3. 已完成：原回答处恢复反馈、真实计数 / 倒计时、停止、成功清除及失败 / 空回答历史恢复。
@@ -89,3 +91,30 @@
 前端流式会话 20、助手窗口 26、恢复反馈 2、SSE 读取 12 项，共 **4 文件 / 60 项通过**。后端隔离打包通过，645 个应用 class 与本轮编译结果逐一一致，开发 JAR 已同步且 SHA-256 一致。复跑脚本和产物位于工作区 `temp/ai-stream-recovery-check/`，不入 Git。
 
 本次只调整错误分类，不新增运行时存储路径或数据库迁移；没有修改前端、Electron 或 Rust 运行代码。前后端业务全量、便携审计与前端生产构建沿用此前记录，本轮未重跑；未执行真实供应商、Electron 实机或云端发布验收。开发运行需完全退出软件再打开以加载新后端。
+
+## 原地重试与会话独立选模修正（2026-11-14）
+
+按用户要求，手动重试 / 重新生成改为原轮次原地生成，各会话独立记住模型、供应商和档位，新会话继承最近选择。复用原 turn / user / assistant ID，保留轮次、提问时间与阅读位置；旧 requestId 移入回执链，较早轮次重试不纳入其后的问答。标题生成、上下文占用、直接请求和队列受理统一使用目标会话配置，迟到响应按独立模型版本处理。
+
+| 检查 | 结果与范围 |
+|---|---|
+| 后端相关回归 | 26 类 / 335 项全部通过，0 失败、0 错误、0 跳过；按本次执行类的最终 XML 去重汇总，未将隔离目录里其它任务的报告计入 |
+| 原地重试专项 | 4 项通过：较早轮身份 / 时间 / 导航数量与上下文截止、完整附件多次重试和旧 ID 拦截、同新 ID 幂等 / usage 累计、容量或改原提问拒绝时事务不损坏、无输出轮次边界 |
+| 会话选模与标题 | 会话模型 5、标题 9 项通过；覆盖会话与供应商隔离、新会话继承、数据库重开、显式独立选择、受理快照、非法会话不改默认和手动标题使用目标模型 |
+| 前端相关回归 | 9 文件 / 143 项：141 通过、2 项既有证据截图测试跳过；窗口 29 项最终复验通过。覆盖原位置更新与原提问数量、受理拒绝后再次重试、草稿保持、会话切换 / 重启 / 迟到响应与分页驻留窗口 |
+| 构建与开发包 | TypeScript / Vite 生产构建、后端隔离打包通过；680 个应用 class 与本轮编译逐一 SHA-256 一致，开发 JAR 已同步；JAR SHA-256 为 `8EA19009508BE38893B56D204100B2D68802AF7C78DD2A6BDC1335E67BA056D0` |
+| 便携审计 | 静态扫描 752 文件，仅已有构建脚本合法的 Process 环境恢复；落盘审计包裹模型 / 标题 / 数据库迁移 32 项通过，软件目录外受监控新增 / 变化为 0，JVM 临时目录在工作区 |
+
+前端复跑：`npm test -- --run src/components/AiAssistant.window.test.tsx src/components/AiAssistant.stream.test.tsx src/components/AiAssistant.test.tsx src/components/AiAssistant.history.test.tsx src/components/AiAssistant.context.test.tsx src/components/AiAssistant.evidence.test.tsx src/components/ai-session/ModelPicker.test.tsx src/hooks/useChatHistoryPages.test.tsx src/hooks/useAiChatTurn.test.ts`，在 frontend 目录执行；构建为同目录 `npm run build`。
+
+后端使用 `temp/web-search-review/run-backend-web-tests.ps1 -TestSelection`，本次三组选择分别为：
+
+```text
+SessionModelChoiceTest,AiChatSessionServiceTest,AiConnectionsServiceTest,ChatTurnServiceLifecycleTest,ChatTurnAttachmentTest,ChatTurnRepositoryTest,AiServiceTurnPathTest,WebSearchSettingsTest
+ChatInPlaceRetryTest,ChatContextServiceTest,ChatContextPayloadGoldenTest,ChatContextBudgetTest,ConversationProjectionTest,ChatHistoryReadTest,ChatHistoryCleanupTest,MemoryJobRepositoryTest,MaterialCreateToolTest,MaterialUpdateToolTest,MaterialDeleteToolTest,MaterialToolChatPathTest,SessionDispatchServiceTest,AiConversationRecoveryTest
+SessionModelChoiceTest,AiSessionTitleServiceTest,DatabaseInitializerTest,Schema9MigrationTest
+```
+
+第三组由 `scripts/portable-audit.ps1 -RunScript temp/run-conversation-portable-tests.ps1` 包裹执行；静态扫描使用 `cache/portable-registry-audit.ps1`。后端打包用同目录脚本的 `-Package`，再由 `verify-isolated-build.ps1 -SyncJar` 核对并同步开发包。测试报告、便携证据与汇总脚本只在根 temp/，不入 Git。
+
+本轮未执行前后端全量、真实供应商或 Electron 实机验收；不把重新生成描述成供应商原流续传，未专门验收全部写工具跨多次手动重试的去重。已验证范围如上，前次全量保留为历史基线。当前接口、数据模型、功能清单与 UI/UX 已同步；未暂存、提交、推送、修改发布版本或工作流。开发运行需完全退出后重新打开以加载新后端。

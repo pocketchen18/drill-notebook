@@ -1,8 +1,11 @@
 import { get, put } from './api';
 import type { ToolName } from './toolActivity';
+import { publish } from './windowBus';
 
 export type BuiltinToolName = Exclude<ToolName, 'unknown_tool'>;
 export const TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
+  search_web: '按需搜索互联网，查找带来源的实时资料。',
+  fetch_web: '读取指定公开网页的正文，不使用浏览器登录状态。',
   read_current_page: '读取当前页面已展示的内容和未保存的笔记草稿。',
   search_materials: '按关键词查找学习资料；笔记支持可选向量与关键词混合检索。',
   read_notebook: '查看笔记本目录与笔记页正文。',
@@ -25,6 +28,7 @@ export const TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
   remove_wrong_question: '将题目移出待巩固，保留原题和作答记录。'
 };
 export const toolGroups = [
+  { id: 'web', label: '联网', description: '', tools: ['search_web', 'fetch_web'] },
   { id: 'material', label: '学习资料', description: '', tools: [
     'read_current_page', 'search_materials', 'read_notebook', 'read_knowledge',
     'read_question_bank', 'read_wrong_questions', 'create_material', 'update_material'
@@ -45,5 +49,8 @@ export interface AiToolSettingsView {
   tools: Array<{ name: BuiltinToolName; group: ToolGroup; enabled: boolean; defaultEnabled: boolean }>;
 }
 export const getToolSettings = () => get<AiToolSettingsView>('/api/ai/tool-settings');
-export const saveToolSettings = (revision: number, enabled: Partial<Record<BuiltinToolName, boolean>>) =>
-  put<AiToolSettingsView>('/api/ai/tool-settings', { revision, enabled });
+export async function saveToolSettings(revision: number, enabled: Partial<Record<BuiltinToolName, boolean>>): Promise<AiToolSettingsView> {
+  const saved = await put<AiToolSettingsView>('/api/ai/tool-settings', { revision, enabled });
+  publish({ type: 'invalidate', keys: [['ai-tool-settings']] });
+  return saved;
+}

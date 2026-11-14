@@ -8,3 +8,14 @@
 .ai-tool-setting-row p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .ai-tool-setting-row .arco-switch { flex-shrink: 0; }
 .ai-tool-settings-error { color: var(--danger); }
+.ai-web-services { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 20px; }
+.ai-web-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ai-web-field > label, .ai-web-credential-heading > label { font-size: 13px; font-weight: 600; }
+.ai-web-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.ai-web-credential { max-width: 620px; margin-top: 20px; }
+.ai-web-credential-heading { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.ai-web-credential > .arco-btn { margin-top: 4px; }
+.ai-web-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px; }
+.ai-web-test-results p { margin: 8px 0; font-size: 13px; }
+.ai-web-test-results span { display: block; margin-top: 4px; }
+@media (max-width: 620px) { .ai-web-services { grid-template-columns: 1fr; gap: 16px; } }

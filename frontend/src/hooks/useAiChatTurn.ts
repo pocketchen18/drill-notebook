@@ -55,6 +55,7 @@ export interface OriginalTurnInput {
 
 /** GET /turns/{requestId} 的可见事实（§4.5）：界面只能拿这些字段描述这一轮。 */
 export interface TurnStatusView {
+  retryOf?: string | null;
   recovery?: AiRecovery | null;
   supplements?: ChatSupplement[];
   reply?: string;

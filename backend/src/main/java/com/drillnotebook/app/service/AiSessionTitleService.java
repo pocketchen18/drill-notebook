@@ -83,7 +83,17 @@ public class AiSessionTitleService {
             throw reject(409, "TITLE_CONFIRM_REQUIRED", "替换手动设置的标题前请确认");
         }
         synchronized (AiConnectionUsage.LOCK) {
-            return start(session, configs.findChat(), vault.sessionPassword(id).orElse(""), false);
+            var store = configs.connections();
+            var state = store.read();
+            store.initializeSessionChoices(state);
+            var choice = sessions.modelChoice(id);
+            AiConfigRepository.ConfigRow config;
+            try {
+                config = state == null ? configs.findChat() : store.resolveChat(state, choice.modelConfigId(), choice.effort());
+            } catch (IllegalArgumentException error) {
+                throw reject(409, "TITLE_MODEL_UNAVAILABLE", "请在本会话输入框下方选择可用模型");
+            }
+            return start(session, config, vault.sessionPassword(id).orElse(""), false);
         }
     }
 
@@ -91,7 +101,7 @@ public class AiSessionTitleService {
                                       String password, boolean automatic) {
         if (config == null || config.endpoint() == null || config.endpoint().isBlank()
                 || (!AiModelLimits.noKey(config) && (config.encryptedKey() == null || config.encryptedKey().isBlank()))) {
-            throw reject(409, "TITLE_MODEL_UNAVAILABLE", "请先配置并应用对话模型");
+            throw reject(409, "TITLE_MODEL_UNAVAILABLE", "请在本会话输入框下方选择可用模型");
         }
         long id = ((Number) session.get("id")).longValue();
         long revision = ((Number) session.get("titleRevision")).longValue();

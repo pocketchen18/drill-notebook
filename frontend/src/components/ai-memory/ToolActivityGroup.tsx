@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronRight, CircleMinus, LoaderCircle, TriangleAlert } from 'lucide-react';
-import { TOOL_NAMES, isDeletionTool, toolDuration, toolGroupTitle, toolResultText, toolStartedAt, toolTone } from '../../lib/toolActivity';
+import { isDeletionTool, isWebTool, toolLabel, webRouteText, toolDuration, toolGroupTitle, toolResultText, toolStartedAt, toolTone } from '../../lib/toolActivity';
 import type { ToolActivity, ToolPhase } from '../../lib/toolActivity';
 
 interface Props {
@@ -80,7 +80,7 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
               });
             })}>
             <StatusIcon tone={toolTone(row)} />
-            <span className="ai-tool-copy"><span>{TOOL_NAMES[row.toolName]}</span>
+            <span className="ai-tool-copy"><span>{toolLabel(row)}</span>
               <span className={`ai-tool-result${toolTone(row) === 'warning' ? ' is-warning' : ''}`}>{toolResultText(row)}</span></span>
             <span className="ai-tool-time">{duration(row)}</span>
             <ChevronRight size={13} className={`ai-tool-chevron${details.has(row.sequence) ? ' is-open' : ''}`} aria-hidden="true" />
@@ -89,10 +89,11 @@ export function ToolActivityGroup({ activities, active = false, phase, onDisclos
             <dt>开始时间</dt><dd>{toolStartedAt(row.startedAt)}</dd>
             <dt>执行耗时</dt><dd>{duration(row)}</dd>
             <dt>{isDeletionTool(row.toolName) || ['create_memory', 'update_memory', 'create_session', 'send_message', 'create_material', 'update_material'].includes(row.toolName) ? '操作范围' : '查询范围'}</dt>
-            <dd>{['list_sessions', 'read_session', 'create_session', 'send_message', 'delete_session'].includes(row.toolName) ? '当前本地数据中的会话'
+            <dd>{isWebTool(row.toolName) ? '公开互联网；仅发送必要查询或目标网址' : ['list_sessions', 'read_session', 'create_session', 'send_message', 'delete_session'].includes(row.toolName) ? '当前本地数据中的会话'
               : ['create_material', 'update_material', 'delete_material', 'remove_wrong_question', 'search_materials', 'read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName) ? '当前本地学习资料' : '当前有权访问的记忆'}</dd>
             <dt>执行结果</dt><dd>{toolResultText(row)}{row.incomplete && !isDeletionTool(row.toolName) && !['list_sessions', 'read_session'].includes(row.toolName) ? '（部分结果）' : ''}</dd>
             <dt>工具名称</dt><dd><code>{row.toolName}</code></dd>
+            {isWebTool(row.toolName) && row.webRoute?.length ? <><dt>服务路径</dt><dd>{row.webRoute.map((step, index) => <div key={index}>{webRouteText(step)}</div>)}</dd></> : null}
             {row.sessionLink && row.toolName !== 'delete_session' && onOpenSession ? <><dt>目标会话</dt><dd><button type="button" onClick={() => onOpenSession(row.sessionLink!)}>打开会话 ↗</button></dd></> : null}
             {row.sourceLink && row.toolName !== 'delete_material' && !deletedLinks.has(row.sourceLink) && onOpenMaterial ? <><dt>{row.toolName === 'remove_wrong_question' ? '原题' : '保存位置'}</dt><dd><button type="button" onClick={() => onOpenMaterial(row.sourceLink!)}>{row.toolName === 'remove_wrong_question' ? '查看原题' : '查看资料'} ↗</button></dd></> : null}
           </dl>

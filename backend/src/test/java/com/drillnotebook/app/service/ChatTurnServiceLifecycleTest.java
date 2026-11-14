@@ -400,19 +400,25 @@ class ChatTurnServiceLifecycleTest {
     }
 
     @Test
-    void retryOfLinksANewTurnToATerminalTarget() throws Exception {
+    void retryOfRestartsTheOriginalTurnAndKeepsMessageIdentities() throws Exception {
         BeginInput stopped = input("上一轮被打断");
         BeginResult first = service.begin(stopped);
         service.cancel(first.lease().requestId());
         service.finalizeTurn(first.lease(), UpstreamReply.of("半句话", null, "aborted"), null);
 
         BeginResult retry = service.begin(new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId,
-                "重新生成一次", "", List.of(), Map.of(), first.lease().requestId()));
+                stopped.userText(), "", List.of(), Map.of(), first.lease().requestId()));
         assertEquals(first.lease().requestId(), jdbc.queryForObject(
                 "SELECT retry_of FROM ai_chat_turn WHERE request_id = ?", String.class, retry.lease().requestId()),
                 "重新生成必须显式留下 retryOf，前端才能去掉旧的中断续接提示（§7.2-7）");
-        assertEquals(first.lease().requestId(), status(first.lease().requestId()).get("requestId"));
+        assertEquals(first.lease().turnId(), retry.lease().turnId());
+        assertEquals(first.lease().userMessageId(), retry.lease().userMessageId());
+        assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn"));
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"));
+        assertEquals("TURN_SUPERSEDED", assertThrows(ChatTurnRejectException.class, () -> status(first.lease().requestId())).code());
         service.finalizeTurn(retry.lease(), UpstreamReply.of("完整回复", null, "stop"), null);
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_message"));
+        assertTrue(ledger.reconcile().consistent());
     }
 
     @Test
@@ -454,14 +460,15 @@ class ChatTurnServiceLifecycleTest {
         assertEquals(ChatTurnRepository.STATUS_ABORTED, stopped.status());
 
         BeginResult resumed = service.begin(new BeginInput(UuidV7.generate(System.currentTimeMillis()), 2, sessionId,
-                "回到 A 重新生成", "", List.of(), Map.of(), first.lease().requestId()));
+                "会话 A 的一轮", "", List.of(), Map.of(), first.lease().requestId()));
         service.finalizeTurn(resumed.lease(), UpstreamReply.of("这次说完了", null, "stop"), null);
         service.finalizeTurn(elsewhere.lease(), UpstreamReply.of("B 的回答", null, "stop"), null);
 
         assertEquals(0, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'ABORTED' AND memory_eligible = 1"),
                 "被打断的旧轮不因重试行而被当成来源");
         assertEquals(1, count("SELECT COUNT(*) FROM ai_chat_turn WHERE status = 'COMPLETED' AND retry_of IS NOT NULL"));
-        assertEquals(0, ledger.read().reservedHistoryBytes(), "三个会话交错收尾后预留全部结算");
+        assertEquals(2, count("SELECT COUNT(*) FROM ai_chat_turn"), "重试不增加会话 A 的轮次");
+        assertEquals(0, ledger.read().reservedHistoryBytes(), "两个会话交错收尾后预留全部结算");
     }
 
     @Test

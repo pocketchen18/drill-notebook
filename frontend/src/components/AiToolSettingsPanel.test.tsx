@@ -6,9 +6,10 @@ import { toolGroups } from '../lib/aiToolSettings';
 import type { AiToolSettingsView } from '../lib/aiToolSettings';
 import { TOOL_NAMES } from '../lib/toolActivity';
 
-const { getSettings, saveSettings } = vi.hoisted(() => ({ getSettings: vi.fn(), saveSettings: vi.fn() }));
+const { getSettings, saveSettings, getWeb } = vi.hoisted(() => ({ getSettings: vi.fn(), saveSettings: vi.fn(), getWeb: vi.fn() }));
 vi.mock('../lib/aiToolSettings', async original => ({ ...await original<typeof import('../lib/aiToolSettings')>(),
   getToolSettings: getSettings, saveToolSettings: saveSettings }));
+vi.mock('../lib/webSearchSettings', async original => ({ ...await original<typeof import('../lib/webSearchSettings')>(), getWebSettings: getWeb }));
 let view: AiToolSettingsView;
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -18,6 +19,8 @@ function mount() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  getWeb.mockResolvedValue({ revision: 0, searchProvider: 'auto', fetchProvider: 'auto', preferNative: false,
+    providers: { tavily: { hasKey: false }, tinyfish: { hasKey: false } } });
   view = { revision: 0, tools: toolGroups.flatMap(group => group.tools.map(name => ({
     name, group: group.id, enabled: group.id !== 'delete', defaultEnabled: group.id !== 'delete'
   }))) };
@@ -28,12 +31,13 @@ beforeEach(() => {
   });
 });
 
-it('全部内置工具分组展示，默认开启 16 项、关闭 4 项删除，恢复默认使用各项默认值', async () => {
+it('全部内置工具分组展示，默认开启 18 项、关闭 4 项删除与原生优先，恢复默认使用各项默认值', async () => {
   const client = mount();
   await screen.findByRole('switch', { name: '删除记忆' });
-  expect(screen.getAllByRole('switch')).toHaveLength(20);
+  await screen.findByRole('switch', { name: '优先使用模型内置 Web 工具' });
+  expect(screen.getAllByRole('switch')).toHaveLength(23);
   expect(new Set(view.tools.map(tool => tool.name))).toEqual(new Set(Object.keys(TOOL_NAMES).filter(name => name !== 'unknown_tool')));
-  expect(screen.getAllByRole('switch', { checked: true })).toHaveLength(16);
+  expect(screen.getAllByRole('switch', { checked: true })).toHaveLength(18);
   for (const control of within(screen.getByRole('region', { name: '删除' })).getAllByRole('switch'))
     expect(control).toHaveAttribute('aria-checked', 'false');
   expect(within(screen.getByRole('region', { name: '学习资料' })).getAllByRole('switch')).toHaveLength(8);
@@ -51,7 +55,7 @@ it('全部内置工具分组展示，默认开启 16 项、关闭 4 项删除，
   await waitFor(() => expect(saveSettings).toHaveBeenLastCalledWith(2,
     Object.fromEntries(view.tools.map(tool => [tool.name, tool.defaultEnabled]))));
   await waitFor(() => expect(screen.getByRole('button', { name: '恢复默认' })).toBeDisabled());
-  expect(screen.getAllByRole('switch', { checked: true })).toHaveLength(16);
+  expect(screen.getAllByRole('switch', { checked: true })).toHaveLength(18);
   expect(client.getQueryData(['ai-runtime-settings'])).toEqual({ untouched: true });
 });
 
@@ -72,7 +76,7 @@ it('保存中禁用开关，失败不显示已开启，冲突重新载入后可�
   mount();
   fireEvent.click(await screen.findByRole('switch', { name: '删除会话' }));
   expect(screen.getByRole('switch', { name: '删除会话' })).toHaveAttribute('aria-checked', 'false');
-  for (const control of screen.getAllByRole('switch')) expect(control).toBeDisabled();
+  for (const tool of view.tools) expect(screen.getByRole('switch', { name: TOOL_NAMES[tool.name] })).toBeDisabled();
   view = { ...view, revision: 5 };
   reject(new Error('设置已在其他窗口修改，请重新载入后保存'));
   expect(await screen.findByRole('alert')).toHaveTextContent('其他窗口');

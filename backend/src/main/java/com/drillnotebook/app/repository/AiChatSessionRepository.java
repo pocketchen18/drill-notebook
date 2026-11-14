@@ -65,6 +65,7 @@ public class AiChatSessionRepository {
             item.put("messageCount", result.getLong("message_count"));
             item.put("modelConfigId", result.getString("model_config_id"));
             item.put("reasoningEffort", result.getString("reasoning_effort"));
+            item.put("modelChoiceRevision", result.getLong("model_choice_revision"));
             item.put("pinnedAt", result.getString("pinned_at"));
             titleMetadata(result, item);
             return item;
@@ -84,6 +85,7 @@ public class AiChatSessionRepository {
             item.put("messageCount", result.getLong("message_count"));
             item.put("modelConfigId", result.getString("model_config_id"));
             item.put("reasoningEffort", result.getString("reasoning_effort"));
+            item.put("modelChoiceRevision", result.getLong("model_choice_revision"));
             item.put("pinnedAt", result.getString("pinned_at"));
             titleMetadata(result, item);
             return item;
@@ -91,18 +93,25 @@ public class AiChatSessionRepository {
     }
 
     public long create(String title, String model) {
+        return create(title, model, new ModelChoice(null, null));
+    }
+
+    public long create(String title, String model, ModelChoice choice) {
         String name = title == null || title.isBlank() ? "新会话" : title.trim();
         boolean temporary = "新会话".equals(name) || "默认会话".equals(name);
         KeyHolder holder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO ai_chat_session(title, model, session_ref, title_source, title_status) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO ai_chat_session(title, model, session_ref, title_source, title_status, model_config_id, reasoning_effort, model_choice_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             statement.setString(1, name);
             statement.setString(2, model);
             statement.setString(3, java.util.UUID.randomUUID().toString().replace("-", ""));
             statement.setString(4, temporary ? "temporary" : "manual");
             statement.setString(5, temporary ? "pending" : "idle");
+            statement.setString(6, choice.modelConfigId());
+            statement.setString(7, choice.effort());
+            statement.setInt(8, choice.modelConfigId() == null ? 0 : 1);
             return statement;
         }, holder);
         Number key = holder.getKey();
@@ -129,7 +138,7 @@ public class AiChatSessionRepository {
                 title, title, title, id);
     }
 
-    /** 会话自己的模型与思考档位；两者为 null 分别表示跟随主模型、使用模型默认档位。 */
+    /** 会话自己的模型与思考档位；空模型只表示尚未初始化，空档位使用这个模型的默认值。 */
     public record ModelChoice(String modelConfigId, String effort) { }
 
     public ModelChoice modelChoice(long id) {
@@ -139,7 +148,7 @@ public class AiChatSessionRepository {
     }
 
     public void setModelChoice(long id, String modelConfigId, String effort) {
-        jdbc.update("UPDATE ai_chat_session SET model_config_id = ?, reasoning_effort = ? WHERE id = ?", modelConfigId, effort, id);
+        jdbc.update("UPDATE ai_chat_session SET model_config_id = ?, reasoning_effort = ?, model_choice_revision = model_choice_revision + 1 WHERE id = ?", modelConfigId, effort, id);
     }
 
     /** 置顶只记录时刻，不改最近活动时间；重复置顶保留最初的时刻，顺序不变。 */

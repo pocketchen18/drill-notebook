@@ -12,6 +12,7 @@ import type { AiRecovery } from '../lib/aiRecovery';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
 import { ModelPicker, type ModelChoice } from './ai-session/ModelPicker';
+import { WebSearchButton } from './ai-session/WebSearchButton';
 import type { Connections } from './ai-connections/types';
 import { ContextMeter, formatTokens } from './ai-session/ContextMeter';
 import { useNavigate } from 'react-router-dom';
@@ -113,6 +114,18 @@ export function quoteBlock(text: string): string {
   return text.split(/\r?\n/).map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
 
+/** 标题和模型分别有版本号，迟到的轮询不能覆盖刚刚保存的选择。 */
+function mergeSessionSnapshot(previous: AiChatSession | undefined, incoming: AiChatSession): AiChatSession {
+  if (!previous) return incoming;
+  const title = (previous.titleRevision ?? 0) > (incoming.titleRevision ?? 0) ? {
+    title: previous.title, titleRevision: previous.titleRevision, titleSource: previous.titleSource, titleStatus: previous.titleStatus
+  } : {};
+  const choice = (previous.modelChoiceRevision ?? 0) > (incoming.modelChoiceRevision ?? 0) ? {
+    modelConfigId: previous.modelConfigId, reasoningEffort: previous.reasoningEffort, modelChoiceRevision: previous.modelChoiceRevision
+  } : {};
+  return { ...incoming, ...title, ...choice };
+}
+
 export function AiAssistant(): JSX.Element {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -137,7 +150,11 @@ export function AiAssistant(): JSX.Element {
   const notebooksQuery = useQuery({ queryKey: ['notebooks'], queryFn: () => get<Notebook[]>('/api/notebooks'), enabled: aiOpen });
   const sessionsQuery = useQuery({
     queryKey: ['ai-sessions'],
-    queryFn: () => get<AiChatSession[]>('/api/ai/sessions'),
+    queryFn: async () => {
+      const incoming = await get<AiChatSession[]>('/api/ai/sessions');
+      const current = queryClient.getQueryData<AiChatSession[]>(['ai-sessions']);
+      return incoming.map(session => mergeSessionSnapshot(current?.find(item => item.id === session.id), session));
+    },
     refetchInterval: 1500,
     enabled: aiOpen
   });
@@ -147,13 +164,18 @@ export function AiAssistant(): JSX.Element {
     const current = queryClient.getQueryData<Connections>(['ai-connections']);
     return current && current.revision > value.revision ? current : value;
   }, enabled: aiOpen });
-  // 模型选择以便携数据库为准，切会话和恢复草稿都不覆盖它。
-  const modelChoice: ModelChoice = { modelConfigId: connectionsQuery.data?.chatModelId ?? null,
+  const [sessionId, setSessionId] = useState<number>();
+  const [newModelChoice, setNewModelChoice] = useState<ModelChoice>();
+  // 全局只提供新会话的继承默认；已有会话始终读取自己的持久化选择。
+  const inheritedChoice: ModelChoice = { modelConfigId: connectionsQuery.data?.chatModelId ?? null,
     reasoningEffort: connectionsQuery.data?.chatReasoningEffort ?? null };
+  const selectedSession = sessionsQuery.data?.find(session => session.id === sessionId);
+  const modelChoice: ModelChoice = sessionId === undefined ? newModelChoice ?? inheritedChoice
+    : selectedSession?.modelConfigId ? { modelConfigId: selectedSession.modelConfigId, reasoningEffort: selectedSession.reasoningEffort ?? null }
+      : inheritedChoice;
   const [modelSaving, setModelSaving] = useState(false);
   const modelSavingRef = useRef(false);
 
-  const [sessionId, setSessionId] = useState<number>();
   const draftApi = window.api?.update;
   const [draftsReady, setDraftsReady] = useState(!draftApi);
   const [draftsError, setDraftsError] = useState('');
@@ -229,7 +251,7 @@ export function AiAssistant(): JSX.Element {
   const firstSendPendingRef = useRef(false);
   const pendingFirstTurnRef = useRef<TurnInput | null>(null);
   // 本轮结果落回哪一个气泡：流式先立占位，非流式收到整块结果才追加。
-  const turnTargetRef = useRef<{ userKey: string; assistantKey: string | null } | null>(null);
+  const turnTargetRef = useRef<{ userKey: string; assistantKey: string | null; retryUserMessageId?: number } | null>(null);
   // 流式期间用户已向上滚动 → 暂停自动滚到底；回到接近底部时自动恢复。
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -295,12 +317,14 @@ export function AiAssistant(): JSX.Element {
   }, []);
   function selectSession(next: number | undefined): void {
     setSideOverlay(false);
-    if (!draftsReady || pendingAssistantWork.current > 0 || firstSendPendingRef.current || next === sessionId) return;
+    // 模型保存绑定发起它的会话，期间可以切去阅读其它会话。
+    if (!draftsReady || pendingAssistantWork.current > (modelSavingRef.current ? 1 : 0) || firstSendPendingRef.current || next === sessionId) return;
     regenerationRef.current = null;
     setRegenerating(null);
     draftCache.current.set(sessionId ?? 'new', { message, attachments, messages, target: turnTargetRef.current,
       sticky: stickyBottomRef.current, scroll: chatContainerRef.current?.scrollTop ?? 0 });
     const draft = draftCache.current.get(next ?? 'new');
+    if (next === undefined) setNewModelChoice(inheritedChoice.modelConfigId ? inheritedChoice : undefined);
     lastExplicitSessionIdRef.current = next ?? null;
     setSessionId(next); setMessage(draft?.message ?? ''); setAttachments(draft?.attachments ?? []); setMessages(draft?.messages ?? []);
     turnTargetRef.current = draft?.target ?? null;
@@ -392,43 +416,57 @@ export function AiAssistant(): JSX.Element {
   /** 本轮的引用、降级提示与 done 快照只存在于本地，服务端历史行按 requestId 把它们认领回去。 */
   const visibleMessages = useMemo<ChatMessage[]>(() => {
     const snapshots = new Map<string, ChatMessage>();
+    const snapshotsById = new Map<number, ChatMessage>();
     for (const item of messages) {
+      if (item.id !== undefined) snapshotsById.set(item.id, item);
       if (item.role === 'assistant' && item.requestId) snapshots.set(item.requestId, item);
+      if (item.role === 'assistant' && item.retryOf) snapshots.set(item.retryOf, item);
       if (item.role === 'user' && item.requestId && item.page) snapshots.set(`user:${item.requestId}`, item);
     }
     const covered = new Set<string>();
+    const coveredIds = new Set<number>();
     const server: ChatMessage[] = history.messages.map((row) => {
+      coveredIds.add(row.id);
       if (row.requestId) covered.add(`${row.role}:${row.requestId}`);
-      const mirror = row.role === 'assistant' && row.requestId ? snapshots.get(row.requestId) : undefined;
+      const mirror = snapshotsById.get(row.id) ?? (row.role === 'assistant' && row.requestId ? snapshots.get(row.requestId) : undefined);
+      const useMirror = !!mirror && (mirror.streaming || !!mirror.retryOf && row.requestId !== mirror.requestId);
+      if (mirror?.requestId) covered.add(`${row.role}:${mirror.requestId}`);
       return {
         id: row.id,
         role: row.role,
-        model: row.model ?? mirror?.model,
-        reasoningEffort: row.reasoningEffort ?? mirror?.reasoningEffort,
-        usage: row.usage,
+        model: useMirror ? mirror?.model : row.model ?? mirror?.model,
+        reasoningEffort: useMirror ? mirror?.reasoningEffort : row.reasoningEffort ?? mirror?.reasoningEffort,
+        usage: useMirror ? mirror?.usage : row.usage,
         roundNumber: row.roundNumber,
-        recovery: mirror?.streaming ? mirror.recovery : row.recovery ?? mirror?.recovery,
+        recovery: useMirror ? mirror?.recovery : row.recovery ?? mirror?.recovery,
         page: row.page ?? snapshots.get(`user:${row.requestId}`)?.page,
-        content: mirror?.streaming || !row.content ? mirror?.content ?? row.content : row.content,
-        reasoning: mirror?.streaming ? mirror.reasoning : row.reasoning ?? mirror?.reasoning,
-        supplements: mirror?.streaming ? mirror.supplements : row.supplements ?? mirror?.supplements,
+        content: useMirror || !row.content ? mirror?.content ?? row.content : row.content,
+        reasoning: useMirror ? mirror?.reasoning : row.reasoning ?? mirror?.reasoning,
+        supplements: useMirror ? mirror?.supplements : row.supplements ?? mirror?.supplements,
         streaming: mirror?.streaming,
-        toolActivities: mirror?.streaming ? mirror.toolActivities
+        toolActivities: useMirror ? mirror?.toolActivities
           : settleToolActivities(mergeToolActivities(mirror?.toolActivities, row.toolActivities)),
         toolPhase: mirror?.toolPhase,
         createdAt: row.createdAt,
-        requestId: row.requestId ?? undefined,
+        requestId: useMirror ? mirror?.requestId : row.requestId ?? undefined,
+        retryOf: mirror?.retryOf,
         citations: mirror?.citations,
-        notice: mirror?.streaming ? mirror.notice : historyNotice(row) ?? mirror?.notice,
+        notice: useMirror ? mirror?.notice : historyNotice(row) ?? mirror?.notice,
         turn: mirror?.turn,
         _key: mirror?._key ?? `h${row.id}`
       };
     });
     // 本地只留还没被服务端历史覆盖的那几条（正在跑的一轮、以及刚定稿还没重取回来的一轮）
     let localRound = history.totalRounds ?? server.filter(item => item.role === 'user').length;
-    const local = history.focused ? [] : messages.filter((item) => !(item.requestId && covered.has(`${item.role}:${item.requestId}`)))
+    const local = messages.filter((item) => !(item.id !== undefined && coveredIds.has(item.id))
+      && !(item.requestId && covered.has(`${item.role}:${item.requestId}`)) && (!history.focused || !!item.retryOf))
       .map(item => item.role === 'user' ? { ...item, roundNumber: ++localRound } : item);
-    return [...server, ...local];
+    for (const item of local) {
+      const originalUser = item.retryOf ? server.findIndex(row => row.role === 'user' && (row.requestId === item.retryOf || row.requestId === item.requestId)) : -1;
+      if (originalUser >= 0 && item.role === 'assistant') server.splice(originalUser + 1, 0, item);
+      else server.push(item);
+    }
+    return server;
   }, [history.messages, history.focused, history.totalRounds, messages]);
   const totalRounds = Math.max(history.totalRounds ?? 0, ...visibleMessages.filter(item => item.role === 'user').map(item => item.roundNumber ?? 0));
   const detectReadingRound = (): void => {
@@ -656,7 +694,7 @@ export function AiAssistant(): JSX.Element {
   };
 
   const createSessionMutation = useMutation({
-    mutationFn: () => post<AiChatSession>('/api/ai/sessions', { title: '新会话' }),
+    mutationFn: (choice: ModelChoice) => post<AiChatSession>('/api/ai/sessions', { title: '新会话', ...(choice.modelConfigId ? choice : {}) }),
     onSuccess: (session) => {
       // 只在首条消息发送时创建；先写缓存和选择，下一次渲染后再启动首轮。
       queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => {
@@ -680,20 +718,30 @@ export function AiAssistant(): JSX.Element {
 
   const updateSessionCache = (session: AiChatSession): void => {
     queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], (old) => (old ?? []).map((item) =>
-      item.id === session.id && (session.titleRevision ?? 0) >= (item.titleRevision ?? 0) ? session : item));
+      item.id === session.id ? mergeSessionSnapshot(item, session) : item));
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
   };
-  /** 改选全局保存后生效；已开始的轮次和已受理的待发消息保持提交时的配置。 */
+  /** 改选只保存当前会话，并更新下一新会话的继承默认。 */
   const changeModelChoice = async (next: ModelChoice): Promise<void> => {
     if (!draftsReady || modelSavingRef.current || !connectionsQuery.data || !next.modelConfigId
       || next.modelConfigId === modelChoice.modelConfigId && next.reasoningEffort === modelChoice.reasoningEffort) return;
     modelSavingRef.current = true; setModelSaving(true);
+    const changedSession = selectedSessionRef.current;
     pendingAssistantWork.current += 1;
     try {
       const value = await put<Connections>('/api/ai/connections/chat-model', { ...next,
+        ...(changedSession === undefined ? {} : { sessionId: changedSession }),
         revision: queryClient.getQueryData<Connections>(['ai-connections'])?.revision ?? connectionsQuery.data.revision });
       queryClient.setQueryData<Connections>(['ai-connections'], current => current && current.revision > value.revision ? current : value);
-      const keys = [['ai-config'], ['ai-memory-settings'], ['ai-context-usage']];
+      if (changedSession === undefined) setNewModelChoice({ modelConfigId: value.chatModelId, reasoningEffort: value.chatReasoningEffort ?? null });
+      else queryClient.setQueryData<AiChatSession[]>(['ai-sessions'], current => current?.map(session => {
+        if (session.id !== changedSession) return session;
+        const saved = value.sessionChoice;
+        return mergeSessionSnapshot(session, { ...session, modelConfigId: saved?.modelConfigId ?? next.modelConfigId,
+          reasoningEffort: saved ? saved.reasoningEffort : next.reasoningEffort,
+          modelChoiceRevision: saved?.revision ?? (session.modelChoiceRevision ?? 0) + 1 });
+      }));
+      const keys = [['ai-config'], ['ai-memory-settings'], ['ai-context-usage'], ['ai-sessions']];
       for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
       publish({ type: 'invalidate', keys: [['ai-connections'], ...keys] });
     } catch (error) {
@@ -730,21 +778,20 @@ export function AiAssistant(): JSX.Element {
     }
   });
 
-  const invalidateSessionLists = (refetchMessages: boolean): void => {
+  const invalidateSessionLists = (refetchMessages: boolean, replacementId = turnTargetRef.current?.retryUserMessageId): void => {
     void queryClient.invalidateQueries({ queryKey: ['ai-sessions'] });
     // 每轮落库与预留结算都会动容量账本：常驻的那条容量提示要跟着结算走
     void queryClient.invalidateQueries({ queryKey: storageQueryKey });
     // 只重取最新一页：更早的页是已看过的稳定游标，没必要为一轮新对话整串重读
-    if (refetchMessages) void history.refreshLatest();
+    if (refetchMessages) void (replacementId ? history.refreshMessage(replacementId) : history.refreshLatest());
   };
 
   /** 增量只写回本轮那个占位气泡：列表被 refetch 重排时也不能写到别的气泡上。 */
   const patchAssistant = (patch: (prev: ChatMessage) => Partial<ChatMessage>): void => {
     setMessages((current) => {
       const key = turnTargetRef.current?.assistantKey;
-      const last = current[current.length - 1];
-      if (!key || !last || last._key !== key || last.role !== 'assistant') return current;
-      return [...current.slice(0, -1), { ...last, ...patch(last) }];
+      if (!key) return current;
+      return current.map(item => item._key === key && item.role === 'assistant' ? { ...item, ...patch(item) } : item);
     });
   };
 
@@ -755,10 +802,10 @@ export function AiAssistant(): JSX.Element {
     const key = target.assistantKey ?? nextMessageKey();
     turnTargetRef.current = { ...target, assistantKey: key };
     setMessages((current) => {
-      const last = current[current.length - 1];
-      const merging = last?.role === 'assistant' && last._key === key;
-      const message: ChatMessage = { ...build(merging ? last : null), _key: key };
-      return merging ? [...current.slice(0, -1), message] : [...current, message];
+      const index = current.findIndex(item => item.role === 'assistant' && item._key === key);
+      const previous = index < 0 ? null : current[index];
+      const message: ChatMessage = { ...previous, ...build(previous), _key: key };
+      return index < 0 ? [...current, message] : current.map((item, at) => at === index ? message : item);
     });
   };
 
@@ -768,18 +815,26 @@ export function AiAssistant(): JSX.Element {
     if (!key) return;
     setMessages((current) => {
       const next = [...current];
-      const last = next[next.length - 1];
-      if (!last || last._key !== key || last.role !== 'assistant') return next;
+      const index = next.findIndex(item => item._key === key && item.role === 'assistant');
+      const last = next[index];
+      if (!last) return next;
       const text = typeof last.content === 'string' ? last.content : '';
       const reasoning = typeof last.reasoning === 'string' ? last.reasoning : '';
       const toolActivities = settleToolActivities(mergeToolActivities(last.toolActivities, activities));
       const finalRecovery = recovery === undefined ? last.recovery : recovery;
       if (!text.trim() && !reasoning.trim() && !toolActivities.length && !finalRecovery) {
-        next.pop();
+        next.splice(index, 1);
+        // 未产生新回答时撤回本地重试身份；服务端历史决定原轮次是否已经替换。
+        if (last.retryOf) {
+          const userKey = turnTargetRef.current?.userKey;
+          for (let at = 0; at < next.length; at++) {
+            if (next[at]._key === userKey) next[at] = { ...next[at], requestId: last.retryOf, retryOf: undefined };
+          }
+        }
         turnTargetRef.current = null;
         return next;
       }
-      next[next.length - 1] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false,
+      next[index] = { ...last, content: text, reasoning: reasoning || undefined, streaming: false,
         notice: finalRecovery ? undefined : notice, toolActivities, recovery: finalRecovery };
       return next;
     });
@@ -815,27 +870,31 @@ export function AiAssistant(): JSX.Element {
         const next = current.map((item) => item.streaming && item.requestId !== event.requestId
           ? { ...item, streaming: false, toolActivities: settleToolActivities(item.toolActivities) } : item);
         if (snapshot.userText && !next.some((item) => item.role === 'user' && item.requestId === event.requestId)) {
-          next.push({ role: 'user', content: snapshot.userText, requestId: event.requestId, _key: `u-${event.requestId}` });
+          const original = history.messages.find(row => row.role === 'user' && (row.requestId === event.requestId || row.requestId === snapshot.retryOf));
+          next.push({ ...original, role: 'user', content: snapshot.userText, requestId: event.requestId, retryOf: snapshot.retryOf ?? undefined,
+            _key: original ? `h${original.id}` : `u-${event.requestId}` });
         }
-        const index = next.findIndex((item) => item.role === 'assistant' && item.requestId === event.requestId);
+        const originalAnswer = history.messages.find(row => row.role === 'assistant' && (row.requestId === event.requestId || row.requestId === snapshot.retryOf));
+        const index = next.findIndex((item) => item.role === 'assistant' && (item.requestId === event.requestId || originalAnswer && item.id === originalAnswer.id));
         const previous = index < 0 ? undefined : next[index];
         if (!running && !previous && !snapshot.reply && !snapshot.reasoning && !snapshot.toolActivities?.length && !snapshot.recovery) return next;
-        const item: ChatMessage = { ...previous, role: 'assistant', content: snapshot.reply ?? previous?.content ?? '',
-          reasoning: snapshot.reasoning ?? previous?.reasoning, requestId: event.requestId, streaming: running,
+        const item: ChatMessage = { ...previous, id: originalAnswer?.id ?? previous?.id, role: 'assistant', content: snapshot.reply ?? previous?.content ?? '',
+          reasoning: snapshot.reasoning ?? previous?.reasoning, requestId: event.requestId, retryOf: snapshot.retryOf ?? previous?.retryOf ?? undefined, streaming: running,
           supplements: snapshot.supplements ?? previous?.supplements,
           recovery: snapshot.recovery === undefined ? previous?.recovery : snapshot.recovery,
           toolActivities: running ? mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)
             : settleToolActivities(mergeToolActivities(previous?.toolActivities, snapshot.toolActivities)),
           toolPhase: snapshot.phase === 'tools' ? 'tools' : 'answer',
           notice: running ? undefined : snapshot.status === 'COMPLETED'
-            ? executionStopNotice(snapshot.finishReason) : statusNotice(snapshot), _key: previous?._key ?? `a-${event.requestId}` };
+            ? executionStopNotice(snapshot.finishReason) : statusNotice(snapshot), _key: previous?._key ?? (originalAnswer ? `h${originalAnswer.id}` : `a-${event.requestId}`) };
         if (index < 0) next.push(item); else next[index] = item;
         return next;
       });
       const key = `${sessionId}:${event.requestId}`;
       if (observedStatusRef.current.get(key) !== snapshot.status) {
         observedStatusRef.current.set(key, snapshot.status ?? 'UNKNOWN');
-        invalidateSessionLists(true);
+        const originalUser = snapshot.retryOf ? history.messages.find(row => row.role === 'user' && (row.requestId === snapshot.retryOf || row.requestId === event.requestId)) : undefined;
+        invalidateSessionLists(true, originalUser?.id);
       }
       return;
     }
@@ -891,7 +950,7 @@ export function AiAssistant(): JSX.Element {
         // 这一轮真的开始过或已产出内容：保留已生成的部分，把服务端错误如实提示给用户（§7.3、§7.2 第 6 条）。
         if (!event.view.recovery) Message.error(event.message || '生成中断，请重试');
         settleOrDropAssistant(outcomeNotice(event.view), event.view.toolActivities, event.view.recovery);
-        invalidateSessionLists(false);
+        invalidateSessionLists(event.view.stateDurable === true);
         return;
       case 'status': {
         const settled = event.status.status !== undefined && event.status.status !== 'RUNNING';
@@ -957,15 +1016,15 @@ export function AiAssistant(): JSX.Element {
     if (isFirstSend) pendingFirstTurnRef.current = input;
     else turn.send(input);
   };
-  const submitMessage = async (continuation?: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
+  const submitMessage = async (mode: 'queue' | 'steer' = 'queue'): Promise<void> => {
     if (!draftsReady || modelSavingRef.current || firstSendPendingRef.current || queueSubmittingRef.current || queue.unconfirmed || regenerationRef.current) return;
-    if (!continuation && !message.trim() && !attachments.length) return;
+    if (!message.trim() && !attachments.length) return;
     if (!configured) {
       Message.warning('请先配置 AI 连接，并在输入框下方选择模型');
       return;
     }
-    const text = continuation ?? (message.trim() || '请分析附件内容');
-    const displayText = [continuation ?? message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)]
+    const text = message.trim() || '请分析附件内容';
+    const displayText = [message.trim(), ...attachments.map((item) => `[附件：${item.name}]`)]
       .filter(Boolean).join('\n\n') || '请分析附件内容';
     const images = attachments.filter((item) => item.kind === 'image');
     const content: string | ChatContentPart[] = images.length
@@ -997,7 +1056,7 @@ export function AiAssistant(): JSX.Element {
       // 同步锁防止同一渲染内的双击/连续回车重复创建；失败前保留输入和附件。
       firstSendPendingRef.current = true;
       try {
-        targetSessionId = (await createSessionMutation.mutateAsync()).id;
+        targetSessionId = (await createSessionMutation.mutateAsync(modelChoice)).id;
       } catch (error) {
         firstSendPendingRef.current = false;
         Message.error(friendlyMessage(error, '创建会话失败，请重试'));
@@ -1016,7 +1075,7 @@ export function AiAssistant(): JSX.Element {
   const regenerationAllowedRef = useRef(false);
   regenerationAllowedRef.current = !regenerationUnavailable;
   const regenerateBlocked = regenerating ? '正在准备重新生成' : regenerationUnavailable;
-  /** 原输入按需读取，retryOf 沿用工具回执；新回答追加，输入草稿保持原样。 */
+  /** 原输入按需读取，新请求复用原消息位置，输入草稿保持原样。 */
   const regenerate = async (requestId: string): Promise<void> => {
     if (regenerationRef.current || modelSavingRef.current || regenerationUnavailable || sessionId === undefined) return;
     const target = { requestId, sessionId };
@@ -1031,12 +1090,20 @@ export function AiAssistant(): JSX.Element {
       }
       const input: TurnInput = { ...original.input, sessionId: target.sessionId, retryOf: requestId,
         pageSnapshot: capturePageSnapshot(useUiStore.getState().pageContext) };
-      const images = input.attachments?.filter((item) => item.kind === 'image') ?? [];
-      const content: ChatMessage['content'] = images.length ? [{ type: 'text', text: input.userText },
-        ...images.map((item) => ({ type: 'image_url' as const, image_url: { url: `data:${item.mimeType};base64,${item.dataBase64}` } }))] : input.userText;
-      const displayText = [input.userText, ...(input.attachments ?? []).map((item) => `[附件：${item.name}]`)].join('\n\n');
-      stickyBottomRef.current = true;
-      beginReply(input, content, displayText);
+      const originalUser = visibleMessages.find(item => item.role === 'user' && item.requestId === requestId);
+      const originalAnswer = visibleMessages.find(item => item.role === 'assistant' && item.requestId === requestId);
+      if (!originalUser) throw new Error('原提问位置无法定位，请刷新会话后重试');
+      const userKey = originalUser._key ?? `h${originalUser.id}`;
+      const assistantKey = originalAnswer?._key ?? nextMessageKey();
+      turnTargetRef.current = { userKey, assistantKey, retryUserMessageId: originalUser.id };
+      const usedModel = activeModel ? { model: `${activeModel.provider.name} · ${activeModel.model.modelId}`,
+        reasoningEffort: activeEffort ?? undefined } : {};
+      setMessages(current => [...current.filter(item => item._key !== userKey && item._key !== assistantKey && item.requestId !== requestId),
+        { ...originalUser, _key: userKey, retryOf: requestId },
+        { id: originalAnswer?.id, createdAt: originalAnswer?.createdAt, role: 'assistant', content: '', reasoning: '',
+          streaming: true, _key: assistantKey, retryOf: requestId, ...usedModel }]);
+      stickyBottomRef.current = originalAnswer === visibleMessages.at(-1);
+      turn.send(input);
     } catch (error) {
       if (regenerationRef.current === target) Message.error(friendlyMessage(error, '重新生成失败，请重试'));
     } finally {
@@ -1388,9 +1455,9 @@ export function AiAssistant(): JSX.Element {
                     <div className="ai-retrieval-notice">
                       {item.notice.message ?? '笔记检索暂时不可用，本次回答未使用笔记内容'}
                       {isAssistant && item === visibleMessages.at(-1) && canContinueTurn(item.notice) && <Button size="mini" type="text"
-                        disabled={streaming || !!message.trim() || attachments.length > 0}
-                        title={message.trim() || attachments.length ? '请先处理输入框中的草稿' : '沿用已有结果，以新一轮预算继续'}
-                        onClick={() => submitMessage('请继续完成上一轮尚未完成的任务，依据已有结果继续；已经确认成功的操作不要重复执行，写入结果不确定时先核对。')}>继续</Button>}
+                        disabled={!!regenerateBlocked || !turnId}
+                        title={regenerateBlocked || '在原轮次重试，保留输入草稿'}
+                        onClick={() => turnId && void regenerate(turnId)}>重试</Button>}
                     </div>
                   ) : null}
                   {isAssistant ? (
@@ -1522,7 +1589,7 @@ export function AiAssistant(): JSX.Element {
                   send();
                 } else if (streaming && event.key === 'Enter' && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
                   event.preventDefault();
-                  if (!queue.data?.editingId) void submitMessage(undefined, 'steer');
+                  if (!queue.data?.editingId) void submitMessage('steer');
                 }
               }}
               placeholder={streaming ? '正在回复，可先输入下一条问题' : composePlaceholder}
@@ -1548,9 +1615,10 @@ export function AiAssistant(): JSX.Element {
             <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || modelSaving || connectionsQuery.isPending || createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={!draftsReady || createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
+            <WebSearchButton enabled={aiOpen} model={activeModel?.model} />
             {streaming && <>
               <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
-                disabled={modelSaving || queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>
+                disabled={modelSaving || queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage('steer')}>插话</Button>
               <Button type="secondary" icon={<Square size={14} />} aria-label="中断生成" title="停止回复" onClick={stopGeneration} />
             </>}
             <Button

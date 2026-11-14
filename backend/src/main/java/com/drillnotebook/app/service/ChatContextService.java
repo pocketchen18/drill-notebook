@@ -232,6 +232,7 @@ public class ChatContextService {
         ChatContextAssembler.Draft draft = assembler.assemble(
                 new ChatContextAssembler.Input(userText, lease.masterPassword(), lease.attachments(), pageContext,
                         pageVersion(pageContext), allowed), projected, selection, hits, audit);
+        draft = assembler.withRetryState(draft, lease.requestId(), lease.retryContext(), audit);
         ContextBudgeter.Target target = new ContextBudgeter.Target(planId, lease.sessionId(),
                 state.contextGeneration(), projected.historyRevision(),
                 // 复核比的是"观测到的检查点版本"而不是"实际采用的摘要"：无效/锁定摘要降级后

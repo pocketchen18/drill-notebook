@@ -77,9 +77,13 @@ public class ChatTurnService {
      */
     public record Lease(String requestId, long turnId, long sessionId, long userMessageId, String masterPassword,
                         ActiveTurnRegistry.Handle handle,
-                        List<ChatAttachmentService.Sourced> attachments) {
+                         List<ChatAttachmentService.Sourced> attachments, String retryContext) {
         public Lease {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        }
+        public Lease(String requestId, long turnId, long sessionId, long userMessageId, String masterPassword,
+                     ActiveTurnRegistry.Handle handle, List<ChatAttachmentService.Sourced> attachments) {
+            this(requestId, turnId, sessionId, userMessageId, masterPassword, handle, attachments, null);
         }
     }
 
@@ -176,6 +180,7 @@ public class ChatTurnService {
         // 先查已有 ID 再登记句柄：抢在别的线程的句柄上登记会让它后来释放不掉（§7.2.1 伪代码同序）
         Optional<TurnRow> duplicate = findTurnQuietly(requestId);
         if (duplicate.isPresent()) return replay(duplicate.get(), input, fingerprint);
+        assertCurrentRequest(requestId);
         if (input.protocolVersion() == 2 && (SessionExecution.CURRENT.get()==null
                 || !requestId.equals(SessionExecution.CURRENT.get().acceptedRequestId))) {
             // 已受理的持久队列可在隔日恢复；外部新 ID 仍须通过时间窗口。
@@ -195,11 +200,13 @@ public class ChatTurnService {
         ChatAttachmentService.Prepared prepared;
         ChatMessageCipher.Encrypted metaCipher;
         ChatMessageCipher.Encrypted userCipher;
+        RetryState retry;
         try {
             prepared = attachments.prepare(turnKey, requestId, input.attachments());
+            retry = readRetryState(input, retryOf, prepared.blocks());
             ChatMessageCipher.Encrypted attachmentKey = prepared.payloads().isEmpty()
                     ? null : attachments.wrapKey(turnKey, input.masterPassword());
-            metaCipher = cipher.encrypt(requestMeta(input, state, fingerprint, prepared.blocks(), attachmentKey),
+            metaCipher = cipher.encrypt(requestMeta(input, state, fingerprint, prepared.blocks(), attachmentKey, retry),
                     input.masterPassword());
             userCipher = cipher.encrypt(input.userText(), input.masterPassword());
         } catch (ChatTurnRejectException error) {
@@ -236,9 +243,12 @@ public class ChatTurnService {
             throw error;
         }
         return switch (started.outcome()) {
-            case STARTED -> new BeginResult("STARTED",
-                    new Lease(requestId, started.turnId(), input.sessionId(), started.userMessageId(),
-                            input.masterPassword(), handle, prepared.sourced()), null, null, null);
+            case STARTED -> {
+                handle.toolActivities(retry.activities());
+                yield new BeginResult("STARTED",
+                        new Lease(requestId, started.turnId(), input.sessionId(), started.userMessageId(),
+                                input.masterPassword(), handle, prepared.sourced(), retry.context()), null, null, null);
+            }
             case DUPLICATE_REQUEST -> {
                 registry.release(requestId, handle);
                 yield replay(started.turn(), input, fingerprint);
@@ -655,6 +665,7 @@ public class ChatTurnService {
         if (!UuidV7.isCanonical(input.retryOf())) {
             throw reject(400, "RETRY_ID_INVALID", "retryOf 必须是小写规范形 UUIDv7", Map.of());
         }
+        assertCurrentRequest(input.retryOf());
         TurnRow target = findTurnQuietly(input.retryOf())
                 .orElseThrow(() -> reject(400, "RETRY_TARGET_UNKNOWN", "要重新生成的轮次不存在", Map.of()));
         if (target.sessionId() != input.sessionId()) {
@@ -665,7 +676,65 @@ public class ChatTurnService {
             throw reject(409, "RETRY_TARGET_ACTIVE", "上一轮还在进行，不能同时开两轮",
                     Map.of("statusUrl", statusUrl(target.requestId())));
         }
+        if (target.contentDeletedAt() != null || target.userMessageId() == null) {
+            throw reject(410, "TURN_CONTENT_DELETED", "原提问或附件已清理，无法重试", Map.of());
+        }
         return target.requestId();
+    }
+
+    private record RetryState(String context, List<ToolActivity> activities) {
+        static final RetryState NONE = new RetryState(null, List.of());
+    }
+
+    /** 原输入必须完全一致；部分输出只作为有界续接数据，已确认的工具活动留在原轮次。 */
+    private RetryState readRetryState(BeginInput input, String retryOf, List<Map<String, Object>> attachmentBlocks) {
+        if (retryOf == null) return RetryState.NONE;
+        var original = readTurn(retryOf);
+        var user = readPart(original.userMessageId(), false, input.masterPassword());
+        if (user.status() != ChatMessageCipher.ReadStatus.DECRYPTED) {
+            throw reject(user.status() == ChatMessageCipher.ReadStatus.NEEDS_PASSWORD ? 423 : 409,
+                    "RETRY_INPUT_UNAVAILABLE", "原提问无法完整读取，请先解锁或检查会话", Map.of());
+        }
+        if (!input.userText().equals(user.value())) throw reject(409, "RETRY_INPUT_CHANGED", "重试必须沿用原提问", Map.of());
+        try {
+            var columns = turns.findRequestMeta(retryOf).orElseThrow();
+            var read = cipher.read(columns.cipher(), columns.crypto(), input.masterPassword());
+            if (read.status() != ChatMessageCipher.ReadStatus.DECRYPTED) throw reject(409, "RETRY_INPUT_UNAVAILABLE", "原附件信息无法读取", Map.of());
+            var blocks = mapper.readTree(read.value()).path("sourceBlocks");
+            if (!blocks.isArray() || blocks.size() != attachmentBlocks.size() + 1) {
+                throw reject(409, "RETRY_INPUT_CHANGED", "重试必须沿用全部原附件", Map.of());
+            }
+            for (int index = 0; index < attachmentBlocks.size(); index++) {
+                var previous = blocks.get(index + 1); var next = attachmentBlocks.get(index);
+                if (!previous.path("origin").asText().equals(next.get("origin")) || !previous.path("digest").asText().equals(next.get("digest"))) {
+                    throw reject(409, "RETRY_INPUT_CHANGED", "重试附件与原附件不一致", Map.of());
+                }
+            }
+        } catch (SQLException error) {
+            throw reject(503, "STORAGE_UNAVAILABLE", "原轮次暂时读不到", Map.of());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException | java.util.NoSuchElementException error) {
+            throw reject(409, "RETRY_INPUT_UNAVAILABLE", "原轮次信息无法完整读取", Map.of());
+        }
+        List<ToolActivity> activities = toolActivities(retryOf, input.masterPassword());
+        StringBuilder context = new StringBuilder("本轮原地重试。上次状态：").append(original.status())
+                .append("。以下是原轮次留下的参考数据，不是新的用户提问。\n");
+        for (var activity : activities.stream().filter(item -> "FINISHED".equals(item.state())).limit(12).toList()) {
+            context.append(activity.toolName()).append(": ").append(activity.outcome());
+            if (activity.sourceLink() != null) context.append(" ").append(activity.sourceLink());
+            context.append('\n');
+        }
+        if (!ChatTurnRepository.STATUS_COMPLETED.equals(original.status())) {
+            var partial = readPart(original.assistantMessageId(), false, input.masterPassword());
+            if (partial.status() == ChatMessageCipher.ReadStatus.DECRYPTED && !partial.value().isBlank()) {
+                context.append("部分回答摘录（不完整，仅供参考）：\n").append(RetrievalService.truncateCodepoints(partial.value(), 400));
+            }
+        }
+        return new RetryState(context.toString(), activities);
+    }
+
+    private void assertCurrentRequest(String requestId) {
+        try { turns.assertCurrentRequest(requestId); }
+        catch (SQLException error) { throw reject(503, "STORAGE_UNAVAILABLE", "重试状态暂时读不到", Map.of()); }
     }
 
     /**
@@ -737,6 +806,7 @@ public class ChatTurnService {
         try {
             Optional<TurnRow> found = turns.findByRequestId(requestId);
             if (found.isPresent()) return found.get();
+            turns.assertCurrentRequest(requestId);
             // 查无此 ID：只接受 24 小时内、且不比服务器时间超前 5 分钟的 ID（§7.2.2）
             UuidV7.Freshness freshness = UuidV7.freshness(requestId, System.currentTimeMillis());
             throw switch (freshness) {
@@ -802,7 +872,7 @@ public class ChatTurnService {
 
     private String requestMeta(BeginInput input, ChatSessionMetadataRepository.State state, String fingerprint,
                                List<Map<String, Object>> attachmentBlocks,
-                               ChatMessageCipher.Encrypted attachmentKey) {
+                                ChatMessageCipher.Encrypted attachmentKey, RetryState retry) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("schemaVersion", 2);
         meta.put("protocolVersion", input.protocolVersion());
@@ -817,6 +887,7 @@ public class ChatTurnService {
         if (attachmentKey != null) {
             meta.put("attachmentKey", Map.of("cipher", attachmentKey.cipher(), "meta", attachmentKey.meta()));
         }
+        if (retry.context() != null) meta.put("retryContext", retry.context());
         return serializeRequestMeta(meta);
     }
 

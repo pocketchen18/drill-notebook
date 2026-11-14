@@ -12,6 +12,7 @@ import type { OriginalTurnInput } from '../hooks/useAiChatTurn';
 import type { AssistantDraftDocument } from '../lib/assistantDrafts';
 import type { Connections } from './ai-connections/types';
 import { prepareForRestart } from '../lib/updatePreparation';
+import type { StreamCallbacks } from '../lib/aiStream';
 
 /** v0.8 助手窗口框架：会话栏、绑定页面、实际模型与用量、回到最新、窗口快捷键与详情栏。 */
 const { apiGet, apiPost, apiPut, streamChatMock } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: vi.fn(), streamChatMock: vi.fn() }));
@@ -22,9 +23,9 @@ vi.mock('../lib/api', async (original) => ({ ...await original<typeof import('..
 const day = 86400000;
 const iso = (offset: number): string => new Date(Date.now() - offset).toISOString();
 const sessions: AiChatSession[] = [
-  { id: 10, title: '导数与连续性', updatedAt: iso(60000), messageCount: 4, sessionLink: 'drill-notebook://session/' + 'a'.repeat(32), modelConfigId: null, reasoningEffort: null },
-  { id: 11, title: '积分换元法', updatedAt: iso(3 * day), messageCount: 2, sessionLink: 'drill-notebook://session/' + 'b'.repeat(32) },
-  { id: 12, title: '英语长难句', updatedAt: iso(40 * day), messageCount: 6, sessionLink: 'drill-notebook://session/' + 'c'.repeat(32) }
+  { id: 10, title: '导数与连续性', updatedAt: iso(60000), messageCount: 4, sessionLink: 'drill-notebook://session/' + 'a'.repeat(32), modelConfigId: 'm1', reasoningEffort: null, modelChoiceRevision: 1 },
+  { id: 11, title: '积分换元法', updatedAt: iso(3 * day), messageCount: 2, sessionLink: 'drill-notebook://session/' + 'b'.repeat(32), modelConfigId: 'm1', reasoningEffort: null, modelChoiceRevision: 1 },
+  { id: 12, title: '英语长难句', updatedAt: iso(40 * day), messageCount: 6, sessionLink: 'drill-notebook://session/' + 'c'.repeat(32), modelConfigId: 'm1', reasoningEffort: null, modelChoiceRevision: 1 }
 ];
 const history = { sessionId: 10, historyRevision: 3, hasMore: false, limit: 50, totalRounds: 2, firstRound: 1, messages: [
   { id: 1, role: 'user', content: '讲解当前这页', requestId: 'r1', readable: true, turnStatus: 'COMPLETED', page: { title: '笔记 · 导数的定义', link: 'drill-notebook://material/note/7' } },
@@ -215,6 +216,30 @@ describe('会话栏', () => {
 });
 
 describe('助手窗口框架', () => {
+  it('回答中的来源链接交给默认浏览器，保留当前会话和未发送草稿', async () => {
+    const url = 'https://www.nvidia.com/en-us/about-nvidia/leadership/';
+    const openExternal = vi.fn().mockResolvedValue(undefined);
+    const originalGet = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((target: string) => target.startsWith('/api/ai/sessions/10/history')
+      ? Promise.resolve({ ...history, messages: history.messages.map(item => item.id === 2
+        ? { ...item, content: `来源：[NVIDIA Management Team](${url})` } : item) })
+      : originalGet(target));
+    Object.defineProperty(window, 'api', { value: { shell: { openExternal } }, configurable: true });
+    try {
+      mount();
+      const link = await screen.findByRole('link', { name: 'NVIDIA Management Team' });
+      const input = document.querySelector<HTMLTextAreaElement>('.ai-drawer-compose textarea')!;
+      fireEvent.change(input, { target: { value: '我还没有发送的追问' } });
+      expect(link).toHaveAttribute('title', url);
+      fireEvent.click(link);
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith(url);
+      expect(input).toHaveValue('我还没有发送的追问');
+      expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('导数与连续性');
+      expect(screen.getByTestId('loc')).toHaveTextContent(/^\/$/);
+      expect(streamChatMock).not.toHaveBeenCalled();
+    } finally { cleanup(); Reflect.deleteProperty(window, 'api'); }
+  });
+
   it('提问下显示提交时的页面，回答显示实际模型、档位与累计用量，可复制', async () => {
     mount();
     expect(await screen.findByText('可导一定连续。')).toBeInTheDocument();
@@ -280,35 +305,64 @@ describe('助手窗口框架', () => {
     await waitFor(() => expect(hiddenSide()).not.toBeVisible());
   });
 
-  it('输入区选择全局保存，切换会话、新建会话和重启后仍使用同一模型与档位', async () => {
+  it('每个会话独立保存模型和供应商，新会话继承最近选择，重启恢复各自选择', async () => {
     let saved = connections();
+    saved.providers.push({ ...saved.providers[0], id: 'p2', name: '另一供应商', models: [{ ...saved.providers[0].models[0], id: 'm3', modelId: 'other-chat' }] });
+    let storedSessions = sessions.map(session => ({ ...session }));
     const base = apiGet.getMockImplementation()!;
-    apiGet.mockImplementation((url: string) => url === '/api/ai/connections' ? Promise.resolve(saved) : base(url));
-    apiPut.mockImplementation(async (_url: string, choice: { modelConfigId: string; reasoningEffort: string | null }) => {
+    apiGet.mockImplementation((url: string) => url === '/api/ai/connections' ? Promise.resolve(saved)
+      : url === '/api/ai/sessions' ? Promise.resolve(storedSessions) : base(url));
+    apiPut.mockImplementation(async (_url: string, choice: { sessionId?: number; modelConfigId: string; reasoningEffort: string | null }) => {
       saved = { ...saved, revision: saved.revision + 1, chatModelId: choice.modelConfigId, chatReasoningEffort: choice.reasoningEffort };
-      return saved;
+      if (choice.sessionId === undefined) return saved;
+      storedSessions = storedSessions.map(session => session.id === choice.sessionId ? { ...session,
+        modelConfigId: choice.modelConfigId, reasoningEffort: choice.reasoningEffort, modelChoiceRevision: session.modelChoiceRevision! + 1 } : session);
+      const session = storedSessions.find(item => item.id === choice.sessionId)!;
+      return { ...saved, sessionChoice: { sessionId: session.id, modelConfigId: session.modelConfigId,
+        reasoningEffort: session.reasoningEffort, revision: session.modelChoiceRevision } };
     });
     const view = mount();
     await screen.findByText('可导一定连续。');
     fireEvent.click(await screen.findByRole('button', { name: '模型：deepseek-chat' }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: /deepseek-reasoner/ }));
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/connections/chat-model', { modelConfigId: 'm2', reasoningEffort: null, revision: 1 }));
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/api/ai/connections/chat-model', { sessionId: 10, modelConfigId: 'm2', reasoningEffort: null, revision: 1 }));
     expect(await screen.findByRole('button', { name: '模型：deepseek-reasoner' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '思考档位：模型默认' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法'));
-    expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('新会话'));
     fireEvent.click(screen.getByRole('button', { name: '思考档位：模型默认' }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'high' }));
-    await waitFor(() => expect(apiPut).toHaveBeenLastCalledWith('/api/ai/connections/chat-model', { modelConfigId: 'm2', reasoningEffort: 'high', revision: 2 }));
+    await waitFor(() => expect(apiPut).toHaveBeenLastCalledWith('/api/ai/connections/chat-model', { sessionId: 10, modelConfigId: 'm2', reasoningEffort: 'high', revision: 2 }));
     await waitFor(() => expect(screen.getByRole('button', { name: '思考档位：high' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法'));
+    expect(screen.getByRole('button', { name: '模型：deepseek-chat' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: '思考档位：high' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '模型：deepseek-reasoner' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /other-chat/ }));
+    await waitFor(() => expect(apiPut).toHaveBeenLastCalledWith('/api/ai/connections/chat-model', { modelConfigId: 'm3', reasoningEffort: null, revision: 3 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：other-chat' })).toBeEnabled());
     expect(apiPut.mock.calls.every(call => call[0] === '/api/ai/connections/chat-model')).toBe(true);
     expect(apiPost).not.toHaveBeenCalledWith('/api/ai/sessions', expect.anything());
     view.unmount(); mount();
     expect(await screen.findByRole('button', { name: '模型：deepseek-reasoner' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '思考档位：high' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：other-chat' })).toBeEnabled());
+  });
+
+  it('换模型保存期间切到另一会话，迟到结果只更新原会话', async () => {
+    const pending = deferred<Connections>(); apiPut.mockReturnValueOnce(pending.promise);
+    mount(); await screen.findByText('可导一定连续。');
+    fireEvent.click(screen.getByRole('button', { name: '模型：deepseek-chat' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /deepseek-reasoner/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^积分换元法 2 条消息/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('积分换元法'));
+    await act(async () => pending.resolve({ ...connections(), revision: 2, chatModelId: 'm2',
+      sessionChoice: { sessionId: 10, modelConfigId: 'm2', reasoningEffort: null, revision: 2 } }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：deepseek-chat' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^导数与连续性 4 条消息/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型：deepseek-reasoner' })).toBeEnabled());
   });
 
   it('选择保存期间不提交消息，失败保留原模型和输入，重试成功后再生效', async () => {
@@ -386,7 +440,7 @@ describe('重新生成回答', () => {
     { clientId: 'c1', kind: 'image', name: '原截图.png', mimeType: 'image/png', dataBase64: 'AAAA' }
   ] } };
 
-  it('圆形箭头重发原提问与附件，沿用轮次回执，保留原回答和输入草稿', async () => {
+  it('圆形箭头在较早的原回答位置重试，沿用完整原输入，提问数量与草稿不变', async () => {
     const base = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input' ? Promise.resolve(original) : base(url));
     mount();
@@ -410,8 +464,39 @@ describe('重新生成回答', () => {
     expect(body.requestId).not.toBe('r1');
     expect(input).toHaveValue('接着问的草稿');
     expect(screen.getByText('草稿附件.txt')).toBeInTheDocument();
+    expect(screen.queryByText('可导一定连续。')).toBeNull();
+    expect(screen.getByText('例如绝对值函数。')).toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-message.user')).toHaveLength(2);
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(2);
+    const callbacks = streamChatMock.mock.calls[0][2] as StreamCallbacks;
+    act(() => { callbacks.onMetadata?.({ requestId: body.requestId }); callbacks.onText('原位置的新回答'); });
+    const rows = [...document.querySelectorAll('.chat-message')];
+    expect(rows.map(row => row.getAttribute('data-conversation-message'))).toEqual(['1', '2', '3', '4']);
+    expect(rows[1]).toHaveTextContent('原位置的新回答');
+    expect(rows[3]).toHaveTextContent('例如绝对值函数。');
+    await act(async () => callbacks.onDone({ requestId: body.requestId, sessionId: 10, reply: '原位置的新回答', reasoning: '', status: 'COMPLETED', stateDurable: true, persistenceStatus: 'saved' }));
+    expect(document.querySelectorAll('.chat-message.user')).toHaveLength(2);
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(2);
+    expect(screen.queryByText(/请继续完成上一轮尚未完成的任务/)).toBeNull();
+  });
+
+  it('重试尚未开始就被拒绝时保留原回答，之后仍能重试原提问', async () => {
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/r1/input' ? Promise.resolve(original)
+      : url.startsWith('/api/ai/turns/') ? Promise.reject(new ApiError('TURN_NOT_FOUND', '本次重试尚未开始', 404)) : base(url));
+    apiPost.mockRejectedValue(new ApiError('HISTORY_STORAGE_FULL', '历史容量不足', 409));
+    mount(); await screen.findByText('可导一定连续。');
+    fireEvent.click(screen.getAllByRole('button', { name: '重新生成' })[0]);
+    await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(1));
+    const callbacks = streamChatMock.mock.calls[0][2] as StreamCallbacks;
+    await act(async () => callbacks.onError({ message: '历史容量不足', partial: false }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '重新生成' })[0]).toBeEnabled());
     expect(screen.getByText('可导一定连续。')).toBeInTheDocument();
-    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(3);
+    expect(document.querySelectorAll('.chat-message.user')).toHaveLength(2);
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: '重新生成' })[0]);
+    await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(2));
+    expect(streamChatMock.mock.calls[1][1]).toMatchObject({ retryOf: 'r1', input: original.input });
   });
 
   it('连续点击只读取和发送一次，准备与生成期间不能另开一轮', async () => {

@@ -96,8 +96,7 @@ public class MaterialUpdateService {
             }
             var sameContent = jdbc.queryForList("SELECT result_version,outcome FROM ai_material_update WHERE request_id=? AND fingerprint=? AND session_id=? AND result_version IS NOT NULL LIMIT 1", request, fingerprint, session);
             if (!sameContent.isEmpty()) return new Receipt((String)sameContent.get(0).get("result_version"), (String)sameContent.get(0).get("outcome"));
-            var prior = jdbc.query("SELECT retry_of FROM ai_chat_turn WHERE request_id=? AND session_id=?", (row,index) -> row.getString(1), request, session);
-            request = prior.isEmpty() ? null : prior.get(0);
+            request = com.drillnotebook.app.repository.ChatTurnRepository.retryParent(jdbc, request, session);
         }
         if (request != null) throw new Failure("STALE");
         return null;

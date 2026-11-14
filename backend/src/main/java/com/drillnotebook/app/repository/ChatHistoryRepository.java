@@ -748,10 +748,12 @@ public class ChatHistoryRepository {
                 }
             }
             // 一轮可能有多次模型请求：这里是各次实测值的累计，不是一次请求的上下文长度。
-            try (PreparedStatement statement = connection.prepareStatement("SELECT a.operation_id, COUNT(*), SUM(a.input_tokens), SUM(a.output_tokens)"
-                    + " FROM ai_usage_attempt a JOIN ai_chat_turn t ON t.request_id = a.operation_id"
+            try (PreparedStatement statement = connection.prepareStatement("SELECT t.request_id, COUNT(*), SUM(a.input_tokens), SUM(a.output_tokens)"
+                    + " FROM ai_chat_turn t JOIN (SELECT request_id, id AS turn_id FROM ai_chat_turn"
+                    + " UNION ALL SELECT request_id, turn_id FROM ai_chat_retry_receipt) r ON r.turn_id = t.id"
+                    + " JOIN ai_usage_attempt a ON a.operation_id = r.request_id"
                     + " WHERE t.session_id = ? AND a.purpose = 'CHAT' AND a.usage_source = 'provider' AND a.state = 'SETTLED'"
-                    + " AND a.operation_id IN (" + marks + ") GROUP BY a.operation_id")) {
+                    + " AND t.request_id IN (" + marks + ") GROUP BY t.request_id")) {
                 statement.setLong(1, sessionId);
                 int index = 2;
                 for (String id : requestIds) statement.setString(index++, id);

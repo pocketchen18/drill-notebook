@@ -111,6 +111,25 @@ public class ChatContextAssembler {
                 rag.hits(), List.copyOf(textAttachments), List.copyOf(currentImages), input.userText(), notices);
     }
 
+    /** 重试状态放在现有会话状态预算中，不追加提问或把旧回答混入真实对话历史。 */
+    public Draft withRetryState(Draft draft, String requestId, String text, ContextAudit.Builder audit) {
+        if (text == null || text.isBlank()) return draft;
+        int tokens = estimator.estimateText(text);
+        if (tokens > SESSION_STATE_BUDGET) {
+            audit.omit(ContextAudit.Omission.BUDGET, "RESUME_STATE", 1);
+            return draft;
+        }
+        Item summary = draft.summary();
+        if (summary != null && summary.estimatedTokens() + tokens > SESSION_STATE_BUDGET) {
+            String reduced = SessionSummaryRenderer.reduce(summary.text(), SESSION_STATE_BUDGET - tokens, estimator);
+            summary = reduced.isBlank() ? null : new Item(summary.kind(), summary.id(), summary.version(), summary.sourceTurnId(),
+                    reduced, estimator.estimateText(reduced));
+        }
+        return new Draft(draft.systemText(), summary, new Item("RESUME_STATE", requestId, "RETRY", null, text, tokens),
+                draft.memories(), draft.recentTurns(), draft.pageParts(), draft.ragExcerpts(), draft.ragHits(),
+                draft.textAttachments(), draft.currentImages(), draft.userText(), draft.notices());
+    }
+
     private Item buildSummary(ConversationProjection.Projection projection, ContextAudit.Builder audit) {
         ConversationProjection.SummaryView summary = projection.summary();
         if (summary == null || summary.modelSummary().isBlank()) return null;

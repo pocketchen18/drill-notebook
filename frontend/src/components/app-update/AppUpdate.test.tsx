@@ -108,7 +108,8 @@ describe('逐版本更新内容', () => {
     expect(screen.queryByRole('button', { name: /^显示的更新说明/ })).toBeNull(); expect(screen.queryByText('v0.7.3 的说明')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '立即更新' })); expect(api.install).toHaveBeenCalledWith('0.8.0');
     fireEvent.click(screen.getByRole('button', { name: '跳过此版本' })); expect(api.skip).toHaveBeenCalledWith('0.8.0');
-    const links = screen.getAllByRole('link', { name: '项目链接' }); fireEvent.click(links[0]); expect(openExternal).toHaveBeenCalled();
+    const links = screen.getAllByRole('link', { name: '项目链接' }); fireEvent.click(links[0]);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/qilin-software/drill-notebook');
   });
   it('加载失败保留同范围缓存并允许重试，空正文不虚构说明', async () => {
     api.notes = vi.fn(async range => ({ range, releases: [{ ...release('0.7.3'), body: '' }], cached: true, error: '网络不可用' }));

@@ -53,7 +53,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 
 会话导航由 `components/ai-session/SessionNavigation` 维护停靠在助手窗口会话栏的列表（另保留浮动列表形态）、固定目标 ID 的菜单、重命名草稿和确认；`AiAssistant` 负责缓存与聊天切换。复制/导出子菜单独立 portal，窄视口点击进入返回式布局，避免悬停替换导致误触。标题生成由后端 `AiSessionTitleService` 有界后台执行；会话列表每 1.5 秒刷新以发现后台新会话和标题变化，自动标题不进入聊天正文或工具活动，也不使用聊天运行圆环。
 
-跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行五个记忆工具、五个会话工具、六个资料读取工具及资料新增 / 修改 / 删除 / 错题移出四个工具，`MemoryTool` 子接口仍受记忆开关控制。全部 20 个工具受独立全局开关管理，非删除默认开启，四个删除默认关闭且不提供给派发任务。每轮提供工具前读取配置，执行前复核；存储异常暂时关闭工具，不能重启被用户关闭的能力。设置页按学习资料 / 记忆 / 会话 / 删除分组，即点即存并可恢复默认。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
+跨会话查阅由 `SessionListTool/SessionReadTool` → `SessionLookupService` → `SessionLookupRepository` 完成，直接查询现有 SQLite 并按目标会话材料解密，不依赖记忆索引。列表按标题筛选/ID 分页；正文以版本绑定游标分段，复核删除/换代。`AiService.ChatTool` 统一运行五个记忆工具、五个会话工具、六个资料读取工具、资料新增 / 修改 / 删除 / 错题移出四个工具，以及 v0.8.2 的两个联网工具；`MemoryTool` 子接口仍受记忆开关控制。全部 22 个工具受独立全局开关管理，18 个非删除默认开启，4 个删除默认关闭且不提供给派发任务。每轮提供工具前读取配置，执行前复核；存储异常暂时关闭工具，不能重启被用户关闭的能力。设置页按联网 / 学习资料 / 记忆 / 会话 / 删除分组，即点即存并可恢复默认。回复中的本地链接由 Markdown 渲染器严格识别，`SessionReferencePreview` 复用历史分页做只读预览，保持主聊天与草稿；资料链接导航至普通业务页面。
 
 `useAiChatTurn` 按 sessionId 跟踪请求，每 900ms 查询运行快照；SSE 负责当前本地发送的增量，快照恢复切换、外部工具启动和断线后的正文。每个会话独立保存本次前端生命周期内的草稿、附件与阅读位置。忙碌时普通发送进入队列，`useChatQueue` 与 `ChatQueue` 管理贴边待发区、编辑、移除撤销、暂停继续和插话；输入草稿与待发项隔离。运行圆环、暂停、待发送数量和停止均按目标会话展示，临时失联显示重连状态。
 
@@ -92,10 +92,10 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 | 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
-| AI | 多供应商与模型、助手全局模型选择与导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
+| AI | 多供应商与模型、各会话独立选模与新会话继承、导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
-当前 schema 18，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
+当前 schema 19，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
 
 ### 3.1 AI 连接、轮次与工具（v0.7.1）
 
@@ -104,7 +104,9 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - 模型发现与验证使用后端代理；最多三个模型并发验证，各模型的文本、图片与工具请求分别记录。文本决定是否加入，工具验证成功才自动开启对应能力。配置版本用于避免旧验证覆盖后续编辑。
 - 对话工具循环按阶段、执行次数、输出额度、单请求/整轮期限和重复无进展共同约束；达限停止新工具并尽量总结。上游请求可取消，SSE 有心跳；正文与活动独立传递，「继续」建立新一轮。
 - 活动按 `requestId` 与轮内 `sequence` 关联，服务端只发白名单摘要，不暴露上游调用 ID；原始参数与工具结果不入 SSE、日志或历史。安全活动元数据随助手消息加密持久化，检查点不推进 `history_revision`，避免使本轮冻结计划失效。
-- `AiToolSettingsRepository` 持久化全局删除开关；`AiService` 在轮次开始过滤，在执行前重新读取防止已关闭项继续运行。工具派发通过 `SessionExecution.delegated` 禁用删除能力。`AiToolSettingsPanel` 提供「工具」Tab 的即存开关、失败回退与恢复默认，其他工具和搜索设置尚未开放。
+- `AiToolSettingsRepository` 持久化全部工具的独立全局开关；`AiService` 在轮次开始过滤，在执行前重新读取防止已关闭项继续运行。工具派发通过 `SessionExecution.delegated` 禁用删除能力。`AiToolSettingsPanel` 提供即存开关、失败回退与恢复默认；`WebSearchSettingsPanel` 的服务 / 密钥草稿独立保存，原生优先即点即存。助手 `WebSearchButton` 一次原子修改 search / fetch 权限，沿用窗口失效消息同步，旧 GET 不覆盖新确认的 revision。
+- `SearchWebTool/FetchWebTool` → `WebSearchService` → `WebProviders/LocalWebFetcher` 接入默认 Exa → Tavily 搜索与本地正文优先读取，只为缺失 URL 尝试远程服务。固定官方接口经 OkHttp / jsoup 处理；公开 IP、连接时 DNS 与重定向逐次验证，响应 / 解压 / 结果与 10 秒尝试、20 秒工具总时限有界。限流冷却只在内存中，配置密钥加密进入 `ai_web_settings`，不新增外部运行时或系统落点。
+- `NativeWebCapabilities` 按官方端点、协议与明确型号提供安全能力元数据；原生优先默认关闭。Anthropic 使用 Messages search / fetch，OpenAI 使用同一受理模型的隔离 Responses search；只发送必要查询 / URL，额外请求复用阶段 / 输出 / 时间 / 停止、并发许可与 `ai_usage_attempt` 账本。实际服务与白名单失败路径进入现有工具活动，未知能力使用所选服务，已支持的原生调用失败不重复向另一家服务发出。矩阵与测试边界见[联网规格](../work/web-search/spec.md)及 [QA](../work/web-search/qa.md)。
 - 前端连接页使用供应商/模型列表与二级编辑页；`ToolActivityGroup` 展示、折叠活动，保留用户手动选择和滚动位置。失败轮次提示归属助手回复；正文流式更新不强制打断向上阅读。
 - 记忆词法索引以 vault、epoch、revision 判定是否可复用，同版本构建合并、解锁时异步预热；聊天模型不参与索引身份。实际记忆变更或重启后的预热仍可能需要时间，不承诺零延迟。
 - 删除来源会话/历史只清理来源证据，长期记忆及原 origin 保留；删除笔记本仍清理所属 NOTEBOOK scope。接口与安全边界见 [api-contracts.md](api-contracts.md)。
@@ -130,12 +132,13 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
 - 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。搜索片段足够时直接引用，需要上下文再按 ID 读取，不重复自动注入整页。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)，本次检索验证见[v0.8.2 清单](v0.8.2-features.md)。
 
-### 3.3 失败恢复、会话内定位与模型选择（v0.8.1）
+### 3.3 失败恢复、会话内定位与模型选择（v0.8.1，含 v0.8.2 修正）
 
-- `AiConnectionsStore.State` 在现有便携数据库 JSON 中保存助手全局模型与档位；`AiConnectionsService.selectChatModel` 使用 revision 和原记忆授权事务，配置编辑与导入绑定保留选择。助手只读数据库选择，旧会话 / 草稿选择不参与派发；受理时冻结模型，后续改选不影响既有任务。
+- `AiConnectionsStore.State` 在便携数据库 JSON 中保存新会话继承的最近模型与档位；各已有会话使用 `ai_chat_session.model_config_id/reasoning_effort`。`AiConnectionsService.selectChatModel` 按 sessionId 在同一事务中保存该会话、新会话默认与原记忆授权，不改其它会话。旧空选择只初始化一次；助手按独立 modelChoiceRevision / titleRevision 合并迟到响应，草稿 choice 不覆盖数据库。直接请求、排队受理、手动标题与上下文占用使用目标会话模型，运行和队列快照不随后续改选变化。
 - `AiRetrySettings` 嵌入全局 `AiRuntimeSettings`，沿用 `ai_runtime_settings` 的 JSON 与 revision；旧文档缺项补默认，旧客户端保存保留已有重试偏好。配置随受理时快照冻结，不新增 schema 或模型专属预算。
 - `AiUpstreamException` 统一 HTTP / SSE / 传输错误及脱敏正文、服务端等待截止时刻；`AiRetryPolicy` 分别管理请求、流式和纯连接失败计数；普通请求和流式恢复从 400ms 起翻倍并抖动，断网保留独立的 5 秒起步策略。`AiService` 在原轮次内等待 / 重发，保持原模型、整轮预算、部分回答与已确认工具上下文；未完整终止的工具调用不执行，交付未知插话不重放。两类协议的断流恢复通过同模型请求续答完成，没有原流续传协议。
 - `AiRecovery` 作为安全状态在 metadata、终态、轮次 / runtime 查询和加密历史之间传递。`RecoveryFeedback` 只在原助手回答处显示真实次数、一次报错和倒计时；停止 / 失败保留事实，成功清除。零正文的恢复失败也保存加密空助手消息，刷新不丢原因。
+- 手动重试经 `ChatTurnService` 核对完整原输入，`ChatTurnRepository.restart` 以一个事务复用原 turn / user / assistant ID，按净增量预留、重加密附件并更新原回答。schema 20 的 `ai_chat_retry_receipt` 保存旧请求与回执链，旧 ID 被拦截并指向最新尝试；覆盖该轮的派生状态失效。`ChatContextAssembler` 以原轮为截止点，前端按稳定消息身份原位合并并只刷新驻留窗口；导航轮次数量和提问时间不变。
 - `ChatHistoryRepository` 对已有用户消息计数并查询轮次对应 ID；`ChatHistoryService` 提供有界预览及 history 的 totalRounds / firstRound / hasOlder。`useChatHistoryPages` 按目标加载阅读窗口，50 条一页、最多 500 条驻留，回到最新恢复最新窗口；请求身份和阅读锚点保护会话切换、定稿与迟到响应。
 - `ConversationNavigation` 使用正文右侧单一键盘定位控件，最多 64 个连续刻度，矮窗按高度减少；非 passive 滚轮翻阅窗口并阻止正文滚动。静止短线、悬停邻近刻度渐长；整卡显示轮次 / 时间、两行粗体提问、三行浅色回答及 `...`。预览只读取已有消息，文字复制 / 引用或覆盖详情期间隐藏导航。
 

@@ -12,6 +12,7 @@ public record AiToolSettings(Map<String, Boolean> overrides) {
 
     /** 设置页的完整目录；模型能力与记忆授权仍在对话入口单独检查。 */
     public static final List<Tool> TOOLS = List.of(
+            new Tool("search_web", "web"), new Tool("fetch_web", "web"),
             new Tool("read_current_page", "material"), new Tool("search_materials", "material"),
             new Tool("read_notebook", "material"), new Tool("read_knowledge", "material"),
             new Tool("read_question_bank", "material"), new Tool("read_wrong_questions", "material"),

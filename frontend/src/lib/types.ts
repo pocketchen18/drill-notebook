@@ -194,6 +194,7 @@ export interface AiChatSession {
   modelConfigId?: string | null;
   /** 旧会话的思考档位元数据；v0.8.1 起不再参与派发。 */
   reasoningEffort?: string | null;
+  modelChoiceRevision?: number;
   tags?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -271,6 +272,8 @@ export interface ChatMessage {
    * 也靠它把徽标/检查器挂回正确的那一轮。legacy 行没有它。
    */
   requestId?: string;
+  /** 原地重试期间把新请求映射到原消息位置；只存在于前端临时状态。 */
+  retryOf?: string;
   /** 前端稳定 key：消息首次创建时分配，后续 refetch/合并复用，避免列表 remount 造成滚动抖动。 */
   _key?: string;
 }
