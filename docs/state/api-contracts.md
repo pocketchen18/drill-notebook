@@ -277,23 +277,28 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 同来源 requestId + toolCallId 幂等，输入改变拒绝；同文本的不同调用不去重。来源上下文已换代返回 STALE，向自身/祖先派发返回 CYCLE_BLOCKED。当前进程最多保留 64 项待处理任务，满时 LIMIT_REACHED；各模型请求最多 8 个同时外发，等待工具不占上游许可。
 - 仅当前用户的创建/委派/发送意图可授权写工具，历史引用和工具结果不能授权。成功受理只表示任务已提交；正常完成且未暂停时 FIFO 接续，停止/失败取消该目标的工具待发项，其他会话独立继续。工具派发在进程重启后不重放；人工队列按 §3.4.1 暂停恢复。
 
-#### 3.2.4 学习资料读取工具（v0.7.3）
+#### 3.2.4 学习资料读取工具（v0.7.3，v0.8.2 接入笔记混合检索）
 
 `protocolVersion=2` 且模型有效 `tools=true` 时提供六个只读工具；不依赖记忆启用或记忆索引。共用现有协议适配、活动记录、取消、全局执行预算及结果 64 KiB 上限。所有参数严格校验未知字段、重复键、类型和范围；参数最多 4096 UTF-8 字节。
 
 | 工具 | 定位参数与行为 |
 |---|---|
 | `read_current_page` | 默认读取本轮主消息提交时的快照；`requestId?` 可指定同轮已接收的插话快照，不读取其它轮次或系统桌面 |
-| `search_materials` | `type?=all\|notebook\|note\|knowledge\|bank\|question\|wrong`、`query?`、`notebookId?` 或 `bankId?`（不同时传）；空 query 浏览目录 |
+| `search_materials` | `type?=all\|notebook\|note\|knowledge\|bank\|question\|wrong`、`query?`、`searchMode?=hybrid\|keyword` 默认 hybrid、`notebookId?` 或 `bankId?`（不同时传）；空 query 浏览目录 |
 | `read_notebook` | 无 ID 列笔记本；`notebookId` 列页面；`pageId` 读取正文，若同时给 notebookId 则核对归属 |
 | `read_knowledge` | 无 pointId 列知识点，可按 bankId 筛选；`pointId` 读正文，`variant?=current\|original\|summary` 默认 current，缺失版本返回 NOT_FOUND |
 | `read_question_bank` | 无 ID 列题库；`bankId` 列题目；`questionId` 读题面、选项、答案、解析、章节等字段 |
 | `read_wrong_questions` | 无 questionId 分页列当前错题本，支持 bankId/query；`questionId` 必须仍属于错题本才可读正文，包含真实统计 |
 
 - 目录参数 `query?` 最多 200 码点、`offset?` 默认 0、`limit?` 默认 10 / 最大 20。返回 `{status,items,offset,hasMore,nextOffset?,incomplete}`；条目含 `type/id/title/parentId/parentTitle/parentPageId/snippet/sourceLink`，各字段可为空。笔记 `parentId` 是所属笔记本，`parentPageId` 是页面树父节点。错题额外返回 `attemptCount/wrongCount/errorRate`（0–1），沿用业务错题成员规则，不伪造统计。
+- `searchMode` 仅 `search_materials` 接受，非空查询时回显请求模式；不能仅据此判断向量实际参与。`hybrid` 只对非空的 `type=note/all` 且无 bankId 的查询接入笔记混合检索；有 notebookId 时限制在该笔记本。其它资料仍使用业务表关键词查询。空查询和明确 ID 读取不调用 embedding。
+- 混合搜索先保留字面匹配，再补充 BM25 / 向量经 RRF 排序的候选，按页面合并多块命中。词法与向量各最多 40 块，保留有界并集后再按页面去重；最终资料候选最多 80 项，offset/limit 在候选内分页。同名不同 ID 仍分别返回。`keyword` 只做参数化字面匹配，保留原有目录分页，适用于精确原文、名称、编号或符号。
+- 搜索中的笔记额外返回 `pageId/notebookId`；非空查询含 `matchTypes`（`keyword/bm25/vector` 的实际来源）。混合补充项可含最佳命中 `chunkId/headingPath`，不返回内部哈希。每个 snippet 最多 240 Unicode 码点，单页最多 4,800；同次调用中重复笔记片段保留全部来源定位，后续项的 snippet 为空并给出 `snippetDuplicateOf` 来源链接。
+- 混合候选池达到上限时 `searchLimited=true/incomplete=true`，notice 提示缩小范围或改用 keyword；`hasMore` 只表示当前候选还有可续页项，不能当作全库完整召回保证。向量未配置不附 notice；选中空间不健康、未就绪、重建 / 覆盖不足、provider 不匹配或异常 / 超时则使用 BM25，并附 `retrievalNotice:{code:"vector-index-unavailable",message}` 和 incomplete=true，不使工具因向量故障失败。返回前复核页面存在、当前归属与分块哈希。
+- 目录结果在共享 64 KiB 硬上限前使用 60 KiB 软预算；Unicode 元数据导致超量时减少条目并返回 `byteLimited=true/hasMore=true/incomplete=true`，nextOffset 依据实际返回数量推进，续页不丢项。片段足够时可直接引用，需要前后文才调用 ID 读取工具。
 - 正文使用 `offset?`、`maxChars?`（默认 4000 / 最大 8000 Unicode 码点）、`version?`；不接受 query/limit。返回单条 items，含定位字段、`text/version/offset/endOffset/totalChars`，顶层含 `version/hasMore/nextOffset?/incomplete`。offset > 0 必须带上次 version；版本变化返回 STALE，重新从 0 读取。目录不接受 maxChars/version/variant。offset 范围为 0–10,000,000。
 - 已保存的笔记、知识点 current、题目 / 错题正文额外返回 `updateVersion`，用于 §3.2.6 更新校验，与分页 `version` 区分。知识点 original / summary 与页面快照不提供更新版本。指定 notebookId / bankId 的目录返回 `container:{type,id,title,description?,sourceLink,updateVersion,truncated}`，即使目录为空也可取得容器信息；容器文本最多 2000 码点。
-- 笔记正文关键词使用现有 `retrieval_chunk` 文本的参数化 LIKE 查询；其它资料使用现有业务表。没有新增索引或资料副本，不提供语义排序。同名条目全部作为候选返回，后续读取用明确 ID。笔记正文保留公式、表格及嵌入题目快照；文件/视频/图片只提供引用或描述，不解析附件字节。
+- 笔记字面匹配使用现有 `retrieval_chunk` 文本的参数化 LIKE 查询，摘要优先取实际命中分块；混合查询复用既有 FTS5、embedding 空间与授权，不新增索引或资料副本。后续正文读取继续用明确 ID 与 version，保留公式、表格及嵌入题目快照；文件/视频/图片只提供引用或描述，不解析附件字节。完整范围与验证见[v0.8.2 清单](v0.8.2-features.md)。
 - `pageSnapshot` 字段为 `kind/title/route/capturedAt/markdown/selection/isDraft/truncated` 和可选 `pageId/notebookId/pointId/bankId/questionId/selectedIds`。kind 为 none/note/knowledge/bank/quiz/wrong/manual；时间为 ISO Instant；路由限应用业务路径。正文最多 32000、选区 2000、标题 200、路由 500 码点，selectedIds 最多 20 个正整数；超限前端截短并标 truncated，后端拒绝非法输入。返回明确采集时间、草稿和截断状态。数据库中的明确目标已删除返回 NOT_FOUND；空业务页返回空 text 与说明，缺快照返回 UNAVAILABLE。
 - 快照绑定提交，排队后切页不改变原目标；插话单独保存请求标识，默认读取仍是主消息。模型工具关闭时只提示尚未看到页面正文，不恢复整页自动注入。
 - 常见状态为 OK、NO_MATCH、NOT_FOUND、STALE、INVALID_ARGUMENT、UNAVAILABLE；失败返回空 items 与 incomplete=true，不泄露底层异常。hasMore 控制续读，incomplete 也可表示提交时已截断。

@@ -1,17 +1,22 @@
 package com.drillnotebook.app.service;
 
 import com.drillnotebook.app.repository.MaterialReadRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.text.Normalizer;
 import java.util.*;
 import org.springframework.stereotype.Service;
 
 @Service
 public class MaterialReadService {
+    private static final int MAX_LIST_BYTES = 60 * 1024;
     private final MaterialReadRepository materials;
     private final MaterialText text;
-    public MaterialReadService(MaterialReadRepository materials, ObjectMapper json) {
-        this.materials = materials; this.text = new MaterialText(json);
+    private final MaterialSearchService search;
+    private final ObjectMapper json;
+    public MaterialReadService(MaterialReadRepository materials, ObjectMapper json, MaterialSearchService search) {
+        this.materials = materials; this.text = new MaterialText(json); this.search = search; this.json = json;
     }
 
     public Map<String, Object> execute(String name, JsonNode args, AiService.ToolInvocation invocation) {
@@ -95,11 +100,21 @@ public class MaterialReadService {
             if (!Set.of("all", "notebook", "note", "knowledge", "bank", "question", "wrong").contains(type)) throw new IllegalArgumentException();
             if (notebook != null && !Set.of("all", "notebook", "note").contains(type)
                     || bank != null && Set.of("notebook", "note").contains(type)) throw new IllegalArgumentException();
-            var rows = materials.list(type, query, notebook, bank, null, offset, limit + 1);
-            boolean more = rows.size() > limit;
+            String mode = string(args, "searchMode", "hybrid", 10);
+            if (!Set.of("hybrid", "keyword").contains(mode)) throw new IllegalArgumentException();
+            boolean hybridSearch = "search_materials".equals(name) && !query.isBlank()
+                    && "hybrid".equals(mode) && bank == null && Set.of("all", "note").contains(type);
+            var page = hybridSearch ? search.search(type, query, notebook, offset, limit) : null;
+            var rows = page == null ? materials.list(type, query, notebook, bank, null, offset, limit + 1) : page.rows();
+            boolean more = page == null ? rows.size() > limit : page.hasMore();
             var items = rows.stream().limit(limit).map(raw -> {
                 var row = new LinkedHashMap<>(raw);
+                row.put("snippet", searchSnippet(Objects.toString(row.get("snippet"), ""), query));
                 row.put("sourceLink", link((String) row.get("type"), ((Number) row.get("id")).longValue()));
+                if ("search_materials".equals(name) && "note".equals(row.get("type"))) {
+                    row.put("notebookId", row.get("parentId")); row.put("pageId", row.get("id"));
+                    if (!query.isBlank()) row.putIfAbsent("matchTypes", List.of("keyword"));
+                }
                 if ("wrong".equals(row.get("type"))) row.putAll(stats(row));
                 else row.keySet().removeAll(Set.of("wrongCount", "attemptCount"));
                 return row;
@@ -107,6 +122,15 @@ public class MaterialReadService {
             var result = new LinkedHashMap<String, Object>();
             result.put("status", items.isEmpty() ? "NO_MATCH" : "OK"); result.put("items", items);
             result.put("offset", offset); result.put("hasMore", more); result.put("incomplete", more);
+            if ("search_materials".equals(name) && !query.isBlank()) result.put("searchMode", mode);
+            if (page != null) {
+                result.put("incomplete", more || page.limited() || page.retrievalNotice() != null);
+                if (page.retrievalNotice() != null) result.put("retrievalNotice", page.retrievalNotice());
+                if (page.limited()) {
+                    result.put("searchLimited", true);
+                    result.put("notice", "搜索候选有上限；可缩小笔记本范围、细化查询，精确查找可使用 searchMode=keyword 分页。");
+                }
+            }
             if ("read_notebook".equals(name) && notebook != null || "read_question_bank".equals(name) && bank != null) {
                 String containerType = notebook != null ? "notebook" : "bank";
                 long containerId = notebook != null ? notebook : bank;
@@ -119,9 +143,23 @@ public class MaterialReadService {
                 result.put("container", container);
             }
             if (more) result.put("nextOffset", offset + items.size());
-            return result;
+            return boundList(result, items, offset);
         } catch (IllegalArgumentException error) { return error("INVALID_ARGUMENT"); }
         catch (RuntimeException error) { return error("UNAVAILABLE"); }
+    }
+
+    /** Unicode metadata can exceed the shared byte limit before the item/character caps. */
+    private Map<String, Object> boundList(Map<String, Object> result, List<? extends Map<String, Object>> items, int offset) {
+        var bounded = new ArrayList<>(items);
+        result.put("items", bounded);
+        try {
+            while (json.writeValueAsBytes(result).length > MAX_LIST_BYTES && bounded.size() > 1) {
+                bounded.remove(bounded.size() - 1);
+                result.put("hasMore", true); result.put("incomplete", true); result.put("byteLimited", true);
+                result.put("nextOffset", offset + bounded.size());
+            }
+            return result;
+        } catch (JsonProcessingException error) { return error("UNAVAILABLE"); }
     }
 
     private Map<String, Object> content(Map<String, Object> source, String body, int offset, int max,
@@ -153,6 +191,9 @@ public class MaterialReadService {
     }
     static String link(String type, long id) { return "drill-notebook://material/" + type + "/" + id; }
     static String clip(String value, int max) { return RetrievalService.truncateCodepoints(value, max); }
+    static String searchSnippet(String value, String query) {
+        return RetrievalService.buildSnippet(value, Normalizer.normalize(query, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT));
+    }
     static Map<String, Object> error(String status) { return Map.of("status", status, "items", List.of(), "incomplete", true); }
     private static Long id(JsonNode args, String key) { return args.has(key) ? SessionToolArguments.number(args, key, 0, Long.MAX_VALUE) : null; }
     private static int number(JsonNode args, String key, int fallback, int min, int max) {

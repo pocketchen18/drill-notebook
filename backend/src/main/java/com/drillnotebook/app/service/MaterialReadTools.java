@@ -31,13 +31,17 @@ public class MaterialReadTools {
             default -> List.of();
         };
         for (String id : ids) properties.put(id, Map.of("type","integer","minimum",1,"description","使用当前页面或目录/查找结果的明确 ID。"));
-        if (!"read_current_page".equals(name)) properties.put("query", Map.of("type","string","maxLength",200,"description","可选关键词，空字符串浏览目录；读取明确 ID 正文时不要传。"));
-        if ("search_materials".equals(name)) properties.put("type", Map.of("type","string","enum",List.of("all","notebook","note","knowledge","bank","question","wrong"),"description","默认 all；notebookId/bankId 限定范围，二者不同时传。"));
+        if (!"read_current_page".equals(name)) properties.put("query", Map.of("type","string","maxLength",200,"description",
+                "search_materials".equals(name) ? "笔记可用自然语言查询或关键词；空字符串浏览目录。" : "可选关键词，空字符串浏览目录；读取明确 ID 正文时不要传。"));
+        if ("search_materials".equals(name)) {
+            properties.put("type", Map.of("type","string","enum",List.of("all","notebook","note","knowledge","bank","question","wrong"),"description","默认 all；notebookId/bankId 限定范围，二者不同时传。"));
+            properties.put("searchMode", Map.of("type","string","enum",List.of("hybrid","keyword"),"description","默认 hybrid：笔记 BM25 + 可选向量融合，字面匹配优先；精确名称、编号、原文或符号用 keyword，只做字面匹配。其它资料仍按关键词查找。"));
+        }
         if ("read_knowledge".equals(name)) properties.put("variant", Map.of("type","string","enum",List.of("current","original","summary"),"description","指定 pointId 时可选，默认 current；缺失原文或总结返回 NOT_FOUND。"));
         if ("read_current_page".equals(name)) properties.put("requestId", Map.of("type","string","maxLength",36,"description","省略读取主消息提交时的页面；读取插话页面时使用该插话的 requestId。"));
         String description = switch(name) {
             case "read_current_page" -> "读取用户提交消息时的主业务页面快照，含选中内容、采集时间和草稿标识。不是读取桌面或聊天框。切页不改变本消息目标。";
-            case "search_materials" -> "只读查找本地学习资料，空关键词浏览目录；返回类型、ID、所属位置、摘要和 sourceLink，同名候选不可随意选中。笔记正文使用已有词法索引。";
+            case "search_materials" -> "只读查找本地学习资料，空查询浏览目录；笔记默认使用已有 BM25 + 向量 + RRF，向量不可用时降级 BM25，精确查找用 searchMode=keyword。返回类型、ID、所属位置、相关正文片段和 sourceLink，同页命中合并，同名候选不可随意选中。搜索片段足够时可直接引用，需要前后文才用 read_notebook 分段读取。最多 80 个候选，searchLimited 时缩小范围或改用 keyword。";
             case "read_notebook" -> "无 ID 列笔记本；notebookId 列页面（parentId 为所属笔记本，parentPageId 为上级页面）；pageId 分段读取明确笔记页，包括公式和嵌入资料引用。";
             case "read_knowledge" -> "无 pointId 列知识点（可按 bankId 筛选）；pointId 分段读取 current 当前卡片、original 原文或 summary 总结，不混淆版本。";
             case "read_question_bank" -> "无 ID 列题库；bankId 列题目；questionId 分段读取题面、选项、答案、解析、章节。";

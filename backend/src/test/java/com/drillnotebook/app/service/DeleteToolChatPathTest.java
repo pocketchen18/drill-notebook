@@ -51,7 +51,7 @@ class DeleteToolChatPathTest {
         session = ChatLegacyWiring.ensureSession(jdbc);
         ai = new AiService(new AiConfigRepository(jdbc), wiring.sessions(), new ApiKeyEncryptor(), json, null, wiring.turnService(), wiring.cipher(), stack.contexts());
         switches = new AiToolSettingsRepository(jdbc); ai.setToolSettings(switches);
-        var materials = new MaterialReadRepository(jdbc); var reads = new MaterialReadService(materials, json);
+        var materials = new MaterialReadRepository(jdbc); var reads = MaterialReadTestSupport.service(jdbc, json);
         var notebooks = new NotebookRepository(jdbc, json);
         var deletes = new MaterialDeleteService(jdbc, new DataSourceTransactionManager(ds), materials, new BankRepository(jdbc),
                 new KnowledgePointRepository(jdbc, json), new QuestionRepository(jdbc, json),

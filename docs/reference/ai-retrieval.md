@@ -1,6 +1,6 @@
 # 笔记本混合检索（RAG）功能说明
 
-本文档规定 **AI 侧栏笔记本混合检索**（BM25 关键词 + 可选向量）的架构、数据模型、REST 接口、离线 worker 协议、模型目录、隐私授权、降级行为、索引维护与开发命令，对应后端 `RetrievalService` / `HybridRetrievalService` / `NoteIndexingService` / `EmbeddingModelService` / `EmbeddingConfigService` / `RetrievalMaintenanceService` 与 Rust `embedding-worker` 的实际实现。前端入口在 AI 侧栏的「检索」开关与设置页的「嵌入 / 模型目录」卡片。
+本文档说明笔记本混合检索（BM25 + 可选向量）的架构、模型与索引、授权、降级和维护。v0.8.2 起，当前 AI 助手通过 `search_materials` 按需查找笔记，来源配置位于「设置 → 嵌入与检索」，工具启停位于「设置 → 工具」。实现包括 `MaterialSearchService` / `MaterialReadService`、既有 `RetrievalService` / `HybridRetrievalService` / 索引与 embedding 服务，以及 Rust `embedding-worker`。旧 `retrievalOptions` 注入契约保留为后端兼容参考，当前前端不再提供该检索开关或发送该选项。
 
 ## 目录
 
@@ -16,21 +16,21 @@
 10. [降级与错误处理](#10-降级与错误处理)
 11. [索引维护](#11-索引维护)
 12. [开发命令与自动 QA](#12-开发命令与自动-qa)
-13. [v0.7 corpus 边界](#13-v07-corpus-边界)
+13. [corpus 边界](#13-corpus-边界)
 14. [常见问题](#14-常见问题)
 
 ---
 
 ## 1. 功能总览
 
-AI 侧栏对话可选择性地把笔记本内容作为上下文注入回答（RAG）。检索分两层：
+AI 助手在需要查找笔记时调用 `search_materials`，默认混合检索返回相关片段和来源；片段足够时直接引用，需要前后文才按 pageId 调用 `read_notebook` 分段读取。检索分两层：
 
 | 层 | 是否默认启用 | 说明 |
 |---|---|---|
 | **BM25 关键词检索** | 是 | 基于 SQLite FTS5（`trigram` 分词）。笔记一旦保存即自动建索引，**无需任何下载**，始终可用。 |
 | **向量检索** | 否（opt-in） | 需要用户**主动**启用一个 embedding 来源（本地模型下载，或配置 OpenAI/Ollama）。未启用时检索契约 = 纯 BM25。 |
 
-两层命中通过 **Reciprocal Rank Fusion（RRF）** 融合成统一排序的引用列表。向量层出现任何故障都会**静默降级**为 BM25-only，并附带一个 `retrievalNotice`，**绝不让对话失败**。
+两层命中通过 **Reciprocal Rank Fusion（RRF）** 排序。资料工具先保留字面匹配，再补充融合候选并按页合并；`searchMode=keyword` 保留字面查找，空 query 浏览目录。向量未配置是正常 BM25；已配置但不可用时回退 BM25 并附 `retrievalNotice`，工具不因向量故障失败。
 
 **核心约束**：
 - 默认**不下载任何模型**，默认**不向任何远程服务发送笔记内容**。
@@ -60,19 +60,26 @@ EmbeddingProvider ──────── Rust embedding-worker（本地）
 retrieval_embedding（float32 BLOB，L2 归一化）
         │
         ▼  coverage=100% → space ACTIVE
-对话：AiService.chat ── HybridRetrievalService
-        │                    ├── RetrievalService（BM25）
-        │                    └── 向量 Top-K（点积）→ RRF 融合
+助手：AiService 工具编排 → MaterialReadTools.search_materials
+        │                    ▼
+        │             MaterialSearchService
+        │                    ├── 字面候选（优先）
+        │                    └── HybridRetrievalService
+        │                         ├── RetrievalService（BM25）
+        │                         └── 向量 Top-K（点积）→ RRF
         ▼
-{ reply, citations[], retrievalNotice? }
+页面合并 / 范围与哈希复核 → { items[], sourceLink, retrievalNotice? }
+        │
+        └── 片段不足时 read_notebook(pageId)，分段取得前后文
 ```
 
 - **写路径**：笔记保存触发 `savePageAndIndex`——在同一事务里重写 `retrieval_chunk` / FTS，并为已选中的 embedding space 排队 `embedding_job`。向量生成由后台 poller 异步完成，不阻塞保存。
-- **读路径**：`chat` 在调用模型前先做混合检索，把至多 10 个片段（12,000 chars 预算）拼成唯一 RAG system message，连同 `citations` 一并返回。
+- **当前读路径**：模型按需调用资料工具，返回最多 20 项 / 4,800 码点片段，不强制后续整页读取，也不重复自动注入笔记正文。混合候选、字节预算和分页契约见 §5.1。
+- **兼容读路径**：显式提交旧 retrievalOptions 的调用继续使用原有检索注入契约；当前前端不发送该字段，详见 §5.1.1。
 
 ## 3. 数据模型（schema v8）
 
-v7 数据库首次启动时一次性升级到 v8（幂等，可重复启动），新增六张表。
+本节记录 schema v8 引入的六张检索表及其约束；当时 v7 首次启动幂等升级到 v8。当前整体数据库为 schema 18，检索表继续复用，v0.8.2 本次工具接入没有数据库迁移。
 
 ### 3.1 `retrieval_chunk` — 检索分块
 
@@ -206,7 +213,27 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 
 所有接口前缀 `/api/ai`，返回 JSON，错误用 HTTP 4xx/5xx + `{error: "..."}`。
 
-### 5.1 对话检索：`POST /api/ai/chat`
+### 5.1 当前助手：`search_materials`
+
+在 v2 工具调用中，模型通过现有资料工具发起查询，不新增 REST 端点。以下为工具参数示例：
+
+```json
+{"type":"note","query":"怎样避免多个线程同时修改同一份数据","searchMode":"hybrid","limit":10}
+```
+
+- searchMode 默认 hybrid；非空 note/all、无 bankId 时接入笔记 BM25 / 可选向量 / RRF，notebookId 可限定一本。其它类型 / 题库范围仍使用业务表关键词查询。
+- keyword 只做字面查找；空 query 浏览目录；明确 ID 的读取仍直接定位，不调用 embedding。
+- items 含 type/id/title/parentId/parentTitle/snippet/sourceLink；笔记搜索额外含 pageId/notebookId，非空查询含实际 matchTypes（keyword/bm25/vector）。混合补充项可含 chunkId/headingPath。
+- 同页分块合并；同次调用中重复笔记片段只展示一次正文，其它来源通过 snippetDuplicateOf 指向已有片段。返回前复核分块哈希与当前页面归属。
+- 默认每页 10、最多 20 项；每个片段最多 240 Unicode 码点，总量最多 4,800。词法与向量各最多 40 块，保留有界排名并集，再按页合并；最终资料候选最多 80 项。
+- hasMore/nextOffset 在当前候选内分页；达到候选边界时 searchLimited/incomplete=true，建议缩小范围或改 keyword。结果超过 60 KiB 软预算时减少行数并返回 byteLimited，nextOffset 按实际行数推进，保持共享 64 KiB 硬上限。
+- 未配置向量无 notice；已配置但不可用时返回 BM25、retrievalNotice 与 incomplete=true。searchMode 只回显请求模式，实际来源看 matchTypes。
+
+工具独立开关、模型工具能力、全局预算和停止继续生效；不依赖长期记忆开关。完整契约见[api-contracts.md §3.2.4](../state/api-contracts.md)，验证见[v0.8.2 清单](../state/v0.8.2-features.md)。
+
+### 5.1.1 兼容对话检索：`POST /api/ai/chat`
+
+本节保留后端兼容契约，适用于显式提交 retrievalOptions 的客户端。当前前端通过资料工具检索，不发送该选项；以下预算与 citations 格式属于兼容注入路径。
 
 请求体在常规 chat 字段外新增 `retrievalOptions`：
 
@@ -369,7 +396,8 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 |---|---|---|
 | `VECTOR_TOP_K` | 40 | 向量分支用有界最小堆保留点积最大的 40 个块 |
 | `RRF_K` | 60 | RRF 平滑常数 |
-| `MAX_RESULTS` | 10 | 融合后最多返回 10 个命中 |
+| `MAX_RESULTS` | 10 | 原 retrieve 的 RRF 融合结果上限；BM25 单独返回仍沿用原有分支行为 |
+| `MAX_CANDIDATES` | 80 | 工具 retrieveCandidates 保留词法 / 向量排名并集，再交给资料服务按页合并 |
 | `timeout-ms` | 1500 | 向量分支（embed + scan）硬 deadline |
 | `worker-ready-ms` | 500 | provider 未就绪时的有界等待 |
 
@@ -377,7 +405,7 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 - **融合公式**：`score = 1/(60+ftsRank) + 1/(60+vectorRank)`；仅出现在单一排序的命中保留其单边项。并列按 `source_id`、`chunk_index` 升序打破。
 - **向量过滤**：按 corpus/scope/space/dimensions 及当前块 `content_hash` 过滤，陈旧向量不参与。
 - **原始 BM25 分数与点积分数绝不混合**，只通过 rank 融合。
-- 对话层再对融合命中应用 12,000-char 上下文预算（`RAG_CONTEXT_CHAR_BUDGET`），按 rank 截断正文，citation 元数据永不截断。
+- 兼容注入路径对融合命中应用 12,000-char 预算（RAG_CONTEXT_CHAR_BUDGET）。当前资料工具采用 §5.1 的片段与字节预算，字面优先、按页合并后分页，不把旧 10 块上限提前施加到页面候选。
 
 ## 9. 隐私与授权
 
@@ -399,7 +427,7 @@ CREATE TABLE IF NOT EXISTS embedding_job (
 |---|---|
 | 从未选中空间 | BM25-only，**无 notice**（这是完整契约，非降级） |
 | 空间非 ACTIVE 或 coverage<100% | BM25-only + notice `vector-index-unavailable` |
-| provider 缺失 / 维度不匹配 / 未就绪超时 | BM25-only + notice |
+| provider 缺失 / 类型、模型或维度不匹配 / 未就绪超时 | BM25-only + notice |
 | embed/scan 抛异常或超过 1500ms deadline | BM25-only + notice（取消 future） |
 
 **关键语义**：远程 embedding provider 不可达时，空间保持 `REBUILDING`、coverage 0 → 检索降级为 BM25 + notice，但**对话模型（主模型）不受影响**，`chat` 仍返回 200 与 BM25 citations。注意这与「对话模型失败」不同——对话模型失败会抛异常（非 200）。
@@ -443,17 +471,15 @@ node scripts/qa-electron.mjs              # Electron CDP UI QA，含 RAG 软检�
 - **Rust 工具链仅在开发/测试本地 embedding worker 时需要**；普通 retrieval-off 构建（只用 BM25 或远程 provider）不强制 Rust。
 - `mvp-test.ps1` Section 8：建两个笔记本 + 已知笔记 → 验证 scope=all/current BM25 citations、status 端点、reindex 409 / retry-failed、远程 embedding 失败时 chat 仍 200 + BM25 降级、删除清理。
 - `portable-audit.ps1`：运行前后递归快照固定受监控根目录（HuggingFace/fastembed 缓存、`Drill Notebook` 本地/漫游目录、TEMP 下 `fastembed/ort/drill-notebook` 条目），比较 path/size/mtime/hash，证明未在 `APP_ROOT` 外新增项目文件。
-- `qa-electron.mjs`：软检查设置页嵌入卡片、AI 侧栏检索开关/范围控件，截图留证（软检查不影响退出码）。
+- `qa-electron.mjs`：设置页和旧侧栏检索开关 / 范围控件的历史软检查，截图留证；软检查不影响退出码，不能作为当前资料工具接入验收。v0.8.2 实际工具链与便携验证见[实施计划](../work/material-hybrid-search/plan.md#3-验证结果)。
 
 Evidence 由测试内 `writeEvidence` 在 `DRILL_EVIDENCE_DIR` 环境变量指向 `.omo/evidence` 时写出（断言始终运行，写文件被门控）。
 
-## 13. v0.7 corpus 边界
+## 13. corpus 边界
 
-当前 `corpus_type` 仅有 `NOTEBOOK`。v0.7（AI 跨会话记忆，原列入 v0.6，因 v0.6 前端 UI 重塑优先而顺延）可将 `CONVERSATION_MEMORY` 作为**独立 corpus** 加入，约束：
+当前检索表的 corpus_type 仅有 NOTEBOOK，v0.8.2 只将笔记混合检索接入资料工具。已实现的长期记忆使用自身词法检索与标题列表，没有接入该笔记向量空间。
 
-- 不改变笔记本数据所有权：`retrieval_chunk` 以 `(corpus_type, source_id, chunk_index)` 唯一，新 corpus 用独立 `corpus_type` 隔离。
-- 保持向量空间不变量：`retrieval_embedding` 仍按 `embedding_space_id` + `corpus_type` 过滤，激活/coverage 仍是 corpus 级属性。
-- 复用同一套 chunk/FTS/job/space 表与 RRF 融合，无需新建并行管线。
+历史规划曾考虑增加独立 CONVERSATION_MEMORY corpus，但该方案未落地，不属于当前能力。将来若接入其它语料，须重新确定其授权、所有权、删除和空间激活规则，并通过 corpus_type 与 embedding_space_id 隔离；不得直接把记忆内容并入笔记空间。
 
 ## 14. 常见问题
 
@@ -463,7 +489,7 @@ Evidence 由测试内 `writeEvidence` 在 `DRILL_EVIDENCE_DIR` 环境变量指�
 
 ### 14.2 配置了远程 embedding 但服务不可达，对话会失败吗？
 
-不会。空间保持 REBUILDING，检索降级为 BM25 + `retrievalNotice`，对话模型照常返回 200。只有**对话主模型**本身失败才会让 chat 非 200。
+向量故障不会使资料工具或对话因检索原因失败。索引仍在重建或已有 provider 不可达时，查询回退 BM25 并附 retrievalNotice；对话主模型自身的失败仍按既有重连与错误规则处理。未配置向量时是正常 BM25，无 notice。
 
 ### 14.3 切换 embedding 模型后旧向量怎么办？
 

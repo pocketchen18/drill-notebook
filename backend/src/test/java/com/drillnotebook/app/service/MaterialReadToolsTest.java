@@ -22,7 +22,7 @@ class MaterialReadToolsTest {
         var ds = Schema9Fixture.dataSource(root);
         new DatabaseInitializer(ds, Schema9Fixture.resolver(root)).initialize();
         jdbc = new JdbcTemplate(ds);
-        service = new MaterialReadService(new MaterialReadRepository(jdbc), json);
+        service = MaterialReadTestSupport.service(jdbc, json);
         jdbc.update("INSERT INTO notebook(id,title) VALUES(1,'同名'),(2,'同名')");
         jdbc.update("INSERT INTO question_bank(id,name) VALUES(1,'数学')");
         jdbc.update("INSERT INTO note_page(id,notebook_id,title,content,parent_id) VALUES(1,1,'微积分',?,NULL),(2,1,'子页',?,1)",

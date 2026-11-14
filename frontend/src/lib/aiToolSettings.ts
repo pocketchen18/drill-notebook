@@ -4,7 +4,7 @@ import type { ToolName } from './toolActivity';
 export type BuiltinToolName = Exclude<ToolName, 'unknown_tool'>;
 export const TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
   read_current_page: '读取当前页面已展示的内容和未保存的笔记草稿。',
-  search_materials: '按关键词查找笔记、知识点、题库和题目。',
+  search_materials: '按关键词查找学习资料；笔记支持可选向量与关键词混合检索。',
   read_notebook: '查看笔记本目录与笔记页正文。',
   read_knowledge: '查看知识点的当前内容、原文或总结。',
   read_question_bank: '查看题库目录与题目详情。',

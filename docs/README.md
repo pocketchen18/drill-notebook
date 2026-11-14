@@ -33,7 +33,8 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [state/architecture.md](state/architecture.md) | 项目架构、进程与模块边界、数据与便携约定 |
-| [state/v0.8.1-features.md](state/v0.8.1-features.md) | 当前 v0.8.1：失败重连、会话内对话跳转与助手模型选择持久化，已实现并通过工程验证；向量检索接入顺延 v0.8.2 |
+| [state/v0.8.2-features.md](state/v0.8.2-features.md) | 当前 v0.8.2：笔记混合检索接入资料工具，已实现并通过工程验证 |
+| [state/v0.8.1-features.md](state/v0.8.1-features.md) | v0.8.1 功能与既有验证：失败重连、会话内对话跳转、助手模型选择持久化及页面适配 |
 | [state/data-model.md](state/data-model.md) | 当前数据库表与关键约束（schema 18）；完整 DDL 以 `backend/src/main/resources/schema.sql` 为准 |
 | [state/api-contracts.md](state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 
@@ -58,7 +59,7 @@ docs/
 2. 需求变更直接原地覆盖，不新增「补充决策」文档。
 3. 功能完成后标记结果并同步状态，施工材料保留至本版收尾；**下一版本开始前**统一移入 `docs/archive/<version>/`。归档时保留真实未完成项和验收限制，不以归档代替验收。
 
-v0.8.0 的功能清单、助手窗口与软件内更新施工材料、交互草图已于 2026-11-12 按用户要求统一移入[版本归档](archive/v0.8.0/README.md)。AI 助手已完成用户验收，更新切片已通过工程验证，历史验收缺口保留原口径。当前 [v0.8.1 清单](state/v0.8.1-features.md)纳入失败重连、会话内对话跳转与助手模型选择持久化，三项已实现并通过工程验证；最终[UI/UX](work/ai-conversation/ui-ux.md)、[规格](work/ai-conversation/spec.md)、[计划与验证](work/ai-conversation/plan.md)及[交互草图](work/ai-conversation/conversation-preview.html)继续保留在 work。读取工具接通向量检索顺延 v0.8.2。此前的 [v0.7.3](archive/v0.7.3/README.md)与 [v0.7.2](archive/v0.7.2/README.md)归档继续保留，历史测试见[测试清单](test/QA_CHECKLIST.md)，联网搜索配置仍为后续候选。
+v0.8.0 的功能清单、助手窗口与软件内更新施工材料、交互草图已于 2026-11-12 按用户要求统一移入[版本归档](archive/v0.8.0/README.md)。AI 助手已完成用户验收，更新切片已通过工程验证，历史验收缺口保留原口径。v0.8.1 的[清单](state/v0.8.1-features.md)、[UI/UX](work/ai-conversation/ui-ux.md)、[规格](work/ai-conversation/spec.md)、[计划与验证](work/ai-conversation/plan.md)及[草图](work/ai-conversation/conversation-preview.html)保留既有实现与验证入口。本次推进 [v0.8.2 清单](state/v0.8.2-features.md)中的笔记混合检索接入，已通过工程验证；施工材料位于 [work/material-hybrid-search/](work/material-hybrid-search/requirements.md)，该工具增强沿用现有界面，无新增布局草图。此前的 [v0.7.3](archive/v0.7.3/README.md)与 [v0.7.2](archive/v0.7.2/README.md)归档继续保留，历史测试见[测试清单](test/QA_CHECKLIST.md)，联网搜索配置仍为后续候选。
 
 ## 3. 测试文档
 
@@ -81,7 +82,7 @@ v0.8.0 的功能清单、助手窗口与软件内更新施工材料、交互草�
 | [DESIGN.md](DESIGN.md) | 全局视觉、交互与编辑器契约 |
 | [features.md](features.md) | 全局产品能力、后续方向与长期边界；版本发布前同步实际交付能力 |
 | [jlink.md](jlink.md) | 便携包嵌入 JRE |
-| [reference/ai-retrieval.md](reference/ai-retrieval.md) | 笔记本混合检索（RAG）：schema v8、API、worker 协议、降级与索引维护 |
+| [reference/ai-retrieval.md](reference/ai-retrieval.md) | 笔记本混合检索：当前按需工具、兼容 API、schema v8、worker、授权、降级与索引维护 |
 | [reference/ai-summary.md](reference/ai-summary.md) | AI 总结知识点：双角色快照、REST API、前端交互 |
 | [reference/review-srs.md](reference/review-srs.md) | 间隔重复复习：配置、调度、今日队列、日历叠加 |
 | [reference/session-curve.md](reference/session-curve.md) | 会话内短周期记忆曲线与循环背诵 |

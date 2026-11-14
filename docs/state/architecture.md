@@ -117,9 +117,10 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - 工具派发在 SQLite 保存幂等收据，待发正文及配置只在内存；人工队列另以 `ChatPendingRepository` 加密保存请求体、配置引用及暂停状态。失败/停止取消工具待发，保留人工待发并暂停，其他会话独立继续。重启只恢复未执行人工内容为暂停状态，不重放已开始或交付未知的内容。
 - 插话经 `SessionExecution` 在下一次模型请求边界领取，不中止当前输出或工具，沿用本轮预算。最终响应结束时也检查已经受理的补充；送达未知不自动重试。接收后的独立用户补充由 `ChatSupplement` 参与历史、上下文、跨会话查阅和导出，按正文偏移保留原回复顺序。
 
-### 3.3 学习资料读取、新增与修改（v0.7.3）
+### 3.3 学习资料读取、新增与修改（v0.7.3，v0.8.2 笔记检索增强）
 
-- `MaterialReadTools` 注册六个独立 `ChatTool`，由 `MaterialReadService` 处理严格参数、资料归属、分页与正文版本；`MaterialReadRepository` 对现有业务表作有界只读查询。笔记关键词复用 `retrieval_chunk` 文本进行 LIKE 匹配，不新增表、索引或语义检索。
+- `MaterialReadTools` 注册六个独立 `ChatTool`，由 `MaterialReadService` 处理严格参数、资料归属、分页与正文版本；`MaterialReadRepository` 对现有业务表作有界只读查询。`search_materials` 默认 hybrid：非空的笔记查询经 `MaterialSearchService` → `HybridRetrievalService.retrieveCandidates` → 既有 BM25 / 可选向量 / RRF，字面匹配优先，再按页面合并有界候选。keyword、空目录、其它类型 / 题库范围和明确 ID 读取沿用原有路径，不调用 embedding。
+- 混合搜索复用现有分块、FTS5、embedding provider 与空间，返回前通过 `noteSearchTargets` 核对当前页面归属和分块哈希；不新增表或模型下载。向量不可用时退回 BM25，既有 provider 授权约束继续生效，日志只记录异常类型。工具候选最多 80 项、每页最多 20 项、每段最多 240 Unicode 码点；重复笔记片段保留来源定位。共享 64 KiB 硬上限前以 60 KiB 软预算减少返回项，按实际数量续页。原 retrieve 的 RRF 融合上限仍为 10 块，BM25 单独分支行为保持兼容。
 - `MaterialCreateTool` 由 `MaterialCreateService` 处理六种新增类型。复用普通仓储与 `NoteIndexingService`；预占回执取得 SQLite 写锁后校验来源轮次，业务写入、索引和回执同事务提交。重试复用结果，参数改变拒绝，取消或错误回滚；保存结果未知不假称失败。
 - `MaterialUpdateTool` → `MaterialUpdateService` 在写事务中核对 `MaterialVersion` 完整业务摘要，复用仓储更新及独立修改回执。部分字段更新不清空其余字段，题目只写提供的列；重复调用和显式重试不覆盖后续编辑。`MaterialNoteEdits` 原位精确替换文本或追加 Markdown，保留富文本和附件节点，不做整页转换；知识点保留原文 / 总结，错题修改原题但不动统计。
 - `MaterialDeleteService` 承接资料删除与错题移出，复用普通级联和同事务回执；非空容器需显式 cascade，当前会话绑定的笔记本不可删。`MemoryDeleteTool` 复用遗忘抑制与纪元推进，自己的已确认变更可更新计划，额外并发变更仍会阻止旧计划继续。`SessionDeleteTool` 在同一写事务内核对真实来源轮次与目标状态，保留长期记忆并清理来源证据。
@@ -127,7 +128,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - 人工错题仅记录真实作答基线，普通错题页与读取工具共享成员 SQL，不生成虚假答题。前端成功活动刷新相关资料、提供「查看资料」。笔记正文刷新由 `NoteAutosave` 的待保存、在途和失败状态保护，普通自动保存与后台 keepalive 都跟踪到结果，并及时刷新提交快照的 isDraft，避免已保存内容一直被误判为草稿。
 - `MaterialText` 将指定笔记页的 TipTap 数据转为可读正文，保留公式及嵌入题目 / 文件引用，不改变既有 `NoteNormalizer` 的索引规则。知识点当前、原文、总结分别读取；错题成员 SQL 与人工页面共用，统计来自真实答题记录。
 - `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
-- 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)。
+- 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。搜索片段足够时直接引用，需要上下文再按 ID 读取，不重复自动注入整页。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)，本次检索验证见[v0.8.2 清单](v0.8.2-features.md)。
 
 ### 3.3 失败恢复、会话内定位与模型选择（v0.8.1）
 

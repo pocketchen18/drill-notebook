@@ -2,7 +2,7 @@
 
 本文档定义了 QA 测试人员、产品及开发人员在发版或功能合并前的验收用例与回归步骤。
 
-v0.7.3 的历史发行范围见[发布说明](../release/v0.7.3-release-notes.md)；v0.8.0 实施材料已[归档](../archive/v0.8.0/README.md)，各切片结果记录在对应模块，软件内更新见[模块三十](#模块三十软件内更新与关于v080)。当前 [v0.8.1](../state/v0.8.1-features.md) 已实现并完成工程验证，失败重连、会话内对话跳转和模型选择见[模块三十一](#模块三十一失败重连与会话内对话跳转v081)，设置与日历的当前页面适配修复见[模块三十二](#模块三十二设置与日历的当前页面适配v081)。下列用例是可复用的验收步骤，不表示每项都已在本轮人工执行；带旧版本和日期的验证段落保留为历史记录。
+v0.7.3 的历史发行范围见[发布说明](../release/v0.7.3-release-notes.md)；v0.8.0 实施材料已[归档](../archive/v0.8.0/README.md)，软件内更新见[模块三十](#模块三十软件内更新与关于v080)。[v0.8.1](../state/v0.8.1-features.md) 的失败重连、会话跳转与模型选择见[模块三十一](#模块三十一失败重连与会话内对话跳转v081)，设置与日历适配见[模块三十二](#模块三十二设置与日历的当前页面适配v081)。当前 [v0.8.2](../state/v0.8.2-features.md) 的笔记混合检索接入已完成工程验证，见[模块三十三](#模块三十三笔记混合检索接入资料工具v082)。下列用例是可复用的验收步骤，不表示每项都已在本轮人工执行；带旧版本和日期的验证段落保留为历史记录。
 
 ---
 
@@ -778,3 +778,32 @@ Electron 编译通过；忽略规则核对通过，根目录备份、便携 ZIP 
 本轮前端 **13 文件 / 106 项**、后端 `MaterialReadToolsTest` **12 项**全部通过，0 失败、0 跳过、0 未处理错误。覆盖真实页面组件、提交快照、主窗口路由、助手桥接、既有助手窗口与设置 / 日历回归；后端验证无资料 ID 的设置 / 日历快照可正常读取，继续保持定位与正文分离。
 
 TypeScript / Vite 构建及后端隔离打包通过；包内 **645 个应用 class** 与同一轮隔离编译结果逐一一致，隔离目录的资料读取测试再次通过，开发 JAR 已同步并核对 SHA-256 一致。临时材料位于工作区 `temp/`，临时构建 POM 已移除。既有 React / Arco、Vite 体积和 JDK 开发告警沿用；本轮未执行业务全量、Electron 实机或真实模型验收、完整便携发行打包及云端发布，不新增运行时落盘路径。
+
+## 模块三十三：笔记混合检索接入资料工具（v0.8.2）
+
+> 已实现并通过工程验证（2026-11-14）。范围见[版本清单](../state/v0.8.2-features.md)，契约见[接口](../state/api-contracts.md)，详细结果见[实施计划](../work/material-hybrid-search/plan.md#3-验证结果)。
+
+| 编号 | 场景 | 预期 |
+|---|---|---|
+| TC-HYBRID-01 | 自然语言查询与纯语义候选 | 默认 hybrid，使用既有 BM25 / 可选向量 / RRF；正文用词不同的候选可由向量命中，返回真实页面与来源 |
+| TC-HYBRID-02 | 精确原文、名称、编号、符号 | keyword 字面匹配，不调用 embedding；默认混合仍优先保留字面匹配 |
+| TC-HYBRID-03 | 空目录、ID 读取、其它资料 / 题库范围 | 继续原有路径，不调用 embedding，不把长期记忆纳入笔记向量空间 |
+| TC-HYBRID-04 | 笔记本范围、孤立块、旧向量及移动页面 | notebookId 生效；复核当前页面存在 / 归属及分块哈希，越范围或陈旧候选不返回 |
+| TC-HYBRID-05 | 同页多块命中与相同正文多来源 | 按页合并后分页；重复笔记片段只返回一次正文，其余来源保留 ID / link 和 snippetDuplicateOf |
+| TC-HYBRID-06 | 结果与片段上限 | 默认 10、最多 20 项，每片段最多 240 Unicode 码点，总片段最多 4,800；不会在工具候选合并前限为 10 块 |
+| TC-HYBRID-07 | 超过候选池与更多目录项 | 混合有界候选明确 searchLimited / incomplete；hasMore 只表示已有候选可续页，keyword 保留完整目录分页 |
+| TC-HYBRID-08 | Unicode 元数据越过字节预算 | 60 KiB 软预算减少条目并设置 byteLimited；nextOffset 按实际数量推进，续页无丢项，结果不越 64 KiB 硬上限 |
+| TC-HYBRID-09 | 向量未配置、空间重建 / 覆盖不足 | 未配置正常 BM25 无 notice；已有空间不可用则 BM25 + retrievalNotice，工具不失败 |
+| TC-HYBRID-10 | provider 缺失 / 模型不匹配 / 异常 / 超时 | 有界等待后回退 BM25，取消后台 future；日志不记录查询、笔记或上游正文 |
+| TC-HYBRID-11 | Chat Completions 普通 / 流式与 Anthropic 编排 | 真正执行混合搜索 → 按 ID 读取 → 回答，工具结果进入本轮，历史仅保存安全活动与来源 |
+| TC-HYBRID-12 | OpenAI / Ollama 配置授权链路 | 有效授权后配置 → 后台索引 → 工具 query embedding；keyword 不外发，endpoint 变更使授权失效后停止请求 |
+| TC-HYBRID-13 | 工具设置与既有助手 | search_materials 说明展示混合检索，独立工具开关、页面读取与 embedding 设置继续工作，无重复入口 |
+| TC-HYBRID-14 | 便携与兼容 | 不新增 schema / 索引 / 系统落点，原有检索、资料读写及索引维护继续通过回归 |
+
+本轮后端相关 **16 类 / 202 项：201 通过、0 失败、0 错误、1 项既有跳过**，前端相关 **4 文件 / 38 项全部通过**。核心 MaterialHybridSearchTest 17 项、真实 MaterialToolChatPathTest 14 项、EmbeddingConfigServiceTest 13 项通过；其余覆盖词法 / 融合、笔记索引、embedding 任务与模型服务、维护和资料读写 / 删除。
+
+唯一跳过项为 EmbeddingModelServiceTest.interruptedDownloadResumesWithRangeVerifiesAndActivates，既有条件要求 model_optimized.onnx 真实夹具，当前环境未提供。向量语义与远程协议使用本地 provider / HTTP 桩验证，没有将此跳过或桩结果当作真实模型准确度结论。
+
+TypeScript / Vite 构建及后端隔离打包通过；**647 个应用 class** 与同轮编译逐一一致，开发 JAR 已同步并核对 SHA-256，保留此前生成中 upstream_error 恢复修复。运行时落盘审计通过：禁用目录新文件 0、RAG 监控根外新建 / 改写文件 0。静态便携审计通过，唯一环境变量模式命中为既有 Process 级恢复，Electron 路径重定向仍在。
+
+临时报告、脚本、夹具和构建位于工作区 temp/material-vector-tool-check/，落盘审计证据位于 temp/portable-audit-63d8012a-c88e-4188-811f-3cb53340a2ef/，均不入 Git。本轮未执行全项目全量、真实模型下载、真实供应商准确度 / Token 对照、Electron 实机、完整发行打包或发布；既有开发告警与历史验收边界保留。

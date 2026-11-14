@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.sqlite.SQLiteDataSource;
@@ -265,6 +267,42 @@ class EmbeddingConfigServiceTest {
         assertNull(spaceState(), "no embedding space may be created without consent");
         assertEquals(0, jobCount());
         assertEquals(0, embeddingsCalls.get(), "no probe/index request without consent");
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"openai", "ollama"})
+    void materialSearchUsesTheConsentedRemoteProviderAndStopsAfterConsentInvalidation(String provider) throws Exception {
+        String endpoint = "openai".equals(provider) ? startOpenAiServer(4, 200, 0, false) : startOllamaServer(4);
+        long page = indexPage("合力", "所有外力互相抵消，速度保持恒定1。");
+        var hybrid = MaterialReadTestSupport.hybrid(jdbc, mapper, registry, 1500, 100);
+        var tool = MaterialReadTools.tool("search_materials", MaterialReadTestSupport.service(jdbc, mapper, hybrid));
+        String query = "{\"type\":\"note\",\"query\":\"如何理解物体受力平衡1\"}";
+        try {
+            var disabled = saveEmbedding(Map.of("provider", provider, "endpoint", endpoint, "model", "m", "dimensions", 4));
+            assertEquals("CONSENT_REQUIRED", disabled.get("code"));
+            tool.execute(null, query, false, "");
+            assertTrue(requestLog.isEmpty(), "the tool cannot enable remote embedding itself");
+
+            saveEmbedding(Map.of("provider", provider, "endpoint", endpoint, "model", "m", "dimensions", 4, "remoteContentConsent", true));
+            assertTrue(executor.runOnce());
+            assertEquals("ACTIVE", spaceState().get("state"));
+            int indexedCalls = requestLog.size();
+            var result = mapper.valueToTree(tool.execute(null, query, false, ""));
+            assertEquals("OK", result.path("status").asText());
+            assertEquals(page, result.path("items").path(0).path("pageId").asLong());
+            assertEquals(List.of("vector"), mapper.convertValue(result.path("items").path(0).path("matchTypes"), List.class));
+            assertEquals(indexedCalls + 1, requestLog.size(), "one query embedding uses the configured protocol");
+            assertTrue(requestLog.get(requestLog.size() - 1).contains("如何理解物体受力平衡1"));
+
+            int beforeKeyword = requestLog.size();
+            var exact = mapper.valueToTree(tool.execute(null, "{\"type\":\"note\",\"query\":\"外力\",\"searchMode\":\"keyword\"}", false, ""));
+            assertEquals("OK", exact.path("status").asText()); assertEquals(beforeKeyword, requestLog.size());
+
+            var changed = saveEmbedding(Map.of("provider", provider, "endpoint", "http://127.0.0.1:59999", "model", "m", "dimensions", 4));
+            assertEquals("CONSENT_REQUIRED", changed.get("code"));
+            var fallback = mapper.valueToTree(tool.execute(null, query, false, ""));
+            assertEquals("NO_MATCH", fallback.path("status").asText());
+            assertEquals(beforeKeyword, requestLog.size(), "invalidated consent must stop the tool's query requests");
+        } finally { hybrid.shutdown(); }
     }
 
     @Test

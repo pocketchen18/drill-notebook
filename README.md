@@ -1,6 +1,6 @@
 # Drill Notebook（面向开发者）
 
-**v0.8.1 三项功能已实现并通过工程验证，尚未发布**：失败重连、会话内对话跳转与助手模型选择持久化，最终范围和验证入口见[当前功能清单](docs/state/v0.8.1-features.md)，发行准备见[本版说明](docs/release/v0.8.1-release-notes.md)；读取工具接通向量检索顺延至 v0.8.2。v0.8.0 已实现独立 AI 助手、会话模型与消息体验、软件内更新与关于，相关材料已[归档](docs/archive/v0.8.0/README.md)，发行与升级记录继续见[v0.8.0 说明](docs/release/v0.8.0-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
+**v0.8.2 笔记混合检索已接入资料工具并通过工程验证，尚未发布**：助手按需使用 BM25 + 可选向量 + RRF，保留精确关键词与按 ID 读取，范围和验证见[当前功能清单](docs/state/v0.8.2-features.md)。[v0.8.1](docs/state/v0.8.1-features.md) 的失败重连、会话内对话跳转与模型持久化已完成工程验证，[发行准备说明](docs/release/v0.8.1-release-notes.md)继续保留；本次未调整发行配置。v0.8.0 相关材料已[归档](docs/archive/v0.8.0/README.md)，发行与升级记录见[v0.8.0 说明](docs/release/v0.8.0-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
 
 | 项 | 说明 |
 |---|---|
@@ -66,7 +66,7 @@
 | **背知识点重构** | 树状大纲阅读与卡片工作区：左侧多级大纲导航（支持搜索过滤、按标签筛选、悬停完整标题气泡 Tooltip、统一层级缩进步长、视口自适应独立双向滚动） + 右侧卡片工作区；点卡片或按全屏按钮进入 `KnowledgeFullCardView` 全屏阅读视图（支持大纲拖拽调宽与阈值自动折叠、键盘快捷翻页、章节/整库/单卡总结与还原、修改/删除按钮，`Escape` 退出） |
 | **AI 总结知识点** | 丰富维度：①总结并导入（选 `.md`/`.txt` → AI 浓缩成标准导入格式 → 入库）②整库/章节总结（对未总结卡逐条存原文+AI 浓缩+更新 `content`）③重新总结（对已总结卡从原文重跑）④未单独配置导入兜底模型时自动无缝回退主模型。详见 [docs/reference/ai-summary.md](docs/reference/ai-summary.md) |
 | **原文/总结双态切换** | 知识卡片标签栏提供单卡「显示原文 / 显示总结」切换；全屏视图支持单卡/章节/整库一键切换；后端提供 `restore-original` / `restore-summary` 批量恢复接口，`knowledge_point_original` 表存 `role=original`/`summary` 双快照，`knowledge_point.content` 在两态间切换 |
-| **笔记本混合检索（RAG）** | AI 侧栏对话可注入笔记本上下文。**BM25 关键词检索默认启用、无需下载**（FTS5 trigram，笔记保存即索引）；向量检索为 opt-in 增强。两层经 RRF 融合成统一引用列表，点 citation 深链跳回页面。详见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) |
+| **笔记本混合检索（RAG）** | v0.5 建立 BM25 + 可选向量 + RRF。**BM25 无需下载**（FTS5 trigram，笔记保存即索引）；v0.8.2 已接入助手的 search_materials，按需返回片段和来源，必要时按 ID 续读。详见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) |
 | **检索范围与降级** | 范围 `all` / `current`（当前笔记本）；向量层任何故障静默降级为 BM25-only 并附 `retrievalNotice`，**对话不受影响** |
 | **本地 embedding 模型目录** | 设置页「嵌入 / 模型目录」：内置 `bge-small-zh-v1.5`（512 维，MIT），**默认不下载**；下载校验 size/sha256、断点续传、可取消、可彻底卸载（模型文件 + 向量） |
 | **远程 embedding（OpenAI/Ollama）** | 可选；**必须先勾选「同意发送笔记内容」**，授权绑定 endpoint/model，更换后失效。远程不可达时降级 BM25，对话仍 200 |
@@ -232,9 +232,19 @@
 
 三项已实现并通过工程验证，尚未发布；最终范围见[本版清单](docs/state/v0.8.1-features.md)，发行准备见[本版说明](docs/release/v0.8.1-release-notes.md)，验证与未验收项见[QA](docs/test/QA_CHECKLIST.md)。
 
-### 1.18 明确后置（未作为当前目标）
+### 1.18 v0.8.2（笔记混合检索接入资料工具）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见 [全局功能清单](docs/features.md)。v0.8.0 的[实现清单](docs/archive/v0.8.0/features.md)已归档；v0.8.1 的[失败重连、会话跳转与模型选择](docs/state/v0.8.1-features.md)已实现并通过工程验证，施工材料保留至下一版本开始前归档。笔记向量检索接入资料工具顺延至 v0.8.2，联网搜索配置、移动与批量删除仍未实现。
+| 功能 | 说明 |
+|---|---|
+| **按需混合检索** | search_materials 默认 hybrid，复用 BM25 + 可选向量 + RRF；字面匹配优先，按笔记页合并，支持笔记本范围 |
+| **精确与分段读取** | keyword 保留名称、编号、原文和符号查找；空目录、其它资料与 ID 读取不调用 embedding，片段足够时直接引用 |
+| **返回预算与降级** | 有界候选、Unicode 片段与字节预算、重复片段去重；旧分块与归属复核，向量不可用回退 BM25 |
+
+已实现并通过工程验证；范围见[本版清单](docs/state/v0.8.2-features.md)，结果见[QA](docs/test/QA_CHECKLIST.md#模块三十三笔记混合检索接入资料工具v082)。复用既有授权与 APP_ROOT 落点，不承诺未经实测的准确度或 Token 节省幅度。
+
+### 1.19 明确后置（未作为当前目标）
+
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见[全局功能清单](docs/features.md)。v0.8.0 的[实现清单](docs/archive/v0.8.0/features.md)已归档；v0.8.1 的[失败重连、会话跳转与模型选择](docs/state/v0.8.1-features.md)已完成工程验证。v0.8.2 的笔记检索接入已实现，长期记忆向量化、联网搜索配置、移动与批量删除仍未实现。
 
 ---
 
@@ -376,7 +386,7 @@
 4. 支持多会话：新建 / 切换 / 双击标题重命名 / 删除；消息落库加密。  
 5. 助手消息可 **插入笔记**（选笔记本+页面）。  
 6. 可导出会话（Markdown / HTML / JSON，以菜单为准）。  
-7. **笔记本检索（v0.5）**：侧栏内开启「检索」，选范围 `全部笔记本` / `当前笔记本`；回答下方列出引用来源，点击跳回对应页面。向量检索需在设置页启用本地模型或远程 embedding（见 [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md)）。
+7. **笔记本检索（v0.8.2 接入工具）**：模型支持工具且开启 search_materials 时，助手按需用自然语言混合检索笔记，返回片段与来源；需要前后文再按 ID 读取，精确查找可用 keyword。向量来源在「设置 → 嵌入与检索」主动启用，未配置时用 BM25，不自动下载模型；远程 embedding 继续需要授权（见[检索说明](docs/reference/ai-retrieval.md)）。
 8. **长期记忆与工具**：开启记忆且模型支持工具时，助手可按需检索、列出、新增和更新记忆；回复内的工具活动组显示执行中、成功、失败或未执行等真实状态，可展开安全摘要并在历史中恢复。删除来源会话不删除长期记忆。
 9. **阅读与长轮次**：流式生成期间向上滚动会暂停自动跟随，回到底部后恢复；达到运行限制会保留已有结果并说明原因，「继续」开启同会话新一轮。独立助手窗口全局选择模型与支持的思考档位，已受理的轮次保留提交时配置。
 
@@ -518,7 +528,8 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 |---|---|
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
 | [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
-| [docs/state/v0.8.1-features.md](docs/state/v0.8.1-features.md) | 当前 v0.8.1 功能清单：失败重连、会话跳转与助手模型持久化，已实现并通过工程验证 |
+| [docs/state/v0.8.2-features.md](docs/state/v0.8.2-features.md) | 当前 v0.8.2：笔记混合检索接入资料工具，已实现并通过工程验证 |
+| [docs/state/v0.8.1-features.md](docs/state/v0.8.1-features.md) | v0.8.1 功能清单与既有验证：失败重连、会话跳转与助手模型持久化 |
 | [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 18） |
 | [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
@@ -530,7 +541,7 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 | [docs/reference/session-curve.md](docs/reference/session-curve.md) | 会话内短周期记忆曲线（循环背诵）：配置、队列算法、页面交互、兼容边界、会话↔日历/跨天曲线联动（评分最终态、顽固项加练、日历实时今天）、测试 |
 | [docs/jlink.md](docs/jlink.md) | 便携包嵌入 JRE |
 | [docs/reference/ai-summary.md](docs/reference/ai-summary.md) | AI 总结知识点：schema、REST API、前端交互 |
-| [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索（RAG）：架构、schema v8、API、worker 协议、模型目录、隐私授权、降级、索引维护 |
+| [docs/reference/ai-retrieval.md](docs/reference/ai-retrieval.md) | 笔记本混合检索：按需工具、兼容 API、schema v8、worker、授权、降级与索引维护 |
 | [docs/release/v0.7.3-release-notes.md](docs/release/v0.7.3-release-notes.md) | v0.7.3 发行记录、验证、升级与预发行边界 |
 | [docs/release/v0.8.0-release-notes.md](docs/release/v0.8.0-release-notes.md) | v0.8.0 发布准备、助手改版、软件内更新与升级说明 |
 | [docs/archive/v0.8.0/](docs/archive/v0.8.0/) | v0.8.0 功能清单、独立助手与软件内更新施工材料、草图及验证边界 |

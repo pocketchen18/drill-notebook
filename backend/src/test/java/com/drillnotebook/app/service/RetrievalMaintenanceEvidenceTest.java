@@ -65,9 +65,11 @@ class RetrievalMaintenanceEvidenceTest {
     /** Fixed-vector provider with parametrizable dimensions. */
     static class FakeProvider implements EmbeddingProvider {
         private final int dims;
-        FakeProvider(int dims) { this.dims = dims; }
+        private final String model;
+        FakeProvider(int dims) { this(dims, "test-model"); }
+        FakeProvider(int dims, String model) { this.dims = dims; this.model = model; }
         @Override public String providerType() { return "local-rust"; }
-        @Override public String modelId() { return "test-model"; }
+        @Override public String modelId() { return model; }
         @Override public int dimensions() { return dims; }
         @Override public boolean isAvailable() { return true; }
         @Override public List<List<Float>> embedDocuments(List<String> texts) {
@@ -237,7 +239,7 @@ class RetrievalMaintenanceEvidenceTest {
         models.upsertSelectedRebuildingSpace(
                 SPACE_B, "{}", "local-rust", "fake-384", DIMS_B);
         models.enqueueMissingJobs(SPACE_B, "activate-backfill");
-        registry.setActive(new FakeProvider(DIMS_B));
+        registry.setActive(new FakeProvider(DIMS_B, "fake-384"));
         assertEquals("DISABLED", spaceState(SPACE_A));
         Map<String, Object> statusSwitch = statusService.status("all", null);
         assertEquals("REBUILDING", statusSwitch.get("indexState"));

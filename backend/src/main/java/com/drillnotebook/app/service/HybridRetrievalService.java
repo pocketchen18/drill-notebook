@@ -5,6 +5,7 @@ import com.drillnotebook.app.model.RetrievalHit;
 import com.drillnotebook.app.model.RetrievalQuery;
 import com.drillnotebook.app.repository.EmbeddingJobRepository;
 import com.drillnotebook.app.repository.RetrievalIndexRepository;
+import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -49,6 +50,8 @@ public class HybridRetrievalService {
     static final int VECTOR_TOP_K = 40;
     static final int RRF_K = 60;
     static final int MAX_RESULTS = 10;
+    /** Tools deduplicate pages before applying their own result limit. */
+    static final int MAX_CANDIDATES = RetrievalService.TOP_K + VECTOR_TOP_K;
 
     private static final Logger log = LoggerFactory.getLogger(HybridRetrievalService.class);
 
@@ -83,9 +86,20 @@ public class HybridRetrievalService {
     }
 
     /** Hybrid result: fused hits plus an optional degrade notice. */
-    public record Result(List<RetrievalHit> hits, Map<String, Object> notice) {}
+    public record Result(List<RetrievalHit> hits, Map<String, Object> notice, boolean candidateLimitReached) {
+        public Result(List<RetrievalHit> hits, Map<String, Object> notice) { this(hits, notice, false); }
+    }
 
     public Result retrieve(RetrievalQuery query) {
+        return retrieve(query, MAX_RESULTS);
+    }
+
+    /** Bounded ranking union for on-demand tools; no chat context is injected. */
+    public Result retrieveCandidates(RetrievalQuery query) {
+        return retrieve(query, MAX_CANDIDATES);
+    }
+
+    private Result retrieve(RetrievalQuery query, int maxResults) {
         long deadline = System.currentTimeMillis() + totalTimeoutMs;
         List<RetrievalHit> bm25 = lexical.retrieve(query);
 
@@ -94,12 +108,22 @@ public class HybridRetrievalService {
         String normalized = RetrievalService.normalizeQuery(queryText);
         if (normalized.isEmpty()) return new Result(List.of(), null);
 
-        VectorOutcome vector = tryVectorSearch(query, queryText, deadline);
-        if (vector.ranks == null) {
-            return new Result(bm25, vector.noticeOrNull());
+        VectorOutcome vector;
+        try {
+            vector = tryVectorSearch(query, queryText, deadline);
+            if (vector.ranks != null) {
+                return new Result(fuseAndMaterialize(bm25, vector.ranks, normalized, maxResults), null,
+                        bm25.size() >= RetrievalService.TOP_K || vector.ranks.size() >= VECTOR_TOP_K);
+            }
+        } catch (RuntimeException error) {
+            log.warn("向量检索暂不可用，本次降级为 BM25-only：{}", error.getClass().getSimpleName());
+            vector = VectorOutcome.DEGRADED;
         }
-        return new Result(fuseAndMaterialize(bm25, vector.ranks, normalized), null);
+        return new Result(bm25, vector.noticeOrNull(), bm25.size() >= RetrievalService.TOP_K);
     }
+
+    @PreDestroy
+    public void shutdown() { vectorExecutor.shutdownNow(); }
 
     // ── Vector branch ───────────────────────────────────────────────────────
 
@@ -132,7 +156,9 @@ public class HybridRetrievalService {
         int dimensions = ((Number) space.get("dimensions")).intValue();
         String spaceId = (String) space.get("embedding_space_id");
         EmbeddingProvider provider = providers.active();
-        if (provider == null || provider.dimensions() != dimensions) {
+        if (provider == null || provider.dimensions() != dimensions
+                || !provider.providerType().equals(space.get("provider_type"))
+                || !provider.modelId().equals(space.get("model_identifier"))) {
             return VectorOutcome.DEGRADED;
         }
         if (!awaitProviderReady(provider, deadline)) return VectorOutcome.DEGRADED;
@@ -157,7 +183,9 @@ public class HybridRetrievalService {
             return VectorOutcome.DEGRADED;
         } catch (Exception error) {
             // Never logs query text or note content.
-            log.warn("向量检索失败，本次降级为 BM25-only：{}", error.getMessage());
+            future.cancel(true);
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("向量检索失败，本次降级为 BM25-only：{}", error.getClass().getSimpleName());
             return VectorOutcome.DEGRADED;
         }
     }
@@ -229,6 +257,10 @@ public class HybridRetrievalService {
      * one-sided hits keep their single term, ties by source/chunk index.
      */
     static List<FusedEntry> fuse(List<RetrievalHit> bm25, List<VectorRanked> vector) {
+        return fuse(bm25, vector, MAX_RESULTS);
+    }
+
+    private static List<FusedEntry> fuse(List<RetrievalHit> bm25, List<VectorRanked> vector, int maxResults) {
         Map<Long, FusedEntry> byChunk = new LinkedHashMap<>();
         for (RetrievalHit hit : bm25) {
             Citation citation = hit.citation();
@@ -261,13 +293,13 @@ public class HybridRetrievalService {
         fused.sort(Comparator.comparingDouble(FusedEntry::rrfScore).reversed()
                 .thenComparingLong(FusedEntry::sourceId)
                 .thenComparingInt(FusedEntry::chunkIndex));
-        return fused.size() <= MAX_RESULTS ? fused : fused.subList(0, MAX_RESULTS);
+        return fused.size() <= maxResults ? fused : fused.subList(0, maxResults);
     }
 
     /** Turn fused entries back into hits with complete citations. */
     private List<RetrievalHit> fuseAndMaterialize(
-            List<RetrievalHit> bm25, List<VectorRanked> vector, String normalizedQuery) {
-        List<FusedEntry> fused = fuse(bm25, vector);
+            List<RetrievalHit> bm25, List<VectorRanked> vector, String normalizedQuery, int maxResults) {
+        List<FusedEntry> fused = fuse(bm25, vector, maxResults);
 
         Map<Long, RetrievalHit> bm25ByChunk = new LinkedHashMap<>();
         for (RetrievalHit hit : bm25) bm25ByChunk.put(hit.citation().chunkId(), hit);
