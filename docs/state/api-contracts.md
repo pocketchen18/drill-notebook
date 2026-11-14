@@ -117,7 +117,7 @@
 | POST | `/ai/models/test` | 测试连接 |
 | POST | `/ai/summarize` | 知识点 / Markdown 总结 |
 
-当前 AI 连接管理统一使用 `/ai/connections`，响应返回 `{revision, providers, chatModelId, chatReasoningEffort, importModelId}`，密钥不回传。修改携带 revision，冲突返回 409；配置编辑、助手模型选择和导入绑定分别操作，助手选择全局持久化。
+当前 AI 连接管理统一使用 `/ai/connections`，响应返回 `{revision, providers, chatModelId, chatReasoningEffort, importModelId}`，密钥不回传。修改携带 revision，冲突返回 409；配置编辑、助手模型选择和导入绑定分别操作。chatModelId / chatReasoningEffort 保存新会话继承的最近选择，已有会话使用各自持久化的模型与档位。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -130,7 +130,7 @@
 | POST | `/ai/connections/providers/{id}/verify-add` | 验证候选并按文本结果添加 |
 | PUT / DELETE | `/ai/connections/models/{id}` | 更新 / 删除模型；路径 ID 为稳定 UUID |
 | PUT | `/ai/connections/bindings` | `{revision, purpose:import, modelId}`；null 恢复跟随助手模型，其他用途拒绝 |
-| PUT | `/ai/connections/chat-model` | 助手输入区保存全局 `{revision, modelConfigId, reasoningEffort}`；成功返回新集合 |
+| PUT | `/ai/connections/chat-model` | 保存 `{revision, modelConfigId, reasoningEffort, sessionId?}`；更新新会话继承默认，有 sessionId 时同事务更新该会话；成功返回新集合及 `sessionChoice?` |
 | POST | `/ai/connections/models/{id}/test` | 短连接测试，不带聊天历史 |
 | POST | `/ai/connections/tests/{requestId}/cancel` | 取消连接测试或新增验证，支持提前取消 |
 
@@ -210,7 +210,8 @@ v2 请求核心字段：
 - 快照 `kind` 支持 `none / note / knowledge / bank / quiz / wrong / manual / settings / calendar`。设置与日历可不带资料 ID，分别通过 `/settings?tab=...` 与 `/calendar?date=...` 定位；正文依然上限 32,000 码点、选区 2,000 码点，沿用 `isDraft / truncated`。设置只登记当前分区允许读取的选项与状态，密钥 / 密码、连接地址、请求头及记忆正文不进入设置快照；日历登记当前月份、日期、计划与筛选后的学习队列。加载失败须在正文说明，不能伪装成空数据。
 - `input.attachments` 的文本去 `data:` 前缀后按 base64 传输；图片大小受请求体上限约束。
 - 同一会话同一时刻只允许一个 `RUNNING` 轮次；v2 同 requestId、同输入的重试复用原收据与结果，输入改变返回 `409 REQUEST_ID_CONFLICT`。直接向聊天接口提交忙碌会话的另一条请求仍返回 `409 SESSION_BUSY`；前端人工排队改走 §3.4.1 队列接口，与工具派发按序接续。尚无记录的请求 ID 仍须满足 UUIDv7 时效要求。
-- `retryOf` 是 v2 顶层可选字段，指向同一会话中要重新回答的原 requestId；重新生成使用新的 requestId，按受理时的会话模型与本次提交的页面快照生成，并将新问答追加到历史。它不覆盖原回答；已有资料写入工具按显式 retryOf 链复用回执，参数改变仍拒绝冲突。原提问与完整附件可通过 §3.3 的只读接口取得。
+- `retryOf` 是 v2 顶层可选字段，指向同一会话中要重新回答的当前 requestId。v0.8.2 起重新生成使用新 requestId，在同一事务中复用原 turnId / userMessageId / assistantMessageId，替换原回答，不追加问答；原提问与完整附件必须一致，可通过 §3.3 的只读接口取得。按受理时的目标会话模型与本次页面快照生成，以原轮次为上下文截止点，不带入其后问答。原消息时间与顺序保留，本次重新受理冻结新的运行配置；自动恢复仍共用正在运行的原请求与预算。
+- 原地重试将被替换 requestId 写入 `ai_chat_retry_receipt`，旧 ID 返回 `409 TURN_SUPERSEDED`，details 带 `replacementRequestId` 和 sessionId。同新 requestId 的重发仍复用本次收据；资料写入工具可沿当前轮次与旧回执的 retryOf 链查重，参数改变仍拒绝冲突。历史累计用量包含原轮次各次尝试的实测记录，不能把旧 ID 作为另一条新消息再次执行。
 
 SSE 事件格式：`event:<name>` + `data:<json>`；事件名：
 
@@ -445,6 +446,8 @@ v2 状态查询同时覆盖尚未建立轮次的派发收据。运行中返回 a
 
 无效 ID 返回 400 `RETRY_ID_INVALID`；原轮次不存在返回 404 `TURN_NOT_FOUND`；正文已清理返回 410 `TURN_CONTENT_DELETED`；原轮次运行中返回 409 `RETRY_TARGET_ACTIVE`；受保护正文未解锁返回 423 `CHAT_PASSWORD_REQUIRED`；原提问、加密元数据或附件无法完整恢复返回 409 `RETRY_INPUT_UNAVAILABLE`。恢复的附件数量必须与保存的原输入一致，不能丢失部分附件后继续发送。
 
+原地重试受理另校验：原提问或附件 origin / digest 不一致返回 `409 RETRY_INPUT_CHANGED`；会话上下文代数变化返回 `409 RETRY_CONTEXT_CHANGED`；原轮未保存助手消息位置且已经有后续消息时返回 `409 RETRY_TARGET_INCOMPLETE`。原轮没有输出但仍是最新轮次时允许重试。已替换的 requestId 在执行、轮次读取及原输入读取中返回 `409 TURN_SUPERSEDED`，指向最新 replacementRequestId；容量不足时不替换原内容或修改原账本。
+
 ### 3.4 会话与历史
 
 | 方法 | 路径 | 用途 |
@@ -472,17 +475,18 @@ v0.8.1 历史与定位契约：
 
 runtime 响应为 `{sessions:[{sessionId,requestId,status,phase?,paused?,queueCount}],current?}`。QUEUED/RUNNING 表示未结束，PAUSED 表示暂停保留；phase 可表达 running/thinking/tools/answer/waiting/stopping。queueCount 不包含正在执行的队头；人工待发与插话详情由队列接口读取。该查询不外发模型请求、不改变会话排序或选择；停止返回 STOPPING 后仍等服务端终态。有运行/排队项时删除、归档与历史清理被拒绝。
 
-会话列表和旧版全局消息查询均为只读；无会话时返回 `[]`，不补建默认记录。前端新会话页没有会话 ID，首次有效发送时调用创建接口，再用返回的 ID 发送该条消息；进入页面、编辑草稿、删除当前会话均不调用创建接口。已有空白记录不自动删除或复用；旧客户端未提供会话 ID 的实际聊天请求仍可按兼容规则创建默认会话。
+会话列表和旧版全局消息查询不外发模型请求或创建会话；v0.8.2 会话列表可幂等初始化旧空模型选择。无会话时返回 `[]`，不补建默认记录。前端新会话页没有会话 ID，首次有效发送时调用创建接口，再用返回的 ID 发送该条消息；进入页面、编辑草稿、删除当前会话均不调用创建接口。已有空白记录不自动删除或复用；旧客户端未提供会话 ID 的实际聊天请求仍可按兼容规则创建默认会话。
 
 会话列表、新建、更新和标题任务响应增加 `sessionLink`、`titleSource`、`titleStatus`、`titleRevision`、`canGenerateTitle`。`sessionLink` 格式为 `drill-notebook://session/<32位小写十六进制引用>`；仅是本地引用，不注册系统协议。可复制到新会话，由 `read_session` 读取；回复引用可打开只读预览。复制成功不等同于模型已经读取。
 
 标题 POST 请求为 `{expectedRevision: number, overwriteManual?: boolean}`。首个完整且保存成功的问答可作为素材；无素材返回 409 `TITLE_NO_EXCHANGE`，人工名未确认覆盖返回 `TITLE_CONFIRM_REQUIRED`，版本变化返回 `TITLE_CHANGED`，任务重复或旧任务仍在收尾返回 `TITLE_BUSY`。缺少助手所选模型返回 `TITLE_MODEL_UNAVAILABLE`，队列满返回 503 `TITLE_QUEUE_FULL`，会话不存在返回 404 `SESSION_NOT_FOUND`。202 返回已认领的会话快照，随后从会话列表读取 generating → ready/failed；失败保留原名。解锁材料只从进程会话取，不进 URL。
 
-新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务用助手当前全局所选模型；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
+新会话首个 COMPLETED 且持久化成功的问答自动提交标题任务；中断/失败不触发，之后首个成功问答可触发。自动失败、重启或切模型都不自动重试；人工重命名始终优先，标题变更不改变列表顺序。自动任务沿用本轮模型快照，手动任务使用目标会话自己的模型与档位；仅发送首个完整问答的正文片段，不带附件、工具结果或整段历史。
 
-- v0.8.1 起模型与思考档位统一由助手输入区全局选择，使用 `/ai/connections/chat-model` 保存，跨会话和重启共用。模型须存在且连接 / 容量完整，显式档位须属于目标模型支持的 effort；只换模型且旧档位不适用时回到模型默认。`POST /ai/sessions`、`PUT /ai/sessions/{id}` 不再接受独立的 modelConfigId/reasoningEffort；旧会话视图中的这两项只保留兼容元数据，不参与派发。受理时冻结全局选择，已受理队列和自动重连不被之后改选覆盖。模型不可用时拒绝外发，历史仍返回当时实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
+- v0.8.2 起模型与思考档位由助手输入区按会话选择。`/ai/connections/chat-model` 有 sessionId 时仅改该会话并更新新会话继承默认；无 sessionId 时保存新草稿的继承默认，不覆盖已有会话。额外响应 `sessionChoice` 为 `{sessionId, modelConfigId, reasoningEffort, revision}`；会话视图返回独立的 modelChoiceRevision，标题版本与模型版本分别合并，迟到响应不能覆盖更新选择。
+- `POST /ai/sessions` 可显式携带 modelConfigId / reasoningEffort，未提供时继承最近默认并固定；`PUT /ai/sessions/{id}` 可更新该会话的独立选择。模型须存在且连接 / 容量完整，显式档位须属于目标模型支持的 effort；助手只换模型且旧档位不适用时回到模型默认。旧空选择优先恢复最近实际模型，无法唯一匹配时只继承一次默认；已有选择不持续跟随全局。受理、排队与自动恢复冻结目标会话配置，其它会话改选不影响运行。模型不可用时拒绝外发，历史仍返回当时实际使用的 `model`（供应商 · 模型）与 `reasoningEffort`。
 
-- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按助手当前全局所选模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`，为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
+- `GET /ai/sessions/{id}/context-usage`（v0.8，只读）返回 `{sessionId, latest, model, contextWindow, outputReserve}`：`latest` 为当前上下文代数里最近一次供应商回报了输入用量的请求 `{requestId, inputTokens, contextWindow, model}`，没有则为 null；`inputTokens` 是一次请求送入的长度（含缓存部分），不是多次工具往返的累计。后三项按目标会话自己的模型给出，模型不可用时为 null。历史分页另为助手消息返回该轮累计实测用量 `usage:{requests,inputTokens,outputTokens}`（包括旧原地重试尝试），为用户消息返回提交时绑定的业务页面 `page:{title,link?}`；没有记录时均不返回，不补估算。
 
 - 会话置顶（v0.8）：`PUT /ai/sessions/{id}` 接受布尔 `pinned`，会话视图返回 `pinnedAt`（ISO 时刻或 null）。重复置顶保留最初的时刻，置顶不改变 `updatedAt`；列表接口的顺序不变，置顶分组与排序由前端按 `pinnedAt` 升序处理。
 - 上下文占用（v0.8）：`GET /ai/sessions/{id}/context-usage` 的 `latest` 增加 `cacheReadTokens` 与 `outputTokens`，均为供应商回报的数字或 null（未回报不补 0）。`inputTokens` 仍是这次请求送入的总长度（含命中的缓存），未命中部分由前端按 `inputTokens - cacheReadTokens` 得出。

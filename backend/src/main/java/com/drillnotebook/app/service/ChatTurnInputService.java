@@ -34,6 +34,7 @@ public class ChatTurnInputService {
         if (!UuidV7.isCanonical(requestId)) {
             throw reject(400, "RETRY_ID_INVALID", "重新生成的轮次标识无效");
         }
+        turns.assertCurrentRequest(requestId);
         var turn = turns.findByRequestId(requestId)
                 .orElseThrow(() -> reject(404, "TURN_NOT_FOUND", "要重新生成的轮次不存在"));
         if (turn.contentDeletedAt() != null) {

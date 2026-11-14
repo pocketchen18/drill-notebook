@@ -92,7 +92,7 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 | 附件 | `note_attachment`：上传/列表/内容/删除 API，SHA-256 去重，存储于 `data/attachments/` |
 | 计划 | 日历计划组与条目（题目/知识点/笔记） |
 | 复习 | spaced repetition 配置、enrollment、schedule、log |
-| AI | 多供应商与模型、助手全局模型选择与导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
+| AI | 多供应商与模型、各会话独立选模与新会话继承、导入绑定、全局运行限制、多会话与加密历史、chat/summarize 代理、长期记忆与工具活动 |
 | 知识点总结 | `knowledge_point_original` 双角色快照（original/summary）；`KnowledgePointSummaryService` + `AiService.summarizeKnowledgePoint` / `summarizeMarkdown`（v0.5） |
 
 当前 schema 19，完整 DDL 以 `backend/src/main/resources/schema.sql` 为准；表与迁移边界见 [data-model.md](data-model.md)。
@@ -132,12 +132,13 @@ AI 助手自 v0.8 起是独立系统窗口：主进程维护唯一的助手窗�
 - `PageSnapshot` 校验消息级快照、生成指纹与无正文定位提示。`AiService` 在本轮内存中按 requestId 保存主消息与插话快照，只在调用工具时提供正文。队列复用既有加密载荷，元数据只记录指纹；工具原始资料结果仍不落历史，仅安全活动摘要随既有加密元数据保存。
 - 目录最多 20 条，正文最多 8000 Unicode 码点，续读校验版本；删除、缺失和不可读明确返回。搜索片段足够时直接引用，需要上下文再按 ID 读取，不重复自动注入整页。来源链接只支持六种本地资料类型与正整数 ID；点击题目时通过单题 GET 取得所属题库，不注册系统协议。契约见 [api-contracts.md §3.2.4](api-contracts.md)，本次检索验证见[v0.8.2 清单](v0.8.2-features.md)。
 
-### 3.3 失败恢复、会话内定位与模型选择（v0.8.1）
+### 3.3 失败恢复、会话内定位与模型选择（v0.8.1，含 v0.8.2 修正）
 
-- `AiConnectionsStore.State` 在现有便携数据库 JSON 中保存助手全局模型与档位；`AiConnectionsService.selectChatModel` 使用 revision 和原记忆授权事务，配置编辑与导入绑定保留选择。助手只读数据库选择，旧会话 / 草稿选择不参与派发；受理时冻结模型，后续改选不影响既有任务。
+- `AiConnectionsStore.State` 在便携数据库 JSON 中保存新会话继承的最近模型与档位；各已有会话使用 `ai_chat_session.model_config_id/reasoning_effort`。`AiConnectionsService.selectChatModel` 按 sessionId 在同一事务中保存该会话、新会话默认与原记忆授权，不改其它会话。旧空选择只初始化一次；助手按独立 modelChoiceRevision / titleRevision 合并迟到响应，草稿 choice 不覆盖数据库。直接请求、排队受理、手动标题与上下文占用使用目标会话模型，运行和队列快照不随后续改选变化。
 - `AiRetrySettings` 嵌入全局 `AiRuntimeSettings`，沿用 `ai_runtime_settings` 的 JSON 与 revision；旧文档缺项补默认，旧客户端保存保留已有重试偏好。配置随受理时快照冻结，不新增 schema 或模型专属预算。
 - `AiUpstreamException` 统一 HTTP / SSE / 传输错误及脱敏正文、服务端等待截止时刻；`AiRetryPolicy` 分别管理请求、流式和纯连接失败计数；普通请求和流式恢复从 400ms 起翻倍并抖动，断网保留独立的 5 秒起步策略。`AiService` 在原轮次内等待 / 重发，保持原模型、整轮预算、部分回答与已确认工具上下文；未完整终止的工具调用不执行，交付未知插话不重放。两类协议的断流恢复通过同模型请求续答完成，没有原流续传协议。
 - `AiRecovery` 作为安全状态在 metadata、终态、轮次 / runtime 查询和加密历史之间传递。`RecoveryFeedback` 只在原助手回答处显示真实次数、一次报错和倒计时；停止 / 失败保留事实，成功清除。零正文的恢复失败也保存加密空助手消息，刷新不丢原因。
+- 手动重试经 `ChatTurnService` 核对完整原输入，`ChatTurnRepository.restart` 以一个事务复用原 turn / user / assistant ID，按净增量预留、重加密附件并更新原回答。schema 20 的 `ai_chat_retry_receipt` 保存旧请求与回执链，旧 ID 被拦截并指向最新尝试；覆盖该轮的派生状态失效。`ChatContextAssembler` 以原轮为截止点，前端按稳定消息身份原位合并并只刷新驻留窗口；导航轮次数量和提问时间不变。
 - `ChatHistoryRepository` 对已有用户消息计数并查询轮次对应 ID；`ChatHistoryService` 提供有界预览及 history 的 totalRounds / firstRound / hasOlder。`useChatHistoryPages` 按目标加载阅读窗口，50 条一页、最多 500 条驻留，回到最新恢复最新窗口；请求身份和阅读锚点保护会话切换、定稿与迟到响应。
 - `ConversationNavigation` 使用正文右侧单一键盘定位控件，最多 64 个连续刻度，矮窗按高度减少；非 passive 滚轮翻阅窗口并阻止正文滚动。静止短线、悬停邻近刻度渐长；整卡显示轮次 / 时间、两行粗体提问、三行浅色回答及 `...`。预览只读取已有消息，文字复制 / 引用或覆盖详情期间隐藏导航。
 

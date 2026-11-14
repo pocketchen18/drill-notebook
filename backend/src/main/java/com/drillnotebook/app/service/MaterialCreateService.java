@@ -115,9 +115,7 @@ public class MaterialCreateService {
             var sameContent = jdbc.query("SELECT material_id FROM ai_material_creation WHERE request_id=? AND fingerprint=? AND session_id=? AND material_id IS NOT NULL LIMIT 1",
                     (row, index) -> row.getLong(1), request, fingerprint, sessionId);
             if (!sameContent.isEmpty()) return new Receipt(fingerprint, sameContent.get(0));
-            var previous = jdbc.query("SELECT retry_of FROM ai_chat_turn WHERE request_id=? AND session_id=?",
-                    (row, index) -> row.getString(1), request, sessionId);
-            request = previous.isEmpty() ? null : previous.get(0);
+            request = com.drillnotebook.app.repository.ChatTurnRepository.retryParent(jdbc, request, sessionId);
         }
         if (request != null) throw new Failure("STALE");
         return null;

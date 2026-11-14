@@ -104,7 +104,7 @@ describe('AiAssistant 流式会话状态', () => {
       if (url === '/api/ai/config') return Promise.resolve({ chat: { hasKey: true, provider: 'custom', endpoint: 'mock://x', model: 'm' } });
       if (url === '/api/notebooks') return Promise.resolve([{ id: 1, title: 'NB' }]);
       if (url === '/api/ai/sessions') return Promise.resolve([{ id: 10, title: 'S' }]);
-      if (url === '/api/ai/sessions/10/history?limit=50') return Promise.resolve(historyPage(serverMessages));
+      if (url.startsWith('/api/ai/sessions/10/history?')) return Promise.resolve(historyPage(serverMessages));
       if (url.startsWith('/api/notebooks/')) return Promise.resolve([]);
       return Promise.resolve({});
     });
@@ -256,21 +256,33 @@ describe('AiAssistant 流式会话状态', () => {
     } finally { act(() => useUiStore.setState({ shortcutConfig: shortcuts })); }
   });
 
-  it('历史达限说明与继续入口保留，继续开启新轮次且不覆盖草稿', async () => {
-    serverMessages = [{ id: 1, role: 'user', content: '检查所有记忆' },
+  it('历史达限后在原轮次重试，沿用原输入并保留下一条草稿', async () => {
+    serverMessages = [{ id: 1, role: 'user', content: '检查所有记忆', requestId: 'budget-turn' },
       { id: 2, role: 'assistant', content: '已完成部分查询', requestId: 'budget-turn', turnStatus: 'COMPLETED', finishReason: 'budget_stages', toolActivities: [activity] }];
+    const base = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) => url === '/api/ai/turns/budget-turn/input'
+      ? Promise.resolve({ requestId: 'budget-turn', sessionId: 10, input: { role: 'user', userText: '检查所有记忆' } }) : base(url));
     renderAssistant();
-    const next = await screen.findByRole('button', { name: '继续' });
+    const next = await screen.findByRole('button', { name: '重试' });
     expect(screen.getByText(/已达工具阶段上限/)).toBeVisible();
     fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '未发送草稿' } });
-    expect(next).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText(/提问/), { target: { value: '' } });
+    expect(next).toBeEnabled();
     fireEvent.click(next);
     await waitFor(() => expect(streamChatMock).toHaveBeenCalledTimes(1));
     const body = streamChatMock.mock.calls[0][1];
     expect(body.sessionId).toBe(10);
     expect(body.requestId).not.toBe('budget-turn');
-    expect(body.input.userText).toContain('已经确认成功的操作不要重复执行');
+    expect(body.retryOf).toBe('budget-turn');
+    expect(body.input.userText).toBe('检查所有记忆');
+    expect(document.querySelectorAll('.chat-message.user')).toHaveLength(1);
+    expect(document.querySelectorAll('.chat-message.assistant')).toHaveLength(1);
+    expect(screen.getByPlaceholderText('正在回复，可先输入下一条问题')).toHaveValue('未发送草稿');
+    serverMessages = [{ id: 1, role: 'user', content: '检查所有记忆', requestId: body.requestId },
+      { id: 2, role: 'assistant', content: '原位置重试完成', requestId: body.requestId, turnStatus: 'COMPLETED' }];
+    act(() => streamCallbacks!.onDone({ requestId: body.requestId, reply: '原位置重试完成', reasoning: '', status: 'COMPLETED', stateDurable: true }));
+    await screen.findByText('原位置重试完成');
+    expect(screen.getByPlaceholderText(/提问/)).toHaveValue('未发送草稿');
+    expect(document.querySelectorAll('.chat-message.user')).toHaveLength(1);
   });
 
   it('失败历史只在助手气泡提示，用户提问保持原文', async () => {

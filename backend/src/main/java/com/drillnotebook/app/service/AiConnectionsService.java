@@ -37,7 +37,11 @@ public class AiConnectionsService {
         this.upstream = new AiUpstreamClient(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), mapper);
     }
 
-    private State state() { return store.initialize(this::migrate); }
+    private State state() {
+        State state = store.initialize(this::migrate);
+        store.initializeSessionChoices(state);
+        return state;
+    }
     public Map<String, Object> view() { synchronized (AiConnectionUsage.LOCK) { return view(state()); } }
     public List<AiModelPresets.Preset> presets(String providerId) {
         synchronized (AiConnectionUsage.LOCK) { return AiModelPresets.forProvider(provider(state(), providerId)); }
@@ -248,7 +252,7 @@ public class AiConnectionsService {
         });
     }
 
-    /** 助手输入区的全局选择；新旧会话与应用重启后共用，已受理的任务保留原配置快照。 */
+    /** 助手输入区改选只写当前会话，并更新新会话的继承默认；已受理任务保留配置快照。 */
     public Map<String, Object> selectChatModel(Map<String, Object> body) {
         return mutate(body, state -> {
             String id = body.containsKey("modelConfigId") ? text(body, "modelConfigId", 80, true) : state.chatModelId();
@@ -386,11 +390,27 @@ public class AiConnectionsService {
             // 显式选择可修复旧版本留下的过期授权；修改当前连接的地址/协议也要同步。
             if (fingerprint != null && (selectChat || !fingerprint.equals(
                     memoryFingerprint(store.resolve(state, "chat"), MemoryPolicyService.PURPOSE_USE)))) {
-                return view(store.saveWithMemoryConsent(next, state.revision(), fingerprint,
-                        memoryFingerprint(target, MemoryPolicyService.PURPOSE_MAINTENANCE)));
+                return saveSelection(next, state, body, selectChat, fingerprint,
+                        memoryFingerprint(target, MemoryPolicyService.PURPOSE_MAINTENANCE));
             }
+            if (selectChat) return saveSelection(next, state, body, true, fingerprint,
+                    memoryFingerprint(target, MemoryPolicyService.PURPOSE_MAINTENANCE));
             return view(store.save(next, state.revision()));
         }
+    }
+
+    private Map<String, Object> saveSelection(State next, State previous, Map<String, Object> body,
+                                               boolean selectChat, String useFingerprint, String maintenanceFingerprint) {
+        Long sessionId = null;
+        if (selectChat && body.get("sessionId") != null) {
+            if (!(body.get("sessionId") instanceof Number id) || id.longValue() <= 0 || id.doubleValue() != id.longValue()) {
+                invalid("会话标识无效");
+            }
+            sessionId = ((Number) body.get("sessionId")).longValue();
+        }
+        var result = view(store.saveWithMemoryConsent(next, previous.revision(), useFingerprint, maintenanceFingerprint, sessionId));
+        if (sessionId != null) result.put("sessionChoice", store.sessionChoice(sessionId));
+        return result;
     }
 
     private static String memoryFingerprint(AiConfigRepository.ConfigRow config, String purpose) {

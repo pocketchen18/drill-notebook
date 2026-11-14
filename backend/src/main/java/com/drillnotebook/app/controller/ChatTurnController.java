@@ -50,7 +50,7 @@ public class ChatTurnController {
         return dispatch==null ? turns.cancel(requestId) : dispatch.cancelRequest(requestId);
     }
 
-    /** 只读取原提问与完整附件；客户端另用新身份和 retryOf 发起重新生成。 */
+    /** 只读取原提问与完整附件；客户端用新请求身份和 retryOf 在原轮次重试。 */
     @GetMapping("/{requestId}/input")
     public ResponseEntity<Map<String, Object>> input(@PathVariable String requestId) throws SQLException {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(inputs.input(requestId));

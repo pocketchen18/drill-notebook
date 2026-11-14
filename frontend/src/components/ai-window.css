@@ -141,7 +141,9 @@
 .ai-window .chat-message.is-jump-target { outline: 2px solid var(--accent-border); outline-offset: 4px; }
 .ai-window.has-conversation-navigation .ai-window-stream { padding-right: 52px; }
 .ai-window .chat-message.user { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding: 0; background: transparent; }
-.ai-window .chat-message.user > .markdown-content { padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--hover-bg); max-width: 100%; }
+/* Markdown 已用段落和 br 表达换行；按正常排版忽略生成 HTML 中的格式换行。 */
+.ai-window .chat-message.user > .markdown-content { padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--hover-bg); max-width: 100%; white-space: normal; }
+.ai-window .chat-message.user > .markdown-content > :last-child { margin-bottom: 0; }
 .chat-bound-page { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button.chat-bound-page { cursor: pointer; }
 button.chat-bound-page:hover { color: var(--accent); }

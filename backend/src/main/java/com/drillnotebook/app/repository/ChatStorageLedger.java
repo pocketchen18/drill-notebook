@@ -223,6 +223,13 @@ public class ChatStorageLedger {
         return Fit.ACCEPTED;
     }
 
+    /** 原地替换先按净增量检查额度；拒绝时原回答和账本都不变。 */
+    public Fit reserveReplacement(Connection connection, long oldHistoryBytes, long newHistoryBytes,
+                                  long oldAttachmentBytes, long newAttachmentBytes) throws SQLException {
+        return reserve(connection, Math.subtractExact(newHistoryBytes, oldHistoryBytes),
+                Math.subtractExact(newAttachmentBytes, oldAttachmentBytes));
+    }
+
     /**
      * 终态结算：把本轮实际新增的存量计入，并一次性释放本轮的回复预留。
      * 调用方必须保证 {@code deltaBytes} 是 newStored − oldStored 且不超过该轮预留，

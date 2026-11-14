@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import MarkdownIt from 'markdown-it';
 import { renderToString } from 'katex';
@@ -6,6 +6,7 @@ import { ensureMermaidTheme, readDocumentTheme } from '../../lib/mermaidTheme';
 import { renderMermaid } from '../../lib/mermaidRender';
 import { useUiStore } from '../../stores/uiStore';
 import { materialLinkTarget } from '../../lib/pageSnapshot';
+import { canOpenExternally, openExternalLink } from '../../lib/externalLink';
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -27,6 +28,13 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
   if (material) {
     token.attrSet('href', `#ai-material-${material.type}-${material.id}`);
     token.attrSet('data-material-link', `drill-notebook://material/${material.type}/${material.id}`);
+  }
+  const href = token.attrGet('href') ?? '';
+  if (canOpenExternally(href)) {
+    // 悬停显示实际目标；浏览器预览环境也在新标签中打开。
+    token.attrSet('title', new URL(href).href);
+    token.attrSet('target', '_blank');
+    token.attrSet('rel', 'noopener noreferrer');
   }
   return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, renderer)
     : renderer.renderToken(tokens, index, options);
@@ -54,7 +62,7 @@ export function renderMarkdownHtml(value: string): string {
     return `DRILL_MATH_PLACEHOLDER_${index}_END`;
   });
 
-  let html = DOMPurify.sanitize(markdown.render(source));
+  let html = DOMPurify.sanitize(markdown.render(source), { ADD_ATTR: ['target'] });
   mathHtml.forEach(({ html: formula, display }, index) => {
     const className = display ? 'markdown-math markdown-math-display' : 'markdown-math';
     html = html.split(`DRILL_MATH_PLACEHOLDER_${index}_END`).join(`<span class="${className}">${formula}</span>`);
@@ -101,13 +109,29 @@ export function MarkdownContent({ value = '', className = '', inline = false, on
     return renderMermaidBlocks(rootRef.current, theme ?? readDocumentTheme());
   }, [html, theme]);
 
-  return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()}
-    onClick={(event) => {
-      const material = event.target instanceof Element ? event.target.closest('a[data-material-link]')?.getAttribute('data-material-link') : null;
-      if (material && materialLinkTarget(material)) { event.preventDefault(); onMaterialLink?.(material); return; }
-      const ref = event.target instanceof Element ? event.target.closest('a[data-session-ref]')?.getAttribute('data-session-ref') : null;
-      if (!ref || !/^[a-f0-9]{32}$/.test(ref)) return;
+  const onLinkClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 && event.button !== 1) return;
+    const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null;
+    if (!link || !event.currentTarget.contains(link)) return;
+    const material = link.getAttribute('data-material-link');
+    if (material && materialLinkTarget(material)) {
       event.preventDefault();
-      onSessionLink?.(`drill-notebook://session/${ref}`);
-    }} dangerouslySetInnerHTML={{ __html: html }} />;
+      if (event.button === 0) onMaterialLink?.(material);
+      return;
+    }
+    const ref = link.getAttribute('data-session-ref');
+    if (ref && /^[a-f0-9]{32}$/.test(ref)) {
+      event.preventDefault();
+      if (event.button === 0) onSessionLink?.(`drill-notebook://session/${ref}`);
+      return;
+    }
+    const href = link.getAttribute('href') ?? '';
+    if (!canOpenExternally(href)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openExternalLink(href);
+  };
+
+  return <div ref={rootRef} className={`markdown-content ${inline ? 'markdown-content-inline' : ''} ${className}`.trim()}
+    onClick={onLinkClick} onAuxClick={onLinkClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }

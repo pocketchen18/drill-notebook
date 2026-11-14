@@ -42,7 +42,7 @@ class WebSearchSettingsTest {
         permissions.save(0, permissions.read().values().with(Map.of("search_web", false, "fetch_web", false)));
         assertTrue(new WebSearchSettingsRepository(jdbc).read().values().preferNative());
         assertFalse(permissions.read().values().enabled("search_web"));
-        assertEquals(19, jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
+        assertEquals(DatabaseInitializer.currentSchemaVersion(), jdbc.queryForObject("SELECT version FROM schema_version", Integer.class));
     }
 
     @Test void bothCapabilitiesShareOneEncryptedKeyAndViewsNeverReturnIt() throws Exception {

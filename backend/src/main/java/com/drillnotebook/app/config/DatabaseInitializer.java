@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DatabaseInitializer {
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
-    private static final int SCHEMA_VERSION = 19;
+    private static final int SCHEMA_VERSION = 20;
 
     /** 当前应用支持的数据库结构版本，供备份恢复在启动换库前拒绝未来版本。 */
     public static int currentSchemaVersion() {
@@ -128,9 +128,10 @@ public class DatabaseInitializer {
             ensureColumn(connection, "ai_chat_session", "memory_skipped_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(connection, "ai_chat_session", "summary_skipped_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(connection, "ai_chat_session", "last_scan_notice", "TEXT");
-            // v18 会话级模型与思考档位：NULL 表示跟随主模型 / 模型默认；轮次记录实际使用的模型。
+            // 会话独立保存模型与档位；旧空选择在连接初始化时一次性继承，不持续跟随全局默认。
             ensureColumn(connection, "ai_chat_session", "model_config_id", "TEXT");
             ensureColumn(connection, "ai_chat_session", "reasoning_effort", "TEXT");
+            ensureColumn(connection, "ai_chat_session", "model_choice_revision", "INTEGER NOT NULL DEFAULT 0");
             // 会话置顶：记录置顶时刻，先置顶的排在前面；NULL 表示未置顶。
             ensureColumn(connection, "ai_chat_session", "pinned_at", "TEXT");
             ensureColumn(connection, "ai_chat_turn", "model_label", "TEXT");

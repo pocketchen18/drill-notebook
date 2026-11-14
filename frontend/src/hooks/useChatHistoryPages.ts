@@ -86,6 +86,8 @@ export interface ChatHistoryPages {
   retry: () => void;
   /** 只用一次请求替换最新一页，更早的页保持不动（不整串重取）。 */
   refreshLatest: () => Promise<void>;
+  /** 原地重试较早的轮次时只刷新它所在窗口，保留当前阅读位置与分页。 */
+  refreshMessage: (messageId: number) => Promise<void>;
 }
 
 export function useChatHistoryPages(sessionId: number | undefined, enabled = true): ChatHistoryPages {
@@ -167,6 +169,19 @@ export function useChatHistoryPages(sessionId: number | undefined, enabled = tru
       client.setQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(historyQueryKey(sessionId), { pages: [target], pageParams: [cursor] });
     } finally { if (current()) reading.current.pending = false; }
   }, [sessionId, client]);
+  const refreshMessage = useCallback(async (messageId: number) => {
+    if (sessionId === undefined || reading.current.pending) return;
+    const sequence = reading.current.sequence;
+    const updated = await get<ChatHistoryPage>(pageUrl(sessionId, { after: messageId - 1 }));
+    if (reading.current.sessionId !== sessionId || reading.current.sequence !== sequence) return;
+    const replacements = new Map(updated.messages.map(message => [message.id, message]));
+    client.setQueryData<InfiniteData<ChatHistoryPage, HistoryCursor>>(historyQueryKey(sessionId), current => {
+      if (!current || current.pages.some(page => page.historyRevision > updated.historyRevision)) return current;
+      return { ...current, pages: current.pages.map(page => ({ ...page,
+        historyRevision: updated.historyRevision, totalRounds: updated.totalRounds ?? page.totalRounds,
+        messages: page.messages.map(message => replacements.get(message.id) ?? message) })) };
+    });
+  }, [sessionId, client]);
   const returnToLatest = useCallback(async () => {
     if (sessionId === undefined) return;
     const sequence = ++reading.current.sequence;
@@ -196,6 +211,7 @@ export function useChatHistoryPages(sessionId: number | undefined, enabled = tru
     error,
     loadOlder,
     retry: () => { void refetch(); },
-    refreshLatest
+    refreshLatest,
+    refreshMessage
   };
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { SessionNavigation, sessionGroup } from './SessionNavigation';
 import type { AiChatSession } from '../../lib/types';
 
@@ -78,6 +78,43 @@ describe('会话导航', () => {
     expect(view.props.onRename).toHaveBeenCalledWith(2, '我尚未保存的草稿');
     expect(view.props.onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '切换会话' })).toHaveTextContent('当前讨论');
+  });
+
+  it.each([{ docked: true, layout: '会话栏' }, { docked: false, layout: '会话列表' }])('$layout 回车保存后退出编辑，不聚焦标题按钮或切换会话', async ({ docked }) => {
+    const view = setup({ docked });
+    if (!docked) fireEvent.click(screen.getByRole('button', { name: '切换会话' }));
+    const row = screen.getByRole('button', { name: /当前讨论 4 条消息/ });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'F2' });
+    const input = await screen.findByRole('textbox', { name: '重命名会话' });
+    fireEvent.change(input, { target: { value: '新的会话标题' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(screen.queryByLabelText('重命名会话')).toBeNull());
+    view.rerender(<SessionNavigation {...view.props} sessions={[{ ...sessions[0], title: '新的会话标题' }, sessions[1]]} />);
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    expect(screen.getByRole('button', { name: /新的会话标题 4 条消息/ })).not.toHaveFocus();
+    expect(view.props.onRename).toHaveBeenCalledExactlyOnceWith(1, '新的会话标题');
+    expect(view.props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it('失焦保存完成后保留搜索框焦点，继续输入不被打断', async () => {
+    let finishSave!: () => void;
+    const onRename = vi.fn(() => new Promise<void>((resolve) => { finishSave = resolve; }));
+    const view = setup({ docked: true, onRename });
+    const row = screen.getByRole('button', { name: /当前讨论 4 条消息/ });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'F2' });
+    const input = await screen.findByRole('textbox', { name: '重命名会话' });
+    fireEvent.change(input, { target: { value: '失焦保存的标题' } });
+    const search = screen.getByRole('textbox', { name: '查找会话' });
+    act(() => search.focus());
+    expect(onRename).toHaveBeenCalledExactlyOnceWith(1, '失焦保存的标题');
+    expect(input).toBeDisabled();
+    await act(async () => { finishSave(); });
+    await waitFor(() => expect(screen.queryByLabelText('重命名会话')).toBeNull());
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    expect(search).toHaveFocus();
+    expect(view.props.onSelect).not.toHaveBeenCalled();
   });
 
   it('保存失败保留草稿，空白报错，Esc 取消而不发请求', async () => {

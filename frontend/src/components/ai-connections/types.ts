@@ -42,9 +42,10 @@ export interface Connections {
   revision: number;
   providers: ConnectionProvider[];
   chatModelId: string | null;
-  /** AI 助手中保存的全局思考档位；空值使用模型默认。 */
+  /** 新会话继承的思考档位；空值使用所选模型默认。 */
   chatReasoningEffort?: string | null;
   importModelId: string | null;
+  sessionChoice?: { sessionId: number; modelConfigId: string; reasoningEffort: string | null; revision: number };
 }
 export interface EditorHandle {
   dirty: boolean;

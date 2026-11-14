@@ -152,8 +152,8 @@ export const SessionNavigation = forwardRef<SessionNavigationHandle, Props>(func
     if (title === draft.original) { setEdit(null); return Promise.resolve(true); }
     setSaving(true);
     const promise = props.onRename(draft.id, title).then(() => {
+      // 保存完成后让用户的后续操作决定焦点，避免打断输入。
       setEdit(null); Message.success('会话已重命名');
-      requestAnimationFrame(() => list.current?.querySelector<HTMLButtonElement>(`[data-session="${draft.id}"]`)?.focus());
       return true;
     }).catch((error: unknown) => {
       setEdit({ ...draft, error: errorText(error) }); return false;

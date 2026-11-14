@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.springframework.stereotype.Repository;
@@ -170,6 +171,7 @@ public class ChatTurnRepository {
     public StartResult begin(Draft draft) throws SQLException {
         ledger.ensureRebuiltInProcess();
         return immediate.execute(connection -> {
+            rejectSuperseded(connection, draft.requestId());
             Optional<TurnRow> existing = findByRequestId(connection, draft.requestId());
             if (existing.isPresent()) {
                 return new StartResult(StartOutcome.DUPLICATE_REQUEST, existing.get(),
@@ -186,6 +188,10 @@ public class ChatTurnRepository {
             long turnMetaBytes = ChatStorageSizer.storedBytes(draft.requestMetaCipher(), draft.requestMetaCrypto());
             long newHistoryBytes = Math.addExact(userBytes, turnMetaBytes);
             long attachmentBytes = draft.attachments().stream().mapToLong(AttachmentPayload::storedBytes).sum();
+
+            if (draft.retryOf() != null) {
+                return restart(connection, draft, newHistoryBytes, attachmentBytes);
+            }
 
             ChatStorageLedger.Fit fit = ledger.reserve(connection, newHistoryBytes, attachmentBytes);
             if (!fit.accepted()) {
@@ -208,6 +214,116 @@ public class ChatTurnRepository {
             return new StartResult(StartOutcome.STARTED,
                     findByRequestId(connection, draft.requestId()).orElseThrow(), revision);
         });
+    }
+
+    /** 同一事务复用原 turn/user/assistant 身份，旧请求成为幂等回执，绝不追加一轮提问。 */
+    private StartResult restart(Connection connection, Draft draft, long newHistoryBytes, long newAttachmentBytes) throws SQLException {
+        rejectSuperseded(connection, draft.retryOf());
+        TurnRow original = findByRequestId(connection, draft.retryOf()).orElseThrow(() ->
+                new com.drillnotebook.app.service.ChatTurnRejectException(409, "RETRY_TARGET_CHANGED", "原轮次已变化，请刷新后重试", Map.of()));
+        if (original.sessionId() != draft.sessionId() || STATUS_RUNNING.equals(original.status())) {
+            throw new com.drillnotebook.app.service.ChatTurnRejectException(409, "RETRY_TARGET_ACTIVE", "原轮次正在运行或不属于此会话", Map.of());
+        }
+        if (original.contentDeletedAt() != null || original.userMessageId() == null) {
+            throw new com.drillnotebook.app.service.ChatTurnRejectException(410, "TURN_CONTENT_DELETED", "原提问已清理，无法重试", Map.of());
+        }
+        if (original.contextGeneration() != draft.contextGeneration()) {
+            throw new com.drillnotebook.app.service.ChatTurnRejectException(409, "RETRY_CONTEXT_CHANGED", "会话上下文已重置，无法原地重试旧轮次", Map.of());
+        }
+        if (original.assistantMessageId() == null && scalar(connection,
+                "SELECT COUNT(*) FROM ai_chat_message m JOIN ai_chat_turn t ON m.session_id = t.session_id"
+                        + " WHERE t.id = ? AND m.id > t.user_message_id", original.id()) > 0) {
+            throw new com.drillnotebook.app.service.ChatTurnRejectException(409, "RETRY_TARGET_INCOMPLETE",
+                    "原轮次未保存回答位置，且已有后续对话，无法原地重试", Map.of());
+        }
+        long oldAttachmentBytes = scalar(connection, "SELECT COALESCE(SUM(byte_length), 0) FROM ai_chat_attachment WHERE turn_id = ?", original.id());
+        var fit = ledger.reserveReplacement(connection, original.storedHistoryBytes(), newHistoryBytes, oldAttachmentBytes, newAttachmentBytes);
+        if (!fit.accepted()) return StartResult.of(StartOutcome.valueOf(fit.name()));
+
+        memory.purgeEvidence(connection, null, List.of(original.id()), messageIdsOf(connection, original.id()));
+        SessionContextRepository.invalidateIn(connection, original.sessionId(), original.id());
+        MemoryJobRepository.supersedeForSessionIn(connection, original.sessionId());
+        try (var statement = connection.prepareStatement("""
+                UPDATE ai_chat_session SET memory_scan_after_turn = MIN(memory_scan_after_turn, ?),
+                  summary_scan_after_turn = MIN(summary_scan_after_turn, ?), summary_last_input_revision = NULL,
+                  summary_last_attempt_through = 0 WHERE id = ?
+                """)) {
+            statement.setLong(1, original.id() - 1); statement.setLong(2, original.id() - 1);
+            statement.setLong(3, original.sessionId()); statement.executeUpdate();
+        }
+        try (var statement = connection.prepareStatement("UPDATE ai_chat_pending SET parent_request_id = ? WHERE parent_request_id = ?")) {
+            statement.setString(1, draft.requestId()); statement.setString(2, original.requestId()); statement.executeUpdate();
+        }
+        try (var statement = connection.prepareStatement("""
+                INSERT INTO ai_chat_retry_receipt(request_id, turn_id, retry_of, replacement_request_id, replaced_at)
+                VALUES (?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, original.requestId()); statement.setLong(2, original.id());
+            statement.setString(3, original.retryOf()); statement.setString(4, draft.requestId());
+            statement.setString(5, draft.startedAt()); statement.executeUpdate();
+        }
+        try (var statement = connection.prepareStatement("""
+                UPDATE ai_chat_message SET content = ?, content_cipher = ?, content_meta = ? WHERE id = ?
+                """)) {
+            statement.setString(1, draft.userContent()); statement.setString(2, draft.userContentCipher());
+            statement.setString(3, draft.userContentMeta()); statement.setLong(4, original.userMessageId());
+            requireOneRow(statement.executeUpdate(), "原提问复用");
+        }
+        if (original.assistantMessageId() != null) {
+            try (var statement = connection.prepareStatement("""
+                    UPDATE ai_chat_message SET content = '', content_cipher = NULL, content_meta = NULL,
+                      reasoning_cipher = NULL, reasoning_meta = NULL WHERE id = ?
+                    """)) {
+                statement.setLong(1, original.assistantMessageId()); requireOneRow(statement.executeUpdate(), "原回答占位复用");
+            }
+        }
+        try (var statement = connection.prepareStatement("DELETE FROM ai_chat_attachment WHERE turn_id = ?")) {
+            statement.setLong(1, original.id()); statement.executeUpdate();
+        }
+        for (AttachmentPayload attachment : draft.attachments()) insertAttachment(connection, original.id(), attachment, draft.startedAt());
+        try (var statement = connection.prepareStatement("""
+                UPDATE ai_chat_turn SET request_id = ?, retry_of = ?, status = 'RUNNING',
+                  request_meta_cipher = ?, request_meta_crypto = ?, result_meta_cipher = NULL, result_meta_crypto = NULL,
+                  runtime_generation = ?, memory_eligible = ?, memory_policy_revision = ?, source_revision = source_revision + 1,
+                  stored_history_bytes = ?, reserved_history_bytes = ?, persistence_status = 'pending', finish_reason = NULL,
+                  finished_at = NULL, model_label = NULL, reasoning_effort = NULL, context_tokens = NULL, context_window = NULL,
+                  cache_read_tokens = NULL, output_tokens = NULL WHERE id = ?
+                """)) {
+            statement.setString(1, draft.requestId()); statement.setString(2, original.requestId());
+            statement.setString(3, draft.requestMetaCipher()); statement.setString(4, draft.requestMetaCrypto());
+            statement.setString(5, draft.runtimeGeneration()); statement.setInt(6, draft.memoryEligible() ? 1 : 0);
+            statement.setObject(7, draft.memoryPolicyRevision()); statement.setLong(8, newHistoryBytes);
+            statement.setLong(9, ChatStorageSizer.REPLY_RESERVATION_BYTES); statement.setLong(10, original.id());
+            requireOneRow(statement.executeUpdate(), "原轮次重试");
+        }
+        if (ChatStorageSizer.turnStoredBytes(connection, original.id()) != newHistoryBytes) throw new SQLException("原地重试存量与实测不一致");
+        return new StartResult(StartOutcome.STARTED, findByRequestId(connection, draft.requestId()).orElseThrow(), bumpSession(connection, draft.sessionId()));
+    }
+
+    public void assertCurrentRequest(String requestId) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) { rejectSuperseded(connection, requestId); }
+    }
+
+    private static void rejectSuperseded(Connection connection, String requestId) throws SQLException {
+        try (var statement = connection.prepareStatement("""
+                SELECT t.request_id, t.session_id FROM ai_chat_retry_receipt r JOIN ai_chat_turn t ON t.id = r.turn_id WHERE r.request_id = ?
+                """)) {
+            statement.setString(1, requestId);
+            try (var row = statement.executeQuery()) {
+                if (row.next()) throw new com.drillnotebook.app.service.ChatTurnRejectException(409, "TURN_SUPERSEDED",
+                        "这一轮已在原处重试，请刷新查看最新回答", Map.of("replacementRequestId", row.getString(1), "sessionId", row.getLong(2)));
+            }
+        }
+    }
+
+    /** 写工具沿旧请求回执链查重；原地重试不会因替换 request_id 丢掉已经确认的写入。 */
+    public static String retryParent(org.springframework.jdbc.core.JdbcTemplate jdbc, String requestId, long sessionId) {
+        var rows = jdbc.query("""
+                SELECT retry_of FROM ai_chat_turn WHERE request_id = ? AND session_id = ?
+                UNION ALL SELECT r.retry_of FROM ai_chat_retry_receipt r JOIN ai_chat_turn t ON t.id = r.turn_id
+                  WHERE r.request_id = ? AND t.session_id = ? LIMIT 1
+                """, (row, index) -> row.getString(1), requestId, sessionId, requestId, sessionId);
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     /**

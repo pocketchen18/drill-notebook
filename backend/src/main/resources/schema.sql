@@ -460,6 +460,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_turn_running_session
     ON ai_chat_turn(session_id) WHERE status = 'RUNNING';
 CREATE INDEX IF NOT EXISTS idx_ai_turn_session_id ON ai_chat_turn(session_id, id);
 
+-- 原地重试复用 turn/message 身份；旧请求只保留幂等与工具回执链，不再成为新轮次。
+CREATE TABLE IF NOT EXISTS ai_chat_retry_receipt (
+    request_id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL REFERENCES ai_chat_turn(id) ON DELETE CASCADE,
+    retry_of TEXT,
+    replacement_request_id TEXT NOT NULL,
+    replaced_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_retry_turn ON ai_chat_retry_receipt(turn_id);
+
 CREATE TABLE IF NOT EXISTS ai_chat_attachment (
     id TEXT PRIMARY KEY,
     turn_id INTEGER NOT NULL REFERENCES ai_chat_turn(id) ON DELETE CASCADE,
