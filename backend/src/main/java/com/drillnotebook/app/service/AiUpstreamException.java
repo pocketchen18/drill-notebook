@@ -68,11 +68,17 @@ public final class AiUpstreamException extends IllegalArgumentException {
         String lowered = (code + " " + message).toLowerCase(Locale.ROOT);
         Long retryAt = retryAt(null, error, System.currentTimeMillis());
         boolean busy = lowered.contains("overloaded") || lowered.contains("server_busy");
-        boolean recoverable = !quota(lowered) && (lowered.contains("rate_limit") || lowered.contains("rate limit")
-                || lowered.contains("server_error") || lowered.contains("api_error") || lowered.contains("stream_disconnected")
+        // 网关可能把生成中的上游失败包成 upstream_error；明确的鉴权、参数或额度错误仍不可重试。
+        boolean permanent = quota(lowered) || lowered.contains("invalid_api_key") || lowered.contains("authentication_error")
+                || lowered.contains("permission_error") || lowered.contains("permission_denied")
+                || lowered.contains("invalid_request") || lowered.contains("invalid_argument")
+                || lowered.contains("context_length_exceeded");
+        boolean recoverable = !permanent && (lowered.contains("rate_limit") || lowered.contains("rate limit")
+                || lowered.contains("server_error") || lowered.contains("api_error") || lowered.contains("upstream_error")
+                || lowered.contains("stream_disconnected")
                 || busy && retryAt != null);
         return new AiUpstreamException(Kind.STREAM, recoverable,
-                safe((code.isBlank() ? "" : code + "\n") + message, null), retryAt, null, busy && !quota(lowered));
+                safe((code.isBlank() ? "" : code + "\n") + message, null), retryAt, null, busy && !permanent);
     }
 
     static AiUpstreamException disconnected(String reason, AiUpstreamClient.Result partial) {
