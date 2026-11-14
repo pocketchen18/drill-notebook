@@ -43,7 +43,7 @@ class MaterialCreateToolTest {
         tool = new MaterialCreateTool(new MaterialCreateService(jdbc, new DataSourceTransactionManager(ds), notebooks,
                 new BankRepository(jdbc), new KnowledgePointRepository(jdbc, json), questions,
                 new NoteIndexingService(notebooks, new RetrievalIndexRepository(jdbc), jdbc, json), active, json));
-        reads = new MaterialReadService(new MaterialReadRepository(jdbc), json);
+        reads = MaterialReadTestSupport.service(jdbc, json);
     }
     @AfterEach void cleanup() throws Exception { TestWorkspace.deleteRecursively(root); }
     private void insertTurn(String request, String retryOf, long id) {

@@ -4,7 +4,7 @@ import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 资料工具的有界只读投影；正文仅在明确 ID 后加载。 */
+/** 资料工具的有界只读投影；搜索只加载匹配分块，完整正文在明确 ID 后读取。 */
 @Repository
 public class MaterialReadRepository {
     private final JdbcTemplate jdbc;
@@ -51,7 +51,16 @@ public class MaterialReadRepository {
             switch (t) {
                 case "notebook" -> { select="SELECT 'notebook' AS type,id,substr(title,1,200) AS title,NULL AS parentId,NULL AS parentTitle,'' AS snippet,0 AS attemptCount,0 AS wrongCount FROM notebook WHERE 1=1"; filter="title"; }
                 case "bank" -> { select="SELECT 'bank' AS type,id,substr(name,1,200) AS title,NULL AS parentId,NULL AS parentTitle,substr(coalesce(description,''),1,240) AS snippet,0 AS attemptCount,0 AS wrongCount FROM question_bank WHERE 1=1"; filter="name || ' ' || coalesce(description,'')"; }
-                case "note" -> { select="SELECT 'note' AS type,p.id,substr(p.title,1,200) AS title,p.notebook_id AS parentId,substr(n.title,1,200) AS parentTitle,coalesce((SELECT substr(r.text,1,240) FROM retrieval_chunk r WHERE r.corpus_type='NOTEBOOK' AND r.source_id=p.id ORDER BY r.chunk_index LIMIT 1),'') AS snippet,0 AS attemptCount,0 AS wrongCount FROM note_page p JOIN notebook n ON n.id=p.notebook_id WHERE 1=1"; filter="p.title"; }
+                case "note" -> {
+                    // 搜索优先取真正包含关键词的分块，再由服务生成有界片段；目录仍只取首段摘要。
+                    String excerpt = query.isBlank() ? "substr(r.text,1,240)" : "r.text";
+                    String order = query.isBlank() ? "r.chunk_index" : "CASE WHEN r.text LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,r.chunk_index";
+                    select="SELECT 'note' AS type,p.id,substr(p.title,1,200) AS title,p.notebook_id AS parentId,substr(n.title,1,200) AS parentTitle,coalesce((SELECT " + excerpt
+                            + " FROM retrieval_chunk r WHERE r.corpus_type='NOTEBOOK' AND r.source_id=p.id AND r.corpus_id=p.notebook_id ORDER BY " + order
+                            + " LIMIT 1),'') AS snippet,0 AS attemptCount,0 AS wrongCount FROM note_page p JOIN notebook n ON n.id=p.notebook_id WHERE 1=1";
+                    if (!query.isBlank()) args.add(pattern);
+                    filter="p.title";
+                }
                 case "knowledge" -> { select="SELECT 'knowledge' AS type,p.id,substr(p.title,1,200) AS title,p.bank_id AS parentId,substr(b.name,1,200) AS parentTitle,substr(p.content,1,240) AS snippet,0 AS attemptCount,0 AS wrongCount FROM knowledge_point p LEFT JOIN question_bank b ON b.id=p.bank_id WHERE 1=1"; filter="p.title || ' ' || p.content || ' ' || coalesce(p.category,'') || ' ' || coalesce(p.tags,'')"; }
                 case "question", "wrong" -> {
                     select="SELECT '"+t+"' AS type,q.id,substr(q.stem,1,200) AS title,q.bank_id AS parentId,substr(b.name,1,200) AS parentTitle,substr(q.stem,1,240) AS snippet,"
@@ -67,7 +76,7 @@ public class MaterialReadRepository {
             if (!query.isBlank()) {
                 select += " AND (" + filter + " LIKE ? ESCAPE '\\'"; args.add(pattern);
                 if ("note".equals(t)) {
-                    select += " OR EXISTS(SELECT 1 FROM retrieval_chunk r WHERE r.corpus_type='NOTEBOOK' AND r.source_id=p.id AND r.text LIKE ? ESCAPE '\\')";
+                    select += " OR EXISTS(SELECT 1 FROM retrieval_chunk r WHERE r.corpus_type='NOTEBOOK' AND r.source_id=p.id AND r.corpus_id=p.notebook_id AND r.text LIKE ? ESCAPE '\\')";
                     args.add(pattern);
                 }
                 select += ")";
@@ -80,5 +89,18 @@ public class MaterialReadRepository {
         if (selects.isEmpty()) return List.of();
         args.add(limit); args.add(offset);
         return jdbc.queryForList("SELECT * FROM (" + String.join(" UNION ALL ", selects) + ") ORDER BY type,id LIMIT ? OFFSET ?", args.toArray());
+    }
+
+    /** Revalidate ranked chunks against current page ownership without loading page bodies. */
+    public List<Map<String, Object>> noteSearchTargets(List<Long> chunkIds, Long notebookId) {
+        if (chunkIds.isEmpty()) return List.of();
+        String placeholders = String.join(",", Collections.nCopies(chunkIds.size(), "?"));
+        String sql = "SELECT c.id AS chunkId,c.content_hash AS chunkHash,p.id,substr(p.title,1,200) AS title,"
+                + "p.notebook_id AS parentId,substr(n.title,1,200) AS parentTitle,p.parent_id AS parentPageId "
+                + "FROM retrieval_chunk c JOIN note_page p ON p.id=c.source_id AND p.notebook_id=c.corpus_id "
+                + "JOIN notebook n ON n.id=p.notebook_id WHERE c.corpus_type='NOTEBOOK' AND c.id IN (" + placeholders + ")";
+        var args = new ArrayList<Object>(chunkIds);
+        if (notebookId != null) { sql += " AND p.notebook_id=?"; args.add(notebookId); }
+        return jdbc.queryForList(sql, args.toArray());
     }
 }

@@ -48,7 +48,7 @@ class MaterialUpdateToolTest {
         active = new ActiveTurnRegistry();
         invocation = new AiService.ToolInvocation("request", "c", 1, 1, active.acquire("request", 1).orElseThrow());
         plan = new ChatContextPlan("p", 1, 1, 1, null, null, null, 1, List.of(), List.of(), List.of(), null);
-        materials = new MaterialReadRepository(jdbc); reads = new MaterialReadService(materials, json);
+        materials = new MaterialReadRepository(jdbc); reads = MaterialReadTestSupport.service(jdbc, json);
         var notebooks = new NotebookRepository(jdbc, json); questions = new QuestionRepository(jdbc, json);
         tool = new MaterialUpdateTool(new MaterialUpdateService(jdbc, new DataSourceTransactionManager(ds), materials, notebooks,
                 new BankRepository(jdbc), new KnowledgePointRepository(jdbc, json), questions,

@@ -1688,7 +1688,7 @@ public class AiService {
                 .stream().anyMatch(tools::containsKey))
             copy.add(index, Map.of("role", "system", "content",
                     (tools.containsKey("read_current_page") ? "用户问当前页面/这题时先 read_current_page。" : "")
-                    + (tools.containsKey("search_materials") ? "找其它学习资料先 search_materials，再用返回的明确 ID 读取正文。" : "")
+                    + (tools.containsKey("search_materials") ? "找其它学习资料先 search_materials，笔记默认混合检索，精确原文/名称/编号使用 searchMode=keyword。相关片段足够时可直接引用，需要前后文才用返回的明确 ID 读取正文。" : "")
                     + "目录或摘要不等于全文；hasMore 时按需续读，正文续读带 version，STALE 时重新读取。只依据实际读到的范围回答。"
                     + "引用资料时使用实际标题和 sourceLink，格式 [资料标题](drill-notebook://material/类型/ID)。"
                     + "当前页是提交时的快照，isDraft 表示未保存；题目答案未展示时不能称已从页面看到答案。"

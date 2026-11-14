@@ -30,6 +30,9 @@ class MaterialToolChatPathTest {
     private boolean steering;
     private boolean creating;
     private boolean updating;
+    private boolean searching;
+    private EmbeddingProviderRegistry embeddingProviders;
+    private HybridRetrievalService hybrid;
     private String updateVersion;
     private String supplementId;
     @BeforeEach void setup() throws Exception {
@@ -38,7 +41,9 @@ class MaterialToolChatPathTest {
         jdbc=new JdbcTemplate(ds); wiring=ChatLegacyWiring.wire(ds,jdbc); stack=ChatContextWiring.wire(ds,jdbc,wiring);
         session=wiring.sessions().create("资料读取","stub");
         ai=new AiService(new AiConfigRepository(jdbc),wiring.sessions(),new ApiKeyEncryptor(),json,null,wiring.turnService(),wiring.cipher(),stack.contexts());
-        var material=new MaterialReadService(new MaterialReadRepository(jdbc),json);
+        embeddingProviders = new EmbeddingProviderRegistry();
+        hybrid = MaterialReadTestSupport.hybrid(jdbc, json, embeddingProviders, 1500, 25);
+        var material=MaterialReadTestSupport.service(jdbc,json,hybrid);
         var notebooks = new NotebookRepository(jdbc, json);
         var create = new MaterialCreateTool(new MaterialCreateService(jdbc,
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), notebooks,
@@ -55,7 +60,7 @@ class MaterialToolChatPathTest {
         server.createContext("/",exchange->{
             JsonNode request=json.readTree(exchange.getRequestBody()); requests.add(request);
             int round=requests.size();
-            boolean done=!tools || round>(updating ? 3 : steering || creating ? 2 : 1);
+            boolean done=!tools || round>(updating ? 3 : steering || creating || searching ? 2 : 1);
             boolean anthropic=exchange.getRequestURI().getPath().endsWith("/messages");
             boolean stream=request.path("stream").asBoolean();
             String toolName = creating ? "create_material" : "read_current_page";
@@ -66,6 +71,11 @@ class MaterialToolChatPathTest {
                 if (round == 2) updateVersion = readResult(request, "c1").path("items").path(0).path("updateVersion").asText();
                 args = round == 1 ? Map.of("pageId", 1) : Map.of("type", "note", "id", 1, "operationId", "edit-note",
                         "expectedVersion", updateVersion, "changes", Map.of("append", "修改工具保存的追加正文"));
+            }
+            if (searching && !done) {
+                toolName = round == 1 ? "search_materials" : "read_notebook";
+                args = round == 1 ? Map.of("type", "note", "query", "如何理解物体受力平衡", "notebookId", 1)
+                        : Map.of("pageId", readResult(request, "c1").path("items").path(0).path("pageId").asLong(), "maxChars", 1000);
             }
             Map<String,Object> message=done ? Map.of("role","assistant","content","已按实际读取内容回答。")
                     : Map.of("role","assistant","content","","tool_calls",List.of(Map.of("id","c"+round,"type","function","function",Map.of("name",toolName,"arguments",json.writeValueAsString(args)))));
@@ -84,7 +94,7 @@ class MaterialToolChatPathTest {
             exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         }); server.start();
     }
-    @AfterEach void cleanup() throws Exception { SessionExecution.CURRENT.remove(); server.stop(0); stack.indexes().shutdown(); TestWorkspace.deleteRecursively(root); }
+    @AfterEach void cleanup() throws Exception { SessionExecution.CURRENT.remove(); server.stop(0); hybrid.shutdown(); stack.indexes().shutdown(); TestWorkspace.deleteRecursively(root); }
     private void config(String format,boolean stream) {
         ai.saveConfig(TestModelLimits.config("provider","custom","endpoint","http://127.0.0.1:"+server.getAddress().getPort()+"/v1","apiKey","fake-key","model","fixture","apiFormat",format,"tools",tools,"streaming",stream));
     }
@@ -101,6 +111,45 @@ class MaterialToolChatPathTest {
                     return json.readTree(block.path("content").asText());
         }
         return json.createObjectNode();
+    }
+
+    @ParameterizedTest @CsvSource({"chat_completions,false,false","chat_completions,true,true","anthropic,false,true"})
+    void vectorSearchThenIdReadWorksThroughTheRealChatToolPath(String format, boolean upstreamStream, boolean uiStream) throws Exception {
+        var notebooks = new NotebookRepository(jdbc, json);
+        long notebook = notebooks.insert("力学笔记");
+        var doc = Map.of("type", "doc", "content", List.of(Map.of("type", "paragraph", "content",
+                List.of(Map.of("type", "text", "text", "所有外力互相抵消，速度保持恒定。" + "背景内容。".repeat(110) + "只有续读才得到的结论")))));
+        long page = notebooks.insertPage(notebook, "合力", doc);
+        new NoteIndexingService(notebooks, new RetrievalIndexRepository(jdbc), jdbc, json).savePageAndIndex(page, "合力", doc);
+        String space = MaterialHybridSearchTest.SPACE;
+        jdbc.update("INSERT INTO embedding_space(embedding_space_id,canonical_contract_json,provider_type,model_identifier,dimensions,state,coverage,is_selected)"
+                + " VALUES(?,'{}','local-rust','test/model',4,'ACTIVE',1,1)", space);
+        for (var chunk : jdbc.queryForList("SELECT id,content_hash FROM retrieval_chunk WHERE source_id=?", page))
+            jdbc.update("INSERT INTO retrieval_embedding(chunk_id,corpus_type,embedding_space_id,dimensions,content_hash,vector_blob) VALUES(?,'NOTEBOOK',?,4,?,?)",
+                    chunk.get("id"), space, chunk.get("content_hash"), EmbeddingVectorCodec.encode(List.of(1f, 0f, 0f, 0f), 4));
+        embeddingProviders.setActive(new HybridRetrievalServiceTest.FakeProvider(4, new float[]{1, 0, 0, 0}));
+        searching = true; config(format, upstreamStream);
+        var body = new LinkedHashMap<>(body("当前页面无笔记正文"));
+        body.put("input", Map.of("userText", "如何理解物体受力平衡"));
+        var events = new ArrayList<Map<String, Object>>();
+        if (uiStream) assertEquals("COMPLETED", ai.chatStream(body, (kind, text) -> true, events::add).status());
+        else assertEquals("COMPLETED", ai.chat(body).get("status"));
+        assertEquals(3, requests.size());
+        assertFalse(requests.get(0).toString().contains("所有外力互相抵消"));
+        var search = readResult(requests.get(1), "c1");
+        assertEquals("OK", search.path("status").asText());
+        assertEquals(List.of("vector"), json.convertValue(search.path("items").path(0).path("matchTypes"), List.class));
+        assertEquals(page, search.path("items").path(0).path("pageId").asLong());
+        assertTrue(search.toString().contains("所有外力互相抵消"));
+        assertFalse(search.toString().contains("只有续读才得到的结论"));
+        assertTrue(readResult(requests.get(2), "c2").toString().contains("只有续读才得到的结论"));
+        assertTrue(requests.get(0).path("tools").toString().contains("searchMode"));
+        assertFalse(requests.get(0).path("tools").toString().contains("search_memories"));
+        var activities = wiring.turnService().toolActivities((String) body.get("requestId"), "");
+        assertEquals(List.of("search_materials", "read_notebook"), activities.stream().map(com.drillnotebook.app.model.ToolActivity::toolName).toList());
+        assertFalse(json.writeValueAsString(activities).contains("外力互相抵消"));
+        assertFalse(json.writeValueAsString(events).contains("外力互相抵消"));
+        assertFalse(stack.history().page(session, null, null, 20).toString().contains("外力互相抵消"));
     }
     @ParameterizedTest @CsvSource({"chat_completions,false,false","chat_completions,true,true","anthropic,false,true"})
     void snapshotIsOnDemandWithMemoryOffAndOnlySafeActivityIsPersisted(String format,boolean upstreamStream,boolean uiStream) throws Exception {
