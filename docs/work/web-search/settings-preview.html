@@ -1,0 +1,366 @@
+<div id="web-search-settings" aria-label="Drill Notebook 设置中的联网工具">
+  <header class="dns-topbar">
+    <i data-lucide="book-open" aria-hidden="true"></i>
+    <strong>Drill Notebook</strong><span class="dns-topbar-divider"></span><span>设置</span>
+  </header>
+  <div class="dns-shell">
+    <nav class="dns-rail" aria-label="主导航">
+      <span class="dns-rail-item" data-tooltip="笔记本"><i data-lucide="notebook-pen" aria-hidden="true"></i></span>
+      <span class="dns-rail-item" data-tooltip="题库"><i data-lucide="list-checks" aria-hidden="true"></i></span>
+      <span class="dns-rail-item" data-tooltip="日历"><i data-lucide="calendar-days" aria-hidden="true"></i></span>
+      <span class="dns-rail-item dns-rail-current" aria-current="page" data-tooltip="设置"><i data-lucide="settings" aria-hidden="true"></i></span>
+    </nav>
+    <main class="dns-main">
+      <nav class="dns-tabs" aria-label="设置分类">
+        <span>常规</span><span>AI 连接</span><span>AI 对话</span><span class="dns-tab-current" aria-current="page">工具</span><span>记忆</span><span>嵌入与检索</span><span>学习与复习</span><span>数据管理</span><span>关于</span>
+      </nav>
+      <section class="dns-panel" aria-labelledby="dns-tools-heading">
+        <div class="dns-panel-heading">
+          <h2 id="dns-tools-heading">工具</h2>
+          <button class="dns-text-action cursor-interaction" type="button" id="dns-restore" disabled><i data-lucide="rotate-ccw" aria-hidden="true"></i>恢复默认</button>
+        </div>
+        <div class="dns-panel-body">
+          <p class="dns-intro">选择 AI 可以使用的内置工具，对所有模型和会话生效。</p>
+          <h3>联网</h3>
+          <label class="dns-switch-row" for="dns-search-enabled">
+            <span><strong>联网搜索</strong><small>查找网页与来源，由模型按需使用。</small></span>
+            <input class="dns-switch cursor-interaction" id="dns-search-enabled" type="checkbox" role="switch" checked>
+          </label>
+          <label class="dns-switch-row" for="dns-fetch-enabled">
+            <span><strong>网页读取</strong><small>读取指定公开网址的正文。</small></span>
+            <input class="dns-switch cursor-interaction" id="dns-fetch-enabled" type="checkbox" role="switch" checked>
+          </label>
+          <label class="dns-switch-row" for="dns-native-first">
+            <span><strong>优先使用模型内置 Web 工具</strong><small>支持时优先使用；不支持时使用已选服务。</small></span>
+            <input class="dns-switch cursor-interaction" id="dns-native-first" type="checkbox" role="switch">
+          </label>
+          <section class="dns-provider-form" aria-label="联网服务配置">
+            <div class="dns-provider-grid">
+              <div class="dns-field">
+                <label for="dns-search-provider">搜索服务</label>
+                <select id="dns-search-provider" aria-describedby="dns-search-help">
+                  <option value="auto">内置自动（免配置）</option>
+                  <option value="tavily">Tavily</option>
+                  <option value="tinyfish">TinyFish</option>
+                </select>
+                <p id="dns-search-help" class="dns-field-help">优先 Exa，受限时尝试 Tavily。</p>
+              </div>
+              <div class="dns-field">
+                <label for="dns-fetch-provider">网页读取服务</label>
+                <select id="dns-fetch-provider" aria-describedby="dns-fetch-help">
+                  <option value="auto">内置自动（本地优先）</option>
+                  <option value="tavily">Tavily</option>
+                  <option value="tinyfish">TinyFish</option>
+                </select>
+                <p id="dns-fetch-help" class="dns-field-help">优先本地正文提取，必要时使用内置服务。</p>
+              </div>
+            </div>
+            <div class="dns-credential" id="dns-tavily-credential" hidden>
+              <div class="dns-credential-heading"><strong>Tavily</strong><span id="dns-tavily-scope">搜索与网页读取共用此配置</span></div>
+              <label for="dns-tavily-key">API Key</label>
+              <div class="dns-key-row">
+                <input id="dns-tavily-key" type="password" autocomplete="off" spellcheck="false" placeholder="演示密钥（不保存输入内容）">
+                <button class="dns-text-action cursor-interaction" type="button" data-remove-key="tavily" hidden>移除密钥</button>
+              </div>
+            </div>
+            <div class="dns-credential" id="dns-tinyfish-credential" hidden>
+              <div class="dns-credential-heading"><strong>TinyFish</strong><span id="dns-tinyfish-scope">搜索与网页读取共用此配置</span></div>
+              <label for="dns-tinyfish-key">API Key</label>
+              <div class="dns-key-row">
+                <input id="dns-tinyfish-key" type="password" autocomplete="off" spellcheck="false" placeholder="演示密钥（不保存输入内容）">
+                <button class="dns-text-action cursor-interaction" type="button" data-remove-key="tinyfish" hidden>移除密钥</button>
+              </div>
+            </div>
+            <div class="dns-form-actions">
+              <button class="dns-action cursor-interaction" type="button" id="dns-test"><i data-lucide="plug-zap" aria-hidden="true"></i>测试连接</button>
+              <span class="dns-actions-spacer"></span>
+              <span class="dns-draft-actions" id="dns-draft-actions" hidden>
+                <button class="dns-action cursor-interaction" type="button" id="dns-cancel">取消</button>
+                <button class="dns-action dns-action-primary cursor-interaction" type="button" id="dns-save">保存</button>
+              </span>
+            </div>
+            <p class="dns-feedback" id="dns-feedback" role="status" aria-live="polite"></p>
+          </section>
+          <p class="dns-footnote">开关立即保存，开启从下一轮生效；关闭会阻止尚未执行的调用。</p>
+          <div class="dns-next-group"><h3>学习资料</h3><span>沿用现有工具开关</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<style>
+  #web-search-settings {
+    --dns-page: light-dark(#f4f6fa, #131519);
+    --dns-panel: light-dark(#ffffff, #1b1e24);
+    --dns-sider: light-dark(#fafbfd, #16181d);
+    --dns-line: light-dark(#e4e7ee, #2a2f38);
+    --dns-input: light-dark(#cbd3e0, #3d4451);
+    --dns-text: light-dark(#1e2433, #e2e6ee);
+    --dns-strong: light-dark(#0f1420, #f7f8fa);
+    --dns-muted: light-dark(#6b7385, #98a2b3);
+    --dns-hover: light-dark(#eff2f7, #242931);
+    --dns-accent: light-dark(#2f54eb, #8da2ff);
+    --dns-fill: light-dark(#2f54eb, #4b6bf0);
+    --dns-on-fill: light-dark(#ffffff, #ffffff);
+    --dns-soft: light-dark(#eef2ff, #1f2a4d);
+    --dns-switch-off: light-dark(#c4cbd8, #454d5c);
+    --dns-error: light-dark(#c73339, #ff7b7b);
+    --dns-success: light-dark(#15803d, #4ade80);
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    border: 1px solid var(--dns-line);
+    border-radius: 10px;
+    background: var(--dns-page);
+    color: var(--dns-text);
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  #web-search-settings *, #web-search-settings *::before, #web-search-settings *::after { box-sizing: border-box; }
+  #web-search-settings [hidden] { display: none !important; }
+  #web-search-settings button, #web-search-settings input, #web-search-settings select { font: inherit; }
+  #web-search-settings button { color: inherit; }
+  #web-search-settings svg { width: 16px; height: 16px; flex: none; }
+  #web-search-settings .dns-topbar { min-height: 54px; display: flex; align-items: center; gap: 10px; padding: 12px 112px 12px 18px; border-bottom: 1px solid var(--dns-line); background: var(--dns-panel); border-radius: 10px 10px 0 0; }
+  #web-search-settings .dns-topbar > svg { color: var(--dns-accent); width: 20px; height: 20px; }
+  #web-search-settings .dns-topbar strong { font-size: 14px; font-weight: 600; }
+  #web-search-settings .dns-topbar-divider { width: 1px; height: 18px; background: var(--dns-line); flex: none; }
+  #web-search-settings .dns-shell { display: grid; grid-template-columns: 56px minmax(0, 1fr); }
+  #web-search-settings .dns-rail { display: flex; align-items: center; flex-direction: column; gap: 8px; padding: 16px 7px; background: var(--dns-sider); border-right: 1px solid var(--dns-line); border-radius: 0 0 0 10px; }
+  #web-search-settings .dns-rail-item { display: grid; place-items: center; width: 36px; height: 36px; color: var(--dns-muted); border-radius: 6px; }
+  #web-search-settings .dns-rail-current { color: var(--dns-accent); background: var(--dns-soft); margin-top: 12px; }
+  #web-search-settings .dns-main { min-width: 0; padding: 16px 20px 20px; }
+  #web-search-settings .dns-tabs { display: flex; gap: 3px; flex-wrap: wrap; margin: 0 0 16px; color: var(--dns-muted); font-size: 12px; }
+  #web-search-settings .dns-tabs > span { padding: 6px 10px; border-radius: 6px; white-space: nowrap; }
+  #web-search-settings .dns-tab-current { background: var(--dns-soft); color: var(--dns-accent); font-weight: 600; }
+  #web-search-settings .dns-panel { min-width: 0; border: 1px solid var(--dns-line); border-radius: 8px; background: var(--dns-panel); }
+  #web-search-settings .dns-panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--dns-line); }
+  #web-search-settings h2 { font-size: 15px; font-weight: 600; margin: 0; color: var(--dns-strong); }
+  #web-search-settings h3 { margin: 20px 0 4px; font-size: 14px; font-weight: 600; color: var(--dns-strong); }
+  #web-search-settings .dns-panel-body { padding: 0 20px 18px; }
+  #web-search-settings .dns-intro { margin: 16px 0 4px; color: var(--dns-muted); font-size: 13px; }
+  #web-search-settings .dns-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--dns-line); }
+  #web-search-settings .dns-switch-row > span { min-width: 0; }
+  #web-search-settings .dns-switch-row strong { font-size: 13px; font-weight: 600; }
+  #web-search-settings .dns-switch-row small { display: block; margin-top: 4px; color: var(--dns-muted); font-size: 12px; line-height: 1.65; }
+  #web-search-settings .dns-switch { appearance: none; position: relative; margin: 0; width: 40px; height: 22px; flex: none; border: 0; border-radius: 12px; background: var(--dns-switch-off); transition: background-color 120ms ease; }
+  #web-search-settings .dns-switch::after { content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px; border-radius: 50%; background: var(--dns-on-fill); transition: transform 120ms ease; }
+  #web-search-settings .dns-switch:checked { background: var(--dns-fill); }
+  #web-search-settings .dns-switch:checked::after { transform: translateX(18px); }
+  #web-search-settings .dns-provider-form { padding-top: 20px; }
+  #web-search-settings .dns-provider-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+  #web-search-settings .dns-field { min-width: 0; }
+  #web-search-settings .dns-field > label, #web-search-settings .dns-credential > label { display: block; margin-bottom: 7px; color: var(--dns-text); font-size: 13px; font-weight: 500; }
+  #web-search-settings select, #web-search-settings .dns-key-row input { width: 100%; min-width: 0; min-height: 34px; padding: 6px 10px; border: 1px solid var(--dns-input); border-radius: 6px; background: var(--dns-panel); color: var(--dns-text); font-size: 13px; }
+  #web-search-settings input::placeholder { color: var(--dns-muted); }
+  #web-search-settings .dns-field-help { margin: 7px 0 0; color: var(--dns-muted); font-size: 12px; line-height: 1.65; }
+  #web-search-settings .dns-credential { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--dns-line); }
+  #web-search-settings .dns-credential-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 12px; font-size: 13px; }
+  #web-search-settings .dns-credential-heading strong { font-weight: 600; }
+  #web-search-settings .dns-credential-heading span { color: var(--dns-muted); font-size: 12px; }
+  #web-search-settings .dns-key-row { display: flex; align-items: center; gap: 12px; }
+  #web-search-settings .dns-key-row .dns-text-action { white-space: nowrap; font-size: 12px; }
+  #web-search-settings .dns-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  #web-search-settings .dns-actions-spacer { flex: 1; }
+  #web-search-settings .dns-draft-actions { display: flex; gap: 8px; }
+  #web-search-settings .dns-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 12px; border: 1px solid var(--dns-line); border-radius: 6px; background: var(--dns-panel); font-size: 13px; }
+  #web-search-settings .dns-action:hover { background: var(--dns-hover); }
+  #web-search-settings .dns-action-primary { background: var(--dns-fill); border-color: var(--dns-fill); color: var(--dns-on-fill); }
+  #web-search-settings .dns-action-primary:hover { background: var(--dns-fill); filter: brightness(.95); }
+  #web-search-settings .dns-text-action { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--dns-muted); font-size: 12px; }
+  #web-search-settings .dns-text-action:hover:not(:disabled) { color: var(--dns-accent); background: var(--dns-soft); }
+  #web-search-settings button:disabled { opacity: .45; }
+  #web-search-settings .dns-feedback { min-height: 18px; margin: 8px 0 0; font-size: 12px; color: var(--dns-success); }
+  #web-search-settings .dns-feedback.is-error { color: var(--dns-error); }
+  #web-search-settings .dns-footnote { margin: 8px 0 0; font-size: 12px; color: var(--dns-muted); line-height: 1.65; }
+  #web-search-settings .dns-next-group { display: flex; align-items: baseline; gap: 12px; border-top: 1px solid var(--dns-line); margin-top: 22px; }
+  #web-search-settings .dns-next-group span { font-size: 12px; color: var(--dns-muted); }
+  @media (max-width: 600px) {
+    #web-search-settings .dns-shell { grid-template-columns: minmax(0, 1fr); }
+    #web-search-settings .dns-rail { display: none; }
+    #web-search-settings .dns-main { padding: 12px; }
+    #web-search-settings .dns-panel-heading { padding: 12px 14px; }
+    #web-search-settings .dns-panel-body { padding: 0 14px 16px; }
+    #web-search-settings .dns-provider-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    #web-search-settings .dns-tabs > span { padding: 5px 7px; }
+    #web-search-settings .dns-topbar { padding-right: 96px; gap: 7px; flex-wrap: wrap; }
+    #web-search-settings .dns-topbar > strong { font-size: 13px; }
+    #web-search-settings .dns-key-row { flex-wrap: wrap; gap: 4px; }
+  }
+  @media (pointer: coarse) {
+    #web-search-settings .dns-switch-row { min-height: 62px; }
+    #web-search-settings .dns-action, #web-search-settings .dns-text-action { min-height: 44px; }
+    #web-search-settings select, #web-search-settings .dns-key-row input { min-height: 44px; font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { #web-search-settings .dns-switch, #web-search-settings .dns-switch::after { transition: none; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('web-search-settings');
+  if (!root) return;
+  const find = (selector) => root.querySelector(selector);
+  const providers = ['tavily', 'tinyfish'];
+  const allowed = ['auto', ...providers];
+  const names = { auto: '内置自动', tavily: 'Tavily', tinyfish: 'TinyFish' };
+  let state = {
+    searchEnabled: true, fetchEnabled: true, preferNative: false,
+    savedSearch: 'auto', savedFetch: 'auto', draftSearch: 'auto', draftFetch: 'auto',
+    demoKeys: { tavily: false, tinyfish: false }
+  };
+  const removing = { tavily: false, tinyfish: false };
+  function restore(snapshot) {
+    const saved = snapshot && snapshot.privateContent && snapshot.privateContent.webSettingsUi;
+    if (!saved || saved.version !== 1) return;
+    ['searchEnabled', 'fetchEnabled', 'preferNative'].forEach((key) => {
+      if (typeof saved[key] === 'boolean') state[key] = saved[key];
+    });
+    ['savedSearch', 'savedFetch', 'draftSearch', 'draftFetch'].forEach((key) => {
+      if (allowed.includes(saved[key])) state[key] = saved[key];
+    });
+    providers.forEach((provider) => {
+      state.demoKeys[provider] = saved.demoKeys && saved.demoKeys[provider] === true;
+    });
+  }
+  function remember() {
+    if (!window.openai || typeof window.openai.setWidgetState !== 'function') return;
+    const snapshot = {
+      modelContent: {
+        surface: '设置 → 工具', searchEnabled: state.searchEnabled, fetchEnabled: state.fetchEnabled,
+        preferNative: state.preferNative, searchProvider: names[state.savedSearch], fetchProvider: names[state.savedFetch]
+      },
+      privateContent: { webSettingsUi: { version: 1, ...state, demoKeys: { ...state.demoKeys } } }
+    };
+    Promise.resolve(window.openai.setWidgetState(snapshot)).catch(() => {});
+  }
+  function feedback(message, error = false) {
+    const output = find('#dns-feedback');
+    output.textContent = message;
+    output.classList.toggle('is-error', error);
+    output.setAttribute('role', error ? 'alert' : 'status');
+  }
+  function dirty() {
+    return state.savedSearch !== state.draftSearch || state.savedFetch !== state.draftFetch ||
+      providers.some((provider) => find('#dns-' + provider + '-key').value.length > 0 || removing[provider]);
+  }
+  function render() {
+    find('#dns-search-enabled').checked = state.searchEnabled;
+    find('#dns-fetch-enabled').checked = state.fetchEnabled;
+    find('#dns-native-first').checked = state.preferNative;
+    find('#dns-search-provider').value = state.draftSearch;
+    find('#dns-fetch-provider').value = state.draftFetch;
+    find('#dns-restore').disabled = state.searchEnabled && state.fetchEnabled;
+    find('#dns-search-help').textContent = state.draftSearch === 'auto'
+      ? '优先 Exa，受限时尝试 Tavily。' : '使用你配置的 ' + names[state.draftSearch] + ' 搜索。';
+    find('#dns-fetch-help').textContent = state.draftFetch === 'auto'
+      ? '优先本地正文提取，必要时使用内置服务。' : '使用你配置的 ' + names[state.draftFetch] + ' 读取网页。';
+    providers.forEach((provider) => {
+      const usedSearch = state.draftSearch === provider;
+      const usedFetch = state.draftFetch === provider;
+      find('#dns-' + provider + '-credential').hidden = !usedSearch && !usedFetch && !removing[provider];
+      find('#dns-' + provider + '-scope').textContent = removing[provider] ? '保存后移除，相关服务恢复内置自动'
+        : usedSearch && usedFetch ? '搜索与网页读取共用此配置' : usedSearch ? '用于联网搜索' : '用于网页读取';
+      const key = find('#dns-' + provider + '-key');
+      key.placeholder = removing[provider] ? '保存后移除' : state.demoKeys[provider] ? '演示：已有配置，留空保留' : '演示密钥（不保存输入内容）';
+      key.disabled = removing[provider];
+      const remove = find('[data-remove-key="' + provider + '"]');
+      remove.hidden = !state.demoKeys[provider];
+      remove.textContent = removing[provider] ? '撤销移除' : '移除密钥';
+    });
+    find('#dns-draft-actions').hidden = !dirty();
+  }
+  function missingCredential() {
+    return providers.find((provider) =>
+      (state.draftSearch === provider || state.draftFetch === provider) &&
+      ((!state.demoKeys[provider] || removing[provider]) && !find('#dns-' + provider + '-key').value.trim())
+    );
+  }
+  function validate() {
+    const missing = missingCredential();
+    if (!missing) return true;
+    feedback('请填写 ' + names[missing] + ' 的演示密钥后再继续。', true);
+    find('#dns-' + missing + '-key').focus();
+    return false;
+  }
+  restore(window.openai && window.openai.widgetState);
+  render();
+  [
+    ['#dns-search-enabled', 'searchEnabled', '联网搜索'],
+    ['#dns-fetch-enabled', 'fetchEnabled', '网页读取'],
+    ['#dns-native-first', 'preferNative', '模型内置 Web 优先']
+  ].forEach(([selector, key, label]) => {
+    find(selector).addEventListener('change', (event) => {
+      state[key] = event.target.checked;
+      feedback('演示：' + label + (state[key] ? '已开启' : '已关闭') + '，对所有会话生效。');
+      render();
+      remember();
+    });
+  });
+  [['#dns-search-provider', 'draftSearch'], ['#dns-fetch-provider', 'draftFetch']].forEach(([selector, key]) => {
+    find(selector).addEventListener('change', (event) => {
+      state[key] = event.target.value;
+      feedback('');
+      render();
+      remember();
+    });
+  });
+  providers.forEach((provider) => {
+    find('#dns-' + provider + '-key').addEventListener('input', () => {
+      feedback('');
+      find('#dns-draft-actions').hidden = !dirty();
+    });
+    find('[data-remove-key="' + provider + '"]').addEventListener('click', () => {
+      removing[provider] = !removing[provider];
+      if (removing[provider]) {
+        find('#dns-' + provider + '-key').value = '';
+        if (state.draftSearch === provider) state.draftSearch = 'auto';
+        if (state.draftFetch === provider) state.draftFetch = 'auto';
+      } else {
+        if (state.savedSearch === provider) state.draftSearch = provider;
+        if (state.savedFetch === provider) state.draftFetch = provider;
+      }
+      feedback('');
+      render();
+    });
+  });
+  find('#dns-cancel').addEventListener('click', () => {
+    state.draftSearch = state.savedSearch;
+    state.draftFetch = state.savedFetch;
+    providers.forEach((provider) => { find('#dns-' + provider + '-key').value = ''; removing[provider] = false; });
+    feedback('演示：已取消服务配置改动。');
+    render();
+    remember();
+  });
+  find('#dns-save').addEventListener('click', () => {
+    if (!validate()) return;
+    providers.forEach((provider) => {
+      if (removing[provider]) state.demoKeys[provider] = false;
+      else if (find('#dns-' + provider + '-key').value.trim()) state.demoKeys[provider] = true;
+      find('#dns-' + provider + '-key').value = '';
+      removing[provider] = false;
+    });
+    state.savedSearch = state.draftSearch;
+    state.savedFetch = state.draftFetch;
+    feedback('演示：服务配置已保存；密钥输入内容未保存。');
+    render();
+    remember();
+  });
+  find('#dns-test').addEventListener('click', () => {
+    if (!validate()) return;
+    feedback('演示结果：搜索服务与网页读取服务可用，未发起网络请求。');
+  });
+  find('#dns-restore').addEventListener('click', () => {
+    state.searchEnabled = true;
+    state.fetchEnabled = true;
+    feedback('演示：联网工具权限已恢复默认，服务配置保留。');
+    render();
+    remember();
+  });
+  window.addEventListener('openai:set_globals', (event) => {
+    const globals = event.detail && event.detail.globals;
+    if (globals && Object.prototype.hasOwnProperty.call(globals, 'widgetState')) {
+      restore(globals.widgetState);
+      render();
+    }
+  });
+})();
+</script>

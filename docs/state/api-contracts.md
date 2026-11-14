@@ -165,6 +165,18 @@ v0.8.1 将上述四项嵌套在 `values.retry` / `defaults.retry`。旧持久化
 
 会话工具产生的自动派发链共用来源轮的时间、输出和工具预算；并发请求先原子预留输出额度，实际结算后释放余量。人工在任一会话发起的新轮次建立自己的预算。
 
+#### 3.1.2 联网服务设置（v0.8.2）
+
+| 方法 | 路径 | 契约 |
+|---|---|---|
+| GET | `/ai/web-settings` | `{revision,searchProvider,fetchProvider,preferNative,providers:{tavily:{hasKey},tinyfish:{hasKey}}}`；只返回公开字段 |
+| PUT | `/ai/web-settings` | `{revision,searchProvider?,fetchProvider?,preferNative?,keys?}`；局部 CAS 更新，返回同形快照；冲突 409 AI_SETTINGS_CONFLICT |
+| POST | `/ai/web-settings/test` | 使用相同服务 / 密钥草稿，可选 `capability=search\|fetch\|both`（默认 both）；返回 `{checks:[{capability,status,count,webProvider?,webRoute}]}`，不保存、不改权限、不返回正文 |
+
+searchProvider / fetchProvider 分别为 `auto|tavily|tinyfish`，默认 auto，preferNative 默认 false。`keys` 以供应商名为键，每家只有一份 `{apiKey?,clear?}`；空密钥保留，明确 clear=true 删除，不允许同时删除和修改，选择自定义服务须有可用密钥。明文输入只用于后端加密与实际请求，不在 GET、测试结果、页面上下文或活动摘要回显。配置坏值 / 未知字段拒绝，不用默认值掩盖。
+
+测试使用固定公开查询与 URL，成功要求有效来源 / 正文，不能以握手或 HTTP 200 代替；能力错误独立返回。原生优先按本轮受理的模型、端点与协议执行，测试草稿不另发原生模型请求。连接模型公开元数据增加 `nativeWeb:{search,fetch,protocol}`，protocol 为 none / anthropic_messages / openai_responses；不代表账户权限已验证。支持矩阵见[规格](../work/web-search/spec.md#原生联网支持矩阵)。
+
 ### 3.2 对话
 
 | 方法 | 路径 | 用途 |
@@ -253,6 +265,8 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 写工具显示「新建会话 / 发送消息」，CREATED/SENT/QUEUED 只表示受理，不代表目标任务完成。读取仍在排队/运行的发送项时只说明查询到的状态，不声称已读到回复。活动详情不保存发出的消息正文。
 
 资料工具显示「读取当前页面 / 查找学习资料 / 读取笔记 / 读取知识点 / 读取题库 / 读取错题 / 新增学习资料」。活动额外允许严格校验的本地 `sourceLink`，成功新增的详情提供「查看资料」；不保存标题或正文。保存结果未知显示核对提示，已确认保存仍有效。正文引用沿用同一来源格式。
+
+联网活动显示「搜索网页 / 读取网页」与实际服务；额外允许 `webProvider` 和最多 4 项 `webRoute:[{provider,status,httpStatus?,retryAt?}]`。provider 仅 exa / tavily / tinyfish / local / anthropic / openai，状态和 HTTP 状态码经白名单校验，retryAt 只接受有效 UTC 时刻。保留有界失败路径，不保存查询、URL、外部会话标识、网页正文、密钥或上游任意错误文字。
 
 #### 3.2.3 对话内会话工具（v0.7.2）
 
@@ -362,21 +376,22 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 
 | 方法 | 路径 | 契约 |
 |---|---|---|
-| GET | `/ai/tool-settings` | `{revision,tools:[{name,group,enabled,defaultEnabled}]}`，全部 20 个内置工具，分组及顺序见下表 |
+| GET | `/ai/tool-settings` | `{revision,tools:[{name,group,enabled,defaultEnabled}]}`，全部 22 个内置工具，分组及顺序见下表 |
 | PUT | `/ai/tool-settings` | `{revision,enabled:{<name>:boolean}}`，部分更新，返回同形快照；未知名称 / 非布尔值 400，版本冲突 409 AI_SETTINGS_CONFLICT |
 
 | group | 工具顺序 | defaultEnabled |
 |---|---|---|
+| `web` | search_web、fetch_web | true |
 | `material` | read_current_page、search_materials、read_notebook、read_knowledge、read_question_bank、read_wrong_questions、create_material、update_material | true |
 | `memory` | search_memories、list_memories、create_memory、update_memory | true |
 | `session` | list_sessions、read_session、create_session、send_message | true |
 | `delete` | delete_memory、delete_session、delete_material、remove_wrong_question | false |
 
-全局开关不跟随模型，设置面板即点即存；恢复默认提交各项 defaultEnabled，即 16 开 / 4 关。无记录或旧配置缺项时使用该项默认值，保留原有删除选择；仅持久化与默认值不同的选择，部分更新不丢失其它组的偏好。沿用 schema 17，无额外迁移。
+全局开关不跟随模型，设置面板即点即存；恢复默认提交各项 defaultEnabled，即 18 开 / 4 关。无记录或旧配置缺项时使用该项默认值，保留原有删除选择；仅持久化与默认值不同的选择，部分更新不丢失其它组的偏好。工具权限沿用 v17 表结构，v19 的联网服务配置独立保存。助手地球按钮一次提交两项 Web 权限：全开时全关，全关或部分开启时全开；服务端确认后同步状态。
 
 开启从下一轮生效，关闭在执行前再次复核，未执行的调用返回 DISABLED，活动显示「工具已在设置中关闭，未执行」。全关仍可正常聊天。记忆工具仍受记忆启用 / 授权约束，全部工具仍受模型工具能力约束，不自动打开其它工具。读取设置异常或已知配置项损坏时接口报错、聊天暂时不提供工具，不能以默认开启值绕过用户选择；未知工具配置忽略。
 
-按本轮可用工具生成系统指引；全局关闭与派发任务的删除限制分别说明，不能用清空 / 修改冒充删除。联网搜索配置尚未开放。
+按本轮可用工具生成系统指引；全局关闭与派发任务的删除限制分别说明，不能用清空 / 修改冒充删除。联网服务配置见 §3.1.2，关闭对应权限时原生 Web 或远程备用均不能绕过。
 
 #### 3.2.8 自动失败恢复（v0.8.1）
 
@@ -398,6 +413,21 @@ SSE 每 10 秒发送注释心跳，不再固定五分钟关闭。v2 任务由后
 - 自动恢复沿用原 requestId、模型、上下文与整轮预算，各类计数在取得完整模型步骤响应后重置。Chat Completions / Anthropic 无原流续传：保留部分回答前缀与已确认工具结果，再请求同一模型继续；未完整结束的工具调用不执行，不重放交付未知的插话。
 - 每次实际上游请求独立结算 usage；缺失用量不造数。鉴权、额度、参数、路径和 TLS 配置等不可恢复错误不重试。等待与重发仍受原整轮时间、输出和停止约束。
 - error 只含脱敏状态码 / 错误代码 / 正文，不含密钥、请求头或工具原始数据。失败 / 停止事实随原助手消息元数据加密保存；只有恢复错误、没有正文的失败也创建加密空助手消息，以便历史恢复原因。成功不保存常驻重连横幅。
+
+#### 3.2.9 联网工具（v0.8.2）
+
+v2、模型有效 tools=true 且对应全局权限开启时提供；不依赖记忆启用或笔记索引。普通 / SSE 复用统一循环，每轮工具数、阶段、时间、输出 / 上下文预算和停止仍有效。
+
+| 工具 | 参数与上限 | 返回 |
+|---|---|---|
+| `search_web` | query 必填，1–500 Unicode 码点且 ≤2 KiB；count 1–5，默认 5 | `{status,items:[{title,url,snippet,publishedAt?,truncated,untrusted:true}],incomplete,webProvider?,webRoute}` |
+| `fetch_web` | urls 必填，1–3 个公开 HTTP(S) URL；maxCharacters 500–12000，默认 6000；offset 0–200000，默认 0 | items 使用 content 代替 snippet；附 finalUrl?，截短且有内容时给实际 nextOffset |
+
+参数总量 ≤4 KiB，拒绝重复键、未知字段、尾随内容与类型转换。搜索每项片段 ≤1200 字符 / 2400 UTF-8 字节；读取每页 ≤14000 字节，正文合计 ≤45000 字节，仍经统一 64 KiB 结果上限复核。未知日期不编造，网页及片段为不可信资料，不产生写入、删除、记忆或派发授权；仅发送必要查询 / URL，不自动传完整笔记或会话。
+
+默认 search 为 Exa → Tavily Keyless，fetch 为本地正文 → Exa → Tavily，只为缺失 URL 尝试后续服务。每次远程尝试 ≤10 秒，整个工具 ≤20 秒并受本轮剩余时间约束；匿名每家每次操作至多尝试一次，按能力记录内存冷却并尊重 Retry-After。安全拒绝、参数错误和停止不降级；自定义及已支持的原生服务失败直接反馈，不静默更换远程供应商。原生模型额外请求共享预算、并发与用量账本。
+
+仅公开 HTTP(S)、80 / 443，连接时 DNS 和每次重定向均校验，最多 5 次重定向；拒绝本机 / 私网 / 元数据及危险地址。正常网页响应解压后 ≤1 MiB，服务响应 ≤2 MiB，不使用浏览器 Cookie、缓存或代理凭证。错误可为 AUTH_REQUIRED / RATE_LIMITED / QUOTA_EXHAUSTED / COOLDOWN / TIME_LIMIT / NETWORK_ERROR / UNSAFE_URL / EMPTY_CONTENT / LOGIN_REQUIRED / CONTENT_TOO_LARGE / UNSUPPORTED_CONTENT / UPSTREAM_ERROR / KEY_UNAVAILABLE，连同实际路径返回；不把业务错误当 NO_MATCH。详细协议与真实实测边界见[规格](../work/web-search/spec.md)和 [QA](../work/web-search/qa.md)。
 
 ### 3.3 轮次状态与上下文
 

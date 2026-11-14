@@ -432,6 +432,7 @@ public class AiConnectionsService {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("id", m.id()); item.put("modelId", m.modelId()); item.put("name", m.name()); item.put("group", m.group());
                 for (String key : List.of("streaming", "tools", "contextWindow", "maxOutputTokens")) item.put(key, m.params().get(key));
+                item.put("nativeWeb", com.drillnotebook.app.service.web.NativeWebCapabilities.of(p.endpoint(), p.apiFormat(), m.modelId()));
                 item.put("reasoningControl", m.params().getOrDefault("reasoningControl", "effort"));
                 item.put("reasoningEfforts", m.params().getOrDefault("reasoningEfforts", List.of()));
                 item.put("defaultReasoningEffort", m.params().get("defaultReasoningEffort"));

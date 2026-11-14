@@ -7,6 +7,26 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ToolActivityTest {
+    @Test void webActivitiesKeepSafeFallbackReasonsButNeverPersistQueriesSourcesOrProviderMessages() throws Exception {
+        var result = ToolActivity.started(1, "search_web").finished("""
+                {"status":"OK","webProvider":"tavily","items":[{"url":"https://example.com/?PRIVATE", "snippet":"PRIVATE"}],
+                 "query":"PRIVATE", "apiKey":"PRIVATE", "webRoute":[
+                  {"provider":"exa","status":"RATE_LIMITED","httpStatus":429,"retryAt":"2026-11-14T12:00:00Z","message":"PRIVATE"},
+                  {"provider":"tavily","status":"OK","headers":{"Authorization":"PRIVATE"}}]}
+                """, 40);
+        assertEquals("tavily", result.webProvider()); assertEquals(1, result.count());
+        assertEquals("RATE_LIMITED", result.webRoute().get(0).status()); assertEquals(429, result.webRoute().get(0).httpStatus());
+        var meta = new ObjectMapper().writeValueAsString(Map.of("toolActivities", List.of(result)));
+        assertFalse(meta.contains("PRIVATE")); assertEquals(result, ToolActivity.readMeta(meta, false).get(0));
+        var invalid = ToolActivity.started(2, "fetch_web").finished("""
+                {"status":"PRIVATE", "webProvider":"PRIVATE", "webRoute":[
+                  {"provider":"PRIVATE","status":"OK"}, {"provider":"local","status":"PRIVATE","httpStatus":999,"retryAt":"PRIVATE"}]}
+                """, 1);
+        assertNull(invalid.webProvider()); assertEquals("UNKNOWN", invalid.outcome());
+        assertEquals(1, invalid.webRoute().size()); assertEquals("UNKNOWN", invalid.webRoute().get(0).status());
+        assertNull(invalid.webRoute().get(0).httpStatus()); assertNull(invalid.webRoute().get(0).retryAt());
+        assertFalse(new ObjectMapper().writeValueAsString(invalid).contains("PRIVATE"));
+    }
     @Test void materialCreationKeepsOnlyValidatedLocalSourceAcrossHistoryRestore() throws Exception {
         var created = ToolActivity.started(1, "create_material").finished("""
                 {"status":"CREATED","sourceLink":"drill-notebook://material/note/17",

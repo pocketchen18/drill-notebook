@@ -1,0 +1,363 @@
+<div id="web-search-assistant" aria-label="Drill Notebook AI 助手联网入口">
+  <aside class="dna-side" aria-label="会话栏">
+    <div class="dna-side-top"><span class="dna-new"><i data-lucide="plus" aria-hidden="true"></i>新会话</span></div>
+    <div class="dna-session-search"><i data-lucide="search" aria-hidden="true"></i><span>搜索会话</span></div>
+    <div class="dna-session-group">今天</div>
+    <div class="dna-session dna-session-current"><i data-lucide="messages-square" aria-hidden="true"></i><span>联网工具选型</span></div>
+    <div class="dna-session"><i data-lucide="messages-square" aria-hidden="true"></i><span>复习计划整理</span></div>
+    <div class="dna-session-group">昨天</div>
+    <div class="dna-session"><i data-lucide="messages-square" aria-hidden="true"></i><span>笔记检索方案</span></div>
+    <div class="dna-side-foot"><span>空间清理</span><span data-tooltip="在主窗口的设置 → 工具中配置搜索服务">设置 ↗</span></div>
+  </aside>
+  <main class="dna-main">
+    <header class="dna-head">
+      <button class="dna-icon dna-head-toggle cursor-interaction" id="dna-toggle-side" type="button" aria-label="收起会话栏" aria-expanded="true" data-tooltip="会话栏"><i data-lucide="panel-left" aria-hidden="true"></i></button>
+      <span class="dna-pin"><i data-lucide="pin" aria-hidden="true"></i></span><span class="dna-head-divider"></span>
+      <strong>联网工具选型</strong>
+    </header>
+    <div class="dna-stream">
+      <div class="dna-content">
+        <div class="dna-user-message"><p>查一下 Exa MCP 的官方文档，整理它的搜索和网页读取能力。</p></div>
+        <article class="dna-answer" aria-label="助手回复">
+          <div class="dna-model-label">Claude Sonnet 4.5</div>
+          <details class="dna-activity" id="dna-activity">
+            <summary class="cursor-interaction">
+              <span class="dna-activity-mark dna-success" id="dna-activity-ok"><i data-lucide="check" aria-hidden="true"></i></span>
+              <span class="dna-activity-mark dna-warning" id="dna-activity-warning" hidden><i data-lucide="triangle-alert" aria-hidden="true"></i></span>
+              <span class="dna-activity-copy"><span id="dna-activity-title">工具执行完成</span><small>2 次工具调用</small></span>
+              <i data-lucide="chevron-right" aria-hidden="true" class="dna-activity-chevron"></i>
+            </summary>
+            <div class="dna-activity-rows">
+              <div class="dna-activity-row"><i data-lucide="globe" aria-hidden="true"></i><div><strong id="dna-search-activity">搜索网页 · Exa</strong><p id="dna-search-result">取得 3 个来源</p><p class="dna-activity-error" id="dna-search-error" hidden></p></div></div>
+              <div class="dna-activity-row"><i data-lucide="file-text" aria-hidden="true"></i><div><strong>读取网页 · 本地正文提取</strong><p>已取得官方文档正文</p></div></div>
+            </div>
+          </details>
+          <div class="dna-answer-copy" id="dna-answer-copy">
+            <p>Exa MCP 提供网页搜索和指定 URL 读取。搜索返回来源链接与相关片段；需要更多上下文时，再读取网页正文。</p>
+            <p>搜索与读取可以分开使用，查找资料后不必自动抓取每一个结果。</p>
+          </div>
+          <div class="dna-sources" id="dna-sources">
+            <a href="https://exa.ai/docs/get-started/exa-mcp" target="_blank" rel="noreferrer"><span>1</span>Exa MCP 官方文档<i data-lucide="external-link" aria-hidden="true"></i></a>
+            <a href="https://exa.ai/docs/search/best-practices" target="_blank" rel="noreferrer"><span>2</span>搜索使用建议<i data-lucide="external-link" aria-hidden="true"></i></a>
+          </div>
+          <div class="dna-message-actions" aria-label="回答操作">
+            <span data-tooltip="复制"><i data-lucide="copy" aria-hidden="true"></i></span>
+            <span data-tooltip="重新生成"><i data-lucide="rotate-cw" aria-hidden="true"></i></span>
+            <span data-tooltip="保存到笔记"><i data-lucide="file-plus-2" aria-hidden="true"></i></span>
+          </div>
+        </article>
+        <div class="dna-demo-turn" id="dna-demo-turn" hidden aria-live="polite"></div>
+      </div>
+    </div>
+    <footer class="dna-foot">
+      <div class="dna-composer">
+        <textarea id="dna-draft" rows="2" aria-label="给助手发送消息" placeholder="继续提问…"></textarea>
+        <div class="dna-compose-toolbar">
+          <span class="dna-page" data-tooltip="绑定的当前页面"><i data-lucide="file-text" aria-hidden="true"></i><span>工具设置</span></span>
+          <span class="dna-context" data-tooltip="会话上下文"><i data-lucide="chart-pie" aria-hidden="true"></i><span>上下文</span></span>
+          <span class="dna-model-picker">Claude Sonnet 4.5<i data-lucide="chevron-down" aria-hidden="true"></i></span>
+          <div class="dna-compose-actions">
+            <span class="dna-icon dna-secondary" data-tooltip="添加附件"><i data-lucide="paperclip" aria-hidden="true"></i></span>
+            <button class="dna-icon dna-secondary dna-web is-on cursor-interaction" id="dna-web-toggle" type="button" aria-label="联网已开启，点击关闭搜索与网页读取" aria-pressed="true" data-tooltip="联网已开启 · 内置自动">
+              <i data-lucide="globe" aria-hidden="true"></i><span class="dna-mixed-dot" aria-hidden="true" hidden></span>
+            </button>
+            <button class="dna-icon dna-send cursor-interaction" id="dna-send" type="button" aria-label="发送演示消息" data-tooltip="发送"><i data-lucide="send" aria-hidden="true"></i></button>
+          </div>
+        </div>
+      </div>
+      <p class="dna-notice" id="dna-notice" role="status" aria-live="polite"></p>
+    </footer>
+  </main>
+</div>
+<style>
+  #web-search-assistant {
+    --dna-panel: light-dark(#ffffff, #1b1e24);
+    --dna-side: light-dark(#f6f8fb, #20242b);
+    --dna-line: light-dark(#e4e7ee, #2a2f38);
+    --dna-input: light-dark(#cbd3e0, #3d4451);
+    --dna-text: light-dark(#1e2433, #e2e6ee);
+    --dna-strong: light-dark(#0f1420, #f7f8fa);
+    --dna-muted: light-dark(#6b7385, #98a2b3);
+    --dna-hover: light-dark(#eff2f7, #242931);
+    --dna-accent: light-dark(#2f54eb, #8da2ff);
+    --dna-soft: light-dark(#eef2ff, #1f2a4d);
+    --dna-fill: light-dark(#2f54eb, #4b6bf0);
+    --dna-contrast: light-dark(#ffffff, #ffffff);
+    --dna-success: light-dark(#15803d, #4ade80);
+    --dna-warning: light-dark(#9a5b00, #f5a524);
+    --dna-error: light-dark(#c73339, #ff7b7b);
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 224px minmax(0, 1fr);
+    border: 1px solid var(--dna-line);
+    border-radius: 10px;
+    background: var(--dna-panel);
+    color: var(--dna-text);
+    font: 14px/1.65 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    overflow-wrap: anywhere;
+  }
+  #web-search-assistant *, #web-search-assistant *::before, #web-search-assistant *::after { box-sizing: border-box; }
+  #web-search-assistant [hidden] { display: none !important; }
+  #web-search-assistant button, #web-search-assistant textarea { font: inherit; }
+  #web-search-assistant svg { width: 16px; height: 16px; flex: none; }
+  #web-search-assistant .dna-side { display: flex; flex-direction: column; min-width: 0; padding: 0 8px; background: var(--dna-side); border-right: 1px solid var(--dna-line); border-radius: 10px 0 0 10px; }
+  #web-search-assistant .dna-side-top { padding: 14px 4px 8px; }
+  #web-search-assistant .dna-new { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; border: 1px solid var(--dna-input); border-radius: 6px; background: var(--dna-panel); font-size: 13px; font-weight: 600; }
+  #web-search-assistant .dna-session-search { display: flex; align-items: center; gap: 6px; margin: 0 4px; padding: 6px 9px; border: 1px solid var(--dna-line); border-radius: 6px; background: var(--dna-panel); color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-session-group { padding: 17px 9px 5px; font-size: 12px; color: var(--dna-muted); }
+  #web-search-assistant .dna-session { display: flex; align-items: center; gap: 8px; padding: 11px 10px; border-radius: 6px; font-size: 13px; }
+  #web-search-assistant .dna-session > svg { width: 14px; height: 14px; color: var(--dna-muted); }
+  #web-search-assistant .dna-session-current { background: var(--dna-soft); color: var(--dna-accent); }
+  #web-search-assistant .dna-session-current > svg { color: var(--dna-accent); }
+  #web-search-assistant .dna-side-foot { display: flex; justify-content: space-between; gap: 8px; padding: 12px 8px; margin-top: auto; border-top: 1px solid var(--dna-line); color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-side-foot > span:last-child { color: var(--dna-accent); }
+  #web-search-assistant .dna-main { min-width: 0; display: flex; flex-direction: column; }
+  #web-search-assistant .dna-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 104px 8px 10px; border-bottom: 1px solid var(--dna-line); }
+  #web-search-assistant .dna-head strong { min-width: 0; font-size: 14px; font-weight: 600; color: var(--dna-strong); }
+  #web-search-assistant .dna-pin { display: grid; place-items: center; flex: none; width: 28px; color: var(--dna-muted); }
+  #web-search-assistant .dna-head-divider { width: 1px; height: 18px; background: var(--dna-line); flex: none; }
+  #web-search-assistant .dna-icon { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dna-muted); }
+  #web-search-assistant button.dna-icon:hover { background: var(--dna-hover); color: var(--dna-text); }
+  #web-search-assistant .dna-stream { flex: 1; padding: 24px 24px 20px; }
+  #web-search-assistant .dna-content { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 760px; margin: 0 auto; }
+  #web-search-assistant .dna-user-message { align-self: flex-end; max-width: 86%; }
+  #web-search-assistant .dna-user-message > p { margin: 0; padding: 10px 14px; border-radius: 12px 12px 4px 12px; background: var(--dna-hover); font-size: 13px; }
+  #web-search-assistant .dna-answer { min-width: 0; }
+  #web-search-assistant .dna-model-label { margin-bottom: 6px; color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-activity { margin: 10px 0 18px; color: var(--dna-text); }
+  #web-search-assistant .dna-activity > summary { display: flex; align-items: center; gap: 9px; padding: 8px 0; list-style: none; border-radius: 6px; font-size: 13px; }
+  #web-search-assistant .dna-activity > summary::-webkit-details-marker { display: none; }
+  #web-search-assistant .dna-activity > summary:hover { background: var(--dna-side); }
+  #web-search-assistant .dna-activity-mark { display: inline-flex; align-items: center; }
+  #web-search-assistant .dna-success { color: var(--dna-success); }
+  #web-search-assistant .dna-warning { color: var(--dna-warning); }
+  #web-search-assistant .dna-activity-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  #web-search-assistant .dna-activity-copy small { color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-activity-chevron { color: var(--dna-muted); transition: transform 120ms ease; }
+  #web-search-assistant .dna-activity[open] .dna-activity-chevron { transform: rotate(90deg); }
+  #web-search-assistant .dna-activity-rows { margin: 2px 0 0 7px; padding-left: 16px; border-left: 1px solid var(--dna-line); }
+  #web-search-assistant .dna-activity-row { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; font-size: 12px; }
+  #web-search-assistant .dna-activity-row > svg { margin-top: 3px; color: var(--dna-muted); }
+  #web-search-assistant .dna-activity-row strong { font-weight: 500; font-size: 13px; }
+  #web-search-assistant .dna-activity-row p { margin: 3px 0 0; color: var(--dna-muted); }
+  #web-search-assistant .dna-activity-row .dna-activity-error { color: var(--dna-error); white-space: pre-line; overflow-wrap: anywhere; }
+  #web-search-assistant .dna-answer-copy p { margin: 12px 0; font-size: 14px; line-height: 1.75; }
+  #web-search-assistant .dna-sources { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 18px; font-size: 12px; }
+  #web-search-assistant .dna-sources a { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--dna-accent); }
+  #web-search-assistant .dna-sources a:hover { text-decoration: underline; }
+  #web-search-assistant .dna-sources a > span { color: var(--dna-muted); }
+  #web-search-assistant .dna-sources a > svg { width: 12px; height: 12px; }
+  #web-search-assistant .dna-message-actions { display: flex; gap: 4px; margin: 14px 0 0 -4px; color: var(--dna-muted); }
+  #web-search-assistant .dna-message-actions > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; }
+  #web-search-assistant .dna-message-actions > span:hover { background: var(--dna-hover); }
+  #web-search-assistant .dna-foot { padding: 4px 24px 12px; }
+  #web-search-assistant .dna-composer { width: 100%; max-width: 760px; margin: 0 auto; padding: 12px; border: 1px solid var(--dna-input); border-radius: 10px; background: var(--dna-panel); }
+  #web-search-assistant textarea { width: 100%; min-width: 0; min-height: 58px; border: 0; padding: 0 3px; resize: vertical; background: transparent; color: var(--dna-text); font-size: 14px; line-height: 1.65; }
+  #web-search-assistant textarea::placeholder { color: var(--dna-muted); }
+  #web-search-assistant .dna-compose-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  #web-search-assistant .dna-compose-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+  #web-search-assistant .dna-page { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 140px; min-height: 28px; padding: 3px 10px; margin-right: auto; border-radius: 20px; background: var(--dna-side); color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-page span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #web-search-assistant .dna-page > svg { width: 13px; height: 13px; }
+  #web-search-assistant .dna-context { display: inline-flex; align-items: center; gap: 4px; color: var(--dna-muted); font-size: 12px; }
+  #web-search-assistant .dna-context > svg { width: 14px; height: 14px; }
+  #web-search-assistant .dna-model-picker { display: inline-flex; align-items: center; gap: 4px; min-width: 0; min-height: 30px; padding: 3px 5px; font-size: 12px; }
+  #web-search-assistant .dna-model-picker > svg { width: 13px; height: 13px; color: var(--dna-muted); }
+  #web-search-assistant .dna-secondary { background: var(--dna-hover); color: var(--dna-text); }
+  #web-search-assistant .dna-web { position: relative; }
+  #web-search-assistant .dna-web.is-on, #web-search-assistant .dna-web.is-mixed { background: var(--dna-soft); color: var(--dna-accent); }
+  #web-search-assistant button.dna-web.is-on:hover, #web-search-assistant button.dna-web.is-mixed:hover { background: var(--dna-soft); color: var(--dna-accent); }
+  #web-search-assistant .dna-mixed-dot { position: absolute; right: 4px; top: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--dna-accent); }
+  #web-search-assistant .dna-send { background: var(--dna-fill); color: var(--dna-contrast); }
+  #web-search-assistant button.dna-send:hover { background: var(--dna-fill); color: var(--dna-contrast); filter: brightness(.95); }
+  #web-search-assistant button.dna-send:disabled { opacity: .45; }
+  #web-search-assistant .dna-notice { max-width: 760px; min-height: 18px; margin: 7px auto 0; color: var(--dna-muted); font-size: 12px; line-height: 1.5; }
+  #web-search-assistant .dna-demo-turn { border-top: 1px solid var(--dna-line); padding-top: 16px; font-size: 13px; }
+  #web-search-assistant .dna-demo-turn p { margin: 8px 0; }
+  #web-search-assistant.is-side-closed { grid-template-columns: minmax(0, 1fr); }
+  #web-search-assistant.is-side-closed .dna-side { display: none; }
+  @media (max-width: 760px) {
+    #web-search-assistant { grid-template-columns: minmax(0, 1fr); }
+    #web-search-assistant .dna-side { display: none; }
+    #web-search-assistant .dna-head-toggle { display: none; }
+    #web-search-assistant .dna-stream { padding: 20px 18px 16px; }
+    #web-search-assistant .dna-foot { padding: 4px 18px 10px; }
+    #web-search-assistant .dna-head { padding-left: 14px; }
+  }
+  @media (max-width: 480px) {
+    #web-search-assistant .dna-head { padding-right: 92px; gap: 6px; }
+    #web-search-assistant .dna-head strong { font-size: 13px; }
+    #web-search-assistant .dna-pin, #web-search-assistant .dna-head-divider { display: none; }
+    #web-search-assistant .dna-stream { padding: 18px 14px 14px; }
+    #web-search-assistant .dna-foot { padding: 4px 12px 10px; }
+    #web-search-assistant .dna-composer { padding: 10px; }
+    #web-search-assistant .dna-page { flex: 1 1 100%; max-width: none; margin-right: 0; }
+    #web-search-assistant .dna-compose-toolbar { gap: 6px; }
+    #web-search-assistant .dna-compose-actions { gap: 6px; }
+    #web-search-assistant .dna-user-message { max-width: 94%; }
+    #web-search-assistant .dna-sources { flex-direction: column; }
+  }
+  @media (pointer: coarse) {
+    #web-search-assistant .dna-icon { width: 44px; height: 44px; }
+    #web-search-assistant .dna-activity > summary { min-height: 44px; }
+    #web-search-assistant textarea { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { #web-search-assistant .dna-activity-chevron { transition: none; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('web-search-assistant');
+  if (!root) return;
+  const find = (selector) => root.querySelector(selector);
+  const button = find('#dna-web-toggle');
+  const activity = find('#dna-activity');
+  const state = { searchEnabled: true, fetchEnabled: true, activity: 'success', activityOpen: false, sideOpen: true };
+  const design = { permissions: 'all', activity: 'success' };
+  const modes = ['success', 'fallback', 'quota'];
+  function permissionMode() {
+    return state.searchEnabled && state.fetchEnabled ? 'all'
+      : state.searchEnabled ? 'search' : state.fetchEnabled ? 'fetch' : 'off';
+  }
+  function restore(snapshot) {
+    const saved = snapshot && snapshot.privateContent && snapshot.privateContent.webAssistantUi;
+    if (!saved || saved.version !== 1) return;
+    ['searchEnabled', 'fetchEnabled', 'activityOpen', 'sideOpen'].forEach((key) => {
+      if (typeof saved[key] === 'boolean') state[key] = saved[key];
+    });
+    if (modes.includes(saved.activity)) state.activity = saved.activity;
+  }
+  function remember() {
+    if (!window.openai || typeof window.openai.setWidgetState !== 'function') return;
+    Promise.resolve(window.openai.setWidgetState({
+      modelContent: {
+        surface: 'AI 助手', searchEnabled: state.searchEnabled, fetchEnabled: state.fetchEnabled,
+        selectedMode: '内置自动', activityExample: state.activity
+      },
+      privateContent: { webAssistantUi: { version: 1, ...state } }
+    })).catch(() => {});
+  }
+  function notice(message) { find('#dna-notice').textContent = message; }
+  function render() {
+    const mode = permissionMode();
+    const full = mode === 'all';
+    const mixed = mode === 'search' || mode === 'fetch';
+    const tooltip = full ? '联网已开启 · 内置自动'
+      : mode === 'off' ? '联网已关闭'
+        : mode === 'search' ? '联网部分开启 · 仅搜索' : '联网部分开启 · 仅网页读取';
+    button.classList.toggle('is-on', full);
+    button.classList.toggle('is-mixed', mixed);
+    find('.dna-mixed-dot').hidden = !mixed;
+    button.setAttribute('aria-pressed', mixed ? 'mixed' : String(full));
+    button.setAttribute('aria-label', tooltip + (full ? '，点击关闭搜索与网页读取' : '，点击开启搜索与网页读取'));
+    button.setAttribute('data-tooltip', tooltip);
+    root.classList.toggle('is-side-closed', !state.sideOpen);
+    find('#dna-toggle-side').setAttribute('aria-expanded', String(state.sideOpen));
+    find('#dna-toggle-side').setAttribute('aria-label', state.sideOpen ? '收起会话栏' : '展开会话栏');
+    find('#dna-activity-ok').hidden = state.activity === 'quota';
+    find('#dna-activity-warning').hidden = state.activity !== 'quota';
+    find('#dna-activity-title').textContent = state.activity === 'quota' ? '搜索暂不可用，网页读取完成' : '工具执行完成';
+    find('#dna-search-activity').textContent = state.activity === 'fallback' ? '搜索网页 · Tavily Keyless' : '搜索网页 · Exa';
+    find('#dna-search-result').textContent = state.activity === 'quota' ? '未取得搜索结果'
+      : state.activity === 'fallback' ? 'Exa 受限后使用备用，取得 3 个来源' : '取得 3 个来源';
+    const error = find('#dna-search-error');
+    error.hidden = state.activity !== 'quota';
+    error.textContent = state.activity === 'quota' ? 'Exa：匿名访问受限（403）\nTavily：daily_cap_reached（429）' : '';
+    const paragraphs = find('#dna-answer-copy').querySelectorAll('p');
+    paragraphs[0].textContent = state.activity === 'quota'
+      ? '搜索服务当前受限，没有取得新的搜索结果。已知的官方文档网址仍可读取。'
+      : 'Exa MCP 提供网页搜索和指定 URL 读取。搜索返回来源链接与相关片段；需要更多上下文时，再读取网页正文。';
+    paragraphs[1].textContent = state.activity === 'quota'
+      ? '可以稍后再试，或在设置 → 工具中配置自己的搜索服务。'
+      : '搜索与读取可以分开使用，查找资料后不必自动抓取每一个结果。';
+    activity.open = state.activityOpen;
+    design.permissions = mode;
+    design.activity = state.activity;
+    find('#dna-send').disabled = !find('#dna-draft').value.trim();
+  }
+  restore(window.openai && window.openai.widgetState);
+  render();
+  button.addEventListener('click', () => {
+    const next = !(state.searchEnabled && state.fetchEnabled);
+    state.searchEnabled = next;
+    state.fetchEnabled = next;
+    render();
+    notice(next ? '演示：联网已开启，对所有会话生效。' : '演示：联网已关闭，已有回答和工具记录保留。');
+    remember();
+  });
+  find('#dna-toggle-side').addEventListener('click', () => {
+    state.sideOpen = !state.sideOpen;
+    render();
+    remember();
+  });
+  activity.addEventListener('toggle', () => {
+    if (state.activityOpen === activity.open) return;
+    state.activityOpen = activity.open;
+    remember();
+  });
+  find('#dna-draft').addEventListener('input', () => {
+    find('#dna-send').disabled = !find('#dna-draft').value.trim();
+  });
+  function sendDemo() {
+    const draft = find('#dna-draft');
+    if (!draft.value.trim()) return;
+    const turn = find('#dna-demo-turn');
+    turn.replaceChildren();
+    const question = document.createElement('p');
+    question.textContent = draft.value;
+    const answer = document.createElement('p');
+    answer.textContent = permissionMode() === 'off'
+      ? '演示回答：联网已关闭，未调用联网工具。'
+      : permissionMode() === 'search' ? '演示回答：允许搜索，网页读取已关闭。'
+        : permissionMode() === 'fetch' ? '演示回答：允许网页读取，搜索已关闭。'
+          : '演示回答：允许按需搜索和读取网页。此草图未发起真实请求。';
+    turn.append(question, answer);
+    turn.hidden = false;
+    draft.value = '';
+    render();
+    notice('已显示演示消息。');
+  }
+  find('#dna-send').addEventListener('click', sendDemo);
+  find('#dna-draft').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      sendDemo();
+    }
+  });
+  window.addEventListener('openai:set_globals', (event) => {
+    const globals = event.detail && event.detail.globals;
+    if (globals && Object.prototype.hasOwnProperty.call(globals, 'widgetState')) {
+      restore(globals.widgetState);
+      render();
+    }
+  });
+  if (typeof globalThis.Tweak === 'function') {
+    const tweak = new Tweak({ container: root, onChange: () => {
+      state.searchEnabled = design.permissions === 'all' || design.permissions === 'search';
+      state.fetchEnabled = design.permissions === 'all' || design.permissions === 'fetch';
+      state.activity = design.activity;
+      if (state.activity !== 'success') state.activityOpen = true;
+      render();
+      remember();
+    } });
+    tweak.addSelect(design, 'permissions', {
+      label: '联网权限状态',
+      options: [
+        { label: '搜索与读取均开启', value: 'all' },
+        { label: '全部关闭', value: 'off' },
+        { label: '仅搜索', value: 'search' },
+        { label: '仅网页读取', value: 'fetch' }
+      ]
+    });
+    tweak.addSelect(design, 'activity', {
+      label: '工具活动示例',
+      options: [
+        { label: '正常完成', value: 'success' },
+        { label: '使用自动备用', value: 'fallback' },
+        { label: '匿名服务受限', value: 'quota' }
+      ]
+    });
+  }
+})();
+</script>

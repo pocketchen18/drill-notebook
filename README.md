@@ -1,6 +1,6 @@
 # Drill Notebook（面向开发者）
 
-**v0.8.2 笔记混合检索已接入资料工具并通过工程验证，尚未发布**：助手按需使用 BM25 + 可选向量 + RRF，保留精确关键词与按 ID 读取，范围和验证见[当前功能清单](docs/state/v0.8.2-features.md)。[v0.8.1](docs/state/v0.8.1-features.md) 的失败重连、会话内对话跳转与模型持久化已完成工程验证，[发行准备说明](docs/release/v0.8.1-release-notes.md)继续保留；本次未调整发行配置。v0.8.0 相关材料已[归档](docs/archive/v0.8.0/README.md)，发行与升级记录见[v0.8.0 说明](docs/release/v0.8.0-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
+**v0.8.2 笔记混合检索与联网搜索已实现并通过工程验证，尚未发布**：助手按需混合检索笔记、搜索互联网与读取公开网页，保留精确关键词和按 ID 读取；联网支持免配置默认服务、Tavily / TinyFish 自定义配置与原生 Web 优先。范围和验证见[当前功能清单](docs/state/v0.8.2-features.md)。[v0.8.1](docs/state/v0.8.1-features.md) 的失败重连、会话内对话跳转与模型持久化已完成工程验证，[发行准备说明](docs/release/v0.8.1-release-notes.md)继续保留；本次未调整发行配置。v0.8.0 相关材料已[归档](docs/archive/v0.8.0/README.md)，发行与升级记录见[v0.8.0 说明](docs/release/v0.8.0-release-notes.md)。**v1.0 之前的所有版本均为不保证稳定性的预发行版。**
 
 | 项 | 说明 |
 |---|---|
@@ -206,7 +206,7 @@
 | **按需读取** | 六个工具查找 / 读取当前页面、笔记、知识点、题库与错题，支持分页、来源与提交时的草稿快照 |
 | **新增与修改** | 新建普通学习资料、人工加入错题；按读取版本修改指定字段，保留草稿、真实统计与重试去重 |
 | **删除工具** | 删除记忆、会话、资料与移出错题本四项，默认关闭；目标版本、非空容器、当前 / 上游 / 忙碌会话受保护 |
-| **全局工具设置** | 全部 20 个内置工具独立启停，16 个非删除默认开、4 个删除默认关；全局保存并可恢复默认 |
+| **全局工具设置** | v0.8.2 起全部 22 个内置工具独立启停，18 个非删除默认开、4 个删除默认关；全局保存并可恢复默认 |
 | **聊天与模型配置** | 去除常驻上下文卡片与右下角入口；上下文窗口、最大输出必填，取消最大输入与保守窗口 |
 | **发行与升级** | schema 17，仍为不保证稳定性的预发行版；实际验证和发布前待办见 [发布说明](docs/release/v0.7.3-release-notes.md) |
 
@@ -232,19 +232,24 @@
 
 三项已实现并通过工程验证，尚未发布；最终范围见[本版清单](docs/state/v0.8.1-features.md)，发行准备见[本版说明](docs/release/v0.8.1-release-notes.md)，验证与未验收项见[QA](docs/test/QA_CHECKLIST.md)。
 
-### 1.18 v0.8.2（笔记混合检索接入资料工具）
+### 1.18 v0.8.2（笔记混合检索与联网搜索）
 
 | 功能 | 说明 |
 |---|---|
 | **按需混合检索** | search_materials 默认 hybrid，复用 BM25 + 可选向量 + RRF；字面匹配优先，按笔记页合并，支持笔记本范围 |
 | **精确与分段读取** | keyword 保留名称、编号、原文和符号查找；空目录、其它资料与 ID 读取不调用 embedding，片段足够时直接引用 |
 | **返回预算与降级** | 有界候选、Unicode 片段与字节预算、重复片段去重；旧分块与归属复核，向量不可用回退 BM25 |
+| **联网搜索与网页读取** | search_web / fetch_web 默认开；Exa 搜索优先、Tavily Keyless 有界备用，静态正文优先本地提取 |
+| **联网服务与入口** | 工具页独立选搜索 / 读取服务，Tavily / TinyFish 共用各自加密密钥，可保存 / 取消 / 测试；助手附件旁的地球按钮控制同一对全局权限 |
+| **原生 Web 优先与安全** | 默认关闭；按官方端点 / 型号分别判断能力，共享预算与用量账本；限制公开 URL、DNS、重定向、响应与时间 |
 
-已实现并通过工程验证；范围见[本版清单](docs/state/v0.8.2-features.md)，结果见[QA](docs/test/QA_CHECKLIST.md#模块三十三笔记混合检索接入资料工具v082)。复用既有授权与 APP_ROOT 落点，不承诺未经实测的准确度或 Token 节省幅度。
+上述笔记检索能力已实现并通过工程验证；范围见[本版清单](docs/state/v0.8.2-features.md)，结果见[QA](docs/test/QA_CHECKLIST.md#模块三十三笔记混合检索接入资料工具v082)。复用既有授权与 APP_ROOT 落点，不承诺未经实测的准确度或 Token 节省幅度。
+
+联网 F02 已完成工程验证与真实匿名搜索 / 抓取探测，构建及便携审计通过；配置保存于 schema 19 的便携数据库。工具设置、助手地球按钮与草图见 [UI/UX](docs/work/web-search/ui-ux.md)，原生能力矩阵见[规格](docs/work/web-search/spec.md)，测试与真实账户 / 实机边界见 [QA](docs/work/web-search/qa.md)。匿名额度与网络条件可能变化，不承诺固定用量或持续可用性。
 
 ### 1.19 明确后置（未作为当前目标）
 
-当前 MVP 核心闭环、后续方向与长期 Non-Goals 见[全局功能清单](docs/features.md)。v0.8.0 的[实现清单](docs/archive/v0.8.0/features.md)已归档；v0.8.1 的[失败重连、会话跳转与模型选择](docs/state/v0.8.1-features.md)已完成工程验证。v0.8.2 的笔记检索接入已实现，长期记忆向量化、联网搜索配置、移动与批量删除仍未实现。
+当前 MVP 核心闭环、后续方向与长期 Non-Goals 见[全局功能清单](docs/features.md)。v0.8.0 的[实现清单](docs/archive/v0.8.0/features.md)已归档；v0.8.1 的[失败重连、会话跳转与模型选择](docs/state/v0.8.1-features.md)已完成工程验证。v0.8.2 的笔记检索接入与联网搜索已实现；长期记忆向量化、移动与批量删除仍为后续方向。
 
 ---
 
@@ -389,6 +394,7 @@
 7. **笔记本检索（v0.8.2 接入工具）**：模型支持工具且开启 search_materials 时，助手按需用自然语言混合检索笔记，返回片段与来源；需要前后文再按 ID 读取，精确查找可用 keyword。向量来源在「设置 → 嵌入与检索」主动启用，未配置时用 BM25，不自动下载模型；远程 embedding 继续需要授权（见[检索说明](docs/reference/ai-retrieval.md)）。
 8. **长期记忆与工具**：开启记忆且模型支持工具时，助手可按需检索、列出、新增和更新记忆；回复内的工具活动组显示执行中、成功、失败或未执行等真实状态，可展开安全摘要并在历史中恢复。删除来源会话不删除长期记忆。
 9. **阅读与长轮次**：流式生成期间向上滚动会暂停自动跟随，回到底部后恢复；达到运行限制会保留已有结果并说明原因，「继续」开启同会话新一轮。独立助手窗口全局选择模型与支持的思考档位，已受理的轮次保留提交时配置。
+10. **联网工具（v0.8.2）**：附件旁地球按钮控制联网；在「设置 → 工具」分别启停搜索 / 网页读取、选择免配置内置自动或自定义 Tavily / TinyFish、测试连接。模型按需调用，不强制每轮联网；原生 Web 优先默认关闭，支持范围见[规格](docs/work/web-search/spec.md#原生联网支持矩阵)。
 
 ### 2.11 设置
 
@@ -528,9 +534,9 @@ python scripts/seed-test-bank.py  # 造题种子（v0.5+）
 |---|---|
 | [docs/README.md](docs/README.md) | 文档体系、更新规则与归档约定 |
 | [docs/features.md](docs/features.md) | 全局功能清单：已交付能力、后续方向与长期边界，发布前同步 |
-| [docs/state/v0.8.2-features.md](docs/state/v0.8.2-features.md) | 当前 v0.8.2：笔记混合检索接入资料工具，已实现并通过工程验证 |
+| [docs/state/v0.8.2-features.md](docs/state/v0.8.2-features.md) | 当前 v0.8.2：笔记混合检索与联网工具已实现，工程验证通过 |
 | [docs/state/v0.8.1-features.md](docs/state/v0.8.1-features.md) | v0.8.1 功能清单与既有验证：失败重连、会话跳转与助手模型持久化 |
-| [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 18） |
+| [docs/state/data-model.md](docs/state/data-model.md) | 已落地数据模型与关键约束（schema 19） |
 | [docs/state/api-contracts.md](docs/state/api-contracts.md) | 核心 REST / SSE 契约与错误格式 |
 | [docs/state/architecture.md](docs/state/architecture.md) | 架构、模块边界、数据与主题 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 全局视觉、交互与编辑器契约 |

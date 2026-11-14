@@ -12,6 +12,7 @@ import type { AiRecovery } from '../lib/aiRecovery';
 import { focusMainWindow, isAssistantWindow, publish } from '../lib/windowBus';
 import './ai-window.css';
 import { ModelPicker, type ModelChoice } from './ai-session/ModelPicker';
+import { WebSearchButton } from './ai-session/WebSearchButton';
 import type { Connections } from './ai-connections/types';
 import { ContextMeter, formatTokens } from './ai-session/ContextMeter';
 import { useNavigate } from 'react-router-dom';
@@ -1548,6 +1549,7 @@ export function AiAssistant(): JSX.Element {
             <ModelPicker connections={connectionsQuery.data} value={modelChoice} busy={streaming || !!regenerating} disabled={!draftsReady || modelSaving || connectionsQuery.isPending || createSessionMutation.isPending}
               onChange={(next) => { void changeModelChoice(next); }} onManage={() => goToMain('/settings?tab=ai')} />
             <Button type="secondary" icon={<Paperclip size={16} />} disabled={!draftsReady || createSessionMutation.isPending} onClick={() => fileInput.current?.click()} aria-label="添加附件" />
+            <WebSearchButton enabled={aiOpen} model={activeModel?.model} />
             {streaming && <>
               <Button className="ai-compose-steer" type="secondary" title="提交，但不中断模型运行" aria-label="插话"
                 disabled={modelSaving || queueSubmitting || queue.unconfirmed || !!queue.data?.editingId || (!message.trim() && !attachments.length)} onClick={() => void submitMessage(undefined, 'steer')}>插话</Button>

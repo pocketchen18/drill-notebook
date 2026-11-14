@@ -742,3 +742,10 @@ CREATE TABLE IF NOT EXISTS ai_tool_settings (
     revision INTEGER NOT NULL,
     document TEXT NOT NULL
 );
+
+-- Provider choices and encrypted keys share the portable database, independently of tool permissions.
+CREATE TABLE IF NOT EXISTS ai_web_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,
+    document TEXT NOT NULL
+);

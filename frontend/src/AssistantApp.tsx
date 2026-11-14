@@ -8,7 +8,7 @@ import { hideAssistantWindow, publish, subscribe } from './lib/windowBus';
 import { isShortcutRecording, LS_SHORTCUTS, matchesAny, readShortcutConfig } from './lib/shortcuts';
 
 /** 这些设置在主窗口修改后，助手窗口要立即看到。 */
-const SHARED_QUERY_KEYS = ['ai-config', 'ai-connections', 'ai-tool-settings', 'ai-runtime-settings', 'ai-memory-settings',
+const SHARED_QUERY_KEYS = ['ai-config', 'ai-connections', 'ai-tool-settings', 'ai-web-settings', 'ai-runtime-settings', 'ai-memory-settings',
   'ai-memory-status', 'notebooks'];
 
 /**

@@ -10,7 +10,20 @@ import java.util.Set;
 /** 面向界面的工具审计白名单；绝不接收参数、正文、外部调用 ID 或任意错误文本。 */
 public record ToolActivity(int sequence, String toolName, String state, String outcome, String startedAt,
                            Long elapsedMs, int count, String availability, boolean incomplete,
-                           String sessionLink, String requestId, String sourceLink) {
+                           String sessionLink, String requestId, String sourceLink, String webProvider, List<WebRouteStep> webRoute) {
+    public record WebRouteStep(String provider, String status, Integer httpStatus, String retryAt) {
+        public WebRouteStep {
+            provider = WEB_PROVIDERS.contains(provider == null ? "" : provider) ? provider : "unknown";
+            status = WEB_STATUSES.contains(status == null ? "" : status) ? status : "UNKNOWN";
+            httpStatus = httpStatus != null && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null;
+            try { retryAt = retryAt == null ? null : Instant.parse(retryAt).toString(); }
+            catch (RuntimeException ignored) { retryAt = null; }
+        }
+    }
+    public ToolActivity(int sequence,String toolName,String state,String outcome,String startedAt,
+                        Long elapsedMs,int count,String availability,boolean incomplete,String sessionLink,String requestId,String sourceLink) {
+        this(sequence,toolName,state,outcome,startedAt,elapsedMs,count,availability,incomplete,sessionLink,requestId,sourceLink,null,List.of());
+    }
     public ToolActivity(int sequence,String toolName,String state,String outcome,String startedAt,
                         Long elapsedMs,int count,String availability,boolean incomplete,String sessionLink,String requestId) {
         this(sequence,toolName,state,outcome,startedAt,elapsedMs,count,availability,incomplete,sessionLink,requestId,null);
@@ -22,6 +35,7 @@ public record ToolActivity(int sequence, String toolName, String state, String o
     public static final int MAX_ENTRIES = 1200;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> TOOLS = Set.of("search_memories", "list_memories", "create_memory", "update_memory",
+            "search_web", "fetch_web",
             "list_sessions", "read_session", "create_session", "send_message",
             "read_current_page", "search_materials", "read_notebook", "read_knowledge", "read_question_bank", "read_wrong_questions", "create_material", "update_material",
             "delete_memory", "delete_session", "delete_material", "remove_wrong_question");
@@ -29,14 +43,23 @@ public record ToolActivity(int sequence, String toolName, String state, String o
             "NO_CHANGE", "UNAVAILABLE", "STALE", "LIMIT_REACHED", "INVALID_ARGUMENT", "NOT_FOUND",
             "AMBIGUOUS", "SUPPRESSED", "REJECTED", "UNKNOWN", "RESULT_TOO_LARGE", "CONTEXT_LIMIT", "REPEATED_CALL", "TIME_LIMIT",
             "SENT", "QUEUED", "RUNNING", "CANCELLED", "CYCLE_BLOCKED", "ARCHIVED", "LOCKED", "CONFLICT", "DRAFT_UNSAVED",
-            "DELETED", "REMOVED", "NOT_EMPTY", "IN_USE", "DISABLED");
+            "DELETED", "REMOVED", "NOT_EMPTY", "IN_USE", "DISABLED",
+            "AUTH_REQUIRED", "RATE_LIMITED", "QUOTA_EXHAUSTED", "UNSAFE_URL", "NETWORK_ERROR", "EMPTY_CONTENT", "LOGIN_REQUIRED",
+            "CONTENT_TOO_LARGE", "UNSUPPORTED_CONTENT", "UPSTREAM_ERROR", "COOLDOWN", "KEY_UNAVAILABLE", "NATIVE_UNSUPPORTED");
     private static final Set<String> AVAILABILITIES = Set.of("READY", "BUILDING", "LOCKED", "UNREADABLE", "TIMEOUT", "NOT_REQUESTED", "DENIED");
+    private static final Set<String> WEB_PROVIDERS = Set.of("exa", "tavily", "tinyfish", "local", "anthropic", "openai");
+    private static final Set<String> WEB_STATUSES = java.util.stream.Stream.concat(OUTCOMES.stream(), java.util.stream.Stream.of("PARTIAL"))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
     public ToolActivity {
         sourceLink=sourceLink!=null && sourceLink.matches("drill-notebook://material/(notebook|note|knowledge|bank|question|wrong)/[1-9][0-9]{0,15}") ? sourceLink : null;
         sessionLink=sessionLink!=null && sessionLink.matches("drill-notebook://session/[a-f0-9]{32}") ? sessionLink : null;
         requestId=UuidV7.isCanonical(requestId) ? requestId : null;
         toolName = TOOLS.contains(toolName == null ? "" : toolName) ? toolName : "unknown_tool";
+        boolean web = "search_web".equals(toolName) || "fetch_web".equals(toolName);
+        webProvider = web && WEB_PROVIDERS.contains(webProvider == null ? "" : webProvider) ? webProvider : null;
+        webRoute = web && webRoute != null ? webRoute.stream().filter(step -> step != null && !"unknown".equals(step.provider()))
+                .limit(4).toList() : List.of();
         state = Set.of("RUNNING", "FINISHED", "UNKNOWN").contains(state == null ? "" : state) ? state : "UNKNOWN";
         outcome = OUTCOMES.contains(outcome == null ? "" : outcome) ? outcome : "UNKNOWN";
         availability = AVAILABILITIES.contains(availability == null ? "" : availability) ? availability : null;
@@ -68,7 +91,8 @@ public record ToolActivity(int sequence, String toolName, String state, String o
             if (Set.of("CREATED", "UPDATED", "DELETED", "REMOVED").contains(status)) returned = 1;
             return new ToolActivity(sequence, toolName, "FINISHED", status, startedAt, durationMs, returned,
                     result.path("availability").asText(null), result.path("incomplete").asBoolean(false),
-                    result.path("sessionLink").asText(null),result.path("requestId").asText(null),result.path("sourceLink").asText(null));
+                    result.path("sessionLink").asText(null),result.path("requestId").asText(null),result.path("sourceLink").asText(null),
+                    result.path("webProvider").asText(null), readWebRoute(result.path("webRoute")));
         } catch (Exception ignored) {
             return unknown();
         }
@@ -91,12 +115,25 @@ public record ToolActivity(int sequence, String toolName, String state, String o
                         row.path("state").asText(), row.path("outcome").asText(), row.path("startedAt").asText(null),
                         row.path("elapsedMs").isIntegralNumber() ? row.path("elapsedMs").longValue() : null,
                         row.path("count").asInt(0), row.path("availability").asText(null),
-                        row.path("incomplete").asBoolean(false),row.path("sessionLink").asText(null),row.path("requestId").asText(null),row.path("sourceLink").asText(null));
+                        row.path("incomplete").asBoolean(false),row.path("sessionLink").asText(null),row.path("requestId").asText(null),row.path("sourceLink").asText(null),
+                        row.path("webProvider").asText(null), readWebRoute(row.path("webRoute")));
                 result.add(!active && "RUNNING".equals(item.state()) ? item.unknown() : item);
             }
             return List.copyOf(result);
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private static List<WebRouteStep> readWebRoute(JsonNode rows) {
+        if (!rows.isArray()) return List.of();
+        var result = new ArrayList<WebRouteStep>();
+        for (JsonNode row : rows) {
+            if (result.size() >= 4) break;
+            result.add(new WebRouteStep(row.path("provider").asText(null), row.path("status").asText(null),
+                    row.path("httpStatus").isIntegralNumber() && row.path("httpStatus").canConvertToInt() ? row.path("httpStatus").intValue() : null,
+                    row.path("retryAt").asText(null)));
+        }
+        return result;
     }
 }

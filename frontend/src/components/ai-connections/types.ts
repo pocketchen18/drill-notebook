@@ -5,6 +5,7 @@ export interface ConnectionModel {
   group: string;
   streaming: boolean;
   tools: boolean;
+  nativeWeb?: { search: boolean; fetch: boolean; protocol: string };
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
   reasoningControl?: ReasoningControl;

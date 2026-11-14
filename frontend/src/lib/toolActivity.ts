@@ -1,5 +1,6 @@
 /** 工具记录只接收安全元数据；参数、正文和任意错误文本不进入展示层。 */
 export const TOOL_NAMES = {
+  search_web: '联网搜索', fetch_web: '网页读取',
   search_memories: '检索记忆', list_memories: '读取记忆',
   list_sessions: '查找历史会话', read_session: '读取会话',
   create_session: '新建会话', send_message: '发送消息',
@@ -22,16 +23,45 @@ export interface ToolActivity {
   sessionLink?: string;
   requestId?: string;
   sourceLink?: string;
+  webProvider?: WebProvider;
+  webRoute?: WebRouteStep[];
 }
+export const WEB_PROVIDERS = { exa: 'Exa', tavily: 'Tavily', tinyfish: 'TinyFish', local: '本地正文提取', anthropic: '模型内置（Anthropic）', openai: '模型内置（OpenAI）' } as const;
+export type WebProvider = keyof typeof WEB_PROVIDERS;
+export interface WebRouteStep { provider: WebProvider; status: string; httpStatus?: number | null; retryAt?: string | null }
+export const WEB_FAILURE_TEXT: Record<string, string> = {
+  AUTH_REQUIRED: '鉴权或匿名访问受限，请检查服务权限或 API Key', RATE_LIMITED: '服务请求受限', QUOTA_EXHAUSTED: '服务额度不足',
+  TIME_LIMIT: '联网请求超时', CANCELLED: '联网请求已停止', UNSAFE_URL: '网址或重定向指向非公开地址，已阻止',
+  NETWORK_ERROR: '网络连接失败', EMPTY_CONTENT: '未取得可用正文或搜索片段', LOGIN_REQUIRED: '网页需要登录或遇到访问验证',
+  CONTENT_TOO_LARGE: '网页响应超过大小上限', UNSUPPORTED_CONTENT: '未取得可读取的正文格式', UPSTREAM_ERROR: '服务返回无效结果或请求失败',
+  COOLDOWN: '服务冷却中，本次已跳过', KEY_UNAVAILABLE: '服务密钥无法读取，请重新配置', NATIVE_UNSUPPORTED: '当前模型不支持此内置联网能力'
+};
 export type ToolPhase = 'tools' | 'answer';
 const OUTCOMES = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DUPLICATE', 'NO_CHANGE',
   'DELETED', 'REMOVED', 'NOT_EMPTY', 'IN_USE', 'DISABLED',
   'UNAVAILABLE', 'STALE', 'LIMIT_REACHED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS', 'SUPPRESSED', 'REJECTED', 'CONFLICT', 'DRAFT_UNSAVED',
-  'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT', 'SENT', 'QUEUED', 'RUNNING', 'CANCELLED', 'CYCLE_BLOCKED', 'ARCHIVED', 'LOCKED']);
+  'RESULT_TOO_LARGE', 'CONTEXT_LIMIT', 'REPEATED_CALL', 'TIME_LIMIT', 'SENT', 'QUEUED', 'RUNNING', 'CANCELLED', 'CYCLE_BLOCKED', 'ARCHIVED', 'LOCKED', ...Object.keys(WEB_FAILURE_TEXT)]);
 export const MAX_TOOL_ACTIVITIES = 1200;
 const AVAILABILITIES = new Set(['READY', 'BUILDING', 'LOCKED', 'UNREADABLE', 'TIMEOUT', 'NOT_REQUESTED', 'DENIED']);
 const NORMAL = new Set(['OK', 'NO_MATCH', 'CREATED', 'UPDATED', 'DELETED', 'REMOVED', 'DUPLICATE', 'NO_CHANGE', 'SUPPRESSED', 'SENT', 'QUEUED', 'RUNNING']);
 export const isDeletionTool = (name: ToolName): boolean => ['delete_memory', 'delete_session', 'delete_material', 'remove_wrong_question'].includes(name);
+export const isWebTool = (name: ToolName): boolean => name === 'search_web' || name === 'fetch_web';
+export const toolLabel = (row: ToolActivity): string => TOOL_NAMES[row.toolName] + (isWebTool(row.toolName) && row.webProvider ? ` · ${WEB_PROVIDERS[row.webProvider]}` : '');
+export function readWebRoute(value: unknown): WebRouteStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 4).flatMap(row => {
+    if (!row || typeof row !== 'object' || !Object.hasOwn(WEB_PROVIDERS, row.provider)) return [];
+    return [{ provider: row.provider as WebProvider, status: OUTCOMES.has(row.status) || row.status === 'PARTIAL' ? row.status : 'UNKNOWN',
+      httpStatus: Number.isInteger(row.httpStatus) && row.httpStatus >= 100 && row.httpStatus <= 599 ? row.httpStatus : null,
+      retryAt: typeof row.retryAt === 'string' && Number.isFinite(Date.parse(row.retryAt)) ? new Date(row.retryAt).toISOString() : null }];
+  });
+}
+export function webRouteText(row: WebRouteStep): string {
+  const status = row.status === 'OK' ? '完成' : row.status === 'PARTIAL' ? '部分完成' : row.status === 'NO_MATCH' ? '未找到匹配来源'
+    : WEB_FAILURE_TEXT[row.status] ?? '未完成';
+  const retry = row.retryAt ? ` · 下次尝试 ${new Date(row.retryAt).toLocaleString('zh-CN', { hour12: false })}` : '';
+  return `${WEB_PROVIDERS[row.provider]}：${status}${row.httpStatus && row.httpStatus >= 400 ? `（HTTP ${row.httpStatus}）` : ''}${retry}`;
+}
 
 export function readToolActivities(value: unknown): ToolActivity[] {
   if (!Array.isArray(value)) return [];
@@ -49,6 +79,8 @@ export function readToolActivities(value: unknown): ToolActivity[] {
       count: Number.isInteger(row.count) ? Math.max(0, Math.min(1000, row.count)) : 0,
       availability: AVAILABILITIES.has(row.availability) ? row.availability : null,
       incomplete: row.incomplete === true,
+      ...(isWebTool(row.toolName) && Object.hasOwn(WEB_PROVIDERS, row.webProvider ?? '') ? { webProvider: row.webProvider as WebProvider } : {}),
+      ...(isWebTool(row.toolName) && Array.isArray(row.webRoute) ? { webRoute: readWebRoute(row.webRoute) } : {}),
       ...(typeof row.sourceLink === 'string' && /^drill-notebook:\/\/material\/(notebook|note|knowledge|bank|question|wrong)\/[1-9][0-9]{0,15}$/.test(row.sourceLink) ? { sourceLink: row.sourceLink } : {}),
       ...(typeof row.sessionLink === 'string' && /^drill-notebook:\/\/session\/[a-f0-9]{32}$/.test(row.sessionLink) ? { sessionLink: row.sessionLink } : {}),
       ...(typeof row.requestId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(row.requestId) ? { requestId: row.requestId } : {})
@@ -84,6 +116,12 @@ export function toolResultText(row: ToolActivity): string {
   if (row.state === 'RUNNING') return '执行中';
   if (row.state === 'UNKNOWN' || row.outcome === 'UNKNOWN') return isDeletionTool(row.toolName) ? '删除结果未确认，请核对' : '执行结果未确认';
   if (row.outcome === 'DISABLED') return '工具已在设置中关闭，未执行';
+  if (isWebTool(row.toolName)) {
+    if (row.outcome === 'OK') return row.toolName === 'search_web' ? `本次找到 ${row.count} 个来源${row.incomplete ? '（片段）' : ''}`
+      : `本次读取 ${row.count} 个网页${row.incomplete ? '（部分内容）' : ''}`;
+    if (row.outcome === 'NO_MATCH') return '没有匹配的公开来源';
+    if (WEB_FAILURE_TEXT[row.outcome]) return WEB_FAILURE_TEXT[row.outcome];
+  }
   if (isDeletionTool(row.toolName)) {
     switch (row.outcome) {
       case 'DELETED': return row.toolName === 'delete_memory' ? '已删除 1 条' : row.toolName === 'delete_session' ? '会话已删除' : '已删除';
@@ -205,6 +243,8 @@ export function toolGroupTitle(rows: ToolActivity[]): string {
   if (rows.some((row) => row.toolName === 'update_material' && row.outcome === 'UPDATED')) parts.push('已更新学习资料');
   else if (rows.some((row) => row.toolName === 'update_material' && ['DUPLICATE', 'NO_CHANGE'].includes(row.outcome))) parts.push('资料修改已核对');
   if (rows.some((row) => row.toolName === 'search_materials')) parts.push('已查找学习资料');
+  if (rows.some(row => row.toolName === 'search_web' && row.outcome === 'OK')) parts.push('已搜索网页');
+  if (rows.some(row => row.toolName === 'fetch_web' && row.outcome === 'OK')) parts.push('已读取网页');
   if (rows.some((row) => ['read_current_page', 'read_notebook', 'read_knowledge', 'read_question_bank', 'read_wrong_questions'].includes(row.toolName))) parts.push('已读取学习资料');
   if (rows.some((row) => row.toolName === 'search_memories')) parts.push('已检索记忆');
   if (rows.some((row) => row.toolName === 'list_memories')) parts.push('已读取记忆');
